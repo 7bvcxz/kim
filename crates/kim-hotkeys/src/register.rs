@@ -215,6 +215,7 @@ impl Registrar {
     }
 
     /// Unregisters everything and ends the thread (also done on drop).
+    #[allow(clippy::drop_non_drop)] // only the Windows backend holds state to release
     pub fn shutdown(self) {
         drop(self);
     }

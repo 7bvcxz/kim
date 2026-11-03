@@ -1,0 +1,26 @@
+[package]
+name = "kim-hotkeys"
+version = "0.0.1"
+description = "Shared hotkey library for Kim tools: key syntax, user layer, conflict checks and a narrow Windows registration backend (no GUI, no process)"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+
+[target."cfg(windows)".dependencies]
+# RegisterHotKey/UnregisterHotKey on a dedicated message thread (register.rs). No window, no hook.
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging"] }
+
+[dev-dependencies]
+# tests/contract.rs compiles xtask/src/jsonschema.rs (the schema-check validator), which needs
+# `regex`; already in the workspace lock for xtask, test-only, never shipped.
+regex = "1.13.1"

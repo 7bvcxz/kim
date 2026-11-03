@@ -1606,6 +1606,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "kim-hotkeys"
+version = "0.0.1"
+dependencies = [
+ "regex",
+ "serde",
+ "serde_json",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "kim-manager"
 version = "0.0.1"
 dependencies = [

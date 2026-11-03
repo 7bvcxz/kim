@@ -114,10 +114,16 @@ fn main() -> ExitCode {
             drop(out);
             match run_host(&cmd, &args) {
                 Ok(data) => {
+                    let warnings = host_warnings(&cmd, &data);
                     if args.json {
                         let mut out = std::io::stdout().lock();
-                        let _ = writeln!(out, "{}", output::success(cmd.name(), &data, &[]));
+                        let _ = writeln!(out, "{}", output::success(cmd.name(), &data, &warnings));
                     } else {
+                        if !args.quiet {
+                            for w in &warnings {
+                                eprintln!("subak: warning: {w}");
+                            }
+                        }
                         human(&cmd, &data, &args);
                     }
                     ExitCode::SUCCESS
@@ -184,6 +190,23 @@ fn run_host(_cmd: &Cmd, _a: &Args) -> Result<Value, CliError> {
         Code::UnsupportedPlatform,
         "the Subak Host prototype needs Windows (ConPTY); Linux support is planned for M4",
     ))
+}
+
+/// Risk R-03 (measured in Step 08, ADR 0016): a Host inside a job it could not leave dies when
+/// that job is closed with kill-on-close.
+fn host_warnings(cmd: &Cmd, d: &Value) -> Vec<String> {
+    if !matches!(cmd, Cmd::HostStart | Cmd::HostStatus) || d["host"]["in_job"] != true {
+        return Vec::new();
+    }
+    vec![if d["host"]["job_breakaway"] == false {
+        "a job of the launching terminal forbids breakaway, so the Host started inside it; \
+         closing that terminal or job may end the Host and its shell (risk R-03)"
+            .to_string()
+    } else {
+        "the Host runs inside a job object it could not leave; if that job is closed with \
+         kill-on-close, the Host and its shell end (risk R-03)"
+            .to_string()
+    }]
 }
 
 /// Human output on stdout (results) and stderr (notices).

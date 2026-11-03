@@ -990,6 +990,12 @@ fn host_dies_with_a_closed_launcher_job_that_forbids_breakaway() {
         "breakaway is denied and reported"
     );
     assert_eq!(doc["data"]["host"]["in_job"], true);
+    assert!(
+        doc["warnings"][0]
+            .as_str()
+            .is_some_and(|w| w.contains("forbids breakaway") && w.contains("R-03")),
+        "the user is warned: {doc}"
+    );
     let h = HostGuard::adopt(ep.clone());
     assert!(
         job.contains(&h.host),

@@ -25,6 +25,9 @@ use std::time::{Duration, Instant};
 use windows_sys::Win32::Foundation::{
     CloseHandle, HANDLE, HANDLE_FLAG_INHERIT, HWND, LPARAM, SetHandleInformation, WAIT_OBJECT_0,
 };
+use windows_sys::Win32::System::Console::{
+    COORD, ClosePseudoConsole, CreatePseudoConsole, HPCON, ResizePseudoConsole,
+};
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
 };
@@ -38,10 +41,10 @@ use windows_sys::Win32::System::Threading::{
     CREATE_NEW_CONSOLE, CREATE_NO_WINDOW, CREATE_SUSPENDED, CreateProcessW,
     DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess,
     GetProcessHandleCount, InitializeProcThreadAttributeList, OpenProcess,
-    PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROCESS_INFORMATION, PROCESS_QUERY_LIMITED_INFORMATION,
-    PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, ResumeThread, STARTF_USESHOWWINDOW,
-    STARTF_USESTDHANDLES, STARTUPINFOEXW, TerminateProcess, UpdateProcThreadAttribute,
-    WaitForSingleObject,
+    PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, PROCESS_INFORMATION,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE, ResumeThread,
+    STARTF_USESHOWWINDOW, STARTF_USESTDHANDLES, STARTUPINFOEXW, TerminateProcess,
+    UpdateProcThreadAttribute, WaitForSingleObject,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetClassNameW, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, SW_HIDE,
@@ -1065,4 +1068,193 @@ fn only_one_host_per_endpoint_and_start_dry_run_changes_nothing() {
     );
     let (code, _) = run(&["host", "status", "--endpoint", &ep]);
     assert_eq!(code, 3, "a failed start leaves no Host behind");
+}
+
+/// An outer pseudo console owned by the test: a real, invisible console for a client, whose
+/// keyboard input and window size the test controls.
+struct OuterConsole {
+    hpc: HPCON,
+    input: File,
+    out: Arc<Mutex<Vec<u8>>>,
+    reader: Option<JoinHandle<()>>,
+    proc: Proc,
+    mark: usize,
+}
+
+impl OuterConsole {
+    fn spawn(cmdline: &str, cols: i16, rows: i16) -> Self {
+        let (in_r, in_w) = pipe_pair();
+        let (out_r, out_w) = pipe_pair();
+        let mut hpc: HPCON = 0;
+        // SAFETY: valid pipe ends; `hpc` receives the pseudo console.
+        let hr = unsafe {
+            CreatePseudoConsole(COORD { X: cols, Y: rows }, in_r, out_w, 0, &raw mut hpc)
+        };
+        assert!(hr >= 0, "CreatePseudoConsole: 0x{hr:08X}");
+        // SAFETY: conhost duplicated both; ours are no longer needed.
+        unsafe {
+            CloseHandle(in_r);
+            CloseHandle(out_w);
+        }
+        let mut size = 0usize;
+        // SAFETY: size query.
+        unsafe { InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &raw mut size) };
+        let mut attr = vec![0u64; size.div_ceil(8)];
+        // SAFETY: buffer of `size` bytes; for this attribute the value is the HPCON itself.
+        let ok = unsafe {
+            InitializeProcThreadAttributeList(attr.as_mut_ptr().cast(), 1, 0, &raw mut size) != 0
+                && UpdateProcThreadAttribute(
+                    attr.as_mut_ptr().cast(),
+                    0,
+                    PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE as usize,
+                    hpc as *const c_void,
+                    size_of::<HPCON>(),
+                    std::ptr::null_mut(),
+                    std::ptr::null(),
+                ) != 0
+        };
+        assert!(ok);
+        let mut si = STARTUPINFOEXW::default();
+        si.StartupInfo.cb = u32::try_from(size_of::<STARTUPINFOEXW>()).unwrap();
+        si.StartupInfo.dwFlags = STARTF_USESTDHANDLES; // null std handles: use the console
+        si.lpAttributeList = attr.as_mut_ptr().cast();
+        let mut cmd = wide(cmdline);
+        let mut pi = PROCESS_INFORMATION::default();
+        // SAFETY: writable command line; live startup info; no handle inheritance.
+        let ok = unsafe {
+            CreateProcessW(
+                std::ptr::null(),
+                cmd.as_mut_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                EXTENDED_STARTUPINFO_PRESENT,
+                std::ptr::null(),
+                std::ptr::null(),
+                &raw const si.StartupInfo,
+                &raw mut pi,
+            )
+        };
+        // SAFETY: the list was initialized above.
+        unsafe { DeleteProcThreadAttributeList(attr.as_mut_ptr().cast()) };
+        assert_ne!(ok, 0);
+        // SAFETY: fresh handles from CreatePipe/CreateProcessW, owned from here on.
+        let (input, output, process) = unsafe {
+            CloseHandle(pi.hThread);
+            (
+                File::from_raw_handle(in_w),
+                File::from_raw_handle(out_r),
+                OwnedHandle::from_raw_handle(pi.hProcess),
+            )
+        };
+        let out = Arc::new(Mutex::new(Vec::new()));
+        let reader = std::thread::spawn({
+            let out = Arc::clone(&out);
+            let mut output = output;
+            move || {
+                let mut buf = [0u8; 8192];
+                while let Ok(n) = output.read(&mut buf) {
+                    if n == 0 {
+                        break;
+                    }
+                    out.lock().unwrap().extend_from_slice(&buf[..n]);
+                }
+            }
+        });
+        Self {
+            hpc,
+            input,
+            out,
+            reader: Some(reader),
+            proc: Proc {
+                pid: pi.dwProcessId,
+                h: process,
+            },
+            mark: 0,
+        }
+    }
+
+    /// Types `bytes` on the console's keyboard.
+    fn keys(&mut self, bytes: &[u8]) {
+        self.input.write_all(bytes).unwrap();
+        self.input.flush().unwrap();
+    }
+
+    fn expect(&mut self, needle: &str) -> String {
+        let until = Instant::now() + LONG;
+        loop {
+            let text = visible(&self.out.lock().unwrap()[self.mark..]);
+            if text.contains(needle) {
+                self.mark = self.out.lock().unwrap().len();
+                return text;
+            }
+            assert!(Instant::now() < until, "`{needle}` not seen:\n{text}");
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+
+    /// Resizes the console window, as dragging a terminal window's border does.
+    fn resize(&self, cols: i16, rows: i16) {
+        // SAFETY: open pseudo console.
+        let hr = unsafe { ResizePseudoConsole(self.hpc, COORD { X: cols, Y: rows }) };
+        assert!(hr >= 0);
+    }
+}
+
+impl Drop for OuterConsole {
+    fn drop(&mut self) {
+        if self.proc.alive() {
+            self.proc.kill();
+        }
+        // SAFETY: created in `spawn`, closed once; the reader keeps draining meanwhile.
+        unsafe { ClosePseudoConsole(self.hpc) };
+        if let Some(r) = self.reader.take() {
+            let _ = r.join();
+        }
+    }
+}
+
+#[test]
+fn console_attach_sends_raw_keys_and_follows_window_resizes() {
+    let h = HostGuard::start("console");
+    let mut con = OuterConsole::spawn(
+        &format!("\"{}\" host attach --endpoint {}", subak(), h.ep),
+        100,
+        30,
+    );
+    con.expect("Ctrl+B d detaches");
+    // Typed keys arrive raw (no line editing by the client's console) and reach the shell.
+    con.keys(b"echo mark^er-555\r");
+    con.expect("marker-555");
+    // The client took the pane size from its own window.
+    con.keys(b"mode con & echo mark^er-w1\r");
+    let text = con.expect("marker-w1");
+    assert_eq!(columns(&text), Some(100), "{text}");
+    // The user resizes the window: the client notices and resizes the pane.
+    con.resize(90, 24);
+    let until = Instant::now() + LONG;
+    while status(&h.ep)["pane"]["size"]["cols"] != 90 {
+        assert!(
+            Instant::now() < until,
+            "the pane did not follow the window size"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    con.keys(b"mode con & echo mark^er-w2\r");
+    let text = con.expect("marker-w2");
+    assert_eq!(columns(&text), Some(90), "{text}");
+    // Ctrl+C is a key for the shell, not a signal for the client.
+    con.keys(&[0x03]);
+    con.keys(b"echo mark^er-after-ctrl-c\r");
+    con.expect("marker-after-ctrl-c");
+    // Ctrl+B d detaches; the client restores its console and exits 0.
+    con.keys(&[0x02, b'd']);
+    assert!(con.proc.wait(LONG), "client exits after Ctrl+B d");
+    assert_eq!(con.proc.exit_code(), Some(0));
+    h.assert_alive("after a console client detached");
+    assert_eq!(status(&h.ep)["clients"]["attached"], 0);
+    eprintln!(
+        "EVIDENCE console-attach: client={} raw keys, Ctrl+C and Ctrl+B d in a console; resize 100x30 -> 90x24 reached shell={} of host={}",
+        con.proc.pid, h.shell.pid, h.host.pid
+    );
 }

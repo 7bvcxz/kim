@@ -13,7 +13,8 @@ prove. Every "verified" line below comes from a run on this machine. Everything 
 Machine: Windows 10 Pro 22H2, build **10.0.19045.6466**, x64, Windows session 1, inbox ConPTY
 (no bundled `conpty.dll`), `subak` 0.0.1 debug build, toolchain 1.99.1 (GNU). The same tests also
 run on every push on the GitHub `windows-2025` runner (Windows Server 2025, build 26100, a newer
-inbox ConPTY). Differences seen there are listed in §6.
+inbox ConPTY). All 11 Host tests of §4 pass there too (CI run 41731725304), after the two fixes
+for differences listed in §6.
 
 ## 1. Result
 
@@ -195,7 +196,7 @@ As in ADR 0004, with the corrections recorded in ADR 0016:
 | Host crash or `TerminateProcess` | Every pane process ends (by design, ADR 0004: no orphans) | verified |
 | Lagging client (≥ 4096 queued frames) | That client is disconnected; the pane is never blocked | implemented; not stress-tested |
 | Newer inbox ConPTY (Windows Server 2025, build 26100, the CI runner): pseudo console close | `ClosePseudoConsole` alone did not end the shell within 10 s, while on 19045 it does. The Host's teardown (grace period, then `TerminateJobObject`) ends it either way | observed in CI (unit test, before the test followed the Host's teardown order) |
-| Newer inbox ConPTY: **win32-input-mode request** | The pane's ConPTY writes `ESC[?9001h` (a request for win32-input-mode) to its output. Passed through, that request switched the console client's own console into win32-input-mode: every key arrived as an escape sequence (the `-v` key log showed only `char=0x001B` records), keys still reached the shell, but `Ctrl+B d` reached it as `^Bd` instead of detaching. Fix: the client, which is the pane's terminal and does not implement win32-input-mode, drops `ESC[?9001h`/`ESC[?9001l` from pane output; ConPTY then gets plain VT input. Any modern console that honors the request is affected the same way, not only CI | observed in CI with `-v`; on 19045 the console delivered plain records |
+| Newer inbox ConPTY: **win32-input-mode request** | The pane's ConPTY writes `ESC[?9001h` (a request for win32-input-mode) to its output. Passed through, that request switched the console client's own console into win32-input-mode: every key arrived as an escape sequence (the `-v` key log showed only `char=0x001B` records), keys still reached the shell, but `Ctrl+B d` reached it as `^Bd` instead of detaching. Fix: the client, which is the pane's terminal and does not implement win32-input-mode, drops `ESC[?9001h`/`ESC[?9001l` from pane output; ConPTY then gets plain VT input. Any modern console that honors the request is affected the same way, not only CI | observed in CI with `-v`; fixed, the console test passes on Server 2025 and 19045 |
 | Lock screen, fast user switching, RDP *disconnect* | The logon session stays, so the Host and shells keep running | **not verified (manual run pending)**, §7.3 |
 | Sleep (S3 / modern standby) and hibernate (S4) | All processes are frozen and resumed; the Host and shell survive, wall-clock gaps appear, and network connections inside the shell may break | **not verified (manual run pending)**, §7.2 |
 | **Logoff / sign out**, RDP *logoff* | Every process of the logon session ends, including the Host: no live process can survive | **not verified (manual run pending)**, §7.3; restore is Steps 29–31 |

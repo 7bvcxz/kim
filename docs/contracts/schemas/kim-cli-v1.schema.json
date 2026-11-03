@@ -201,13 +201,14 @@
     },
     "tool_view": {
       "type": "object",
-      "required": ["id", "name", "summary", "support", "status", "installed_version", "latest_compatible", "latest", "incompatible_reason", "note"],
+      "required": ["id", "name", "summary", "support", "availability", "status", "installed_version", "latest_compatible", "latest", "incompatible_reason", "note"],
       "additionalProperties": false,
       "properties": {
         "id": { "$ref": "#/$defs/tool_id" },
         "name": { "type": "string", "minLength": 1 },
         "summary": { "type": "string" },
         "support": { "enum": ["stable", "preview", "in-development", "deprecated"] },
+        "availability": { "$ref": "#/$defs/availability" },
         "status": { "$ref": "#/$defs/tool_status" },
         "installed_version": { "$ref": "#/$defs/nullable_semver" },
         "latest_compatible": { "$ref": "#/$defs/nullable_semver" },
@@ -265,6 +266,92 @@
       }
     },
     "string_list": { "type": "array", "items": { "type": "string" } },
+    "availability": {
+      "description": "Release stage, derived from the signed catalog's releases (CATALOG_FORMAT §6): planned = no release, preview = preview releases only, available = a stable release exists.",
+      "enum": ["planned", "preview", "available"]
+    },
+    "permission_view": {
+      "type": "object",
+      "required": ["id", "label", "detail", "opt_in"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/tool_id" },
+        "label": { "$ref": "#/$defs/nullable_string" },
+        "detail": { "type": "string", "minLength": 1 },
+        "opt_in": { "type": "boolean" }
+      }
+    },
+    "entry_point": {
+      "type": "object",
+      "required": ["kind", "command", "summary", "status"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "$ref": "#/$defs/tool_id" },
+        "command": { "type": "string", "minLength": 1 },
+        "summary": { "type": "string", "minLength": 1 },
+        "status": { "enum": ["available", "planned"] }
+      }
+    },
+    "link": {
+      "type": "object",
+      "required": ["kind", "title", "url"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "$ref": "#/$defs/tool_id" },
+        "title": { "type": "string", "minLength": 1 },
+        "url": { "type": "string", "pattern": "^https://." }
+      }
+    },
+    "shortcut_row": {
+      "type": "object",
+      "required": ["action", "title", "scope", "keys", "bindable", "state"],
+      "additionalProperties": false,
+      "properties": {
+        "action": { "type": "string", "minLength": 1 },
+        "title": { "type": "string", "minLength": 1 },
+        "scope": { "type": "string", "pattern": "^(global|app|context:[a-z][a-z0-9-]{0,31})$" },
+        "keys": { "$ref": "#/$defs/string_list" },
+        "bindable": { "type": "boolean" },
+        "state": { "enum": ["default", "user", "profile", "disabled", "unbound"] }
+      }
+    },
+    "shortcuts_view": {
+      "description": "source = installed: from the installed hotkeys.manifest.json and the user's hotkeys.json (HOTKEY_CONTRACT §9.2 discovery); source = catalog: the catalog's summary of the defaults.",
+      "type": "object",
+      "required": ["source", "manifest", "backend", "enabled", "actions", "note"],
+      "additionalProperties": false,
+      "properties": {
+        "source": { "enum": ["installed", "catalog"] },
+        "manifest": { "type": "string", "minLength": 1 },
+        "backend": { "type": "string", "minLength": 1 },
+        "enabled": { "type": "boolean" },
+        "actions": { "type": "array", "items": { "$ref": "#/$defs/shortcut_row" } },
+        "note": { "$ref": "#/$defs/nullable_string" }
+      }
+    },
+    "install_locations": {
+      "type": "object",
+      "required": ["program_dir", "user_data_dirs", "per_user", "elevation"],
+      "additionalProperties": false,
+      "properties": {
+        "program_dir": { "$ref": "#/$defs/path" },
+        "user_data_dirs": { "$ref": "#/$defs/string_list" },
+        "per_user": { "const": true },
+        "elevation": { "const": false }
+      }
+    },
+    "manual_actions": {
+      "type": "object",
+      "required": ["automatic_updates", "install", "update", "uninstall", "check"],
+      "additionalProperties": false,
+      "properties": {
+        "automatic_updates": { "const": false },
+        "install": { "type": "string", "minLength": 1 },
+        "update": { "type": "string", "minLength": 1 },
+        "uninstall": { "type": "string", "minLength": 1 },
+        "check": { "type": "string", "minLength": 1 }
+      }
+    },
 
     "catalog_list": {
       "type": "object",
@@ -280,7 +367,7 @@
     },
     "catalog_show": {
       "type": "object",
-      "required": ["catalog", "platform", "tool", "description", "license", "homepage", "releases"],
+      "required": ["catalog", "platform", "tool", "description", "license", "homepage", "releases", "features", "runs", "entry_points", "links", "permissions", "shortcuts", "install", "manage"],
       "additionalProperties": false,
       "properties": {
         "catalog": { "$ref": "#/$defs/catalog_info" },
@@ -289,7 +376,25 @@
         "description": { "type": "string" },
         "license": { "type": "string" },
         "homepage": { "$ref": "#/$defs/nullable_string" },
-        "releases": { "type": "array", "items": { "$ref": "#/$defs/release_view" } }
+        "releases": { "type": "array", "items": { "$ref": "#/$defs/release_view" } },
+        "features": { "$ref": "#/$defs/string_list" },
+        "runs": {
+          "anyOf": [
+            {
+              "type": "object",
+              "required": ["id", "label"],
+              "additionalProperties": false,
+              "properties": { "id": { "$ref": "#/$defs/tool_id" }, "label": { "$ref": "#/$defs/nullable_string" } }
+            },
+            { "type": "null" }
+          ]
+        },
+        "entry_points": { "type": "array", "items": { "$ref": "#/$defs/entry_point" } },
+        "links": { "type": "array", "items": { "$ref": "#/$defs/link" } },
+        "permissions": { "type": "array", "items": { "$ref": "#/$defs/permission_view" } },
+        "shortcuts": { "anyOf": [ { "$ref": "#/$defs/shortcuts_view" }, { "type": "null" } ] },
+        "install": { "anyOf": [ { "$ref": "#/$defs/install_locations" }, { "type": "null" } ] },
+        "manage": { "anyOf": [ { "$ref": "#/$defs/manual_actions" }, { "type": "null" } ] }
       }
     },
     "catalog_status": {
@@ -342,7 +447,7 @@
     },
     "plan": {
       "type": "object",
-      "required": ["tool", "action", "from", "to", "channel", "release_notes", "asset", "catalog_version", "tool_dir", "running", "notes"],
+      "required": ["tool", "action", "from", "to", "channel", "release_notes", "asset", "catalog_version", "tool_dir", "running", "permissions", "dependencies", "notes"],
       "additionalProperties": false,
       "properties": {
         "tool": { "$ref": "#/$defs/tool_id" },
@@ -355,6 +460,8 @@
         "catalog_version": { "type": "integer", "minimum": 0 },
         "tool_dir": { "$ref": "#/$defs/path" },
         "running": { "type": "array", "items": { "$ref": "#/$defs/running_process" } },
+        "permissions": { "description": "Disclosed before the user confirms (KIM-SEC-006).", "type": "array", "items": { "$ref": "#/$defs/permission_view" } },
+        "dependencies": { "description": "Declared dependencies; all are installed already (Kim never installs one implicitly).", "type": "array", "items": { "$ref": "#/$defs/dependency" } },
         "notes": { "$ref": "#/$defs/string_list" }
       }
     },
@@ -412,13 +519,14 @@
     },
     "uninstall_plan": {
       "type": "object",
-      "required": ["tool", "version", "tool_dir", "running", "data_dirs", "purge_data"],
+      "required": ["tool", "version", "tool_dir", "running", "runs", "data_dirs", "purge_data"],
       "additionalProperties": false,
       "properties": {
         "tool": { "$ref": "#/$defs/tool_id" },
         "version": { "$ref": "#/$defs/nullable_semver" },
         "tool_dir": { "$ref": "#/$defs/path" },
         "running": { "type": "array", "items": { "$ref": "#/$defs/running_process" } },
+        "runs": { "description": "How the catalog says the tool runs (tray, host, ...), when a catalog was available.", "$ref": "#/$defs/nullable_string" },
         "data_dirs": { "$ref": "#/$defs/string_list" },
         "purge_data": { "type": "boolean" }
       }

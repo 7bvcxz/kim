@@ -10,9 +10,10 @@
 //!   previously installed version exactly as it was;
 //! * never stops a running program and never elevates privileges.
 
+use crate::catalog::details::{self, PermissionView};
 use crate::catalog::status::{self, Installed, incompatibility, matching_asset};
 use crate::catalog::store::Loaded;
-use crate::catalog::{Asset, AssetKind, Channel, Release};
+use crate::catalog::{Asset, AssetKind, Catalog, Channel, Dependency, Release};
 use crate::error::{ErrorCode, KimError, Result};
 use crate::fetch::Downloader;
 use crate::paths::Paths;
@@ -68,6 +69,12 @@ pub struct Plan {
     pub tool_dir: PathBuf,
     /// Programs currently running from this tool's directory. They are never stopped.
     pub running: Vec<RunningProcess>,
+    /// What the tool declares it does (screen capture, global hotkeys, …), disclosed before
+    /// the user confirms (`KIM-SEC-006`).
+    pub permissions: Vec<PermissionView>,
+    /// Other tools this release needs. All are installed already: Kim never installs one
+    /// implicitly (a missing one fails the plan with `dependency_missing`).
+    pub dependencies: Vec<Dependency>,
     pub notes: Vec<String>,
 }
 
@@ -184,6 +191,17 @@ pub fn plan_install(
                     ),
                 ));
             }
+            (None, None) if view.availability == status::Availability::Planned => {
+                // Listed so users know it exists, but nothing can be downloaded (KIM-FR-051).
+                return Err(KimError::new(
+                    ErrorCode::NoRelease,
+                    format!("{tool_id} is planned: no release has been published yet"),
+                )
+                .with_hint(
+                    "nothing can be installed until a signed release exists; `kim catalog refresh` \
+                     fetches a newer catalog when one is published",
+                ));
+            }
             (None, None) => {
                 let mut e = KimError::new(
                     ErrorCode::NoRelease,
@@ -262,6 +280,8 @@ pub fn plan_install(
         catalog_version: loaded.catalog.catalog_version,
         tool_dir,
         running,
+        permissions: details::permissions(tool),
+        dependencies: release.dependencies.clone(),
         notes,
     })
 }
@@ -802,6 +822,8 @@ pub struct UninstallPlan {
     pub version: Option<String>,
     pub tool_dir: PathBuf,
     pub running: Vec<RunningProcess>,
+    /// How the catalog says the tool runs (`tray`, `host`, …), for the hint when it is running.
+    pub runs: Option<String>,
     /// User data that will be **kept** unless `purge_data` is set.
     pub data_dirs: Vec<PathBuf>,
     pub purge_data: bool,
@@ -838,6 +860,7 @@ pub fn plan_uninstall(paths: &Paths, tool: &str, purge_data: bool) -> Result<Uni
         tool: tool.into(),
         version: record.map(|r| r.version),
         running: running::processes_under(&tool_dir),
+        runs: None,
         data_dirs: paths
             .user_data_dirs(tool)
             .into_iter()
@@ -846,6 +869,16 @@ pub fn plan_uninstall(paths: &Paths, tool: &str, purge_data: bool) -> Result<Uni
         tool_dir,
         purge_data,
     })
+}
+
+impl UninstallPlan {
+    /// Adds what the catalog says about the tool (how it runs), when a catalog is at hand.
+    /// Uninstall itself never needs a catalog.
+    #[must_use]
+    pub fn with_catalog(mut self, catalog: &Catalog) -> Self {
+        self.runs = catalog.tool(&self.tool).and_then(|t| t.runs.clone());
+        self
+    }
 }
 
 pub fn execute_uninstall(plan: &UninstallPlan, paths: &Paths) -> Result<UninstallOutcome> {
@@ -861,11 +894,7 @@ pub fn execute_uninstall(plan: &UninstallPlan, paths: &Paths) -> Result<Uninstal
                 pids.join(", ")
             ),
         )
-        .with_hint(if plan.tool == "subak" {
-            "stop it yourself first (e.g. end your Subak sessions), then retry".to_string()
-        } else {
-            format!("close {} first, then retry", plan.tool)
-        }));
+        .with_hint(details::stop_hint(&plan.tool, plan.runs.as_deref())));
     }
     clean_staging(paths, &plan.tool);
     // Commit point: once current.json is gone, the tool counts as uninstalled.

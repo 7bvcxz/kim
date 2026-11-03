@@ -23,6 +23,40 @@ pub enum ToolStatus {
     Damaged,
 }
 
+/// How far a tool's distribution has come, derived from the signed catalog's releases and never
+/// declared by it (CATALOG_FORMAT §6, `KIM-FR-051`): a tool is only *available* once a signed,
+/// hashed stable release exists. Independent of this machine (that is [`ToolStatus`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Availability {
+    /// No release on any channel: listed so users know it exists, nothing to download.
+    Planned,
+    /// Only preview-channel releases exist.
+    Preview,
+    /// At least one stable release exists.
+    Available,
+}
+
+impl Availability {
+    pub fn of(tool: &Tool) -> Self {
+        if tool.releases.iter().any(|r| r.channel == Channel::Stable) {
+            Self::Available
+        } else if tool.releases.is_empty() {
+            Self::Planned
+        } else {
+            Self::Preview
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Planned => "planned",
+            Self::Preview => "preview",
+            Self::Available => "available",
+        }
+    }
+}
+
 /// What is installed for a tool, as far as Kim can tell.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Installed {
@@ -63,6 +97,7 @@ pub struct ToolView {
     pub name: String,
     pub summary: String,
     pub support: Support,
+    pub availability: Availability,
     pub status: ToolStatus,
     pub installed_version: Option<String>,
     /// Newest release on the selected channel(s) that is compatible with this machine.
@@ -73,6 +108,23 @@ pub struct ToolView {
     pub incompatible_reason: Option<String>,
     /// Extra information, e.g. that only preview releases exist.
     pub note: Option<String>,
+}
+
+impl ToolView {
+    /// The short word Kim and Kim Manager show for a tool that is not installed, so that the
+    /// release stage is never hidden (Planned / Preview / Available, `KIM-FR-051`). `None` for
+    /// installed and damaged tools, which have their own words.
+    pub fn availability_label(&self) -> Option<&'static str> {
+        match (self.status, self.availability) {
+            (ToolStatus::Available, Availability::Preview) => Some("available (preview)"),
+            (ToolStatus::Available, _) => Some("available"),
+            (ToolStatus::Incompatible, _) => Some("incompatible"),
+            (ToolStatus::Unreleased, Availability::Planned) => Some("planned"),
+            (ToolStatus::Unreleased, Availability::Preview) => Some("preview only"),
+            (ToolStatus::Unreleased, Availability::Available) => Some("not released"),
+            (ToolStatus::Installed | ToolStatus::UpdateAvailable | ToolStatus::Damaged, _) => None,
+        }
+    }
 }
 
 /// Which channels to consider: `stable` only, or `preview` (stable + preview).
@@ -184,6 +236,7 @@ pub fn evaluate_tool(
         name: tool.name.clone(),
         summary: tool.summary.clone(),
         support: tool.support,
+        availability: Availability::of(tool),
         status,
         installed_version,
         latest_compatible: latest_compatible.map(|(_, v)| v.to_string()),
@@ -310,6 +363,35 @@ mod tests {
         assert_eq!(s.latest.as_deref(), Some("1.3.0-beta.1"));
         assert_eq!(s.latest_compatible.as_deref(), Some("1.2.0"));
         assert_eq!(s.status, ToolStatus::UpdateAvailable);
+    }
+
+    /// KIM-FR-051: availability comes from the releases alone, never from a declaration.
+    #[test]
+    fn availability_is_derived_from_releases_and_shown_with_the_status() {
+        let p = win(19045);
+        let c = fixture();
+        let a = |id: &str| Availability::of(c.tool(id).unwrap());
+        assert_eq!(a("example-unreleased"), Availability::Planned);
+        assert_eq!(a("subak"), Availability::Preview, "preview releases only");
+        assert_eq!(a("example-stable"), Availability::Available);
+
+        let planned = view("example-unreleased", &p, &Installed::No, Channel::Preview);
+        assert_eq!(
+            (planned.availability, planned.availability_label()),
+            (Availability::Planned, Some("planned"))
+        );
+        let stable_only = view("subak", &p, &Installed::No, Channel::Stable);
+        assert_eq!(stable_only.availability_label(), Some("preview only"));
+        let preview = view("subak", &p, &Installed::No, Channel::Preview);
+        assert_eq!(preview.availability_label(), Some("available (preview)"));
+        let stable = view("example-stable", &p, &Installed::No, Channel::Stable);
+        assert_eq!(stable.availability_label(), Some("available"));
+        let installed = view("example-stable", &p, &v("1.2.0"), Channel::Stable);
+        assert_eq!(installed.availability_label(), None);
+        assert_eq!(
+            serde_json::to_value(planned).unwrap()["availability"],
+            "planned"
+        );
     }
 
     #[test]

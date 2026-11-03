@@ -357,6 +357,128 @@ mod tests {
         );
     }
 
+    /// Step 47 (KIM-FR-050, KIM-FR-051, KIM-SEC-006): Noeul and Ddalgak are listed as distinct,
+    /// planned tools with honest metadata; Kim and Subak are unchanged.
+    #[test]
+    fn the_bundled_catalog_lists_noeul_and_ddalgak_as_planned_tools_with_metadata() {
+        use super::super::status::Availability;
+        use super::super::{
+            EntryStatus, KNOWN_BACKENDS, KNOWN_ENTRY_KINDS, KNOWN_LINK_KINDS, KNOWN_PERMISSIONS,
+            KNOWN_RUNS,
+        };
+        let c = super::super::parse(BUNDLED_CATALOG).unwrap();
+        let ids: Vec<&str> = c.tools.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids, ["kim", "subak", "noeul", "ddalgak"]);
+        assert!(c.catalog_version >= 3);
+        for t in &c.tools {
+            assert_eq!(Availability::of(t), Availability::Planned, "{}", t.id);
+        }
+        // Kim and Subak keep their Step 05 entries (no new metadata was invented for them).
+        for id in ["kim", "subak"] {
+            let t = c.tool(id).unwrap();
+            assert!(t.features.is_empty() && t.permissions.is_empty() && t.shortcuts.is_none());
+        }
+        let known = |list: &[(&str, &str)], v: &str| list.iter().any(|(k, _)| *k == v);
+        for id in ["noeul", "ddalgak"] {
+            let t = c.tool(id).unwrap();
+            assert!(!t.features.is_empty(), "{id} lists its features");
+            assert_eq!(
+                t.runs.as_deref(),
+                Some("tray"),
+                "{id} is a background utility"
+            );
+            assert!(known(KNOWN_RUNS, t.runs.as_deref().unwrap()));
+            assert!(t.entry_points.iter().any(|e| e.kind == "cli"));
+            for e in &t.entry_points {
+                assert!(KNOWN_ENTRY_KINDS.contains(&e.kind.as_str()), "{}", e.kind);
+                assert_eq!(e.status, EntryStatus::Planned, "nothing is released yet");
+            }
+            for l in &t.links {
+                assert!(KNOWN_LINK_KINDS.contains(&l.kind.as_str()), "{}", l.kind);
+                assert!(l.url.starts_with("https://github.com/hellomouv/kim"));
+            }
+            assert!(t.links.iter().any(|l| l.kind == "docs"));
+            assert!(t.links.iter().any(|l| l.kind == "mcp"));
+            for p in &t.permissions {
+                assert!(
+                    known(KNOWN_PERMISSIONS, &p.id),
+                    "typo in permission `{}`",
+                    p.id
+                );
+            }
+            let s = t.shortcuts.as_ref().expect("shortcut summary");
+            assert!(KNOWN_BACKENDS.contains(&s.backend.as_str()));
+        }
+        let perms = |id: &str| -> Vec<(String, bool)> {
+            c.tool(id)
+                .unwrap()
+                .permissions
+                .iter()
+                .map(|p| (p.id.clone(), p.opt_in))
+                .collect()
+        };
+        let noeul = perms("noeul");
+        for want in ["global-hotkeys", "screen-capture", "clipboard"] {
+            assert!(noeul.contains(&(want.into(), false)), "noeul: {want}");
+        }
+        assert!(
+            noeul.iter().all(|(id, _)| id != "keyboard-hook"),
+            "Noeul uses RegisterHotKey, never a hook (HOTKEY_CONTRACT §13.3)"
+        );
+        let ddalgak = perms("ddalgak");
+        for want in ["keyboard-hook", "input-injection", "launch-programs"] {
+            assert!(
+                ddalgak.contains(&(want.into(), true)),
+                "ddalgak: {want} is opt-in (HOTKEY_CONTRACT §13.4)"
+            );
+        }
+    }
+
+    /// The catalog's shortcut summaries are the hotkey manifests of the contract
+    /// (HOTKEY_CONTRACT §3.4, §13.3, §13.4): same backend, and every app/global action with
+    /// the same default keys, scope and bindability.
+    #[test]
+    fn bundled_shortcut_summaries_match_the_contract_hotkey_manifests() {
+        use kim_hotkeys::manifest::{MANIFEST_FILE, Manifest};
+        let c = super::super::parse(BUNDLED_CATALOG).unwrap();
+        for id in ["noeul", "ddalgak"] {
+            let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+                "../../docs/contracts/examples/kim-hotkey-manifest-v1/{id}.json"
+            ));
+            let m = Manifest::parse(&std::fs::read(&path).unwrap()).unwrap();
+            let s = c.tool(id).unwrap().shortcuts.as_ref().unwrap();
+            assert_eq!(s.manifest, MANIFEST_FILE);
+            assert_eq!(
+                serde_json::to_value(m.backend).unwrap(),
+                serde_json::json!(s.backend),
+                "{id} backend"
+            );
+            let declared: Vec<&str> = m
+                .actions
+                .iter()
+                .filter(|a| a.context.is_none())
+                .map(|a| a.id.as_str())
+                .collect();
+            let summarized: Vec<&str> = s.actions.iter().map(|a| a.action.as_str()).collect();
+            assert_eq!(
+                summarized, declared,
+                "{id}: every app/global action, in order"
+            );
+            for a in &s.actions {
+                let decl = m.action(&a.action).unwrap();
+                let keys: Vec<&str> = decl.defaults.iter().map(|d| d.keys()).collect();
+                assert_eq!(a.keys, keys, "{id} {} defaults", a.action);
+                assert_eq!(
+                    a.scope,
+                    super::super::details::declared_scope(decl),
+                    "{id} {}",
+                    a.action
+                );
+                assert_eq!(a.bindable, decl.bindable, "{id} {}", a.action);
+            }
+        }
+    }
+
     #[test]
     fn bundled_is_used_offline_and_nothing_is_written() {
         let t = Tmp::new("offline");

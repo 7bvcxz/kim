@@ -1,0 +1,295 @@
+{
+  "schema": "kim.catalog",
+  "schema_version": 1,
+  "catalog_version": 3,
+  "generated_at": "2026-11-04T00:00:00Z",
+  "expires_at": "2027-05-04T00:00:00Z",
+  "publisher": "mouv",
+  "tools": [
+    {
+      "id": "kim",
+      "name": "Kim",
+      "summary": "Catalog and explicit installer for Kim tools",
+      "description": "Lists Kim tools and installs, updates or removes them only when you ask. Never installs anything by itself.",
+      "homepage": "https://github.com/hellomouv/kim",
+      "license": "MIT OR Apache-2.0",
+      "support": "in-development",
+      "releases": []
+    },
+    {
+      "id": "subak",
+      "name": "Subak",
+      "summary": "Persistent Windows-first terminal with a separate Host and Clients",
+      "description": "Sessions live in a per-user background Host and survive closing every window. Headless CLI, optional native GUI, Claude Code status. Not released yet.",
+      "homepage": "https://github.com/hellomouv/kim",
+      "license": "MIT OR Apache-2.0",
+      "support": "in-development",
+      "releases": []
+    },
+    {
+      "id": "noeul",
+      "name": "Noeul",
+      "summary": "Screenshot and pin tool: F1 captures a region, double-click pins it on the desktop",
+      "description": "A small native screenshot utility in the spirit of Snipaste. F1 starts a region capture, a double-click inside the selection pins it as a floating window, and F3 pins the clipboard image. It stays in the notification area while you use it and uses no keyboard hook. Not released yet.",
+      "homepage": "https://github.com/hellomouv/kim",
+      "license": "MIT OR Apache-2.0",
+      "support": "in-development",
+      "releases": [],
+      "features": [
+        "F1 starts a region capture; a double-click inside the selection pins it to the desktop",
+        "F3 pins the image on the clipboard as a floating window",
+        "Copy (Ctrl+C) or save (Ctrl+S) a selection or a pin; Esc cancels",
+        "Planned: annotation, color picker, capture history, multi-monitor and high-DPI support",
+        "Every shortcut can be changed, turned off or reset"
+      ],
+      "runs": "tray",
+      "entry_points": [
+        {
+          "kind": "gui",
+          "command": "noeul",
+          "summary": "Starts Noeul in the notification area; F1 and F3 work while it runs",
+          "status": "planned"
+        },
+        {
+          "kind": "cli",
+          "command": "noeul capture --region <x,y,w,h> --output <file> --json",
+          "summary": "Captures a screen region to a file without opening a window (needs an unlocked desktop)",
+          "status": "planned"
+        },
+        {
+          "kind": "cli",
+          "command": "noeul status --json",
+          "summary": "Reports whether Noeul runs, its pins and its shortcut registrations",
+          "status": "planned"
+        },
+        {
+          "kind": "cli",
+          "command": "noeul hotkeys list --json",
+          "summary": "Lists Noeul's shortcuts with their state (the hotkey contract's commands)",
+          "status": "planned"
+        },
+        {
+          "kind": "cli",
+          "command": "noeul capabilities --json",
+          "summary": "Describes Noeul's commands for agents and `kim tools describe`",
+          "status": "planned"
+        },
+        {
+          "kind": "mcp",
+          "command": "noeul mcp",
+          "summary": "Optional local MCP adapter with allowlisted capture and pin actions",
+          "status": "planned"
+        }
+      ],
+      "links": [
+        {
+          "kind": "docs",
+          "title": "Noeul design and Snipaste parity plan (Step 48)",
+          "url": "http://example.invalid/noeul-docs"
+        },
+        {
+          "kind": "shortcuts",
+          "title": "Noeul in the hotkey contract",
+          "url": "https://github.com/hellomouv/kim/blob/main/docs/HOTKEY_CONTRACT.md#133-noeul-shortcuts-are-tool-operations"
+        },
+        {
+          "kind": "mcp",
+          "title": "Noeul CLI and MCP integration (Step 62)",
+          "url": "https://github.com/hellomouv/kim/issues/67"
+        }
+      ],
+      "shortcuts": {
+        "manifest": "hotkeys.manifest.json",
+        "backend": "register",
+        "actions": [
+          {
+            "action": "capture.region",
+            "title": "Capture a region",
+            "scope": "global",
+            "keys": [
+              "F1"
+            ]
+          },
+          {
+            "action": "paste.float",
+            "title": "Pin the clipboard image",
+            "scope": "global",
+            "keys": [
+              "F3"
+            ]
+          },
+          {
+            "action": "settings.open",
+            "title": "Open settings",
+            "scope": "app",
+            "keys": [
+              "Ctrl+Comma"
+            ]
+          }
+        ]
+      },
+      "permissions": [
+        {
+          "id": "global-hotkeys",
+          "detail": "F1 and F3 are registered system-wide only while Noeul runs (RegisterHotKey, no keyboard hook)"
+        },
+        {
+          "id": "screen-capture",
+          "detail": "Reads the screen only when you start a capture; nothing leaves your computer"
+        },
+        {
+          "id": "clipboard",
+          "detail": "Reads an image from the clipboard for F3 and writes the captures you copy"
+        },
+        {
+          "id": "autostart",
+          "detail": "Starts when you sign in only if you turn that on in its settings",
+          "opt_in": true
+        }
+      ]
+    },
+    {
+      "id": "ddalgak",
+      "name": "Ddalgak",
+      "summary": "Automation engine: one key press runs the remaps, text, launches and macros you define",
+      "description": "Ddalgak turns triggers you choose into actions: remap keys, type text, open programs or websites, move the mouse, switch modes and run multi-step macros. Rules are made in a visual editor or with a headless CLI. Its keyboard hook exists only while you have the engine turned on, and Ctrl+Alt+Shift+Esc always turns it off. Not released yet.",
+      "homepage": "https://github.com/hellomouv/kim",
+      "license": "MIT OR Apache-2.0",
+      "support": "in-development",
+      "releases": [],
+      "features": [
+        "Rules: a trigger (key, chord or sequence) runs one action or ordered steps",
+        "Actions: remap keys, type Unicode text, open programs and websites, move and click the mouse",
+        "Planned: modes, app-specific rules, profiles, macro recording and a safe test playground",
+        "Ctrl+Alt+Shift+Esc always turns the engine off and releases held keys",
+        "Visual rule editor, plus a headless CLI for scripts and agents"
+      ],
+      "runs": "tray",
+      "entry_points": [
+        {
+          "kind": "gui",
+          "command": "ddalgak",
+          "summary": "Starts Ddalgak with its tray icon and rule editor; the engine stays off until you turn it on",
+          "status": "planned"
+        },
+        {
+          "kind": "cli",
+          "command": "ddalgak rule list --json",
+          "summary": "Lists your rules without opening a window",
+          "status": "planned"
+        },
+        {
+          "kind": "cli",
+          "command": "ddalgak test --dry-run",
+          "summary": "Simulates rules in the test playground; injects no input",
+          "status": "planned"
+        },
+        {
+          "kind": "cli",
+          "command": "ddalgak pause",
+          "summary": "Pauses every rule of the running engine",
+          "status": "planned"
+        },
+        {
+          "kind": "cli",
+          "command": "ddalgak hotkeys list --json",
+          "summary": "Lists Ddalgak's own shortcuts and its rule triggers (the hotkey contract's commands)",
+          "status": "planned"
+        },
+        {
+          "kind": "mcp",
+          "command": "ddalgak mcp",
+          "summary": "Optional local MCP adapter: read-only inspection, explicitly permissioned changes",
+          "status": "planned"
+        }
+      ],
+      "links": [
+        {
+          "kind": "docs",
+          "title": "Ddalgak design and rule model (Step 65)",
+          "url": "https://github.com/hellomouv/kim/issues/70"
+        },
+        {
+          "kind": "shortcuts",
+          "title": "Ddalgak in the hotkey contract",
+          "url": "https://github.com/hellomouv/kim/blob/main/docs/HOTKEY_CONTRACT.md#134-ddalgak-a-user-defined-automation-engine"
+        },
+        {
+          "kind": "mcp",
+          "title": "Ddalgak CLI and MCP integration (Step 81)",
+          "url": "https://github.com/hellomouv/kim/issues/86"
+        }
+      ],
+      "shortcuts": {
+        "manifest": "hotkeys.manifest.json",
+        "backend": "hook",
+        "actions": [
+          {
+            "action": "engine.toggle",
+            "title": "Turn the automation engine on or off",
+            "scope": "global",
+            "keys": []
+          },
+          {
+            "action": "engine.pause",
+            "title": "Pause or resume all rules",
+            "scope": "global",
+            "keys": []
+          },
+          {
+            "action": "editor.open",
+            "title": "Open the rule editor",
+            "scope": "global",
+            "keys": []
+          },
+          {
+            "action": "engine.emergency-off",
+            "title": "Emergency off: remove the hook and release held keys",
+            "scope": "global",
+            "keys": [
+              "Ctrl+Alt+Shift+Escape"
+            ],
+            "bindable": false
+          }
+        ]
+      },
+      "permissions": [
+        {
+          "id": "keyboard-hook",
+          "detail": "A low-level keyboard hook exists only while you have the engine on; it acts on your rule triggers only and records no keystrokes",
+          "opt_in": true
+        },
+        {
+          "id": "input-injection",
+          "detail": "Types text and sends keys or mouse input only when one of your rules says so",
+          "opt_in": true
+        },
+        {
+          "id": "launch-programs",
+          "detail": "Opens programs or websites only when one of your rules says so",
+          "opt_in": true
+        },
+        {
+          "id": "window-control",
+          "detail": "Moves, activates or closes windows only when one of your rules says so",
+          "opt_in": true
+        },
+        {
+          "id": "clipboard",
+          "detail": "Reads or writes the clipboard only when one of your rules says so",
+          "opt_in": true
+        },
+        {
+          "id": "global-hotkeys",
+          "detail": "Its own shortcuts (engine on or off, pause, editor) are registered system-wide while it runs, once you bind them"
+        },
+        {
+          "id": "autostart",
+          "detail": "Starts when you sign in only if you turn that on",
+          "opt_in": true
+        }
+      ]
+    }
+  ],
+  "$comment": "INVALID EXAMPLE: the bundled catalog with one broken metadata rule."
+}

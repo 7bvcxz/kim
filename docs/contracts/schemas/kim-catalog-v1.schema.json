@@ -29,7 +29,81 @@
         "homepage": { "type": "string", "pattern": "^https://" },
         "license": { "type": "string", "minLength": 1 },
         "support": { "enum": ["stable", "preview", "in-development", "deprecated"] },
-        "releases": { "type": "array", "items": { "$ref": "#/$defs/release" } }
+        "releases": { "type": "array", "items": { "$ref": "#/$defs/release" } },
+        "features": {
+          "description": "Optional (Step 47): short feature summaries, one line each.",
+          "type": "array", "maxItems": 16,
+          "items": { "type": "string", "minLength": 1, "maxLength": 120 }
+        },
+        "runs": {
+          "description": "Optional (Step 47): how the program runs. Known values: on-demand, window, tray, host; Kim shows other values as they are.",
+          "$ref": "#/$defs/word"
+        },
+        "entry_points": {
+          "description": "Optional (Step 47): GUI, headless CLI and MCP entry points. A tool without releases may only declare planned ones.",
+          "type": "array", "maxItems": 32, "items": { "$ref": "#/$defs/entry_point" }
+        },
+        "links": {
+          "description": "Optional (Step 47): documentation and integration guides.",
+          "type": "array", "maxItems": 16, "items": { "$ref": "#/$defs/link" }
+        },
+        "shortcuts": { "$ref": "#/$defs/shortcuts" },
+        "permissions": {
+          "description": "Optional (Step 47): security-relevant capabilities, disclosed before every install. Known ids: global-hotkeys, keyboard-hook, screen-capture, clipboard, input-injection, launch-programs, window-control, autostart, network.",
+          "type": "array", "maxItems": 32, "items": { "$ref": "#/$defs/permission" }
+        }
+      }
+    },
+    "word": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,31}$" },
+    "entry_point": {
+      "type": "object",
+      "required": ["kind", "command", "summary", "status"],
+      "properties": {
+        "kind": { "description": "gui, cli (headless: never opens a window) or mcp", "$ref": "#/$defs/word" },
+        "command": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "summary": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "status": { "enum": ["available", "planned"] }
+      }
+    },
+    "link": {
+      "type": "object",
+      "required": ["kind", "title", "url"],
+      "properties": {
+        "kind": { "description": "docs, mcp, shortcuts, source, ...", "$ref": "#/$defs/word" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "url": { "type": "string", "pattern": "^https://." }
+      }
+    },
+    "shortcuts": {
+      "description": "Optional (Step 47): a summary of the tool's hotkey manifest (HOTKEY_CONTRACT §3.4). For an installed tool Kim shows the installed manifest instead.",
+      "type": "object",
+      "required": ["manifest", "backend", "actions"],
+      "properties": {
+        "manifest": { "type": "string", "pattern": "^[^/\\\\:]+\\.json$" },
+        "backend": { "description": "focus, register or hook (HOTKEY_CONTRACT §4.2)", "$ref": "#/$defs/word" },
+        "actions": {
+          "type": "array", "maxItems": 64,
+          "items": {
+            "type": "object",
+            "required": ["action", "title", "scope"],
+            "properties": {
+              "action": { "type": "string", "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*){1,3}$" },
+              "title": { "type": "string", "minLength": 1, "maxLength": 120 },
+              "scope": { "type": "string", "pattern": "^(global|app|context:[a-z][a-z0-9-]{0,31})$" },
+              "keys": { "type": "array", "maxItems": 4, "items": { "type": "string", "minLength": 1 } },
+              "bindable": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    },
+    "permission": {
+      "type": "object",
+      "required": ["id", "detail"],
+      "properties": {
+        "id": { "$ref": "#/$defs/word" },
+        "detail": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "opt_in": { "type": "boolean" }
       }
     },
     "release": {

@@ -2,7 +2,7 @@
   "command": "catalog.show",
   "data": {
     "catalog": {
-      "catalog_version": 2,
+      "catalog_version": 3,
       "expires_at": "2027-05-04T00:00:00Z",
       "generated_at": "2026-11-04T00:00:00Z",
       "publisher": "mouv",
@@ -14,15 +14,38 @@
       "stale": false
     },
     "description": "Sessions live in a per-user background Host and survive closing every window. Headless CLI, optional native GUI, Claude Code status. Not released yet.",
+    "entry_points": [],
+    "features": [],
     "homepage": "https://github.com/hellomouv/kim",
+    "install": {
+      "elevation": false,
+      "per_user": true,
+      "program_dir": "C:\\Users\\me\\AppData\\Local\\Programs\\mouv\\subak",
+      "user_data_dirs": [
+        "C:\\Users\\me\\AppData\\Roaming\\mouv\\subak",
+        "C:\\Users\\me\\AppData\\Local\\mouv\\subak"
+      ]
+    },
     "license": "MIT OR Apache-2.0",
+    "links": [],
+    "manage": {
+      "automatic_updates": false,
+      "check": "kim update check",
+      "install": "kim install subak",
+      "uninstall": "kim uninstall subak",
+      "update": "kim update subak"
+    },
+    "permissions": [],
     "platform": {
       "arch": "x86_64",
       "os": "windows",
       "os_build": 19045
     },
     "releases": [],
+    "runs": null,
+    "shortcuts": null,
     "tool": {
+      "availability": "planned",
       "id": "subak",
       "incompatible_reason": null,
       "installed_version": null,

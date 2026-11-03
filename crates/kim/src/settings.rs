@@ -14,6 +14,11 @@ pub struct Settings {
     pub check_updates_on_launch: bool,
     /// Refuse every network operation (catalog refresh, downloads).
     pub offline_mode: bool,
+    /// Set when the settings file exists but cannot be read or parsed. Kim then fails closed:
+    /// network operations are refused (the user may have chosen offline mode) until the file is
+    /// fixed or removed. Never serialized.
+    #[serde(skip)]
+    pub unreadable: Option<String>,
 }
 
 /// The keys that `kim settings set` accepts.
@@ -27,24 +32,27 @@ impl Settings {
     /// Loads settings; a missing file yields defaults. A corrupt file also yields defaults plus a
     /// warning (never a crash).
     pub fn load_from(path: &Path) -> (Self, Option<String>) {
+        // A missing file means defaults. A file that exists but cannot be used fails closed:
+        // the user might have enabled offline mode in it, so network access is refused.
+        let fail_closed = |why: String| {
+            let s = Self {
+                offline_mode: true,
+                unreadable: Some(why.clone()),
+                ..Self::default()
+            };
+            (
+                s,
+                Some(format!(
+                    "{why}; network operations are disabled until the file is fixed or removed"
+                )),
+            )
+        };
         match std::fs::read(path) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => (Self::default(), None),
-            Err(e) => (
-                Self::default(),
-                Some(format!(
-                    "cannot read {}: {e}; using defaults",
-                    path.display()
-                )),
-            ),
+            Err(e) => fail_closed(format!("cannot read {}: {e}", path.display())),
             Ok(bytes) => match serde_json::from_slice(&bytes) {
                 Ok(s) => (s, None),
-                Err(e) => (
-                    Self::default(),
-                    Some(format!(
-                        "{} is invalid ({e}); using defaults",
-                        path.display()
-                    )),
-                ),
+                Err(e) => fail_closed(format!("{} is invalid ({e})", path.display())),
             },
         }
     }
@@ -100,6 +108,13 @@ impl Settings {
 
     /// Error to return when a network operation is attempted in offline mode.
     pub fn ensure_online(&self) -> Result<()> {
+        if let Some(why) = &self.unreadable {
+            return Err(KimError::new(
+                ErrorCode::OfflineMode,
+                format!("{why}; Kim will not use the network while its settings are unreadable"),
+            )
+            .with_hint("fix or delete the settings file, then retry (defaults allow explicit network operations)"));
+        }
         if self.offline_mode {
             Err(KimError::new(
                 ErrorCode::OfflineMode,
@@ -165,8 +180,13 @@ mod tests {
         );
         std::fs::write(&path, b"{oops").unwrap();
         let (s, warn) = Settings::load_from(&path);
-        assert_eq!(s, Settings::default());
-        assert!(warn.unwrap().contains("using defaults"));
+        // Fail closed: a corrupt file must not silently re-enable the network.
+        assert!(s.offline_mode && s.unreadable.is_some());
+        assert!(!s.check_updates_on_launch);
+        assert!(warn.unwrap().contains("network operations are disabled"));
+        let e = s.ensure_online().unwrap_err();
+        assert_eq!(e.code, ErrorCode::OfflineMode);
+        assert!(e.message.contains("unreadable"), "{}", e.message);
         let _ = std::fs::remove_dir_all(dir);
     }
 }

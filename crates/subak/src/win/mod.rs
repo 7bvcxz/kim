@@ -2,8 +2,8 @@
 //!
 //! Only this module tree calls Win32. Every `unsafe` block states why it is sound.
 
-pub mod console;
 pub mod conpty;
+pub mod console;
 pub mod pipe;
 pub mod spawn;
 
@@ -102,7 +102,9 @@ unsafe fn from_wide_ptr(p: *const u16) -> String {
 
 /// Waits for a waitable handle; `true` when it is signaled.
 pub fn wait(h: HANDLE, timeout: Option<Duration>) -> bool {
-    let ms = timeout.map_or(INFINITE, |d| u32::try_from(d.as_millis()).unwrap_or(INFINITE - 1));
+    let ms = timeout.map_or(INFINITE, |d| {
+        u32::try_from(d.as_millis()).unwrap_or(INFINITE - 1)
+    });
     // SAFETY: `h` is a valid waitable handle owned by the caller for the duration of the call.
     unsafe { WaitForSingleObject(h, ms) == WAIT_OBJECT_0 }
 }
@@ -160,7 +162,15 @@ pub fn user_sid() -> io::Result<String> {
     let token = Handle::new(token)?;
     let mut len = 0u32;
     // SAFETY: size query with a null buffer; fails with ERROR_INSUFFICIENT_BUFFER and sets `len`.
-    unsafe { GetTokenInformation(token.raw(), TokenUser, std::ptr::null_mut(), 0, &raw mut len) };
+    unsafe {
+        GetTokenInformation(
+            token.raw(),
+            TokenUser,
+            std::ptr::null_mut(),
+            0,
+            &raw mut len,
+        )
+    };
     // u64 elements keep the buffer aligned for TOKEN_USER.
     let mut buf = vec![0u64; (len as usize).div_ceil(8).max(1)];
     // SAFETY: `buf` holds at least `len` writable bytes.
@@ -262,7 +272,12 @@ impl AttrList {
     /// # Safety
     /// `value` must point to `size` readable bytes that stay valid until the process is created
     /// (or, for `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE`, be the `HPCON` value itself).
-    pub unsafe fn set(&mut self, attribute: u32, value: *const c_void, size: usize) -> io::Result<()> {
+    pub unsafe fn set(
+        &mut self,
+        attribute: u32,
+        value: *const c_void,
+        size: usize,
+    ) -> io::Result<()> {
         // SAFETY: the list was initialized in `new`; the caller guarantees `value`.
         let ok = unsafe {
             UpdateProcThreadAttribute(

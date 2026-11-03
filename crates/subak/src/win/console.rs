@@ -63,11 +63,10 @@ impl RawMode {
         };
         let hin = std_handle(STD_INPUT_HANDLE);
         if let Some(m) = mode(hin) {
-            let new = (m
-                & !(ENABLE_LINE_INPUT
-                    | ENABLE_ECHO_INPUT
-                    | ENABLE_PROCESSED_INPUT
-                    | ENABLE_MOUSE_INPUT))
+            let new = (m & !(ENABLE_LINE_INPUT
+                | ENABLE_ECHO_INPUT
+                | ENABLE_PROCESSED_INPUT
+                | ENABLE_MOUSE_INPUT))
                 | ENABLE_VIRTUAL_TERMINAL_INPUT
                 | ENABLE_WINDOW_INPUT;
             // SAFETY: console input handle verified by GetConsoleMode.
@@ -121,7 +120,11 @@ pub enum Input {
 /// `ENABLE_VIRTUAL_TERMINAL_INPUT`) and a resize when the window size differs from `*size`.
 /// The size is also re-checked on every timeout, because conhost does not report window-height
 /// changes as events.
-pub fn read_input(size: &mut (u16, u16), pending_high: &mut Option<u16>, poll: Duration) -> io::Result<Vec<Input>> {
+pub fn read_input(
+    size: &mut (u16, u16),
+    pending_high: &mut Option<u16>,
+    poll: Duration,
+) -> io::Result<Vec<Input>> {
     let hin = std_handle(STD_INPUT_HANDLE);
     let mut out = Vec::new();
     let ms = u32::try_from(poll.as_millis()).unwrap_or(250);

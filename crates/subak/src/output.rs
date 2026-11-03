@@ -112,7 +112,7 @@ impl CliError {
 }
 
 /// The success document of `--json`.
-pub fn success(command: &str, data: Value, warnings: &[String]) -> String {
+pub fn success(command: &str, data: &Value, warnings: &[String]) -> String {
     json!({
         "ok": true,
         "command": command,
@@ -177,8 +177,46 @@ mod tests {
     }
 
     #[test]
+    fn every_code_is_registered_in_the_cli_contract_with_its_exit_code() {
+        // docs/CLI_CONTRACT.md §6: one row per code, `| `code` | exit | meaning |`, in either
+        // the shared table or the Subak table.
+        let doc = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/CLI_CONTRACT.md"),
+        )
+        .unwrap();
+        let mut rows = std::collections::BTreeMap::new();
+        for line in doc.lines() {
+            let cells: Vec<&str> = line
+                .trim()
+                .trim_matches('|')
+                .split('|')
+                .map(str::trim)
+                .collect();
+            if cells.len() >= 3
+                && let Some(code) = cells[0].strip_prefix('`').and_then(|c| c.strip_suffix('`'))
+                && let Ok(exit) = cells[1].parse::<u8>()
+            {
+                assert!(
+                    rows.insert(code.to_string(), exit).is_none(),
+                    "`{code}` documented twice"
+                );
+            }
+        }
+        for c in Code::ALL {
+            assert_eq!(
+                rows.get(c.as_str()),
+                Some(&c.exit_code()),
+                "`{}` must be in CLI_CONTRACT.md §6 with exit {}",
+                c.as_str(),
+                c.exit_code()
+            );
+        }
+    }
+
+    #[test]
     fn envelopes_have_the_contract_shape() {
-        let ok: Value = serde_json::from_str(&success("host.status", json!({"a": 1}), &[])).unwrap();
+        let ok: Value =
+            serde_json::from_str(&success("host.status", &json!({"a": 1}), &[])).unwrap();
         assert_eq!(ok["ok"], true);
         assert_eq!(ok["schema_version"], 1);
         assert_eq!(ok["data"]["a"], 1);

@@ -29,7 +29,9 @@ use windows_sys::Win32::System::Pipes::{
     PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
     WaitNamedPipeW,
 };
-use windows_sys::Win32::System::Threading::{INFINITE, WaitForMultipleObjects, WaitForSingleObject};
+use windows_sys::Win32::System::Threading::{
+    INFINITE, WaitForMultipleObjects, WaitForSingleObject,
+};
 
 const BUFFER: u32 = 64 * 1024;
 
@@ -60,7 +62,13 @@ fn os_err(code: u32) -> io::Error {
 
 impl Pipe {
     /// One overlapped read or write. `timeout` bounds the wait (reads only).
-    fn io(&self, write: bool, buf: *mut u8, len: usize, timeout: Option<Duration>) -> io::Result<usize> {
+    fn io(
+        &self,
+        write: bool,
+        buf: *mut u8,
+        len: usize,
+        timeout: Option<Duration>,
+    ) -> io::Result<usize> {
         let event = Event::new()?;
         let mut ov = OVERLAPPED {
             hEvent: event.raw(),
@@ -83,7 +91,9 @@ impl Pipe {
             if err != ERROR_IO_PENDING {
                 return Err(os_err(err));
             }
-            let ms = timeout.map_or(INFINITE, |d| u32::try_from(d.as_millis()).unwrap_or(INFINITE - 1));
+            let ms = timeout.map_or(INFINITE, |d| {
+                u32::try_from(d.as_millis()).unwrap_or(INFINITE - 1)
+            });
             // SAFETY: valid event handle.
             if unsafe { WaitForSingleObject(event.raw(), ms) } == WAIT_TIMEOUT {
                 // SAFETY: cancels exactly this operation; then wait for it to finish so `ov` and
@@ -192,7 +202,8 @@ impl Listener {
     pub fn bind(endpoint: &str) -> io::Result<Self> {
         // Deny NETWORK logons, allow only the current user (generic all). Protected: no
         // inherited ACEs. Peer identity checks follow in Step 09.
-        let sd = SecurityDescriptor::from_sddl(&format!("D:P(D;;GA;;;NU)(A;;GA;;;{})", user_sid()?))?;
+        let sd =
+            SecurityDescriptor::from_sddl(&format!("D:P(D;;GA;;;NU)(A;;GA;;;{})", user_sid()?))?;
         let mut l = Self {
             name: wide(path(endpoint)),
             sd,
@@ -217,7 +228,11 @@ impl Listener {
         };
         let open = PIPE_ACCESS_DUPLEX
             | FILE_FLAG_OVERLAPPED
-            | if first { FILE_FLAG_FIRST_PIPE_INSTANCE } else { 0 };
+            | if first {
+                FILE_FLAG_FIRST_PIPE_INSTANCE
+            } else {
+                0
+            };
         // SAFETY: `name` is NUL-terminated; `sa` and its descriptor are alive for the call.
         let h = unsafe {
             CreateNamedPipeW(
@@ -338,18 +353,19 @@ mod tests {
     use windows_sys::Win32::Security::DACL_SECURITY_INFORMATION;
 
     fn endpoint(tag: &str) -> String {
-        format!("subak-unit-{tag}-{}-{:?}", std::process::id(), std::thread::current().id())
-            .replace(['(', ')'], "")
+        format!(
+            "subak-unit-{tag}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        )
+        .replace(['(', ')'], "")
     }
 
     #[test]
     fn duplex_overlapped_io_does_not_deadlock() {
         let ep = endpoint("duplex");
         let mut l = Listener::bind(&ep).unwrap();
-        let client = std::thread::spawn({
-            let ep = ep.clone();
-            move || connect(&ep, Duration::from_secs(5)).unwrap()
-        });
+        let client = std::thread::spawn(move || connect(&ep, Duration::from_secs(5)).unwrap());
         let server = l.accept().unwrap().unwrap();
         let client = Arc::new(client.join().unwrap());
         assert_eq!(server.client_pid(), Some(std::process::id()));
@@ -371,7 +387,11 @@ mod tests {
         assert_eq!(&reader.join().unwrap(), b"pong!");
         drop(server);
         let mut rest = [0u8; 1];
-        assert_eq!(client.read_some(&mut rest, None).unwrap(), 0, "EOF after server close");
+        assert_eq!(
+            client.read_some(&mut rest, None).unwrap(),
+            0,
+            "EOF after server close"
+        );
     }
 
     #[test]
@@ -384,9 +404,12 @@ mod tests {
         let s = l.accept().unwrap().unwrap();
         let mut b = [0u8; 1];
         let t = Instant::now();
-        let e = Deadline { pipe: &s, until: Instant::now() + Duration::from_millis(200) }
-            .read(&mut b)
-            .unwrap_err();
+        let e = Deadline {
+            pipe: &s,
+            until: Instant::now() + Duration::from_millis(200),
+        }
+        .read(&mut b)
+        .unwrap_err();
         assert_eq!(e.kind(), io::ErrorKind::TimedOut);
         assert!(t.elapsed() < Duration::from_secs(3));
         drop(c);
@@ -397,7 +420,11 @@ mod tests {
         assert!(t.join().unwrap().unwrap(), "accept returns None on stop");
         drop(s);
         let gone = connect(&ep, Duration::from_millis(100)).unwrap_err();
-        assert_eq!(gone.kind(), io::ErrorKind::NotFound, "pipe name removed: {gone}");
+        assert_eq!(
+            gone.kind(),
+            io::ErrorKind::NotFound,
+            "pipe name removed: {gone}"
+        );
     }
 
     #[test]
@@ -436,8 +463,18 @@ mod tests {
         let sddl = unsafe { super::super::from_wide_ptr(text) };
         let sid = user_sid().unwrap();
         assert!(sddl.starts_with("D:P"), "{sddl}");
-        assert!(sddl.contains(";;;NU)") && sddl.contains("(D;"), "denies NETWORK: {sddl}");
-        assert!(sddl.contains(&format!(";;;{sid})")), "allows the user: {sddl}");
-        assert_eq!(sddl.matches("(A;").count(), 1, "exactly one allow ACE: {sddl}");
+        assert!(
+            sddl.contains(";;;NU)") && sddl.contains("(D;"),
+            "denies NETWORK: {sddl}"
+        );
+        assert!(
+            sddl.contains(&format!(";;;{sid})")),
+            "allows the user: {sddl}"
+        );
+        assert_eq!(
+            sddl.matches("(A;").count(),
+            1,
+            "exactly one allow ACE: {sddl}"
+        );
     }
 }

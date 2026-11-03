@@ -105,11 +105,16 @@ pub fn serve(opts: &ServeOpts) -> Result<Value, CliError> {
     })?;
     let (cols, rows) = DEFAULT_SIZE;
     let pty = Pty::spawn(&opts.shell, profile_dir().as_deref(), cols, rows).map_err(|e| {
-        CliError::new(Code::SpawnFailed, format!("cannot start `{}`: {e}", opts.shell))
-            .hint("check the --shell command line")
+        CliError::new(
+            Code::SpawnFailed,
+            format!("cannot start `{}`: {e}", opts.shell),
+        )
+        .hint("check the --shell command line")
     })?;
     let pty = Arc::new(pty);
-    let output = pty.take_output().expect("a fresh pseudo console has its output end");
+    let output = pty
+        .take_output()
+        .expect("a fresh pseudo console has its output end");
     let (sd_tx, sd_rx) = mpsc::channel();
     let host = Arc::new(Host {
         pty: Arc::clone(&pty),
@@ -149,7 +154,7 @@ pub fn serve(opts: &ServeOpts) -> Result<Value, CliError> {
         move || {
             while let Ok(Some(p)) = listener.accept() {
                 let host = Arc::clone(&host);
-                thread::spawn(move || host.serve_conn(Arc::new(p)));
+                thread::spawn(move || host.serve_conn(&Arc::new(p)));
             }
         }
     });
@@ -186,7 +191,7 @@ pub fn serve(opts: &ServeOpts) -> Result<Value, CliError> {
             "job_processes_left": pty.job_processes(),
         },
     });
-    host.finish(requester, &report, reason);
+    host.finish(requester.as_ref(), &report, reason);
     stopper.set();
     join_bounded(acceptor, Duration::from_secs(2));
     Ok(report)
@@ -238,7 +243,9 @@ enum Reply {
 
 impl Host {
     fn lock(&self) -> MutexGuard<'_, State> {
-        self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     fn read_output(&self, out: &Handle) {
@@ -309,19 +316,21 @@ impl Host {
         })
     }
 
-    fn event(st: &mut State, name: &str, data: Value) -> Vec<u8> {
+    fn event(st: &mut State, name: &str, data: &Value) -> Vec<u8> {
         st.event_seq += 1;
-        proto::encode_control(&json!({"type": "event", "seq": st.event_seq, "event": name, "data": data}))
+        proto::encode_control(
+            &json!({"type": "event", "seq": st.event_seq, "event": name, "data": data}),
+        )
     }
 
     /// Sends the final messages and waits (bounded) until they are written to every pipe.
-    fn finish(&self, requester: Option<(u64, Value)>, report: &Value, reason: &str) {
+    fn finish(&self, requester: Option<&(u64, Value)>, report: &Value, reason: &str) {
         let mut acks = Vec::new();
         let mut st = self.lock();
         let ids: Vec<u64> = st.conns.keys().copied().collect();
         for id in ids {
             let mut frames = Vec::new();
-            if let Some((rid, req)) = &requester
+            if let Some((rid, req)) = requester
                 && *rid == id
             {
                 frames.push(response(req, Ok(report.clone())));
@@ -329,9 +338,13 @@ impl Host {
             frames.push(Self::event(
                 &mut st,
                 "pane.exited",
-                json!({"pane": 1, "pid": self.pty.pid(), "exit_code": report["shell"]["exit_code"]}),
+                &json!({"pane": 1, "pid": self.pty.pid(), "exit_code": report["shell"]["exit_code"]}),
             ));
-            frames.push(Self::event(&mut st, "host.stopping", json!({"reason": reason})));
+            frames.push(Self::event(
+                &mut st,
+                "host.stopping",
+                &json!({"reason": reason}),
+            ));
             let conn = &st.conns[&id];
             let last = frames.len() - 1;
             for (i, bytes) in frames.into_iter().enumerate() {
@@ -349,10 +362,10 @@ impl Host {
         }
     }
 
-    fn serve_conn(self: Arc<Self>, pipe: Arc<Pipe>) {
+    fn serve_conn(self: Arc<Self>, pipe: &Arc<Pipe>) {
         let (tx, rx) = mpsc::sync_channel::<Out>(QUEUE);
         let writer = thread::spawn({
-            let pipe = Arc::clone(&pipe);
+            let pipe = Arc::clone(pipe);
             move || {
                 for out in rx {
                     if pipe.write_all_bytes(&out.bytes).is_err() {
@@ -365,8 +378,8 @@ impl Host {
                 }
             }
         });
-        if let Some(id) = self.handshake(&pipe, &tx) {
-            self.requests(id, &pipe, &tx);
+        if let Some(id) = self.handshake(pipe, &tx) {
+            self.requests(id, pipe, &tx);
             self.lock().conns.remove(&id);
         }
         drop(tx);
@@ -381,7 +394,13 @@ impl Host {
 
     fn send_final(tx: &mpsc::SyncSender<Out>, bytes: Vec<u8>) {
         let (atx, arx) = mpsc::channel();
-        if tx.try_send(Out { bytes, ack: Some(atx) }).is_ok() {
+        if tx
+            .try_send(Out {
+                bytes,
+                ack: Some(atx),
+            })
+            .is_ok()
+        {
             let _ = arx.recv_timeout(Duration::from_secs(1));
         }
     }
@@ -475,7 +494,8 @@ impl Host {
                         return;
                     }
                     let rid = m["id"].clone();
-                    let reply = self.handle(id, &rid, m["method"].as_str().unwrap_or(""), &m["params"]);
+                    let reply =
+                        self.handle(id, &rid, m["method"].as_str().unwrap_or(""), &m["params"]);
                     if let Reply::Now(r) = reply {
                         let _ = tx.try_send(Out {
                             bytes: response(&rid, r),
@@ -505,7 +525,8 @@ impl Host {
             }
             "pane.attach" => self.attach(conn, rid, params),
             "pane.resize" => Reply::Now(size_param(params).and_then(|s| {
-                let (c, r) = s.ok_or(("invalid_params", "cols and rows are required".to_string()))?;
+                let (c, r) =
+                    s.ok_or(("invalid_params", "cols and rows are required".to_string()))?;
                 self.pty
                     .resize(c, r)
                     .map_err(|e| ("internal_error", format!("resize failed: {e}")))?;
@@ -560,7 +581,12 @@ impl Host {
         });
         if !replay.is_empty() {
             let _ = c.tx.try_send(Out {
-                bytes: proto::encode_data(STREAM, seq - replay.len() as u64, FLAG_SNAPSHOT, &replay),
+                bytes: proto::encode_data(
+                    STREAM,
+                    seq - replay.len() as u64,
+                    FLAG_SNAPSHOT,
+                    &replay,
+                ),
                 ack: None,
             });
         }

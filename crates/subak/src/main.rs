@@ -92,7 +92,7 @@ fn main() -> ExitCode {
         }
         Cmd::Capabilities if args.json => {
             let data: Value = serde_json::from_str(CAPABILITIES).expect("valid built-in JSON");
-            let _ = writeln!(out, "{}", output::success("capabilities", data, &[]));
+            let _ = writeln!(out, "{}", output::success("capabilities", &data, &[]));
             ExitCode::SUCCESS
         }
         Cmd::Capabilities => {
@@ -111,7 +111,7 @@ fn main() -> ExitCode {
                 Ok(data) => {
                     if args.json {
                         let mut out = std::io::stdout().lock();
-                        let _ = writeln!(out, "{}", output::success(cmd.name(), data, &[]));
+                        let _ = writeln!(out, "{}", output::success(cmd.name(), &data, &[]));
                     } else {
                         human(&cmd, &data, &args);
                     }

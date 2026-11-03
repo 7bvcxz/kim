@@ -100,8 +100,8 @@ pub fn read_frame(r: &mut impl Read) -> io::Result<Option<Frame>> {
             if len - 1 > MAX_CONTROL {
                 return Err(invalid("control frame too large"));
             }
-            let v: Value =
-                serde_json::from_slice(&body[1..]).map_err(|_| invalid("control frame is not JSON"))?;
+            let v: Value = serde_json::from_slice(&body[1..])
+                .map_err(|_| invalid("control frame is not JSON"))?;
             if !v.is_object() {
                 return Err(invalid("control frame is not a JSON object"));
             }
@@ -243,7 +243,9 @@ mod tests {
         let mut r = wire.as_slice();
         assert_eq!(
             read_frame(&mut r).unwrap(),
-            Some(Frame::Control(json!({"type": "hello", "protocol": {"min": 0, "max": 0}})))
+            Some(Frame::Control(
+                json!({"type": "hello", "protocol": {"min": 0, "max": 0}})
+            ))
         );
         assert_eq!(
             read_frame(&mut r).unwrap(),
@@ -254,21 +256,24 @@ mod tests {
                 bytes: b"echo hi\r".to_vec()
             })
         );
-        assert!(matches!(read_frame(&mut r).unwrap(), Some(Frame::Data { .. })));
+        assert!(matches!(
+            read_frame(&mut r).unwrap(),
+            Some(Frame::Data { .. })
+        ));
         assert_eq!(read_frame(&mut r).unwrap(), None, "clean EOF");
     }
 
     #[test]
     fn malformed_frames_are_invalid_data_never_panics() {
         let cases: Vec<Vec<u8>> = vec![
-            vec![1, 0],                                   // truncated header
-            vec![0, 0, 0, 0],                             // zero length
-            vec![255, 255, 255, 255, 1],                  // too long
-            vec![3, 0, 0, 0, 1, b'{'],                    // truncated body
-            vec![2, 0, 0, 0, 1, b'1'],                    // JSON but not an object
-            vec![2, 0, 0, 0, 9, b'x'],                    // unknown kind
-            vec![5, 0, 0, 0, 2, 1, 0, 0, 0],              // data header truncated
-            encode_data(1, 0, 0x80, b"x"),                // unknown flag
+            vec![1, 0],                      // truncated header
+            vec![0, 0, 0, 0],                // zero length
+            vec![255, 255, 255, 255, 1],     // too long
+            vec![3, 0, 0, 0, 1, b'{'],       // truncated body
+            vec![2, 0, 0, 0, 1, b'1'],       // JSON but not an object
+            vec![2, 0, 0, 0, 9, b'x'],       // unknown kind
+            vec![5, 0, 0, 0, 2, 1, 0, 0, 0], // data header truncated
+            encode_data(1, 0, 0x80, b"x"),   // unknown flag
             {
                 let mut v = header(KIND_CONTROL, MAX_CONTROL + 1);
                 v.resize(5 + MAX_CONTROL + 1, b' ');
@@ -290,7 +295,11 @@ mod tests {
         // 18 bytes pushed, cap 16: "c\n0123456789\nxyz" kept; replay starts after the first \n.
         assert_eq!(r.replay(), b"0123456789\nxyz");
         r.push(&[b'q'; 40]);
-        assert_eq!(r.replay(), b"", "no line start left: replay nothing rather than garbage");
+        assert_eq!(
+            r.replay(),
+            b"",
+            "no line start left: replay nothing rather than garbage"
+        );
     }
 
     #[test]
@@ -300,7 +309,11 @@ mod tests {
         assert_eq!(k.feed(&[PREFIX, PREFIX, b'x']), (vec![PREFIX, b'x'], false));
         assert_eq!(k.feed(&[PREFIX, b'c']), (vec![PREFIX, b'c'], false));
         assert_eq!(k.feed(&[b'a', PREFIX]), (b"a".to_vec(), false));
-        assert_eq!(k.feed(b"d"), (Vec::new(), true), "prefix carried across reads");
+        assert_eq!(
+            k.feed(b"d"),
+            (Vec::new(), true),
+            "prefix carried across reads"
+        );
         assert_eq!(k.feed(&[b'z', PREFIX, b'd', b'q']), (b"z".to_vec(), true));
     }
 

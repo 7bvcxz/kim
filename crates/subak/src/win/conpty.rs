@@ -191,7 +191,10 @@ impl Pty {
     }
 
     pub fn write_input(&self, bytes: &[u8]) -> io::Result<()> {
-        let guard = self.input.lock().map_err(|_| io::Error::other("poisoned"))?;
+        let guard = self
+            .input
+            .lock()
+            .map_err(|_| io::Error::other("poisoned"))?;
         let Some(h) = guard.as_ref() else {
             return Err(io::ErrorKind::BrokenPipe.into());
         };
@@ -200,8 +203,15 @@ impl Pty {
             let mut n = 0u32;
             let len = u32::try_from(rest.len().min(64 * 1024)).expect("bounded");
             // SAFETY: `rest` has `len` readable bytes; synchronous anonymous pipe.
-            if unsafe { WriteFile(h.raw(), rest.as_ptr(), len, &raw mut n, std::ptr::null_mut()) }
-                == 0
+            if unsafe {
+                WriteFile(
+                    h.raw(),
+                    rest.as_ptr(),
+                    len,
+                    &raw mut n,
+                    std::ptr::null_mut(),
+                )
+            } == 0
             {
                 return Err(io::Error::last_os_error());
             }
@@ -305,7 +315,16 @@ pub fn read_output(h: &Handle, buf: &mut [u8]) -> io::Result<usize> {
     let mut n = 0u32;
     let len = u32::try_from(buf.len()).unwrap_or(u32::MAX);
     // SAFETY: `buf` has `len` writable bytes; synchronous anonymous pipe read by one thread.
-    if unsafe { ReadFile(h.raw(), buf.as_mut_ptr(), len, &raw mut n, std::ptr::null_mut()) } == 0 {
+    if unsafe {
+        ReadFile(
+            h.raw(),
+            buf.as_mut_ptr(),
+            len,
+            &raw mut n,
+            std::ptr::null_mut(),
+        )
+    } == 0
+    {
         let err = io::Error::last_os_error();
         return match err.raw_os_error().map(|c| c as u32) {
             Some(ERROR_BROKEN_PIPE | ERROR_NO_DATA) => Ok(0),
@@ -376,7 +395,12 @@ mod tests {
                     }
                 }
             });
-            Self { pty, rx, seen: Vec::new(), reader }
+            Self {
+                pty,
+                rx,
+                seen: Vec::new(),
+                reader,
+            }
         }
 
         fn expect(&mut self, needle: &str) -> String {
@@ -410,7 +434,10 @@ mod tests {
         s.expect("marker-io-1");
         s.pty.write_input(b"mode con\r").unwrap();
         let text = s.expect("Columns:");
-        assert!(text.contains("100"), "initial size reaches the shell:\n{text}");
+        assert!(
+            text.contains("100"),
+            "initial size reaches the shell:\n{text}"
+        );
         s.pty.resize(132, 40).unwrap();
         s.seen.clear();
         s.pty.write_input(b"mode con\r").unwrap();
@@ -434,13 +461,18 @@ mod tests {
         let before = count();
         for i in 0..8 {
             let mut s = Session::start(80, 25);
-            s.pty.write_input(format!("echo cyc^le-{i}\r").as_bytes()).unwrap();
+            s.pty
+                .write_input(format!("echo cyc^le-{i}\r").as_bytes())
+                .unwrap();
             s.expect(&format!("cycle-{i}"));
             s.end();
         }
         let after = count();
         // Each session opens ~8 handles (2 pipes, job, process, thread, attribute data); a leak
         // would grow by ~64. Other tests in this binary run concurrently, hence the slack.
-        assert!(after <= before + 16, "handles grew from {before} to {after}");
+        assert!(
+            after <= before + 16,
+            "handles grew from {before} to {after}"
+        );
     }
 }

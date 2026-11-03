@@ -97,9 +97,11 @@ pub fn parse(raw: &[String]) -> Result<(Cmd, Args), (String, CliError)> {
             if let Some(v) = inline.clone() {
                 return Some(v);
             }
-            i += 1;
-            let v = raw.get(i).cloned();
-            if v.is_none() {
+            // A following `--flag` is never taken as a value (`--opt=--x` passes such a value).
+            let v = raw.get(i + 1).filter(|v| !v.starts_with("--")).cloned();
+            if v.is_some() {
+                i += 1;
+            } else {
                 bad.get_or_insert(CliError::usage(format!("{name} needs a value")));
             }
             v
@@ -254,8 +256,15 @@ mod tests {
         let (cmd, a) = p(&["host", "stop", "-y", "--dry-run"]).unwrap();
         assert_eq!(cmd, Cmd::HostStop);
         assert!(a.yes && a.dry_run);
-        let (_, a) = p(&["host", "serve", "--shell", "cmd.exe /d", "--job-breakaway", "false"])
-            .unwrap();
+        let (_, a) = p(&[
+            "host",
+            "serve",
+            "--shell",
+            "cmd.exe /d",
+            "--job-breakaway",
+            "false",
+        ])
+        .unwrap();
         assert_eq!(a.shell.as_deref(), Some("cmd.exe /d"));
         assert_eq!(a.job_breakaway, Some(false));
     }
@@ -266,10 +275,24 @@ mod tests {
         assert_eq!(usage(&["attach"]).0, "subak");
         assert_eq!(usage(&["host", "frob"]).0, "host");
         assert_eq!(usage(&["host", "status", "--yes"]).0, "host.status");
-        assert_eq!(usage(&["host", "start", "--endpoint", "a\\b"]).0, "host.start");
+        assert_eq!(
+            usage(&["host", "start", "--endpoint", "a\\b"]).0,
+            "host.start"
+        );
         assert_eq!(usage(&["host", "attach", "--size", "1x1"]).0, "host.attach");
         assert_eq!(usage(&["host", "attach", "--json"]).0, "host.attach");
         assert_eq!(usage(&["host", "stop", "--endpoint"]).0, "host.stop");
+        let (name, e) = usage(&["host", "stop", "--endpoint", "--json"]);
+        assert_eq!(name, "host.stop");
+        assert!(e.message.contains("needs a value"), "{}", e.message);
+        assert_eq!(
+            p(&["host", "start", "--shell=--odd", "--json"])
+                .unwrap()
+                .1
+                .shell
+                .as_deref(),
+            Some("--odd")
+        );
         assert_eq!(usage(&["host", "status", "-q", "-v"]).0, "host.status");
         assert_eq!(usage(&["--json"]).0, "subak");
         assert_eq!(usage(&["capabilities", "--bogus"]).0, "capabilities");

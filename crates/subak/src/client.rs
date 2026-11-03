@@ -48,7 +48,8 @@ fn host_error(code: &str, message: &str) -> CliError {
         "timeout" => Code::Timeout,
         _ => Code::Internal,
     };
-    CliError::new(c, format!("the Host refused the request: {message}")).detail(format!("ipc error code: {code}"))
+    CliError::new(c, format!("the Host refused the request: {message}"))
+        .detail(format!("ipc error code: {code}"))
 }
 
 /// One connection to a Host, after the handshake.
@@ -89,14 +90,24 @@ impl Session {
             Ok(Some(Frame::Control(m))) if m["type"] == "error" => {
                 return Err(host_error(
                     m["error"]["code"].as_str().unwrap_or("?"),
-                    m["error"]["message"].as_str().unwrap_or("handshake refused"),
+                    m["error"]["message"]
+                        .as_str()
+                        .unwrap_or("handshake refused"),
                 ));
             }
             Err(e) if e.kind() == io::ErrorKind::TimedOut => {
-                return Err(CliError::new(Code::Timeout, "the Host did not answer the handshake within 5 s"));
+                return Err(CliError::new(
+                    Code::Timeout,
+                    "the Host did not answer the handshake within 5 s",
+                ));
             }
             Ok(None) | Err(_) => return Err(disconnected()),
-            Ok(Some(_)) => return Err(CliError::new(Code::ProtocolError, "unexpected handshake reply")),
+            Ok(Some(_)) => {
+                return Err(CliError::new(
+                    Code::ProtocolError,
+                    "unexpected handshake reply",
+                ));
+            }
         };
         Ok(Self {
             pipe: Arc::new(pipe),
@@ -105,9 +116,12 @@ impl Session {
         })
     }
 
-    pub fn request(&mut self, method: &str, params: Value) -> Result<Value, CliError> {
+    pub fn request(&mut self, method: &str, params: &Value) -> Result<Value, CliError> {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
-        send(&self.pipe, &json!({"type": "request", "id": id, "method": method, "params": params}))?;
+        send(
+            &self.pipe,
+            &json!({"type": "request", "id": id, "method": method, "params": params}),
+        )?;
         loop {
             match proto::read_frame(&mut &*self.pipe) {
                 Ok(Some(Frame::Control(m))) if m["type"] == "response" && m["id"] == id => {
@@ -123,7 +137,10 @@ impl Session {
                 Ok(Some(_)) => {} // events and data are not for a plain request
                 Ok(None) => return Err(disconnected()),
                 Err(e) if e.kind() == io::ErrorKind::InvalidData => {
-                    return Err(CliError::new(Code::ProtocolError, format!("malformed Host message: {e}")));
+                    return Err(CliError::new(
+                        Code::ProtocolError,
+                        format!("malformed Host message: {e}"),
+                    ));
                 }
                 Err(_) => return Err(disconnected()),
             }
@@ -168,7 +185,10 @@ pub fn start(a: &Args, endpoint: &str) -> Result<Value, CliError> {
         }));
     }
     if let Ok(mut s) = Session::open(endpoint, Duration::from_millis(500)) {
-        let pid = s.request("host.status", json!({})).ok().map(|st| st["host"]["pid"].clone());
+        let pid = s
+            .request("host.status", &json!({}))
+            .ok()
+            .map(|st| st["host"]["pid"].clone());
         return Err(CliError::new(
             Code::HostAlreadyRunning,
             format!(
@@ -185,7 +205,7 @@ pub fn start(a: &Args, endpoint: &str) -> Result<Value, CliError> {
     loop {
         match Session::open(endpoint, Duration::from_millis(200)) {
             Ok(mut s) => {
-                let st = s.request("host.status", json!({}))?;
+                let st = s.request("host.status", &json!({}))?;
                 if st["host"]["pid"] != spawned.pid {
                     return Err(CliError::new(
                         Code::HostAlreadyRunning,
@@ -204,7 +224,10 @@ pub fn start(a: &Args, endpoint: &str) -> Result<Value, CliError> {
         }
         if let Some(code) = win::exit_code(spawned.process.raw()) {
             return Err(if code == u32::from(Code::HostAlreadyRunning.exit_code()) {
-                CliError::new(Code::HostAlreadyRunning, "another Host already serves this endpoint")
+                CliError::new(
+                    Code::HostAlreadyRunning,
+                    "another Host already serves this endpoint",
+                )
             } else {
                 CliError::new(
                     Code::SpawnFailed,
@@ -214,31 +237,41 @@ pub fn start(a: &Args, endpoint: &str) -> Result<Value, CliError> {
             });
         }
         if Instant::now() > deadline {
-            return Err(CliError::new(Code::Timeout, "the Host did not open its pipe within 10 s")
-                .detail(format!("host pid {}", spawned.pid)));
+            return Err(
+                CliError::new(Code::Timeout, "the Host did not open its pipe within 10 s")
+                    .detail(format!("host pid {}", spawned.pid)),
+            );
         }
         std::thread::sleep(Duration::from_millis(50));
     }
 }
 
 pub fn status(endpoint: &str) -> Result<Value, CliError> {
-    Session::open(endpoint, Duration::from_secs(2))?.request("host.status", json!({}))
+    Session::open(endpoint, Duration::from_secs(2))?.request("host.status", &json!({}))
 }
 
 fn can_prompt(a: &Args) -> bool {
     let env_no_input = std::env::var("KIM_NO_INPUT")
         .is_ok_and(|v| !(v.is_empty() || v == "0" || v.eq_ignore_ascii_case("false")));
-    !a.json && !a.no_input && !env_no_input && io::stdin().is_terminal() && io::stderr().is_terminal()
+    !a.json
+        && !a.no_input
+        && !env_no_input
+        && io::stdin().is_terminal()
+        && io::stderr().is_terminal()
 }
 
 /// `host stop`: destructive — ends the shell and every process in its job, then the Host.
 pub fn stop(a: &Args, endpoint: &str) -> Result<Value, CliError> {
     let mut s = Session::open(endpoint, Duration::from_secs(2))?;
-    let st = s.request("host.status", json!({}))?;
+    let st = s.request("host.status", &json!({}))?;
     if a.dry_run {
-        return Ok(json!({"dry_run": true, "would_stop": {"host": st["host"], "pane": st["pane"], "clients": st["clients"]}}));
+        return Ok(
+            json!({"dry_run": true, "would_stop": {"host": st["host"], "pane": st["pane"], "clients": st["clients"]}}),
+        );
     }
-    let host_pid = st["host"]["pid"].as_u64().and_then(|p| u32::try_from(p).ok());
+    let host_pid = st["host"]["pid"]
+        .as_u64()
+        .and_then(|p| u32::try_from(p).ok());
     if !a.yes {
         let question = format!(
             "Stop the Subak Host (pid {}) and end its shell (pid {}, {} process(es))? [y/N] ",
@@ -255,11 +288,14 @@ pub fn stop(a: &Args, endpoint: &str) -> Result<Value, CliError> {
         let mut line = String::new();
         let _ = io::stdin().read_line(&mut line);
         if !matches!(line.trim(), "y" | "Y" | "yes") {
-            return Err(CliError::new(Code::Cancelled, "not stopped; nothing changed"));
+            return Err(CliError::new(
+                Code::Cancelled,
+                "not stopped; nothing changed",
+            ));
         }
     }
     let host_proc = host_pid.and_then(win::open_process);
-    let report = s.request("host.stop", json!({"dry_run": false}))?;
+    let report = s.request("host.stop", &json!({"dry_run": false}))?;
     let exited = host_proc
         .as_ref()
         .is_none_or(|h| win::wait(h.raw(), Some(Duration::from_secs(10))));
@@ -281,11 +317,15 @@ enum End {
 pub fn attach(a: &Args, endpoint: &str) -> Result<Value, CliError> {
     let mut s = Session::open(endpoint, Duration::from_secs(2))?;
     let console_in = console::stdin_is_console();
-    let size = a
-        .size
-        .or_else(|| if console_in { console::window_size() } else { None });
+    let size = a.size.or_else(|| {
+        if console_in {
+            console::window_size()
+        } else {
+            None
+        }
+    });
     if a.dry_run {
-        let st = s.request("host.status", json!({}))?;
+        let st = s.request("host.status", &json!({}))?;
         return Ok(json!({"dry_run": true, "would_attach": {
             "host": st["host"], "pane": st["pane"],
             "size": size.map(|(c, r)| json!({"cols": c, "rows": r})),
@@ -293,7 +333,7 @@ pub fn attach(a: &Args, endpoint: &str) -> Result<Value, CliError> {
     }
     let res = s.request(
         "pane.attach",
-        json!({"size": size.map(|(c, r)| json!({"cols": c, "rows": r}))}),
+        &json!({"size": size.map(|(c, r)| json!({"cols": c, "rows": r}))}),
     )?;
     let host_pid = s.welcome["host"]["pid"].clone();
     if !a.quiet {
@@ -316,18 +356,33 @@ pub fn attach(a: &Args, endpoint: &str) -> Result<Value, CliError> {
     let end = loop {
         match proto::read_frame(&mut &*s.pipe) {
             Ok(Some(Frame::Data { bytes, .. })) => {
-                if stdout.write_all(&bytes).and_then(|()| stdout.flush()).is_err() {
+                if stdout
+                    .write_all(&bytes)
+                    .and_then(|()| stdout.flush())
+                    .is_err()
+                {
                     // Our own output is gone (e.g. the reader of a pipe went away): detach.
                     break End::Detached;
                 }
             }
             Ok(Some(Frame::Control(m))) => match m["type"].as_str() {
-                Some("event") if m["event"] == "pane.exited" => exit_code = m["data"]["exit_code"].clone(),
-                Some("event") if m["event"] == "host.stopping" => stopping = m["data"]["reason"].clone(),
-                Some("response") if m["id"] == detach_id.load(Ordering::SeqCst) => break End::Detached,
+                Some("event") if m["event"] == "pane.exited" => {
+                    exit_code = m["data"]["exit_code"].clone();
+                }
+                Some("event") if m["event"] == "host.stopping" => {
+                    stopping = m["data"]["reason"].clone();
+                }
+                Some("response") if m["id"] == detach_id.load(Ordering::SeqCst) => {
+                    break End::Detached;
+                }
                 _ => {}
             },
-            Ok(None) | Err(_) if !stopping.is_null() => break End::Stopped { exit_code, reason: stopping },
+            Ok(None) | Err(_) if !stopping.is_null() => {
+                break End::Stopped {
+                    exit_code,
+                    reason: stopping,
+                };
+            }
             Ok(None) | Err(_) => {
                 drop(raw);
                 return Err(disconnected());
@@ -345,14 +400,24 @@ pub fn attach(a: &Args, endpoint: &str) -> Result<Value, CliError> {
 }
 
 /// The input side of an attach (its own thread): keys or piped bytes → data frames.
-fn input(pipe: &Pipe, console_in: bool, size: Option<(u16, u16)>, ids: &AtomicU64, detach_id: &AtomicU64) {
+fn input(
+    pipe: &Pipe,
+    console_in: bool,
+    size: Option<(u16, u16)>,
+    ids: &AtomicU64,
+    detach_id: &AtomicU64,
+) {
     let mut keys = DetachKeys::default();
     let request = |method: &str, params: Value| -> bool {
         let id = ids.fetch_add(1, Ordering::SeqCst);
         if method == "pane.detach" {
             detach_id.store(id, Ordering::SeqCst);
         }
-        send(pipe, &json!({"type": "request", "id": id, "method": method, "params": params})).is_ok()
+        send(
+            pipe,
+            &json!({"type": "request", "id": id, "method": method, "params": params}),
+        )
+        .is_ok()
     };
     let mut forward = |bytes: &[u8]| -> Option<bool> {
         let (fwd, detach) = keys.feed(bytes);
@@ -368,7 +433,8 @@ fn input(pipe: &Pipe, console_in: bool, size: Option<(u16, u16)>, ids: &AtomicU6
         let mut size = size.unwrap_or((0, 0));
         let mut high = None;
         loop {
-            let Ok(events) = console::read_input(&mut size, &mut high, Duration::from_millis(250)) else {
+            let Ok(events) = console::read_input(&mut size, &mut high, Duration::from_millis(250))
+            else {
                 request("pane.detach", json!({}));
                 return;
             };

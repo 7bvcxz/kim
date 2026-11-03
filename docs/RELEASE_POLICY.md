@@ -1,8 +1,9 @@
 # Release, install and update policy
 
-Status: **current** · Step 06 · Decisions: [ADR 0013](adr/0013-kim-manager-architecture.md),
-[CATALOG_FORMAT](CATALOG_FORMAT.md) · Requirements: `KIM-SEC-001…005`, `KIM-FR-005…009`,
-`KIM-FR-034`
+Status: **current** · Step 06 · Step 47 (disclosure, background utilities, Noeul and Ddalgak) ·
+Decisions: [ADR 0013](adr/0013-kim-manager-architecture.md), [CATALOG_FORMAT](CATALOG_FORMAT.md) ·
+Requirements: `KIM-SEC-001…006`, `KIM-FR-001`, `KIM-FR-002`, `KIM-FR-005…009`, `KIM-FR-034`,
+`KIM-FR-051`
 
 ## 1. Consent rules (non-negotiable)
 
@@ -18,14 +19,25 @@ Status: **current** · Step 06 · Decisions: [ADR 0013](adr/0013-kim-manager-arc
    the unreadable file) until the file is fixed or removed, because it may contain the user's
    offline choice.
 3. **Dependencies are never installed implicitly.** A release that needs another tool fails with
-   `dependency_missing` and names what to install first.
-4. **Kim never stops a running program.** Uninstall is refused (`tool_running`, exit 7) while any
+   `dependency_missing` and names what to install first. Installing Kim installs no other tool,
+   and installing one tool installs no other (`KIM-FR-001`, `KIM-FR-002`): the only way a second
+   tool arrives is the user's own `kim install <that tool>`. Once its dependencies are installed,
+   the plan lists them (`plan.dependencies`).
+4. **What a tool may do is disclosed first.** The plan of every install and update lists the
+   permissions the catalog declares for the tool, e.g. *registers system-wide shortcuts*,
+   *captures the screen*, *installs a low-level keyboard hook (only after you turn it on)*,
+   *injects keyboard and mouse input* (`plan.permissions`, human `permits` lines; Kim Manager
+   shows them in the details pane before the Install button is pressed). Disclosure never
+   replaces the explicit action (`KIM-SEC-006`, [CATALOG_FORMAT §2.1](CATALOG_FORMAT.md)).
+5. **Kim never stops a running program.** Uninstall is refused (`tool_running`, exit 7) while any
    program from the tool's directory runs; an update installs side-by-side, leaves the running
    version untouched and reports that the new version is used on next start (`KIM-FR-034`).
-5. **User data survives uninstall** unless the user separately confirms deleting it
+   Background utilities that stay in the notification area (`runs: tray`: Noeul, Ddalgak) get a
+   hint telling the user to quit them from their tray icon; Kim never ends their process.
+6. **User data survives uninstall** unless the user separately confirms deleting it
    (`--purge-data` plus an interactive `delete` confirmation or `--yes`; in Kim Manager a
    checkbox plus an "I understand" acknowledgement) (`KIM-SEC-005`).
-6. **No elevation.** Installs are per user under `%LOCALAPPDATA%\Programs\mouv`; Kim never
+7. **No elevation.** Installs are per user under `%LOCALAPPDATA%\Programs\mouv`; Kim never
    requests administrator rights (`KIM-SEC-004`).
 
 ## 2. Install transaction
@@ -77,4 +89,7 @@ the binaries themselves is additional and is used only when a legitimate certifi
    `docs/contracts/examples/kim-catalog-v1/bundled.json`; `cargo xtask ci`.
 5. Merge to `main`; users see the release after `kim catalog refresh` (or a new Kim build).
 
-No release of Subak exists yet; the bundled catalog lists it with `releases: []`.
+No release of Subak, Noeul or Ddalgak exists yet; the bundled catalog lists them with
+`releases: []` (availability *planned*), so `kim install` refuses them with `no_release` and Kim
+Manager offers no Install button. A tool becomes *available* only through step 3 of this
+checklist: a real, hashed package in a signed catalog.

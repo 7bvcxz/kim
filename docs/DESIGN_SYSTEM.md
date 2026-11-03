@@ -124,6 +124,13 @@ available (ring + dot), incompatible (triangle), not installed (nothing).
   release notes (scrollable), and one explicit primary action (`Install` / `Update to x.y.z` /
   `Uninstall` as secondary-danger). No action is ever triggered by selection alone.
 - Offline/catalog-stale banner at top (info), with "Refresh catalog" button — never automatic.
+- Details also show (Step 47) the release stage (`Planned` / `Preview` / `Available`), support,
+  how the tool runs, and below the action: features, keyboard shortcuts (keys in mono, scope
+  in muted text, fixed keys marked), *What it may do on your computer* (each permission in
+  emphasis with its detail, opt-in ones marked), command-line and MCP entry points (planned
+  ones marked), documentation links as selectable text (no browser is started), install
+  location and *Updates: manual only*. A planned tool shows why there is nothing to install
+  instead of a button. The pane scrolls; the list row shows `planned` instead of a version.
 
 ### 3.3 Install progress
 

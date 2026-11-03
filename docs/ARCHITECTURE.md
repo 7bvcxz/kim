@@ -229,6 +229,7 @@ they return `unsupported_platform` until milestone M4.
 | Kim CLI contract v1, JSON schemas, headless management (`status`, `version`, `tools list\|describe`), capability discovery | implemented | 07 |
 | Hotkey contract v1 for every GUI tool (specification, schemas, conflict scenarios; [HOTKEY_CONTRACT](HOTKEY_CONTRACT.md)) | current (design) | 45 |
 | Shared hotkey library (`crates/kim-hotkeys`), `kim hotkeys` CLI, cross-tool conflict detection, Kim Manager shortcuts (`focus` backend), Windows `RegisterHotKey` backend ([HOTKEY_CONTRACT §17](HOTKEY_CONTRACT.md)) | implemented (binding editor of §11.2: planned) | 46 |
+| Catalog tool metadata (features, entry points, links, shortcut summaries, permissions), derived availability, permission disclosure in install plans; Noeul and Ddalgak listed as planned ([CATALOG_FORMAT §2.1](CATALOG_FORMAT.md)) | implemented (Noeul and Ddalgak themselves: planned, Steps 48–64 and 65–83) | 47 |
 | ConPTY + detached Host proof: `subak host start\|status\|attach\|stop` prototype (one shell per Host, prototype pipe; [CONPTY_PROOF](CONPTY_PROOF.md), ADR 0016) | implemented (prototype) | 08 |
 | IPC v1, supervisor | planned | 09 |
 | Session lifecycle, PTY management, CLI, replay | planned | 10–14 |

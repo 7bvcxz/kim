@@ -74,3 +74,16 @@ user without elevation (`KIM-SEC-004`), and a failed update must leave the old v
   CLI_CONTRACT §9.5 once Subak's CLI exists (Step 12). Install records store a redacted
   `source_url` (KIM-SEC-013). The `%LOCALAPPDATA%\Programs\mouv\bin` launcher of point 2 is not
   implemented yet.
+- 2026-11-04 (Step 47): the catalog gained optional, additive tool metadata (features, `runs`,
+  entry points, links, a shortcut summary of the hotkey manifest, permissions;
+  [CATALOG_FORMAT §2.1](../CATALOG_FORMAT.md)) and lists Noeul and Ddalgak as planned tools.
+  Three refinements of this decision: (1) **availability** (planned / preview / available) is
+  derived from the signed releases and can never be declared; (2) install locations and the
+  manual-only update policy stay Kim's decision, so the catalog has no field for either (a
+  path chosen by a catalog would widen what a signed but mistaken catalog can do); (3) the
+  install plan **discloses** the declared permissions and dependencies before anything is
+  downloaded (KIM-SEC-006), while consent remains the user's explicit action. Point 4 now also
+  covers background utilities (`runs: tray`): uninstall is refused while they run, with a hint
+  to quit them from the tray; Kim still never stops them. The shortcuts of an installed tool
+  come from its installed hotkey manifest by the discovery rules of ADR 0017, not from the
+  catalog.

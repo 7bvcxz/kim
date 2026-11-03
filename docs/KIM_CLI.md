@@ -1,6 +1,6 @@
 # `kim` command reference and agent workflows
 
-Status: **current** · `kim` 0.0.1 · CLI contract v1 · Steps 07, 46 · Rules:
+Status: **current** · `kim` 0.0.1 · CLI contract v1 · Steps 07, 46, 47 · Rules:
 [CLI_CONTRACT](CLI_CONTRACT.md) · Catalog: [CATALOG_FORMAT](CATALOG_FORMAT.md) · Consent:
 [RELEASE_POLICY](RELEASE_POLICY.md)
 
@@ -28,8 +28,8 @@ Manager can do is available here (`KIM-FR-013`). The same list in machine-readab
 | `kim capabilities` | read | no | — | — | Kim's own capabilities document |
 | `kim tools list` | read | no | — | — | Installed tools: version, executable, status, capabilities summary |
 | `kim tools describe <tool>` | read | no | — | — | One tool with its full capabilities; `--require-version <req>`, `--require-command <name>` (repeatable), `--probe [--timeout <s>]` |
-| `kim catalog list` | read | no | — | — | Catalog tools and their status here; `--channel stable\|preview`, `--installed` |
-| `kim catalog show <tool>` | read | no | — | — | Description, releases, the package for this machine, compatibility |
+| `kim catalog list` | read | no | — | — | Catalog tools, their release stage (`availability`: planned, preview, available) and their status here; `--channel stable\|preview`, `--installed` |
+| `kim catalog show <tool>` | read | no | — | — | Description, releases, the package for this machine, compatibility, and the tool's features, how it runs, entry points, links, shortcuts, permissions, install locations and manual-only actions ([CATALOG_FORMAT §2.1](CATALOG_FORMAT.md)) |
 | `kim catalog status` | read | no | — | — | Catalog in use, signer, freshness, cache path, trusted keys |
 | `kim catalog verify <file>` | read | no | — | — | Verify any catalog file and its signature (`--sig <file>`) |
 | `kim catalog refresh` | write | **yes** | yes | — | Fetch, verify and cache the catalog (`--source <url>`); installs nothing |
@@ -138,7 +138,20 @@ Without `--yes` the answer is `confirmation_required` (exit 7) and nothing chang
 tool it is `tool_running` (exit 7) — Kim never stops programs. User data is kept unless the user
 also asked for `--purge-data`. [`cli_functional.rs::non_interactive_runs_never_prompt_or_hang`]
 
-### 4.6 Respect an offline machine
+### 4.6 Tell the user what a tool may do before installing it
+
+```sh
+kim catalog show noeul --json --no-input         # data.tool.availability: planned → nothing to install yet
+kim install noeul --dry-run --json --no-input    # data.plan.permissions, data.plan.dependencies
+```
+
+Show `data.permissions` (or `data.plan.permissions`) to the user before asking for consent,
+including which ones are `opt_in`. `availability: planned` means no release exists: `kim install`
+fails with `no_release` (exit 5); do not retry. For an installed tool, `data.shortcuts` comes
+from its installed hotkey manifest and the user's `hotkeys.json` (`source: "installed"`).
+[`catalog_tools.rs`]
+
+### 4.7 Respect an offline machine
 
 ```sh
 kim settings set offline_mode true --dry-run --json --no-input   # preview
@@ -149,7 +162,7 @@ All reads and dry runs keep working; every network command fails with `offline_m
 without contacting anything.
 [`cli_functional.rs::offline_mode_refuses_every_network_command_and_allows_reads_and_dry_runs`]
 
-### 4.7 Error handling template
+### 4.8 Error handling template
 
 | Exit | Agent action |
 | --- | --- |

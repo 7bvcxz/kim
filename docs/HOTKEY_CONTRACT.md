@@ -41,8 +41,8 @@ what Step 46 ran).
 | --- | --- | --- |
 | Kim Manager (`kim`) | Step 46: `catalog.refresh` `F5`, `help.show` `F1` (shortcut list), `tool.install`/`tool.update`/`tool.uninstall` unbound by default, plus the reserved navigation keys of §7.2. | **Conforms** since Step 46: compiled-in manifest (`crates/kim/src/hotkeys.manifest.json`), `kim hotkeys` commands, `focus` backend (§13.2, §17). The binding editor of §11.2 is not implemented yet. |
 | Subak (`subak`) | Not implemented yet. Defaults are specified: `Ctrl+T`, `Ctrl+W`, `Ctrl+Tab`, `Ctrl+Shift+Tab`, the `Ctrl+B` prefix table (`SUBAK-FR-033`), and `F1` / `Ctrl+B ?` help ([DESIGN_SYSTEM §4.1](DESIGN_SYSTEM.md)). | Steps 17 and 23 implement them on this contract; §13.1 maps ADR 0009 onto it. |
-| Noeul (`noeul`) | Planned (Steps 48+). `F1` region capture and `F3` floating paste are requested defaults. | Steps 48, 61 and 62 follow §13.3. |
-| Ddalgak (`ddalgak`) | Planned (Steps 65+). An automation engine with its own rule model. | Steps 66, 73 and 81 follow §13.4. |
+| Noeul (`noeul`) | Planned (Steps 48+). `F1` region capture and `F3` floating paste are requested defaults. | Steps 48, 61 and 62 follow §13.3. Listed in the Kim catalog with this shortcut summary since Step 47. |
+| Ddalgak (`ddalgak`) | Planned (Steps 65+). An automation engine with its own rule model. | Steps 66, 73 and 81 follow §13.4. Listed in the Kim catalog with this shortcut summary since Step 47. |
 
 ## 2. Terms
 
@@ -101,7 +101,10 @@ Every conforming tool declares its actions in a **hotkey manifest**
 compiled into the tool; its actions, scopes and defaults appear in `<tool> hotkeys list --json`.
 It SHOULD also be shipped as `hotkeys.manifest.json` next to `capabilities.json` in the
 package. Kim can then show a tool's shortcuts and check cross-tool defaults **without starting
-the tool**, as with capabilities (CLI_CONTRACT §9.2).
+the tool**, as with capabilities (CLI_CONTRACT §9.2). Before a tool is installed, the Kim
+catalog carries a summary of its `global` and `app` defaults (`tools[].shortcuts`,
+[CATALOG_FORMAT §2.1](CATALOG_FORMAT.md), Step 47); once it is installed, Kim shows the
+installed manifest and the user's `hotkeys.json` instead.
 
 ```json
 {

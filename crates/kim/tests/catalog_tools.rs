@@ -416,11 +416,21 @@ fn noeul_install_reports_progress_and_a_failed_update_rolls_back() {
     let record = || std::fs::read(paths.install_record("noeul")).ok();
     let platform = Platform::current();
 
+    // A release whose package is not downloadable (yet): network_unavailable, nothing changes.
     let b1 = package(&[("V", b"1")]);
-    let u1 = srv.put("/1.zip", b1.clone());
+    let u1 = format!("http://127.0.0.1:{}/1.zip", srv.port);
     let l = loaded(vec![rel("0.1.0", &u1, &b1, &[])]);
     let plan =
         install::plan_install(&l, &paths, &platform, "noeul", &PlanOptions::default()).unwrap();
+    let e = run(&plan).0.unwrap_err();
+    assert_eq!(e.code, ErrorCode::NetworkUnavailable, "{}", e.message);
+    assert!(record().is_none());
+    assert!(
+        std::fs::read_dir(paths.staging_dir()).map_or(true, |mut rd| rd.next().is_none()),
+        "no partial download is left"
+    );
+
+    srv.put("/1.zip", b1.clone());
     assert!(
         plan.permissions.iter().any(|p| p.id == "screen-capture"),
         "disclosed in the plan"

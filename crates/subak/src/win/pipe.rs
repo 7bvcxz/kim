@@ -1,4 +1,4 @@
-//! Prototype named-pipe transport (ADR 0005; hardened in Step 09).
+//! Named-pipe transport of IPC v1 (ADR 0005, ADR 0016, ADR 0019).
 //!
 //! - **Overlapped I/O on both ends.** On a handle opened for synchronous I/O, Windows serializes
 //!   operations per file object: a blocking `ReadFile` in one thread blocks a `WriteFile` in
@@ -6,11 +6,15 @@
 //!   with its own event, so one reader and one writer thread can share a connection.
 //! - The pipe is local only (`PIPE_REJECT_REMOTE_CLIENTS`), its first instance is created with
 //!   `FILE_FLAG_FIRST_PIPE_INSTANCE` (exactly one Host per endpoint), and it carries an
-//!   owner-only DACL (deny NETWORK, allow the current user). Step 09 adds the peer identity
-//!   checks and the final pipe name of ADR 0005.
-//! - Clients connect with `SECURITY_IDENTIFICATION` so a server can never impersonate them.
+//!   owner-only DACL (deny NETWORK, allow the current user).
+//! - **Peer identity.** The server reads the user SID from the token of the connection itself
+//!   ([`Pipe::client_user_sid`], identification-level impersonation); the client looks up the
+//!   server process ([`Pipe::server_pid`]). `host.rs` and `client.rs` compare them.
+//! - Clients connect with `SECURITY_IDENTIFICATION`, so a server can read their identity but
+//!   never act as them.
 
-use super::{Event, Handle, SecurityDescriptor, user_sid, wide};
+use super::{Event, Handle, SecurityDescriptor, token_user_sid, user_sid, wide};
+use crate::proto::TimedRead;
 use std::io::{self, Read, Write};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -18,19 +22,19 @@ use windows_sys::Win32::Foundation::{
     ERROR_ACCESS_DENIED, ERROR_IO_PENDING, ERROR_NO_DATA, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED,
     GENERIC_READ, GENERIC_WRITE, GetLastError, INVALID_HANDLE_VALUE, WAIT_OBJECT_0, WAIT_TIMEOUT,
 };
-use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
+use windows_sys::Win32::Security::{RevertToSelf, SECURITY_ATTRIBUTES, TOKEN_QUERY};
 use windows_sys::Win32::Storage::FileSystem::{
     CreateFileW, FILE_FLAG_FIRST_PIPE_INSTANCE, FILE_FLAG_OVERLAPPED, OPEN_EXISTING,
     PIPE_ACCESS_DUPLEX, ReadFile, SECURITY_IDENTIFICATION, SECURITY_SQOS_PRESENT, WriteFile,
 };
 use windows_sys::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
 use windows_sys::Win32::System::Pipes::{
-    ConnectNamedPipe, CreateNamedPipeW, GetNamedPipeClientProcessId, PIPE_READMODE_BYTE,
-    PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
-    WaitNamedPipeW,
+    ConnectNamedPipe, CreateNamedPipeW, GetNamedPipeClientProcessId, GetNamedPipeServerProcessId,
+    ImpersonateNamedPipeClient, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE,
+    PIPE_UNLIMITED_INSTANCES, PIPE_WAIT, WaitNamedPipeW,
 };
 use windows_sys::Win32::System::Threading::{
-    INFINITE, WaitForMultipleObjects, WaitForSingleObject,
+    GetCurrentThread, INFINITE, OpenThreadToken, WaitForMultipleObjects, WaitForSingleObject,
 };
 
 const BUFFER: u32 = 64 * 1024;
@@ -40,11 +44,10 @@ pub fn path(endpoint: &str) -> String {
     format!(r"\\.\pipe\{endpoint}")
 }
 
-/// The default prototype endpoint: per user SID and Windows session, marked `proto` so it can
-/// never collide with Step 09's real pipe name.
+/// The well-known endpoint of ADR 0005: one per user SID and Windows (logon) session.
 pub fn default_endpoint() -> io::Result<String> {
     Ok(format!(
-        "mouv-subak-proto-{}-s{}",
+        "mouv-subak-{}-s{}",
         user_sid()?,
         super::session_id()
     ))
@@ -98,11 +101,16 @@ impl Pipe {
             if unsafe { WaitForSingleObject(event.raw(), ms) } == WAIT_TIMEOUT {
                 // SAFETY: cancels exactly this operation; then wait for it to finish so `ov` and
                 // `buf` are no longer referenced by the kernel.
-                unsafe {
+                let done = unsafe {
                     CancelIoEx(self.h.raw(), &raw const ov);
-                    GetOverlappedResult(self.h.raw(), &raw const ov, &raw mut n, 1);
-                }
-                return Err(io::ErrorKind::TimedOut.into());
+                    GetOverlappedResult(self.h.raw(), &raw const ov, &raw mut n, 1)
+                };
+                // The operation may have completed just before the cancel: keep those bytes.
+                return if done != 0 && n > 0 {
+                    Ok(n as usize)
+                } else {
+                    Err(io::ErrorKind::TimedOut.into())
+                };
             }
         }
         // SAFETY: the operation completed (or was signaled); reap its result.
@@ -144,6 +152,60 @@ impl Pipe {
         // SAFETY: valid server pipe handle; `pid` is writable.
         (unsafe { GetNamedPipeClientProcessId(self.h.raw(), &raw mut pid) } != 0).then_some(pid)
     }
+
+    /// Client side: the id of the process that created the server end (the Host, or a squatter).
+    pub fn server_pid(&self) -> Option<u32> {
+        let mut pid = 0u32;
+        // SAFETY: valid client pipe handle; `pid` is writable.
+        (unsafe { GetNamedPipeServerProcessId(self.h.raw(), &raw mut pid) } != 0).then_some(pid)
+    }
+
+    /// Server side: the user SID of the connected client, read from the token of this
+    /// connection rather than looked up by process id: no pid-reuse race, and it also works for
+    /// an elevated client whose process token a normal Host may not open.
+    ///
+    /// Clients connect with `SECURITY_IDENTIFICATION`, so the impersonation only lets this thread
+    /// *read* the identity, and it reverts before returning. Windows allows it only after data
+    /// was read from the pipe, so call it after the first frame.
+    pub fn client_user_sid(&self) -> io::Result<String> {
+        // SAFETY: valid server pipe handle; the impersonation is undone below on every path.
+        if unsafe { ImpersonateNamedPipeClient(self.h.raw()) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let mut token = std::ptr::null_mut();
+        // SAFETY: opens this thread's impersonation token; OpenAsSelf = TRUE checks access
+        // against the Host's own token (an identification-level token cannot open objects).
+        let opened =
+            unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, 1, &raw mut token) } != 0;
+        let open_error = io::Error::last_os_error();
+        // SAFETY: ends the impersonation started above.
+        if unsafe { RevertToSelf() } == 0 {
+            // The caller drops the connection, and its thread ends.
+            return Err(io::Error::other(
+                "RevertToSelf failed after reading the client's identity",
+            ));
+        }
+        if !opened {
+            return Err(open_error);
+        }
+        token_user_sid(&Handle::new(token)?)
+    }
+}
+
+impl TimedRead for &Pipe {
+    fn read_until(&mut self, buf: &mut [u8], until: Option<Instant>) -> io::Result<usize> {
+        let timeout = match until {
+            None => None,
+            Some(u) => {
+                let left = u.saturating_duration_since(Instant::now());
+                if left.is_zero() {
+                    return Err(io::ErrorKind::TimedOut.into());
+                }
+                Some(left)
+            }
+        };
+        self.read_some(buf, timeout)
+    }
 }
 
 fn is_closed(e: &io::Error) -> bool {
@@ -170,23 +232,6 @@ impl Write for &Pipe {
     }
 }
 
-/// A `Read` adapter that fails with `TimedOut` after a deadline (handshake limits).
-#[derive(Debug)]
-pub struct Deadline<'a> {
-    pub pipe: &'a Pipe,
-    pub until: Instant,
-}
-
-impl Read for Deadline<'_> {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let left = self.until.saturating_duration_since(Instant::now());
-        if left.is_zero() {
-            return Err(io::ErrorKind::TimedOut.into());
-        }
-        self.pipe.read_some(buf, Some(left))
-    }
-}
-
 /// The server side: owns the next unconnected instance and a stop event.
 #[derive(Debug)]
 pub struct Listener {
@@ -201,7 +246,7 @@ impl Listener {
     /// this endpoint.
     pub fn bind(endpoint: &str) -> io::Result<Self> {
         // Deny NETWORK logons, allow only the current user (generic all). Protected: no
-        // inherited ACEs. Peer identity checks follow in Step 09.
+        // inherited ACEs. The peer identity checks come on top (ADR 0019).
         let sd =
             SecurityDescriptor::from_sddl(&format!("D:P(D;;GA;;;NU)(A;;GA;;;{})", user_sid()?))?;
         let mut l = Self {
@@ -385,6 +430,19 @@ mod tests {
         let mut b = [0u8; 5];
         (&server).read_exact(&mut b).unwrap();
         assert_eq!(&b, b"ping!");
+        // Both ends learn who is on the other side (ADR 0019).
+        assert_eq!(client.server_pid(), Some(std::process::id()));
+        assert_eq!(server.client_user_sid().unwrap(), user_sid().unwrap());
+        assert_eq!(
+            server.client_user_sid().unwrap(),
+            user_sid().unwrap(),
+            "the impersonation was reverted and can be repeated"
+        );
+        assert_eq!(
+            super::super::process_user_sid(std::process::id()).unwrap(),
+            user_sid().unwrap(),
+            "the thread runs as itself again"
+        );
         server.write_all_bytes(b"pong!").unwrap();
         assert_eq!(&reader.join().unwrap(), b"pong!");
         drop(server);
@@ -406,12 +464,9 @@ mod tests {
         let s = l.accept().unwrap().unwrap();
         let mut b = [0u8; 1];
         let t = Instant::now();
-        let e = Deadline {
-            pipe: &s,
-            until: Instant::now() + Duration::from_millis(200),
-        }
-        .read(&mut b)
-        .unwrap_err();
+        let e = (&s)
+            .read_until(&mut b, Some(Instant::now() + Duration::from_millis(200)))
+            .unwrap_err();
         assert_eq!(e.kind(), io::ErrorKind::TimedOut);
         assert!(t.elapsed() < Duration::from_secs(3));
         drop(c);

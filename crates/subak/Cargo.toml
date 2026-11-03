@@ -21,13 +21,15 @@ workspace = true
 serde_json = "1.0.154"
 
 [target."cfg(windows)".dependencies]
-# Step 08 ConPTY Host prototype: pseudo console, job objects, named pipes, detached spawn.
+# The Host and its clients: pseudo console, job objects, named pipes and peer identity, detached
+# spawn with the user's logon environment (CreateEnvironmentBlock), the start mutex.
 windows-sys = { version = "0.61.2", features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
     "Win32_System_Console",
+    "Win32_System_Environment",
     "Win32_System_IO",
     "Win32_System_JobObjects",
     "Win32_System_Pipes",

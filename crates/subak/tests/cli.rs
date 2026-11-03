@@ -98,7 +98,7 @@ fn unknown_arguments_fail_with_usage_exit_code_on_stderr() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.starts_with("subak: error:"), "{err}");
     assert!(
-        err.contains("only `capabilities` and the Step 08 `host` prototype exist"),
+        err.contains("only `capabilities` and the `host` commands exist"),
         "{err}"
     );
 }
@@ -250,16 +250,38 @@ fn host_dry_runs_describe_the_plan_and_start_nothing() {
     assert_eq!(doc["data"]["dry_run"], true);
     let (code, _) = json(&["host", "status", "--endpoint", &ep]);
     assert_eq!(code, 3, "nothing was started");
-    // The default endpoint is per user and session, and marked as the prototype's.
+    // The default endpoint is the well-known per-user, per-session pipe of ADR 0005, and the
+    // start lock is derived from it.
     let out = subak(&["host", "start", "--dry-run", "--json"]);
     let doc: Value = serde_json::from_slice(&out.stdout).unwrap();
-    let default = doc["data"]["would_start"]["endpoint"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    let plan = &doc["data"]["would_start"];
+    let default = plan["endpoint"].as_str().unwrap().to_string();
     assert!(
-        default.starts_with(r"\\.\pipe\mouv-subak-proto-S-1-5-"),
+        default.starts_with(r"\\.\pipe\mouv-subak-S-1-5-") && default.contains("-s"),
         "{default}"
+    );
+    assert_eq!(
+        plan["start_lock"].as_str().unwrap(),
+        format!(r"Local\mouv-subak-start-{}", &default[r"\\.\pipe\".len()..])
+    );
+    assert_eq!(plan["environment"], "user (CreateEnvironmentBlock)");
+    assert_eq!(plan["idle_exit_s"], 10, "ADR 0003 §4 default grace");
+    // The plan reports the job this command runs in (risk R-03).
+    assert!(plan["launcher_job"].is_null() || plan["launcher_job"]["kill_on_close"].is_boolean());
+    let (code, doc) = json(&[
+        "host",
+        "start",
+        "--endpoint",
+        &ep,
+        "--no-shell",
+        "--dry-run",
+    ]);
+    assert_eq!(code, 0);
+    assert_eq!(doc["data"]["would_start"]["shell"], Value::Null);
+    assert!(
+        doc["data"]["would_start"]["arguments"]
+            .to_string()
+            .contains("--no-shell")
     );
 }
 

@@ -161,22 +161,15 @@ fn run_host(cmd: &Cmd, a: &Args) -> Result<Value, CliError> {
     }
     match cmd {
         Cmd::HostServe => {
-            let opts = host::ServeOpts {
-                endpoint,
-                shell: a.shell.clone().unwrap_or_else(host::default_shell),
-                job_breakaway: a.job_breakaway,
-            };
+            let opts = client::serve_opts(a, endpoint);
             if a.dry_run {
-                return Ok(serde_json::json!({"dry_run": true, "would_serve": {
-                    "endpoint": win::pipe::path(&opts.endpoint),
-                    "shell": opts.shell,
-                    "cwd": host::profile_dir().map(|p| p.display().to_string()),
-                }}));
+                return Ok(client::serve_plan(&opts));
             }
             host::serve(&opts)
         }
         Cmd::HostStart => client::start(a, &endpoint),
         Cmd::HostStatus => client::status(&endpoint),
+        Cmd::HostHealth => client::health(&endpoint),
         Cmd::HostStop => client::stop(a, &endpoint),
         Cmd::HostAttach => client::attach(a, &endpoint),
         _ => Err(CliError::new(Code::Internal, "not a host command")),
@@ -195,18 +188,31 @@ fn run_host(_cmd: &Cmd, _a: &Args) -> Result<Value, CliError> {
 /// Risk R-03 (measured in Step 08, ADR 0016): a Host inside a job it could not leave dies when
 /// that job is closed with kill-on-close.
 fn host_warnings(cmd: &Cmd, d: &Value) -> Vec<String> {
-    if !matches!(cmd, Cmd::HostStart | Cmd::HostStatus) || d["host"]["in_job"] != true {
-        return Vec::new();
+    let mut w = Vec::new();
+    if matches!(cmd, Cmd::HostStart | Cmd::HostStatus) && d["host"]["environment"] == "inherited" {
+        w.push(
+            "the user's logon environment could not be built, so the Host inherited its \
+             launcher's environment"
+                .to_string(),
+        );
     }
-    vec![if d["host"]["job_breakaway"] == false {
+    if !matches!(cmd, Cmd::HostStart | Cmd::HostStatus) || d["host"]["in_job"] != true {
+        return w;
+    }
+    w.push(if d["host"]["job_breakaway"] == false {
         "a job of the launching terminal forbids breakaway, so the Host started inside it; \
          closing that terminal or job may end the Host and its shell (risk R-03)"
+            .to_string()
+    } else if d["host"]["job"]["kill_on_close"] == false {
+        "the Host runs inside a job object it could not leave; that job does not end its \
+         processes when closed, but an enclosing job may (risk R-03)"
             .to_string()
     } else {
         "the Host runs inside a job object it could not leave; if that job is closed with \
          kill-on-close, the Host and its shell end (risk R-03)"
             .to_string()
-    }]
+    });
+    w
 }
 
 /// Human output on stdout (results) and stderr (notices).
@@ -237,25 +243,49 @@ fn human(cmd: &Cmd, d: &Value, a: &Args) {
             d["pane"]["command"].as_str().unwrap_or("?"),
             d["endpoint"].as_str().unwrap_or("?"),
         ),
-        Cmd::HostStatus => writeln!(
+        Cmd::HostStatus => {
+            let pane = if d["pane"].is_null() {
+                "no pane (started with --no-shell)".to_string()
+            } else {
+                format!(
+                    "shell pid {} running: {} ({}), {}x{}, {} process(es) in its job",
+                    d["pane"]["pid"],
+                    d["pane"]["running"],
+                    d["pane"]["command"].as_str().unwrap_or("?"),
+                    d["pane"]["size"]["cols"],
+                    d["pane"]["size"]["rows"],
+                    d["pane"]["job_processes"],
+                )
+            };
+            writeln!(
+                out,
+                "Host pid {} since {} (session {}, protocol {}, job breakaway: {}, in a job: {}, \
+                 idle exit after {} s)\n{pane}\nclients: {} connected, {} attached\nendpoint: {}",
+                d["host"]["pid"],
+                d["host"]["started_at"].as_str().unwrap_or("?"),
+                d["host"]["session_id"],
+                d["protocol"],
+                d["host"]["job_breakaway"],
+                d["host"]["in_job"],
+                d["host"]["idle_exit_s"],
+                d["clients"]["connected"],
+                d["clients"]["attached"],
+                d["endpoint"].as_str().unwrap_or("?"),
+            )
+        }
+        Cmd::HostHealth => writeln!(
             out,
-            "Host pid {} since {} (session {}, job breakaway: {}, in a job: {})\n\
-             shell pid {} running: {} ({}), {}x{}, {} process(es) in its job\n\
-             clients: {} connected, {} attached\nendpoint: {}",
+            "healthy: Host pid {} (protocol {}, up {} s), verified as {} of this user; answered in {} ms",
             d["host"]["pid"],
-            d["host"]["started_at"].as_str().unwrap_or("?"),
-            d["host"]["session_id"],
-            d["host"]["job_breakaway"],
-            d["host"]["in_job"],
-            d["pane"]["pid"],
-            d["pane"]["running"],
-            d["pane"]["command"].as_str().unwrap_or("?"),
-            d["pane"]["size"]["cols"],
-            d["pane"]["size"]["rows"],
-            d["pane"]["job_processes"],
-            d["clients"]["connected"],
-            d["clients"]["attached"],
-            d["endpoint"].as_str().unwrap_or("?"),
+            d["host"]["protocol"],
+            d["host"]["uptime_s"],
+            d["identity"]["image"].as_str().unwrap_or("?"),
+            d["latency_ms"],
+        ),
+        Cmd::HostStop if d["shell"].is_null() => writeln!(
+            out,
+            "Host pid {} stopped (exited: {}); it owned no pane",
+            d["host"]["pid"], d["host"]["exited"],
         ),
         Cmd::HostStop => writeln!(
             out,
@@ -284,11 +314,16 @@ fn human(cmd: &Cmd, d: &Value, a: &Args) {
                         "[subak: detached; the shell keeps running in Host pid {}]",
                         d["host"]["pid"]
                     );
+                } else if let Some(reason) = d["host"]["stopped"].as_str() {
+                    eprintln!(
+                        "[subak: the shell ended (exit code {}); the Host stopped ({reason})]",
+                        d["shell_exit_code"],
+                    );
                 } else {
                     eprintln!(
-                        "[subak: the shell ended (exit code {}); the Host stopped ({})]",
+                        "[subak: the shell ended (exit code {}); the Host keeps running until \
+                         its idle grace period ends]",
                         d["shell_exit_code"],
-                        d["host"]["stopped"].as_str().unwrap_or("?")
                     );
                 }
             }

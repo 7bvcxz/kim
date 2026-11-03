@@ -13,7 +13,7 @@
 //! 4. teardown: `ClosePseudoConsole` (attached processes get `CTRL_CLOSE_EVENT`) while the reader
 //!    keeps draining, then `TerminateJobObject` for anything left, then close the handles.
 
-use super::{AttrList, Handle, exit_code, wait, wide};
+use super::{AttrList, EnvBlock, Handle, exit_code, wait, wide};
 use std::ffi::c_void;
 use std::io;
 use std::path::Path;
@@ -89,8 +89,15 @@ pub fn kill_on_close_job() -> io::Result<Handle> {
 }
 
 impl Pty {
-    /// Starts `command_line` in a new pseudo console of `cols`×`rows`, inside a new job.
-    pub fn spawn(command_line: &str, cwd: Option<&Path>, cols: u16, rows: u16) -> io::Result<Self> {
+    /// Starts `command_line` in a new pseudo console of `cols`×`rows`, inside a new job, with
+    /// environment `env` (`None` inherits the Host's).
+    pub fn spawn(
+        command_line: &str,
+        cwd: Option<&Path>,
+        cols: u16,
+        rows: u16,
+        env: Option<&EnvBlock>,
+    ) -> io::Result<Self> {
         let (in_read, in_write) = anonymous_pipe()?;
         let (out_read, out_write) = anonymous_pipe()?;
         let mut hpc: HPCON = 0;
@@ -132,8 +139,9 @@ impl Pty {
         let mut cmd = wide(command_line);
         let cwd_w = cwd.map(wide);
         let mut pi = PROCESS_INFORMATION::default();
-        // SAFETY: `cmd` is a writable NUL-terminated buffer as CreateProcessW requires; `si` and
-        // the attribute list are alive; handles are not inherited (bInheritHandles = FALSE).
+        // SAFETY: `cmd` is a writable NUL-terminated buffer as CreateProcessW requires; `si`, the
+        // attribute list and the environment block are alive; handles are not inherited
+        // (bInheritHandles = FALSE).
         let ok = unsafe {
             CreateProcessW(
                 std::ptr::null(),
@@ -142,7 +150,7 @@ impl Pty {
                 std::ptr::null(),
                 0,
                 EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT,
-                std::ptr::null(),
+                env.map_or(std::ptr::null(), EnvBlock::as_ptr),
                 cwd_w.as_ref().map_or(std::ptr::null(), |w| w.as_ptr()),
                 &raw const si.StartupInfo,
                 &raw mut pi,
@@ -384,7 +392,8 @@ mod tests {
 
     impl Session {
         fn start(cols: u16, rows: u16) -> Self {
-            let pty = Arc::new(Pty::spawn("cmd.exe /d /q", None, cols, rows).expect("spawn cmd"));
+            let pty =
+                Arc::new(Pty::spawn("cmd.exe /d /q", None, cols, rows, None).expect("spawn cmd"));
             let out = pty.take_output().expect("output");
             let (tx, rx) = mpsc::channel();
             let reader = std::thread::spawn(move || {

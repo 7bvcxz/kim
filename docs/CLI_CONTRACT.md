@@ -135,17 +135,23 @@ different meaning or exit code. `crates/kim/tests/cli_contract.rs` checks that t
 | `already_installed` | 7 | The requested version is already installed; nothing to do (use `--reinstall` to repair). |
 | `cancelled` | 8 | The user cancelled; nothing was changed. |
 
-**Subak codes** (Step 08 `host` prototype). `subak` also uses `io`, `internal`,
-`permission_denied`, `usage`, `timeout`, `confirmation_required` and `cancelled` with the meaning
-and exit code above. `crates/subak/src/output.rs` tests that this table matches its code.
+**Subak codes** (Step 08 `host` prototype, Step 09 Host supervisor and IPC v1). `subak` also
+uses `io`, `internal`, `permission_denied`, `usage`, `timeout`, `confirmation_required` and
+`cancelled` with the meaning and exit code above. `crates/subak/src/output.rs` tests that this
+table matches its code.
 
 | Code | Exit | Meaning |
 | --- | --- | --- |
 | `spawn_failed` | 1 | The Host or its shell could not be started (missing program, bad command line). |
 | `host_not_running` | 3 | No Subak Host serves the endpoint. |
-| `protocol_error` | 4 | The Host or client sent a malformed or unexpected IPC message, or speaks another protocol version. |
+| `target_not_found` | 3 | The Host has no pane matching the target (a Host started with `--no-shell` has none). |
+| `protocol_error` | 4 | The Host or client sent a malformed or unexpected IPC message. |
+| `host_identity_mismatch` | 4 | The endpoint is served by a process that is not a `subak.exe` of this user (a pipe squatter, or a Host that cannot be verified). Nothing was sent to it. |
 | `unsupported_platform` | 5 | The command needs an OS feature this platform does not have yet (the Host needs Windows ConPTY until M4). |
+| `host_too_old` | 5 | The running Host speaks only older IPC protocol majors than this client. The client never restarts it. |
+| `host_too_new` | 5 | The running Host speaks only newer IPC protocol majors than this client. |
 | `host_disconnected` | 6 | The Host closed the connection unexpectedly (crashed, killed, or shutting down). |
+| `host_unresponsive` | 6 | A verified Host accepted the connection but did not answer the handshake in time. It is neither stopped nor replaced. |
 | `host_already_running` | 7 | A Host already serves the endpoint; attach to it or stop it explicitly. |
 
 Codes registered for the `hotkeys` command group of every GUI tool

@@ -1,20 +1,39 @@
-//! Prototype clients of the Step 08 Host: `host start | status | stop | attach`.
+//! Clients of the Host — the client SDK (ADR 0003, ADR 0005, ADR 0019) and the
+//! `host start | status | health | stop | attach` commands.
+//!
+//! Connecting is: open the pipe, **verify who serves it** before sending a single byte (the
+//! server process must run as this user and be a `subak.exe`), then `hello` → `welcome` with
+//! version negotiation. Starting on demand takes a per-endpoint start mutex, so several clients
+//! starting at once give exactly one Host. Nothing here ever kills or replaces a Host: a Host
+//! that holds the endpoint but does not answer is reported (`host_unresponsive`), never ended,
+//! because it may own live sessions.
 //!
 //! Each command is an independent short-lived process. Closing, killing or crashing any of them
-//! — including the console window an attach runs in — only drops its pipe connection; the Host,
-//! its pseudo console and its shell are unaffected (`SUBAK-FR-003`, `SUBAK-FR-015`).
+//! only drops its pipe connection; the Host and its panes are unaffected (`SUBAK-FR-003`).
 
 use crate::cli::Args;
-use crate::host::{default_shell, profile_dir};
+use crate::host::{self, default_shell, profile_dir};
 use crate::output::{CliError, Code};
-use crate::proto::{self, DetachKeys, FLAG_INPUT, Frame, PROTOCOL, STREAM};
-use crate::win::pipe::{self, Deadline, Pipe};
-use crate::win::{self, console, spawn};
+use crate::proto::{self, ClientKind, DetachKeys, FLAG_INPUT, Frame, STREAM};
+use crate::win::pipe::{self, Pipe};
+use crate::win::{self, EnvBlock, NamedLock, console, spawn};
 use serde_json::{Value, json};
 use std::io::{self, IsTerminal, Read, Write};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
+
+/// The executable a genuine Host runs as (ADR 0005).
+pub const HOST_IMAGE: &str = "subak.exe";
+/// How long a starter waits for a new Host to serve its pipe.
+const START_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a starter waits for another starter holding the start lock.
+const LOCK_TIMEOUT: Duration = Duration::from_secs(20);
+/// How long a client waits for a stopping Host to release the endpoint.
+const STOPPING_TIMEOUT: Duration = Duration::from_secs(15);
+/// `host.stop` answers once the panes have ended (grace period plus forced end).
+const STOP_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The endpoint from `--endpoint`, or the per-user default.
 pub fn endpoint(a: &Args) -> Result<String, CliError> {
@@ -26,17 +45,22 @@ pub fn endpoint(a: &Args) -> Result<String, CliError> {
     }
 }
 
+/// The per-endpoint start lock (`Local\` = this Windows session).
+pub fn start_lock_name(endpoint: &str) -> String {
+    format!(r"Local\mouv-subak-start-{endpoint}")
+}
+
 fn host_not_running(endpoint: &str) -> CliError {
     CliError::new(
         Code::HostNotRunning,
         format!("no Subak Host is serving `{}`", pipe::path(endpoint)),
     )
-    .hint("start one with `subak host start` (Step 08 prototype)")
+    .hint("start one with `subak host start`")
 }
 
 fn disconnected() -> CliError {
     CliError::new(Code::HostDisconnected, "the Host closed the connection")
-        .hint("check `subak host status`; a stopped or crashed Host ends its shell")
+        .hint("check `subak host status`; a stopped or crashed Host ends its panes")
 }
 
 /// Maps a Host-side IPC error code to a CLI error.
@@ -46,18 +70,147 @@ fn host_error(code: &str, message: &str) -> CliError {
         "host_stopping" => Code::HostDisconnected,
         "invalid_params" => Code::Usage,
         "timeout" => Code::Timeout,
+        "unauthorized" => Code::PermissionDenied,
+        "target_not_found" => Code::TargetNotFound,
+        "busy" => Code::ConfirmationRequired,
         _ => Code::Internal,
     };
     CliError::new(c, format!("the Host refused the request: {message}"))
         .detail(format!("ipc error code: {code}"))
 }
 
-/// One connection to a Host, after the handshake.
+/// The CLI error for a refused handshake. A protocol range mismatch says which side is older,
+/// and the client never restarts the Host to fix it (ADR 0005).
+fn handshake_refused(err: &Value) -> CliError {
+    let code = err["code"].as_str().unwrap_or("?");
+    let message = err["message"].as_str().unwrap_or("handshake refused");
+    if code == "protocol_unsupported" {
+        let host_max = err["details"]["supported"]["max"].as_u64().unwrap_or(0);
+        return if host_max < proto::PROTOCOL_MIN {
+            CliError::new(
+                Code::HostTooOld,
+                format!("the running Host is older than this client: {message}"),
+            )
+            .hint("it keeps running; when its sessions can end, stop it with `subak host stop` and start the new version")
+        } else {
+            CliError::new(
+                Code::HostTooNew,
+                format!("the running Host is newer than this client: {message}"),
+            )
+            .hint("use the subak.exe that matches the running Host, or update this one")
+        };
+    }
+    host_error(code, message)
+}
+
+/// Why a connection attempt failed, for start-on-demand decisions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Why {
+    NotRunning,
+    Stopping,
+    Other,
+}
+
+/// A failed connection attempt.
+#[derive(Debug)]
+pub struct Failure {
+    pub why: Why,
+    pub err: CliError,
+}
+
+fn other(err: CliError) -> Failure {
+    Failure {
+        why: Why::Other,
+        err,
+    }
+}
+
+fn mismatch(endpoint: &str, pid: Option<u32>, reason: &str) -> CliError {
+    let mut e = CliError::new(
+        Code::HostIdentityMismatch,
+        format!(
+            "`{}` is not served by a Subak Host of this user: {reason}",
+            pipe::path(endpoint)
+        ),
+    )
+    .hint("nothing was sent to it; another program holds this pipe name. Use another --endpoint, or end that program yourself");
+    if let Some(pid) = pid {
+        e = e.detail(format!("server process id: {pid}"));
+    }
+    e
+}
+
+/// Checks who serves `pipe` — before anything is sent to it (ADR 0005): the server process must
+/// run as this user and be a `subak.exe`. Returns its process id.
+pub fn verify_host(pipe: &Pipe, endpoint: &str) -> Result<u32, CliError> {
+    let Some(pid) = pipe.server_pid() else {
+        return Err(mismatch(endpoint, None, "the server process is unknown"));
+    };
+    let me = win::user_sid()
+        .map_err(|e| CliError::new(Code::Io, format!("cannot determine the current user: {e}")))?;
+    match win::process_user_sid(pid) {
+        Ok(sid) if sid == me => {}
+        Ok(_) => return Err(mismatch(endpoint, Some(pid), "it runs as another user")),
+        Err(e) => {
+            return Err(mismatch(
+                endpoint,
+                Some(pid),
+                &format!("its owner cannot be verified ({e})"),
+            )
+            .detail("an elevated (administrator) Host cannot be verified by a normal client"));
+        }
+    }
+    let image = win::process_image(pid).map_err(|e| {
+        mismatch(
+            endpoint,
+            Some(pid),
+            &format!("its program cannot be read ({e})"),
+        )
+    })?;
+    let name = image
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    if !name.eq_ignore_ascii_case(HOST_IMAGE) {
+        return Err(mismatch(
+            endpoint,
+            Some(pid),
+            &format!("its program is `{name}`, not {HOST_IMAGE}"),
+        )
+        .detail(format!("server program: {}", image.display())));
+    }
+    Ok(pid)
+}
+
+/// `host serve` found its endpoint taken: by a genuine Host, or by something else.
+pub fn occupied(endpoint: &str) -> CliError {
+    let running = |pid: Option<u32>| {
+        let mut e = CliError::new(
+            Code::HostAlreadyRunning,
+            format!("a Host already serves `{}`", pipe::path(endpoint)),
+        )
+        .hint("attach to it with `subak host attach`, or stop it with `subak host stop`");
+        if let Some(pid) = pid {
+            e = e.detail(format!("host pid: {pid}"));
+        }
+        e
+    };
+    match pipe::connect(endpoint, Duration::from_secs(1)) {
+        Ok(p) => match verify_host(&p, endpoint) {
+            Ok(pid) => running(Some(pid)),
+            Err(e) => e,
+        },
+        Err(_) => running(None),
+    }
+}
+
+/// One connection to a Host, after the identity checks and the handshake.
 #[derive(Debug)]
 pub struct Session {
     pipe: Arc<Pipe>,
     next_id: Arc<AtomicU64>,
     pub welcome: Value,
+    pub host_pid: u32,
 }
 
 fn send(pipe: &Pipe, msg: &Value) -> Result<(), CliError> {
@@ -66,64 +219,99 @@ fn send(pipe: &Pipe, msg: &Value) -> Result<(), CliError> {
 }
 
 impl Session {
-    pub fn open(endpoint: &str, timeout: Duration) -> Result<Self, CliError> {
-        let pipe = pipe::connect(endpoint, timeout).map_err(|e| match e.kind() {
-            io::ErrorKind::NotFound => host_not_running(endpoint),
-            io::ErrorKind::PermissionDenied => CliError::new(
-                Code::PermissionDenied,
-                format!("access to `{}` was denied", pipe::path(endpoint)),
-            )
-            .hint("the endpoint belongs to another user or program; use your own endpoint"),
-            _ => CliError::new(Code::Io, format!("cannot connect to the Host: {e}")),
+    pub fn open(endpoint: &str, wait: Duration) -> Result<Self, CliError> {
+        Self::try_open(endpoint, wait).map_err(|f| f.err)
+    }
+
+    /// Connects; `wait` bounds the wait while every pipe instance is busy.
+    pub fn try_open(endpoint: &str, wait: Duration) -> Result<Self, Failure> {
+        let pipe = pipe::connect(endpoint, wait).map_err(|e| match e.kind() {
+            io::ErrorKind::NotFound => Failure {
+                why: Why::NotRunning,
+                err: host_not_running(endpoint),
+            },
+            io::ErrorKind::PermissionDenied => other(
+                CliError::new(
+                    Code::PermissionDenied,
+                    format!("access to `{}` was denied", pipe::path(endpoint)),
+                )
+                .hint("the endpoint belongs to another user, or this process runs sandboxed (low integrity)"),
+            ),
+            _ => other(CliError::new(
+                Code::Io,
+                format!("cannot connect to the Host: {e}"),
+            )),
         })?;
-        send(
-            &pipe,
-            &json!({"type": "hello", "protocol": {"min": PROTOCOL, "max": PROTOCOL},
-                    "client": {"name": "subak-cli", "version": env!("CARGO_PKG_VERSION"), "kind": "cli"}}),
-        )?;
-        let mut dl = Deadline {
-            pipe: &pipe,
-            until: Instant::now() + Duration::from_secs(5),
-        };
-        let welcome = match proto::read_frame(&mut dl) {
+        let pid = verify_host(&pipe, endpoint).map_err(other)?;
+        send(&pipe, &proto::hello(ClientKind::Cli, "subak-cli")).map_err(other)?;
+        let deadline = Instant::now() + proto::HANDSHAKE_TIMEOUT;
+        let welcome = match proto::read_frame(&mut &pipe, Some(deadline), |_| deadline) {
             Ok(Some(Frame::Control(m))) if m["type"] == "welcome" => m,
             Ok(Some(Frame::Control(m))) if m["type"] == "error" => {
-                return Err(host_error(
-                    m["error"]["code"].as_str().unwrap_or("?"),
-                    m["error"]["message"]
-                        .as_str()
-                        .unwrap_or("handshake refused"),
-                ));
+                let why = if m["error"]["code"] == "host_stopping" {
+                    Why::Stopping
+                } else {
+                    Why::Other
+                };
+                return Err(Failure {
+                    why,
+                    err: handshake_refused(&m["error"]),
+                });
             }
             Err(e) if e.kind() == io::ErrorKind::TimedOut => {
-                return Err(CliError::new(
-                    Code::Timeout,
-                    "the Host did not answer the handshake within 5 s",
+                return Err(other(
+                    CliError::new(
+                        Code::HostUnresponsive,
+                        format!(
+                            "Host pid {pid} accepted the connection but did not answer within {} s",
+                            proto::HANDSHAKE_TIMEOUT.as_secs()
+                        ),
+                    )
+                    .hint("it may be busy or hung; it was neither stopped nor replaced, because it may own live sessions. Try again, or end that process yourself"),
                 ));
             }
-            Ok(None) | Err(_) => return Err(disconnected()),
+            Ok(None) | Err(_) => return Err(other(disconnected())),
             Ok(Some(_)) => {
-                return Err(CliError::new(
+                return Err(other(CliError::new(
                     Code::ProtocolError,
                     "unexpected handshake reply",
-                ));
+                )));
             }
         };
+        let negotiated = welcome["protocol"].as_u64().unwrap_or(0);
+        if !(proto::PROTOCOL_MIN..=proto::PROTOCOL_MAX).contains(&negotiated)
+            || welcome["host"]["pid"].as_u64() != Some(u64::from(pid))
+        {
+            return Err(other(CliError::new(
+                Code::ProtocolError,
+                "the Host's welcome does not match the verified server process or protocol",
+            )));
+        }
         Ok(Self {
             pipe: Arc::new(pipe),
             next_id: Arc::new(AtomicU64::new(1)),
             welcome,
+            host_pid: pid,
         })
     }
 
     pub fn request(&mut self, method: &str, params: &Value) -> Result<Value, CliError> {
+        self.request_within(method, params, proto::REQUEST_TIMEOUT)
+    }
+
+    pub fn request_within(
+        &mut self,
+        method: &str,
+        params: &Value,
+        timeout: Duration,
+    ) -> Result<Value, CliError> {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
-        send(
-            &self.pipe,
-            &json!({"type": "request", "id": id, "method": method, "params": params}),
-        )?;
+        send(&self.pipe, &proto::request(id, method, params))?;
+        let deadline = Instant::now() + timeout;
         loop {
-            match proto::read_frame(&mut &*self.pipe) {
+            match proto::read_frame(&mut &*self.pipe, Some(deadline), |t| {
+                t + proto::FRAME_TIMEOUT
+            }) {
                 Ok(Some(Frame::Control(m))) if m["type"] == "response" && m["id"] == id => {
                     return if m["ok"] == true {
                         Ok(m["result"].clone())
@@ -134,8 +322,20 @@ impl Session {
                         ))
                     };
                 }
+                Ok(Some(Frame::Control(m))) if m["type"] == "error" => {
+                    return Err(handshake_refused(&m["error"]));
+                }
                 Ok(Some(_)) => {} // events and data are not for a plain request
                 Ok(None) => return Err(disconnected()),
+                Err(e) if e.kind() == io::ErrorKind::TimedOut => {
+                    return Err(CliError::new(
+                        Code::Timeout,
+                        format!(
+                            "the Host did not answer `{method}` within {} s",
+                            timeout.as_secs()
+                        ),
+                    ));
+                }
                 Err(e) if e.kind() == io::ErrorKind::InvalidData => {
                     return Err(CliError::new(
                         Code::ProtocolError,
@@ -148,79 +348,136 @@ impl Session {
     }
 }
 
-/// `host start`: spawn a detached Host and wait until it serves the endpoint.
-pub fn start(a: &Args, endpoint: &str) -> Result<Value, CliError> {
-    let exe = std::env::current_exe()
-        .map_err(|e| CliError::new(Code::Io, format!("cannot locate subak.exe: {e}")))?;
-    let shell = a.shell.clone().unwrap_or_else(default_shell);
-    let cwd = profile_dir()
-        .or_else(|| std::env::current_dir().ok())
-        .ok_or_else(|| CliError::new(Code::Io, "no working directory for the Host"))?;
-    let args_for = |breakaway: bool| -> Vec<String> {
-        [
-            "host",
-            "serve",
-            "--endpoint",
-            endpoint,
-            "--shell",
-            &shell,
-            "--job-breakaway",
-            if breakaway { "true" } else { "false" },
-        ]
-        .map(String::from)
-        .to_vec()
-    };
-    if a.dry_run {
-        return Ok(json!({
-            "dry_run": true,
-            "would_start": {
-                "program": exe.display().to_string(),
-                "arguments": args_for(true),
-                "cwd": cwd.display().to_string(),
-                "creation_flags": spawn::FLAG_NAMES,
-                "stdio": "NUL (no other inherited handles)",
-                "endpoint": pipe::path(endpoint),
-                "shell": shell,
+/// How a Host started on demand is configured.
+#[derive(Debug, Clone)]
+pub struct Plan {
+    pub shell: Option<String>,
+    pub idle_exit_s: u64,
+}
+
+impl Plan {
+    pub fn from_args(a: &Args) -> Self {
+        Self {
+            shell: if a.no_shell {
+                None
+            } else {
+                Some(a.shell.clone().unwrap_or_else(default_shell))
             },
-        }));
+            idle_exit_s: a.idle_exit.unwrap_or(host::DEFAULT_IDLE_EXIT_S),
+        }
     }
-    if let Ok(mut s) = Session::open(endpoint, Duration::from_millis(500)) {
-        let pid = s
-            .request("host.status", &json!({}))
-            .ok()
-            .map(|st| st["host"]["pid"].clone());
-        return Err(CliError::new(
-            Code::HostAlreadyRunning,
-            format!(
-                "a Host already serves `{}` (pid {})",
-                pipe::path(endpoint),
-                pid.unwrap_or(Value::Null)
-            ),
-        )
-        .hint("attach with `subak host attach`, or stop it with `subak host stop`"));
+
+    fn args(&self, endpoint: &str, breakaway: bool) -> Vec<String> {
+        let mut v: Vec<String> = ["host", "serve", "--endpoint", endpoint]
+            .map(String::from)
+            .to_vec();
+        match &self.shell {
+            Some(s) => v.extend(["--shell".into(), s.clone()]),
+            None => v.push("--no-shell".into()),
+        }
+        v.extend([
+            "--idle-exit".into(),
+            self.idle_exit_s.to_string(),
+            "--job-breakaway".into(),
+            breakaway.to_string(),
+        ]);
+        v
     }
-    let spawned = spawn::spawn_detached(&exe, args_for, &cwd)
-        .map_err(|e| CliError::new(Code::SpawnFailed, format!("cannot start the Host: {e}")))?;
-    let deadline = Instant::now() + Duration::from_secs(10);
+}
+
+/// Waits until a stopping Host has released the endpoint.
+fn wait_gone(endpoint: &str) -> Result<(), CliError> {
+    let until = Instant::now() + STOPPING_TIMEOUT;
     loop {
-        match Session::open(endpoint, Duration::from_millis(200)) {
-            Ok(mut s) => {
-                let st = s.request("host.status", &json!({}))?;
-                if st["host"]["pid"] != spawned.pid {
-                    return Err(CliError::new(
-                        Code::HostAlreadyRunning,
-                        "another Host started on this endpoint at the same time",
-                    ));
-                }
-                return Ok(json!({
-                    "started": true,
-                    "endpoint": st["endpoint"],
-                    "host": st["host"],
-                    "pane": st["pane"],
-                }));
+        match Session::try_open(endpoint, Duration::from_millis(100)) {
+            Err(Failure {
+                why: Why::NotRunning,
+                ..
+            }) => return Ok(()),
+            Err(Failure {
+                why: Why::Stopping, ..
+            }) => {}
+            Ok(_) => return Ok(()), // a new Host already took over; the caller reconnects
+            Err(f) => return Err(f.err),
+        }
+        if Instant::now() > until {
+            return Err(CliError::new(
+                Code::HostUnresponsive,
+                "the Host has been stopping for 15 s and still holds the endpoint",
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// The result of [`connect_or_start`].
+#[derive(Debug)]
+pub struct Connected {
+    pub session: Session,
+    /// The process id of the Host this call started, `None` when one already ran.
+    pub started: Option<u32>,
+    /// The start lock was abandoned by a starter that crashed mid-start.
+    pub lock_abandoned: bool,
+}
+
+/// Start on demand (ADR 0003 §3): connect to the Host, or start one. Several callers at once
+/// get one Host: the start lock serializes starters, and whoever holds it re-checks the endpoint
+/// before spawning. A stopping Host is waited for; any other refusal (identity mismatch, an
+/// unresponsive or incompatible Host) is returned as is: nothing is killed or replaced.
+pub fn connect_or_start(endpoint: &str, plan: &Plan) -> Result<Connected, CliError> {
+    let attempt = |wait| match Session::try_open(endpoint, wait) {
+        Ok(s) => Ok(Some(s)),
+        Err(Failure {
+            why: Why::NotRunning,
+            ..
+        }) => Ok(None),
+        Err(Failure {
+            why: Why::Stopping, ..
+        }) => wait_gone(endpoint).map(|()| None),
+        Err(f) => Err(f.err),
+    };
+    if let Some(session) = attempt(Duration::from_millis(500))? {
+        return Ok(Connected {
+            session,
+            started: None,
+            lock_abandoned: false,
+        });
+    }
+    let lock = NamedLock::acquire(&start_lock_name(endpoint), LOCK_TIMEOUT).map_err(|e| {
+        if e.kind() == io::ErrorKind::TimedOut {
+            CliError::new(
+                Code::Timeout,
+                "another client has been starting the Host for 20 s",
+            )
+        } else {
+            CliError::new(Code::Io, format!("cannot take the Host start lock: {e}"))
+        }
+    })?;
+    // Another starter may have finished while this one waited for the lock.
+    if let Some(session) = attempt(Duration::from_millis(500))? {
+        return Ok(Connected {
+            session,
+            started: None,
+            lock_abandoned: lock.abandoned,
+        });
+    }
+    let spawned = spawn_host(endpoint, plan)?;
+    let deadline = Instant::now() + START_TIMEOUT;
+    loop {
+        match Session::try_open(endpoint, Duration::from_millis(200)) {
+            Ok(session) => {
+                let started = (session.host_pid == spawned.pid).then_some(spawned.pid);
+                return Ok(Connected {
+                    session,
+                    started,
+                    lock_abandoned: lock.abandoned,
+                });
             }
-            Err(e) if e.code == Code::HostNotRunning => {}
-            Err(e) => return Err(e),
+            Err(Failure {
+                why: Why::NotRunning,
+                ..
+            }) => {}
+            Err(f) => return Err(f.err),
         }
         if let Some(code) = win::exit_code(spawned.process.raw()) {
             return Err(if code == u32::from(Code::HostAlreadyRunning.exit_code()) {
@@ -228,6 +485,8 @@ pub fn start(a: &Args, endpoint: &str) -> Result<Value, CliError> {
                     Code::HostAlreadyRunning,
                     "another Host already serves this endpoint",
                 )
+            } else if code == u32::from(Code::HostIdentityMismatch.exit_code()) {
+                mismatch(endpoint, None, "another program took the pipe name")
             } else {
                 CliError::new(
                     Code::SpawnFailed,
@@ -246,8 +505,111 @@ pub fn start(a: &Args, endpoint: &str) -> Result<Value, CliError> {
     }
 }
 
+fn host_exe() -> Result<PathBuf, CliError> {
+    std::env::current_exe()
+        .map_err(|e| CliError::new(Code::Io, format!("cannot locate subak.exe: {e}")))
+}
+
+fn spawn_host(endpoint: &str, plan: &Plan) -> Result<spawn::Spawned, CliError> {
+    let exe = host_exe()?;
+    // ADR 0003 §6: the Host gets the user's logon environment, not this terminal's.
+    let env = EnvBlock::for_current_user().ok();
+    let cwd = host_cwd(env.as_ref())?;
+    spawn::spawn_detached(&exe, |b| plan.args(endpoint, b), &cwd, env.as_ref())
+        .map_err(|e| CliError::new(Code::SpawnFailed, format!("cannot start the Host: {e}")))
+}
+
+fn host_cwd(env: Option<&EnvBlock>) -> Result<PathBuf, CliError> {
+    profile_dir(env)
+        .or_else(|| std::env::current_dir().ok())
+        .ok_or_else(|| CliError::new(Code::Io, "no working directory for the Host"))
+}
+
+fn job_json(j: Option<win::JobLimits>) -> Value {
+    j.map_or(Value::Null, |j| {
+        json!({
+            "kill_on_close": j.kill_on_close,
+            "breakaway_ok": j.breakaway_ok,
+            "silent_breakaway_ok": j.silent_breakaway_ok,
+        })
+    })
+}
+
+/// `host start`: start a detached Host and wait until it serves the endpoint.
+pub fn start(a: &Args, endpoint: &str) -> Result<Value, CliError> {
+    let plan = Plan::from_args(a);
+    // The job this command runs in decides whether the Host can leave it (risk R-03).
+    let launcher_job = job_json(win::current_job_limits());
+    if a.dry_run {
+        let env = EnvBlock::for_current_user().ok();
+        return Ok(json!({
+            "dry_run": true,
+            "would_start": {
+                "program": host_exe()?.display().to_string(),
+                "arguments": plan.args(endpoint, true),
+                "cwd": host_cwd(env.as_ref())?.display().to_string(),
+                "creation_flags": spawn::FLAG_NAMES,
+                "stdio": "NUL (no other inherited handles)",
+                "environment": if env.is_some() { "user (CreateEnvironmentBlock)" } else { "inherited" },
+                "endpoint": pipe::path(endpoint),
+                "start_lock": start_lock_name(endpoint),
+                "shell": plan.shell,
+                "idle_exit_s": plan.idle_exit_s,
+                "launcher_job": launcher_job,
+            },
+        }));
+    }
+    let Connected {
+        mut session,
+        started,
+        lock_abandoned,
+    } = connect_or_start(endpoint, &plan)?;
+    let st = session.request("host.status", &json!({}))?;
+    if started.is_none() {
+        return Err(CliError::new(
+            Code::HostAlreadyRunning,
+            format!("a Host already serves `{}`", pipe::path(endpoint)),
+        )
+        .detail(format!("host pid: {}", session.host_pid))
+        .hint("attach with `subak host attach`, or stop it with `subak host stop`"));
+    }
+    Ok(json!({
+        "started": true,
+        "endpoint": st["endpoint"],
+        "host": st["host"],
+        "pane": st["pane"],
+        "launcher_job": launcher_job,
+        "start_lock_abandoned": lock_abandoned,
+    }))
+}
+
 pub fn status(endpoint: &str) -> Result<Value, CliError> {
     Session::open(endpoint, Duration::from_secs(2))?.request("host.status", &json!({}))
+}
+
+/// `host health`: the heartbeat. Connects (identity checks, handshake) and asks `host.health`.
+pub fn health(endpoint: &str) -> Result<Value, CliError> {
+    let t = Instant::now();
+    let mut s = Session::open(endpoint, Duration::from_secs(2))?;
+    let h = s.request("host.health", &json!({}))?;
+    let ms = u64::try_from(t.elapsed().as_millis()).unwrap_or(u64::MAX);
+    if h["healthy"] != true {
+        return Err(CliError::new(
+            Code::HostDisconnected,
+            format!("Host pid {} is shutting down", s.host_pid),
+        ));
+    }
+    Ok(json!({
+        "healthy": true,
+        "endpoint": pipe::path(endpoint),
+        "host": {
+            "pid": h["pid"], "version": h["version"], "protocol": h["protocol"],
+            "uptime_s": h["uptime_s"], "terminals": h["terminals"], "clients": h["clients"],
+        },
+        "identity": {"same_user": true, "image": HOST_IMAGE},
+        "features": s.welcome["features"],
+        "latency_ms": ms,
+    }))
 }
 
 fn can_prompt(a: &Args) -> bool {
@@ -260,19 +622,19 @@ fn can_prompt(a: &Args) -> bool {
         && io::stderr().is_terminal()
 }
 
-/// `host stop`: destructive — ends the shell and every process in its job, then the Host.
+/// `host stop`: ends the panes (destructive, needs consent) and then the Host.
 pub fn stop(a: &Args, endpoint: &str) -> Result<Value, CliError> {
     let mut s = Session::open(endpoint, Duration::from_secs(2))?;
     let st = s.request("host.status", &json!({}))?;
     if a.dry_run {
-        return Ok(
-            json!({"dry_run": true, "would_stop": {"host": st["host"], "pane": st["pane"], "clients": st["clients"]}}),
-        );
+        let plan = s.request("host.stop", &json!({"dry_run": true}))?;
+        return Ok(json!({"dry_run": true, "would_stop": {
+            "host": st["host"], "pane": st["pane"], "clients": st["clients"],
+            "would_kill": plan["would_kill"],
+        }}));
     }
-    let host_pid = st["host"]["pid"]
-        .as_u64()
-        .and_then(|p| u32::try_from(p).ok());
-    if !a.yes {
+    let live = st["terminals"].as_u64().unwrap_or(0) > 0;
+    if live && !a.yes {
         let question = format!(
             "Stop the Subak Host (pid {}) and end its shell (pid {}, {} process(es))? [y/N] ",
             st["host"]["pid"], st["pane"]["pid"], st["pane"]["job_processes"]
@@ -294,14 +656,18 @@ pub fn stop(a: &Args, endpoint: &str) -> Result<Value, CliError> {
             ));
         }
     }
-    let host_proc = host_pid.and_then(win::open_process);
-    let report = s.request("host.stop", &json!({"dry_run": false}))?;
+    let host_proc = win::open_process(s.host_pid);
+    let report = s.request_within(
+        "host.stop",
+        &json!({"dry_run": false, "kill_terminals": live}),
+        STOP_TIMEOUT,
+    )?;
     let exited = host_proc
         .as_ref()
         .is_none_or(|h| win::wait(h.raw(), Some(Duration::from_secs(10))));
     Ok(json!({
         "stopped": true,
-        "host": {"pid": st["host"]["pid"], "exited": exited},
+        "host": {"pid": s.host_pid, "exited": exited},
         "shell": report["shell"],
     }))
 }
@@ -309,11 +675,11 @@ pub fn stop(a: &Args, endpoint: &str) -> Result<Value, CliError> {
 /// How an attach ended.
 enum End {
     Detached,
-    Stopped { exit_code: Value, reason: Value },
+    Ended { exit_code: Value, stopped: Value },
 }
 
-/// `host attach`: stream the pane until detach (`Ctrl+B d`, or end of piped input), the shell's
-/// exit or an explicit stop.
+/// `host attach`: stream the pane until detach (`Ctrl+B d`, or end of piped input), the pane's
+/// end or an explicit stop.
 pub fn attach(a: &Args, endpoint: &str) -> Result<Value, CliError> {
     let mut s = Session::open(endpoint, Duration::from_secs(2))?;
     let console_in = console::stdin_is_console();
@@ -331,11 +697,13 @@ pub fn attach(a: &Args, endpoint: &str) -> Result<Value, CliError> {
             "size": size.map(|(c, r)| json!({"cols": c, "rows": r})),
         }}));
     }
+    s.request("events.subscribe", &json!({"topics": ["panes", "host"]}))?;
     let res = s.request(
         "pane.attach",
-        &json!({"size": size.map(|(c, r)| json!({"cols": c, "rows": r}))}),
+        &json!({"interactive": true, "size": size.map(|(c, r)| json!({"cols": c, "rows": r}))}),
     )?;
-    let host_pid = s.welcome["host"]["pid"].clone();
+    let host_pid = s.host_pid;
+    let pane_id = res["pane_id"].clone();
     if !a.quiet {
         eprintln!(
             "[subak: attached to Host pid {host_pid}, shell pid {}; Ctrl+B d detaches]",
@@ -352,12 +720,11 @@ pub fn attach(a: &Args, endpoint: &str) -> Result<Value, CliError> {
         move || input(&pipe, console_in, size, &ids, &detach_id, verbose)
     });
     let mut stdout = io::stdout().lock();
-    let mut exit_code = Value::Null;
-    let mut stopping = Value::Null;
+    let mut stopped = Value::Null;
     // This client is the pane's terminal and does not grant win32-input-mode (see OutputFilter).
     let mut filter = proto::OutputFilter::default();
     let end = loop {
-        match proto::read_frame(&mut &*s.pipe) {
+        match proto::read_frame(&mut &*s.pipe, None, |t| t + proto::FRAME_TIMEOUT) {
             Ok(Some(Frame::Data { bytes, .. })) => {
                 if stdout
                     .write_all(&filter.feed(&bytes))
@@ -369,11 +736,14 @@ pub fn attach(a: &Args, endpoint: &str) -> Result<Value, CliError> {
                 }
             }
             Ok(Some(Frame::Control(m))) => match m["type"].as_str() {
-                Some("event") if m["event"] == "pane.exited" => {
-                    exit_code = m["data"]["exit_code"].clone();
+                Some("event") if m["event"] == "pane.exited" && m["data"]["pane_id"] == pane_id => {
+                    break End::Ended {
+                        exit_code: m["data"]["exit_code"].clone(),
+                        stopped,
+                    };
                 }
                 Some("event") if m["event"] == "host.stopping" => {
-                    stopping = m["data"]["reason"].clone();
+                    stopped = m["data"]["reason"].clone();
                 }
                 Some("response") if m["id"] == detach_id.load(Ordering::SeqCst) => {
                     if a.verbose {
@@ -383,10 +753,10 @@ pub fn attach(a: &Args, endpoint: &str) -> Result<Value, CliError> {
                 }
                 _ => {}
             },
-            Ok(None) | Err(_) if !stopping.is_null() => {
-                break End::Stopped {
-                    exit_code,
-                    reason: stopping,
+            Ok(None) | Err(_) if !stopped.is_null() => {
+                break End::Ended {
+                    exit_code: Value::Null,
+                    stopped,
                 };
             }
             Ok(None) | Err(_) => {
@@ -398,8 +768,8 @@ pub fn attach(a: &Args, endpoint: &str) -> Result<Value, CliError> {
     drop(raw);
     Ok(match end {
         End::Detached => json!({"detached": true, "host": {"pid": host_pid}, "pane": res["pane"]}),
-        End::Stopped { exit_code, reason } => json!({
-            "detached": false, "host": {"pid": host_pid, "stopped": reason},
+        End::Ended { exit_code, stopped } => json!({
+            "detached": false, "host": {"pid": host_pid, "stopped": stopped},
             "pane": res["pane"], "shell_exit_code": exit_code,
         }),
     })
@@ -420,11 +790,7 @@ fn input(
         if method == "pane.detach" {
             detach_id.store(id, Ordering::SeqCst);
         }
-        send(
-            pipe,
-            &json!({"type": "request", "id": id, "method": method, "params": params}),
-        )
-        .is_ok()
+        send(pipe, &proto::request(id, method, &params)).is_ok()
     };
     let mut forward = |bytes: &[u8]| -> Option<bool> {
         let (fwd, detach) = keys.feed(bytes);
@@ -491,4 +857,27 @@ fn input(
             None => return,
         }
     }
+}
+
+/// The serve options for `host serve` from the command line.
+pub fn serve_opts(a: &Args, endpoint: String) -> host::ServeOpts {
+    let plan = Plan::from_args(a);
+    host::ServeOpts {
+        endpoint,
+        shell: plan.shell,
+        job_breakaway: a.job_breakaway,
+        idle_exit: Duration::from_secs(plan.idle_exit_s),
+    }
+}
+
+/// `host serve --dry-run`.
+pub fn serve_plan(opts: &host::ServeOpts) -> Value {
+    let env = EnvBlock::for_current_user().ok();
+    json!({"dry_run": true, "would_serve": {
+        "endpoint": pipe::path(&opts.endpoint),
+        "shell": opts.shell,
+        "idle_exit_s": opts.idle_exit.as_secs(),
+        "cwd": profile_dir(env.as_ref()).map(|p| p.display().to_string()),
+        "environment": if env.is_some() { "user (CreateEnvironmentBlock)" } else { "inherited" },
+    }})
 }

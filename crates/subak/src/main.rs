@@ -8,8 +8,13 @@
 //! runs only after an explicit `subak host start` (or `host serve`), and no command opens a
 //! window. The real CLI (Step 12) follows the same contract.
 
+// Portable modules: compiled and unit-tested on every target, but until the Linux Host (M4,
+// ADR 0011) only the Windows Host and clients use most of them.
+#[cfg_attr(not(windows), allow(dead_code))]
 mod cli;
+#[cfg_attr(not(windows), allow(dead_code))]
 mod output;
+#[cfg_attr(not(windows), allow(dead_code))]
 mod proto;
 
 #[cfg(windows)]

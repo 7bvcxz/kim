@@ -45,15 +45,21 @@ use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
 };
 use windows_sys::Win32::System::IO::{CancelIoEx, GetOverlappedResult, OVERLAPPED};
+use windows_sys::Win32::System::JobObjects::{
+    AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob, JOB_OBJECT_LIMIT_BREAKAWAY_OK,
+    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK,
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+    SetInformationJobObject,
+};
 use windows_sys::Win32::System::Pipes::{
     ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, PIPE_TYPE_BYTE, PIPE_WAIT,
     WaitNamedPipeW,
 };
 use windows_sys::Win32::System::Threading::{
-    CREATE_NO_WINDOW, CreateEventW, CreateMutexW, GetCurrentProcess, OpenProcess, OpenProcessToken,
-    OpenThread, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
-    ResumeThread, SetThreadToken, SuspendThread, THREAD_SUSPEND_RESUME, TerminateProcess,
-    WaitForSingleObject,
+    CREATE_NO_WINDOW, CREATE_SUSPENDED, CreateEventW, CreateMutexW, GetCurrentProcess, OpenProcess,
+    OpenProcessToken, OpenThread, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+    PROCESS_TERMINATE, ResumeThread, SetThreadToken, SuspendThread, THREAD_SUSPEND_RESUME,
+    TerminateProcess, WaitForSingleObject,
 };
 
 const LONG: Duration = Duration::from_secs(20);
@@ -1641,5 +1647,152 @@ fn the_host_environment_is_the_users_not_the_launchers() {
     );
     eprintln!(
         "EVIDENCE environment: launcher had USERPROFILE/HOME/SSH_AUTH_SOCK/SUBAK_LEAK_TEST poisoned; the pane saw USERPROFILE={real_profile}, none of the rest"
+    );
+}
+
+/// A job object owned by the test: kill-on-close plus `extra` limit flags.
+struct Job(HANDLE);
+
+impl Job {
+    fn new(extra: u32) -> Self {
+        // SAFETY: anonymous job; checked.
+        let h = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+        assert!(!h.is_null());
+        let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | extra;
+        // SAFETY: valid struct of the size passed.
+        let ok = unsafe {
+            SetInformationJobObject(
+                h,
+                JobObjectExtendedLimitInformation,
+                (&raw const info).cast(),
+                u32::try_from(size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>()).unwrap(),
+            )
+        };
+        assert_ne!(ok, 0);
+        Self(h)
+    }
+
+    fn assign(&self, process: HANDLE) {
+        // SAFETY: valid job and process handles.
+        assert_ne!(unsafe { AssignProcessToJobObject(self.0, process) }, 0);
+    }
+
+    fn contains(&self, p: &Proc) -> bool {
+        let mut r = 0;
+        // SAFETY: valid handles; `r` is writable.
+        unsafe { IsProcessInJob(p.h.as_raw_handle(), self.0, &raw mut r) };
+        r != 0
+    }
+}
+
+impl Drop for Job {
+    fn drop(&mut self) {
+        // SAFETY: owned handle; kill-on-close ends every process still in the job.
+        unsafe { CloseHandle(self.0) };
+    }
+}
+
+/// Runs `subak host start … --json` as a launcher that is placed in `jobs` (outermost first)
+/// before it runs a single instruction; returns its envelope.
+fn start_in_jobs(ep: &str, jobs: &[&Job]) -> Value {
+    let child = Command::new(subak())
+        .args([
+            "host",
+            "start",
+            "--endpoint",
+            ep,
+            "--no-shell",
+            "--idle-exit",
+            "60",
+            "--json",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW | CREATE_SUSPENDED)
+        .spawn()
+        .unwrap();
+    for j in jobs {
+        j.assign(child.as_raw_handle());
+    }
+    // Resume the suspended main thread: suspend once more, resume twice.
+    let threads = Proc::open(child.id()).suspend();
+    for t in &threads.0 {
+        // SAFETY: valid thread handle with suspend/resume access.
+        unsafe { ResumeThread(t.as_raw_handle()) };
+    }
+    drop(threads);
+    let out = child.wait_with_output().unwrap();
+    let doc: Value = serde_json::from_slice(&out.stdout).unwrap();
+    validate("cli-envelope-v1", &doc);
+    assert_eq!(out.status.code(), Some(0), "{doc}");
+    doc
+}
+
+/// Risk R-03, measured headlessly: breakaway is decided per job level (ADR 0016 §4, ADR 0019).
+#[test]
+fn breakaway_is_decided_per_job_level() {
+    // Silent breakaway: the Host lands outside the launcher's job and survives its close.
+    let ep = endpoint("job-silent");
+    let job = Job::new(JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK);
+    let doc = start_in_jobs(&ep, &[&job]);
+    assert_eq!(
+        doc["data"]["launcher_job"]["silent_breakaway_ok"], true,
+        "{doc}"
+    );
+    let h = Host {
+        proc: Proc::open(pid_of(&doc["data"]["host"]["pid"])),
+        ep,
+    };
+    assert!(!job.contains(&h.proc));
+    drop(job);
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(
+        h.proc.alive(),
+        "silent breakaway: the Host outlives the launcher's job"
+    );
+    let silent_pid = h.proc.pid;
+    drop(h);
+
+    // Nested jobs: the inner one allows breakaway, the outer one does not (a terminal whose own
+    // job allows it, inside an IDE or a service whose job does not).
+    let ep = endpoint("job-nested");
+    let outer = Job::new(0);
+    let inner = Job::new(JOB_OBJECT_LIMIT_BREAKAWAY_OK);
+    let doc = start_in_jobs(&ep, &[&outer, &inner]);
+    let d = &doc["data"];
+    assert_eq!(
+        d["launcher_job"]["breakaway_ok"], true,
+        "the launcher sees its immediate job: {doc}"
+    );
+    assert_eq!(d["host"]["job_breakaway"], true, "{doc}");
+    assert_eq!(d["host"]["in_job"], true, "…but the Host is still in a job");
+    assert_eq!(
+        d["host"]["job"]["breakaway_ok"], false,
+        "…which forbids breakaway"
+    );
+    assert!(
+        doc["warnings"][0]
+            .as_str()
+            .is_some_and(|w| w.contains("R-03")),
+        "the user is warned: {doc}"
+    );
+    let h = Host {
+        proc: Proc::open(pid_of(&d["host"]["pid"])),
+        ep,
+    };
+    assert!(!inner.contains(&h.proc) && outer.contains(&h.proc));
+    drop(inner);
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(h.proc.alive(), "closing the inner job is safe");
+    drop(outer);
+    assert!(
+        h.proc.wait(LONG),
+        "closing the outer kill-on-close job ends the Host (R-03)"
+    );
+    eprintln!(
+        "EVIDENCE R-03: silent-breakaway job closed, Host {silent_pid} survived; nested jobs: Host {} left the inner job (breakaway ok), stayed in the outer one and died with it",
+        h.proc.pid
     );
 }

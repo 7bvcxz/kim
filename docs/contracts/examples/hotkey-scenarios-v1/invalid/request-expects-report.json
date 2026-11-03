@@ -1,0 +1,8 @@
+{
+  "schema": "kim.hotkey-scenario",
+  "schema_version": 1,
+  "title": "invalid",
+  "tools": [{"manifest": "kim", "config": null}],
+  "request": {"command": "disable", "tool": "kim", "action": "help.show"},
+  "expected": {"report": {"tools": [], "conflicts": [], "summary": {"errors": 0, "warnings": 0, "infos": 0}}}
+}

@@ -193,6 +193,9 @@ available (ring + dot), incompatible (triangle), not installed (nothing).
   [ADR 0009](adr/0009-gui-clients-and-keyboard-dispatch.md) dispatch order (IME guard → prefix →
   app shortcuts → PTY).
 - A keyboard help overlay (`Ctrl+B ?` and `F1`) lists live bindings.
+- Every GUI's shortcut list, keyboard-only binding editor and "Keyboard shortcuts: on/off"
+  switch follow [HOTKEY_CONTRACT §11](HOTKEY_CONTRACT.md); the keys above are its reserved
+  navigation actions.
 
 ### 4.2 High-DPI and multiple monitors
 

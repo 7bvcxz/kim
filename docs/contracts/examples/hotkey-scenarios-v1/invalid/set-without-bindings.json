@@ -1,0 +1,8 @@
+{
+  "schema": "kim.hotkey-scenario",
+  "schema_version": 1,
+  "title": "invalid",
+  "tools": [{"manifest": "kim", "config": null}],
+  "request": {"command": "set", "tool": "kim", "action": "help.show"},
+  "expected": {"outcome": "refused", "error": {"code": "hotkey_invalid", "exit_code": 2}, "conflicts": []}
+}

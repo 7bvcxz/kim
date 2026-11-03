@@ -1,0 +1,12 @@
+{
+  "ok": false,
+  "command": "hotkeys.set",
+  "schema_version": 1,
+  "error": {
+    "code": "hotkey_conflict",
+    "exit_code": 2,
+    "message": "F3 conflicts with another binding",
+    "hint": null,
+    "details": []
+  }
+}

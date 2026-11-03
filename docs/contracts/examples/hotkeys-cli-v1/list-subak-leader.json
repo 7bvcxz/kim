@@ -1,0 +1,51 @@
+{
+  "ok": true,
+  "command": "hotkeys.list",
+  "schema_version": 1,
+  "data": {
+    "tool": "subak",
+    "enabled": true,
+    "config": {"path": "C:\\Users\\me\\AppData\\Roaming\\mouv\\subak\\hotkeys.json", "state": "invalid"},
+    "disabled_scopes": [],
+    "leaders": [{"id": "prefix", "keys": "Ctrl+B", "source": "default"}],
+    "actions": [
+      {
+        "id": "window.new",
+        "title": "New window",
+        "scope": "app",
+        "bindable": true,
+        "source": "default",
+        "defaults": ["@prefix char:c"],
+        "bindings": [
+          {
+            "keys": "@prefix char:c",
+            "scope": "app",
+            "trigger": "press",
+            "active": true,
+            "registration": "not_applicable"
+          }
+        ]
+      },
+      {
+        "id": "input.send-prefix",
+        "title": "Send the prefix key to the program",
+        "scope": "app",
+        "bindable": true,
+        "source": "default",
+        "defaults": ["@prefix @prefix"],
+        "bindings": [
+          {
+            "keys": "@prefix @prefix",
+            "scope": "app",
+            "trigger": "press",
+            "active": true,
+            "registration": "not_applicable"
+          }
+        ]
+      }
+    ]
+  },
+  "warnings": [
+    "hotkeys.json is invalid (overrides[2].bindings[0]: unknown key `Hyper`); running in safe mode: no global shortcuts, defaults for the rest"
+  ]
+}

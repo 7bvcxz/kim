@@ -1,7 +1,8 @@
 //! The `schema-check` task: validates `docs/contracts/examples/<name>/*.json` (must pass) and
 //! `docs/contracts/examples/<name>/invalid/*.json` (must fail) against
 //! `docs/contracts/schemas/<name>.schema.json`, using the subset validator in
-//! [`crate::jsonschema`].
+//! [`crate::jsonschema`]. The hotkey scenarios are additionally recomputed by the reference
+//! checker in [`crate::hotkeys`] (docs/HOTKEY_CONTRACT.md §15).
 
 use crate::jsonschema::Validator;
 use serde_json::Value;
@@ -12,6 +13,7 @@ pub struct Report {
     pub schemas: usize,
     pub valid_examples: usize,
     pub invalid_examples: usize,
+    pub hotkey_scenarios: usize,
     /// For each invalid example: (path, first violation) — shown by `schema-check --verbose`.
     pub rejections: Vec<(String, String)>,
     pub problems: Vec<String>,
@@ -87,6 +89,9 @@ pub fn check_contracts(root: &Path) -> Result<Report, String> {
             }
         }
     }
+    let hotkeys = crate::hotkeys::check(&contracts)?;
+    report.hotkey_scenarios = hotkeys.scenarios;
+    report.problems.extend(hotkeys.problems);
     if report.schemas == 0 {
         report
             .problems
@@ -104,8 +109,8 @@ mod tests {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
         let report = check_contracts(root).expect("contracts readable");
         assert!(
-            report.schemas >= 6,
-            "expected the IPC, state, catalog and CLI schemas"
+            report.schemas >= 10,
+            "expected the IPC, state, catalog, CLI and hotkey schemas"
         );
         assert!(
             report.problems.is_empty(),

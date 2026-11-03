@@ -1,0 +1,83 @@
+{
+  "schema": "kim.hotkey-scenario",
+  "schema_version": 1,
+  "title": "Layout, IME and OS-default warnings",
+  "description": "Ctrl+Alt+R can collide with an AltGr character on non-US layouts, Ctrl+Space can switch the input method, and a global PrintScreen replaces the OS screenshot key. All three are warnings: the bindings work, and the user may keep them.",
+  "tools": [
+    {
+      "manifest": "kim",
+      "config": {
+        "schema": "kim.hotkeys",
+        "schema_version": 1,
+        "tool": "kim",
+        "overrides": [
+          {"action": "catalog.refresh", "bindings": ["Ctrl+Alt+R"]},
+          {"action": "help.show", "bindings": ["Ctrl+Space"]}
+        ]
+      }
+    },
+    {
+      "manifest": "noeul",
+      "config": {
+        "schema": "kim.hotkeys",
+        "schema_version": 1,
+        "tool": "noeul",
+        "overrides": [{"action": "capture.region", "bindings": ["PrintScreen"]}]
+      }
+    }
+  ],
+  "expected": {
+    "report": {
+      "tools": [
+        {"tool": "kim", "version": "0.1.0", "enabled": true, "source": "manifest"},
+        {"tool": "noeul", "version": "0.1.0", "enabled": true, "source": "manifest"}
+      ],
+      "conflicts": [
+        {
+          "code": "altgr_collision",
+          "severity": "warning",
+          "tool": "kim",
+          "action": "catalog.refresh",
+          "keys": "Ctrl+Alt+R",
+          "scope": "app",
+          "source": "user",
+          "with": null,
+          "offers": [{"kind": "disable"}, {"kind": "keep"}]
+        },
+        {
+          "code": "ime_toggle",
+          "severity": "warning",
+          "tool": "kim",
+          "action": "help.show",
+          "keys": "Ctrl+Space",
+          "scope": "app",
+          "source": "user",
+          "with": null,
+          "offers": [
+            {"kind": "rebind", "keys": "Ctrl+Shift+Space"},
+            {"kind": "rebind", "keys": "Ctrl+Alt+Shift+Space"},
+            {"kind": "disable"},
+            {"kind": "keep"}
+          ]
+        },
+        {
+          "code": "os_shortcut",
+          "severity": "warning",
+          "tool": "noeul",
+          "action": "capture.region",
+          "keys": "PrintScreen",
+          "scope": "global",
+          "source": "user",
+          "with": null,
+          "offers": [
+            {"kind": "rebind", "keys": "Shift+PrintScreen"},
+            {"kind": "rebind", "keys": "Ctrl+Shift+PrintScreen"},
+            {"kind": "disable"},
+            {"kind": "keep"}
+          ]
+        }
+      ],
+      "summary": {"errors": 0, "warnings": 3, "infos": 0}
+    }
+  }
+}

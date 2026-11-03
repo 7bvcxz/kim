@@ -91,3 +91,27 @@ This is non-negotiable.
 - Placeholders, mocks and planned features are labeled as such in code, help text and docs.
 - Untested platforms or behaviors are explicitly marked **not tested**.
 - Decisions that trade one principle against another are written down as ADRs.
+
+## 9. Keyboard shortcuts belong to the user
+
+- Every installable Kim tool that has a GUI lets the user see, change and switch off its
+  keyboard shortcuts: a discoverable list of its actions and their current keys, defaults only
+  where a default really helps, user-editable bindings, disable and reset for one action or for
+  the whole tool, and a headless command to inspect and change all of it.
+  [KIM-FR-040…046]
+- Shortcuts serve GUI operations. Not every CLI command needs a hotkey, and a tool without a GUI
+  needs none; agents reach the same operations through the CLI.
+- A tool **asks** for keys and never **takes** them. Keys the operating system reserves, the
+  secure desktop (Ctrl+Alt+Del, UAC, sign-in, lock screen), password fields, and shortcuts that
+  other programs already own are respected. Kim detects and reports a conflict and offers a
+  remap; it never steals a key by force. [KIM-SEC-020, KIM-SEC-021]
+- There is no shared hotkey daemon or system-wide hook for all tools. Each tool handles its own
+  shortcuts, and only while it runs. A tool installs a keyboard hook only when its purpose
+  requires one (Ddalgak, an automation engine), only after the user enabled it, and never
+  hidden. Shortcut handling is never keylogging. [KIM-NFR-020, KIM-SEC-022]
+- There is always a way back: a switch that turns all of a tool's shortcuts off, reset to
+  defaults, and an emergency path that still works when a binding or the configuration is
+  broken. [KIM-SEC-023]
+- Shortcuts survive keyboard layouts and input methods: Korean and other IMEs keep working,
+  non-US layouts are first-class, and stored bindings are portable to Linux later.
+  [KIM-NFR-021, KIM-NFR-022]

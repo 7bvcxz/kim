@@ -65,16 +65,14 @@ floating_icon = false
 tray_icon = true
 close_terminal_shortcut = "kill"   # kill | hide (ADR 0009)
 
-[keys]
-prefix = "Ctrl+B"
-new_terminal = "Ctrl+T"
-close_terminal = "Ctrl+W"
-next_terminal = "Ctrl+Tab"
-previous_terminal = "Ctrl+Shift+Tab"
-terminal_first_mode = false
-
 [claude]
 indicator = true
 ```
+
+Key bindings are not part of `config.toml`. They live in `hotkeys.json` next to it, as for
+every Kim tool ([HOTKEY_CONTRACT §8](../HOTKEY_CONTRACT.md), ADR 0017). This draft's former
+`[keys]` table (`prefix`, `new_terminal`, …, `terminal_first_mode`) was removed before any
+Subak release read it: the prefix is the leader `prefix`, and terminal-first mode is a preset
+of disabled overrides (HOTKEY_CONTRACT §13.1).
 
 Profiles (`[[profiles]]`) arrive in Step 20/33 and are specified there.

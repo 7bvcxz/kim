@@ -1,0 +1,58 @@
+{
+  "schema": "kim.hotkey-scenario",
+  "schema_version": 1,
+  "title": "Nothing beats a leader",
+  "description": "The user bound terminal.new to Ctrl+B, Subak's prefix. A leader is never suppressed and never the subject: the user binding is inactive (duplicate_binding error) until the user picks another chord.",
+  "tools": [
+    {
+      "manifest": "subak",
+      "config": {
+        "schema": "kim.hotkeys",
+        "schema_version": 1,
+        "tool": "subak",
+        "overrides": [{"action": "terminal.new", "bindings": ["Ctrl+B"]}]
+      }
+    }
+  ],
+  "expected": {
+    "report": {
+      "tools": [{"tool": "subak", "version": "0.1.0", "enabled": true, "source": "manifest"}],
+      "conflicts": [
+        {
+          "code": "duplicate_binding",
+          "severity": "error",
+          "tool": "subak",
+          "action": "terminal.new",
+          "keys": "Ctrl+B",
+          "scope": "app",
+          "source": "user",
+          "with": {"tool": "subak", "action": "@prefix", "keys": "Ctrl+B", "scope": "app"},
+          "offers": [{"kind": "rebind", "keys": "Ctrl+Shift+B"}, {"kind": "disable"}]
+        },
+        {
+          "code": "shadows_terminal_input",
+          "severity": "info",
+          "tool": "subak",
+          "action": "@prefix",
+          "keys": "Ctrl+B",
+          "scope": "app",
+          "source": "default",
+          "with": null,
+          "offers": []
+        },
+        {
+          "code": "shadows_terminal_input",
+          "severity": "info",
+          "tool": "subak",
+          "action": "terminal.close",
+          "keys": "Ctrl+W",
+          "scope": "app",
+          "source": "default",
+          "with": null,
+          "offers": []
+        }
+      ],
+      "summary": {"errors": 1, "warnings": 0, "infos": 2}
+    }
+  }
+}

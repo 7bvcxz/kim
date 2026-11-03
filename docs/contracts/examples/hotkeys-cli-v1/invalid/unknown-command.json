@@ -1,0 +1,14 @@
+{
+  "ok": true,
+  "command": "hotkeys.remove",
+  "schema_version": 1,
+  "data": {
+    "tool": "kim",
+    "dry_run": false,
+    "written": true,
+    "path": "C:\\Users\\me\\AppData\\Roaming\\mouv\\kim\\hotkeys.json",
+    "changes": [],
+    "conflicts": []
+  },
+  "warnings": []
+}

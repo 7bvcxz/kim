@@ -1,0 +1,11 @@
+{
+  "schema": "kim.hotkeys",
+  "schema_version": 1,
+  "tool": "subak",
+  "leaders": {"prefix": "Ctrl+code:Backquote"},
+  "overrides": [
+    {"action": "window.new", "bindings": ["@prefix char:c", "@prefix char:ㅊ"]},
+    {"action": "terminal.rename", "bindings": ["AltGr+Shift+F2"]}
+  ],
+  "unknown_future_field": {"kept": true}
+}

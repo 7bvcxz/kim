@@ -1,0 +1,6 @@
+{
+  "schema": "kim.hotkeys",
+  "schema_version": 1,
+  "tool": "noeul",
+  "overrides": [{"action": "capture.region", "bindings": ["Shift+Win+S"]}]
+}

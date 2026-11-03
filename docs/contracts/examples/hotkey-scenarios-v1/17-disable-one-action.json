@@ -1,0 +1,26 @@
+{
+  "schema": "kim.hotkey-scenario",
+  "schema_version": 1,
+  "title": "`disable` turns one action off",
+  "description": "`kim hotkeys disable help.show` writes a disabled override; the other actions keep their defaults.",
+  "tools": [{"manifest": "kim", "config": null}],
+  "request": {"command": "disable", "tool": "kim", "action": "help.show"},
+  "expected": {
+    "outcome": "applied",
+    "written": true,
+    "config_after": {
+      "schema": "kim.hotkeys",
+      "schema_version": 1,
+      "tool": "kim",
+      "overrides": [{"action": "help.show", "disabled": true}]
+    },
+    "changes": [
+      {
+        "action": "help.show",
+        "before": {"bindings": ["F1"], "source": "default"},
+        "after": {"bindings": [], "source": "disabled"}
+      }
+    ],
+    "conflicts": []
+  }
+}

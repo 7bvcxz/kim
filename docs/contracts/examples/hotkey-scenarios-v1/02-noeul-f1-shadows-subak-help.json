@@ -1,0 +1,67 @@
+{
+  "schema": "kim.hotkey-scenario",
+  "schema_version": 1,
+  "title": "A global default shadows another tool's app key",
+  "description": "Noeul's global F1 (region capture) means Subak's F1 help never fires while Noeul runs. This is a warning with remap offers for the shadowed binding; nothing is changed. Subak's help stays reachable through Ctrl+B ?.",
+  "tools": [{"manifest": "noeul", "config": null}, {"manifest": "subak", "config": null}],
+  "expected": {
+    "report": {
+      "tools": [
+        {"tool": "noeul", "version": "0.1.0", "enabled": true, "source": "manifest"},
+        {"tool": "subak", "version": "0.1.0", "enabled": true, "source": "manifest"}
+      ],
+      "conflicts": [
+        {
+          "code": "global_shadows_app",
+          "severity": "warning",
+          "tool": "subak",
+          "action": "help.show",
+          "keys": "F1",
+          "scope": "app",
+          "source": "default",
+          "with": {"tool": "noeul", "action": "capture.region", "keys": "F1", "scope": "global"},
+          "offers": [
+            {"kind": "rebind", "keys": "Shift+F1"},
+            {"kind": "rebind", "keys": "Ctrl+Shift+F1"},
+            {"kind": "disable"},
+            {"kind": "keep"}
+          ]
+        },
+        {
+          "code": "shadows_terminal_input",
+          "severity": "info",
+          "tool": "subak",
+          "action": "@prefix",
+          "keys": "Ctrl+B",
+          "scope": "app",
+          "source": "default",
+          "with": null,
+          "offers": []
+        },
+        {
+          "code": "shadows_terminal_input",
+          "severity": "info",
+          "tool": "subak",
+          "action": "terminal.close",
+          "keys": "Ctrl+W",
+          "scope": "app",
+          "source": "default",
+          "with": null,
+          "offers": []
+        },
+        {
+          "code": "shadows_terminal_input",
+          "severity": "info",
+          "tool": "subak",
+          "action": "terminal.new",
+          "keys": "Ctrl+T",
+          "scope": "app",
+          "source": "default",
+          "with": null,
+          "offers": []
+        }
+      ],
+      "summary": {"errors": 0, "warnings": 1, "infos": 3}
+    }
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "schema": "kim.hotkey-scenario",
+  "schema_version": 1,
+  "title": "invalid",
+  "tools": [],
+  "expected": {"report": {"tools": [], "conflicts": [], "summary": {"errors": 0, "warnings": 0, "infos": 0}}}
+}

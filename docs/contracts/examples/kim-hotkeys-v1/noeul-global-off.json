@@ -1,0 +1,7 @@
+{
+  "schema": "kim.hotkeys",
+  "schema_version": 1,
+  "tool": "noeul",
+  "disabled_scopes": ["global"],
+  "overrides": [{"action": "capture.region", "bindings": [{"keys": "F1", "scope": "app"}]}]
+}

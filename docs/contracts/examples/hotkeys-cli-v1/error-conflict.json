@@ -1,0 +1,12 @@
+{
+  "ok": false,
+  "command": "hotkeys.set",
+  "schema_version": 1,
+  "error": {
+    "code": "hotkey_conflict",
+    "exit_code": 7,
+    "message": "F3 conflicts with another binding",
+    "hint": "try Shift+F3 or Ctrl+Shift+F3, or run `noeul hotkeys set paste.float <keys>`; --allow-conflict keeps both (the first tool to register wins)",
+    "details": ["cross_tool_global: noeul paste.float uses F3 (global)"]
+  }
+}

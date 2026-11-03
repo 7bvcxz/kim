@@ -1,0 +1,12 @@
+{
+  "ok": false,
+  "command": "hotkeys.reset",
+  "schema_version": 1,
+  "error": {
+    "code": "confirmation_required",
+    "exit_code": 7,
+    "message": "resetting all shortcuts discards your bindings",
+    "hint": "re-run with --yes (a backup is kept as hotkeys.json.bak)",
+    "details": []
+  }
+}

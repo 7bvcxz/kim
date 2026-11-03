@@ -1,0 +1,25 @@
+{
+  "schema": "kim.hotkey-scenario",
+  "schema_version": 1,
+  "title": "`set` refuses an OS-reserved chord",
+  "description": "`kim hotkeys set help.show Win+L` is refused with hotkey_reserved (exit 2). Nothing is written.",
+  "tools": [{"manifest": "kim", "config": null}],
+  "request": {"command": "set", "tool": "kim", "action": "help.show", "bindings": ["Win+L"]},
+  "expected": {
+    "outcome": "refused",
+    "error": {"code": "hotkey_reserved", "exit_code": 2},
+    "conflicts": [
+      {
+        "code": "os_reserved",
+        "severity": "error",
+        "tool": "kim",
+        "action": "help.show",
+        "keys": "Win+L",
+        "scope": "app",
+        "source": "user",
+        "with": {"reserved": "os", "keys": "Win+L", "name": "Windows key shortcut"},
+        "offers": [{"kind": "disable"}]
+      }
+    ]
+  }
+}

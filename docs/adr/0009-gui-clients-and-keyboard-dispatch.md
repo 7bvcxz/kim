@@ -76,3 +76,10 @@ Bindings are configurable per profile.
 
 - 2026-11-04 (Step 04): the toolkit decision is [ADR 0014](0014-gui-technology.md) — egui +
   glow for chrome, a dedicated cell-grid renderer for terminal content.
+- 2026-11-04 (Step 45): Subak's bindings follow the cross-tool hotkey contract
+  ([ADR 0017](0017-universal-customizable-hotkeys.md),
+  [HOTKEY_CONTRACT §13.1](../HOTKEY_CONTRACT.md)). The dispatch order above is unchanged. The
+  prefix becomes the leader `prefix`, the pass-through rule is derived from the current `app`
+  bindings, "terminal-first mode" is a preset of disabled overrides, per-profile bindings are
+  `profiles` overlays, and bindings live in `hotkeys.json` instead of the `[keys]` table of
+  `config.toml`.

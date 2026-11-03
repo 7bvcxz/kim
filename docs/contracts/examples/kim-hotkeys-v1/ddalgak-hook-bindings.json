@@ -1,0 +1,13 @@
+{
+  "schema": "kim.hotkeys",
+  "schema_version": 1,
+  "tool": "ddalgak",
+  "overrides": [
+    {"action": "engine.toggle", "bindings": ["RCtrl+RShift+F11"]},
+    {
+      "action": "engine.pause",
+      "bindings": [{"keys": "Ctrl+Shift+Pause", "trigger": "hold", "hold_ms": 800}]
+    },
+    {"action": "editor.open", "bindings": [{"keys": "Ctrl+Shift+code:KeyD", "scope": "global"}]}
+  ]
+}

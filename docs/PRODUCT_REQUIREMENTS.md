@@ -95,6 +95,31 @@ changed by an ADR with measurements.
 | KIM-SEC-013 | Secrets (tokens, passwords, keys, values marked secret) never appear in logs, JSON output, crash reports or plaintext state. | P0 | M1 | T, I |
 | KIM-SEC-014 | A documented process exists for privately reporting security issues. | P0 | M1 | D |
 
+### 3.4 Keyboard shortcuts (every Kim tool with a GUI)
+
+These apply to every installable Kim tool that has a GUI: Kim Manager, Subak's GUI, and later
+tools such as Noeul and Ddalgak. A tool without a GUI needs no shortcuts, and CLI commands do
+not need hotkeys of their own. Milestone M2 below means that Kim Manager and Subak conform by
+the end of M2; a tool added later conforms in its first release that has a GUI. The rules are
+specified in [HOTKEY_CONTRACT.md](HOTKEY_CONTRACT.md) ([ADR 0017](adr/0017-universal-customizable-hotkeys.md)).
+
+| ID | Requirement | Pri | MS | Verify |
+| --- | --- | --- | --- | --- |
+| KIM-FR-040 | A cross-tool hotkey contract (v1) defines action IDs, scopes, the chord and sequence syntax, the stored configuration and its migrations, the `hotkeys` CLI, conflict and precedence rules, and safety rules. JSON schemas and conflict fixtures make it machine-checkable. | P0 | M1 | D, T |
+| KIM-FR-041 | **Discoverable.** Every GUI tool lists all of its bindable actions with their current binding, scope and state (default, user-set, disabled, unbound, in conflict) inside the GUI, reachable by keyboard, and `<tool> hotkeys list --json` returns the same list. | P1 | M2 | T, M |
+| KIM-FR-042 | **Defaults where appropriate.** Defaults exist only for frequent actions. A system-wide (global) default is limited to a tool's primary entry action, and never uses a reserved chord or another Kim tool's global default. | P1 | M2 | T, I |
+| KIM-FR-043 | **Editable.** The user can rebind every bindable action, in the GUI by keyboard-only capture and with `<tool> hotkeys set`, without reinstalling or restarting the tool. Only the contract's reserved navigation and recovery keys cannot be rebound. | P1 | M2 | T, M |
+| KIM-FR-044 | **Disable and reset.** Each binding can be disabled on its own, bindings can be reset per action or all at once, and a tool-wide switch turns all of a tool's shortcuts off (global registrations are released at once). User choices survive updates; a changed default never overwrites a user binding. | P1 | M2 | T |
+| KIM-FR-045 | **Headless.** The `<tool> hotkeys` commands (`list`, `show`, `set`, `disable`, `enable`, `reset`, `check`) follow the CLI contract (`--json`, `--dry-run`, exit codes, registered error codes). They never open a window, register a hotkey or install a hook. | P1 | M2 | T |
+| KIM-FR-046 | **Conflicts are reported, never resolved silently.** Conflicts inside a tool, between installed Kim tools (found by read-only discovery, without a daemon), with reserved chords, and at registration with keys that other programs own are reported with stable codes and a non-destructive remap offer. Nothing changes until the user chooses. | P1 | M2 | T |
+| KIM-NFR-020 | **No shared hook or daemon.** Shortcut support adds no process. Each tool handles its own keys only while it runs, registers global hotkeys only while it runs and they are enabled, and adds no idle wake-ups or polling. | P0 | M2 | T, I |
+| KIM-NFR-021 | **Accessible binding editor and IME safety.** Capture and editing work by keyboard alone, never trap focus, announce the captured chord to screen readers and never fire the action being captured. No shortcut fires during an IME composition, and IME mode keys are never bound. | P1 | M2 | T, M |
+| KIM-NFR-022 | **Portable bindings.** Stored bindings use the contract's key names (logical, physical or character), never bare Windows virtual-key numbers, so a Linux backend can read the same file. Linux runtime support is still not claimed before M4. | P1 | M2 | T, I |
+| KIM-SEC-020 | **NON-NEGOTIABLE.** A Kim tool never steals a shortcut by force. It does not unregister, hook around or override a chord that the OS reserves or that another program owns. A failed registration is reported, and the binding stays inactive until the user changes it. | P0 | M2 | T, I |
+| KIM-SEC-021 | **NON-NEGOTIABLE.** No Kim tool intercepts, observes or injects keys on the secure desktop (Ctrl+Alt+Del / Secure Attention Sequence, UAC consent, sign-in and lock screen) or in password fields. Shortcut capture never records text typed into a password field. | P0 | M2 | I, T, M |
+| KIM-SEC-022 | **No keylogging.** Shortcut handling acts only on bound chords. It never logs, stores or transmits other keystrokes, and diagnostics name action IDs, not typed keys. A system-wide keyboard hook is allowed only in a tool whose purpose needs one (Ddalgak), only after the user enabled it, and visibly. | P0 | M2 | I, T |
+| KIM-SEC-023 | **Emergency recovery.** Every tool with global shortcuts can start with all shortcuts off (`--no-hotkeys`, `KIM_NO_HOTKEYS`) and can turn them off from the CLI while running. An unreadable or invalid configuration never registers global shortcuts and never crashes the tool. A tool with a keyboard hook also keeps one non-remappable emergency chord that switches the hook off. | P0 | M2 | T, M |
+
 ## 4. Subak requirements
 
 ### 4.1 Host, Client and object model

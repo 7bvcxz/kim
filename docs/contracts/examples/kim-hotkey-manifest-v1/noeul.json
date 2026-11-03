@@ -1,0 +1,24 @@
+{
+  "schema": "kim.hotkey-manifest",
+  "schema_version": 1,
+  "hotkey_contract": 1,
+  "tool": "noeul",
+  "version": "0.1.0",
+  "backend": "register",
+  "contexts": [
+    { "id": "capture-overlay", "title": "Region capture overlay" },
+    { "id": "pin", "title": "Floating pinned image" }
+  ],
+  "actions": [
+    { "id": "capture.region", "title": "Capture a region (F1)", "scopes": ["global", "app"], "defaults": ["F1"] },
+    { "id": "paste.float", "title": "Paste the clipboard as a floating pin (F3)", "scopes": ["global", "app"], "defaults": ["F3"] },
+    { "id": "settings.open", "title": "Open settings", "scopes": ["app"], "defaults": ["Ctrl+Comma"] },
+    { "id": "capture.cancel", "title": "Cancel the capture", "context": "capture-overlay", "defaults": ["Escape"] },
+    { "id": "capture.pin", "title": "Pin the selection (keyboard alternative to double-click)", "context": "capture-overlay", "defaults": ["Enter"] },
+    { "id": "capture.copy", "title": "Copy the selection", "context": "capture-overlay", "defaults": ["Ctrl+C"] },
+    { "id": "capture.save", "title": "Save the selection", "context": "capture-overlay", "defaults": ["Ctrl+S"] },
+    { "id": "pin.copy", "title": "Copy the pinned image", "context": "pin", "defaults": ["Ctrl+C"] },
+    { "id": "pin.save", "title": "Save the pinned image", "context": "pin", "defaults": ["Ctrl+S"] },
+    { "id": "pin.close", "title": "Close the pin", "context": "pin", "defaults": ["Escape"] }
+  ]
+}

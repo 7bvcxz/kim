@@ -17,9 +17,10 @@ did.
 | Document | Status | Purpose |
 | --- | --- | --- |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | current | Components, Host internals, object model, lifecycles, close/kill semantics, restart behavior, telemetry |
-| [adr/README.md](adr/README.md) | current | Architecture decision records (ADR 0001–0015) |
+| [adr/README.md](adr/README.md) | current | Architecture decision records (ADR 0001–0015, 0017) |
 | [CLI_CONTRACT.md](CLI_CONTRACT.md) | current (contract v1) | Cross-tool CLI contract: names, help, streams, `--json` envelope, exit codes, error-code registry, dry-run/confirmation, versioning, capabilities and tool-to-tool invocation, secret redaction |
 | [KIM_CLI.md](KIM_CLI.md) | current | `kim` command reference, files and environment, sample agent workflows |
+| [HOTKEY_CONTRACT.md](HOTKEY_CONTRACT.md) | current (contract v1, specification) | Customizable shortcuts for every Kim GUI tool: action IDs, scopes, key syntax, layouts and IME, reserved keys, `hotkeys.json`, conflicts and precedence, `hotkeys` CLI, accessibility and safety, Subak/Kim Manager/Noeul/Ddalgak mapping |
 | [CATALOG_FORMAT.md](CATALOG_FORMAT.md) | current | Kim catalog format, signatures and trust, sources/offline/freshness, tool status, read-only catalog CLI and exit codes |
 | [RELEASE_POLICY.md](RELEASE_POLICY.md) | current | Consent rules, install transaction, channels, signing keys, publishing checklist |
 | [DESIGN_SYSTEM.md](DESIGN_SYSTEM.md) | current | Kim visual language: tokens, components, keyboard, high-DPI, contrast, Korean/Unicode, reduced motion |
@@ -36,7 +37,10 @@ Contract schemas live in `contracts/schemas/`, with valid and invalid examples i
 `contracts/examples/`; `cargo xtask schema-check` (also run by `cargo test`) validates them.
 The CLI schemas (`cli-envelope-v1`, `kim-cli-v1`, `tool-capabilities-v1`) are additionally
 checked against the real `kim` and `subak` binaries by their integration tests; the
-`kim-cli-v1` examples are golden files generated from real runs.
+`kim-cli-v1` examples are golden files generated from real runs. The hotkey schemas
+(`kim-hotkeys-v1`, `kim-hotkey-manifest-v1`, `hotkeys-cli-v1`, `hotkey-scenarios-v1`) are a
+specification no tool implements yet; for the scenarios, `schema-check` also recomputes every
+expected conflict report with a reference checker ([HOTKEY_CONTRACT §15](HOTKEY_CONTRACT.md)).
 
 ## Planned
 

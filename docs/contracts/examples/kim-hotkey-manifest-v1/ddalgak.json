@@ -1,0 +1,14 @@
+{
+  "schema": "kim.hotkey-manifest",
+  "schema_version": 1,
+  "hotkey_contract": 1,
+  "tool": "ddalgak",
+  "version": "0.1.0",
+  "backend": "hook",
+  "actions": [
+    { "id": "engine.toggle", "title": "Turn the automation engine on or off", "scopes": ["global"], "defaults": [] },
+    { "id": "engine.pause", "title": "Pause or resume all rules", "scopes": ["global"], "defaults": [] },
+    { "id": "editor.open", "title": "Open the rule editor", "scopes": ["global", "app"], "defaults": [] },
+    { "id": "engine.emergency-off", "title": "Emergency off: remove the hook and release held keys", "scopes": ["global"], "defaults": ["Ctrl+Alt+Shift+Escape"], "bindable": false }
+  ]
+}

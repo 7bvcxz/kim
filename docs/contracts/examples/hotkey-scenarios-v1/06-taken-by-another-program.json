@@ -1,0 +1,32 @@
+{
+  "schema": "kim.hotkey-scenario",
+  "schema_version": 1,
+  "title": "A chord another program owns is never stolen",
+  "description": "Another program (for example a screenshot tool) registered F1 first, so Noeul's registration fails. Noeul reports `taken` with remap offers and leaves the other program alone.",
+  "tools": [{"manifest": "noeul", "config": null}],
+  "environment": {"taken": ["F1"]},
+  "expected": {
+    "report": {
+      "tools": [{"tool": "noeul", "version": "0.1.0", "enabled": true, "source": "manifest"}],
+      "conflicts": [
+        {
+          "code": "taken",
+          "severity": "warning",
+          "tool": "noeul",
+          "action": "capture.region",
+          "keys": "F1",
+          "scope": "global",
+          "source": "default",
+          "with": {"other_program": true, "keys": "F1"},
+          "offers": [
+            {"kind": "rebind", "keys": "Shift+F1"},
+            {"kind": "rebind", "keys": "Ctrl+Shift+F1"},
+            {"kind": "disable"},
+            {"kind": "keep"}
+          ]
+        }
+      ],
+      "summary": {"errors": 0, "warnings": 1, "infos": 0}
+    }
+  }
+}

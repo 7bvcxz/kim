@@ -1,9 +1,11 @@
 //! Repository automation. Run `cargo xtask --help`.
 //!
-//! Std-only on purpose: it must build fast in CI and add no dependencies to audit.
+//! Deliberately small: std plus `serde_json` and `regex` (for contract schema checks). Never
+//! shipped to users.
 
 mod docs;
 mod ledger;
+mod schema;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -13,7 +15,11 @@ cargo xtask <command>
 
 COMMANDS:
     docs-check        Check requirement IDs, relative links and the docs index
-    ci                Run the CI gate locally: fmt --check, clippy -D warnings, tests, docs-check
+    schema-check [--verbose]
+                      Validate contract examples against docs/contracts/schemas (valid must
+                      pass, examples/<name>/invalid/ must fail)
+    ci                Run the CI gate locally: fmt --check, clippy -D warnings, tests,
+                      docs-check, schema-check
     e2e [--force]     Build release binaries and run the e2e suite. Refuses unless the
                       e2e ledger says 15 Step issues were processed since the last run
                       (AGENTS.md §4); --force overrides and must be justified in the ledger.
@@ -25,6 +31,7 @@ fn main() -> ExitCode {
     let root = repo_root();
     let result = match args.first().map(String::as_str) {
         Some("docs-check") => run_docs_check(&root),
+        Some("schema-check") => run_schema_check(&root, args.iter().any(|a| a == "--verbose")),
         Some("ci") => run_ci(&root),
         Some("e2e") => run_e2e(&root, args.iter().any(|a| a == "--force")),
         Some("e2e-status") => e2e_status(&root).map(|n| {
@@ -75,6 +82,31 @@ fn run_docs_check(root: &Path) -> Result<(), String> {
     }
 }
 
+fn run_schema_check(root: &Path, verbose: bool) -> Result<(), String> {
+    let report = schema::check_contracts(root)?;
+    if verbose {
+        for (path, why) in &report.rejections {
+            println!("  rejected {path}: {why}");
+        }
+    }
+    println!(
+        "schema-check: {} schemas, {} valid and {} invalid examples",
+        report.schemas, report.valid_examples, report.invalid_examples
+    );
+    if report.problems.is_empty() {
+        println!("schema-check: PASS");
+        Ok(())
+    } else {
+        for p in &report.problems {
+            eprintln!("  - {p}");
+        }
+        Err(format!(
+            "schema-check: FAIL ({} problems)",
+            report.problems.len()
+        ))
+    }
+}
+
 fn cargo(root: &Path, args: &[&str]) -> Result<(), String> {
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
     println!("$ cargo {}", args.join(" "));
@@ -104,7 +136,8 @@ fn run_ci(root: &Path) -> Result<(), String> {
         ],
     )?;
     cargo(root, &["test"])?;
-    run_docs_check(root)
+    run_docs_check(root)?;
+    run_schema_check(root, false)
 }
 
 fn e2e_status(root: &Path) -> Result<u32, String> {

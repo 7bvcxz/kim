@@ -12,20 +12,36 @@ did.
 | [SUBAK_PHILOSOPHY.md](SUBAK_PHILOSOPHY.md) | current | Subak's Host/Client model, object model, crucial distinctions, Claude indicator |
 | [PRODUCT_REQUIREMENTS.md](PRODUCT_REQUIREMENTS.md) | current | Numbered, testable requirements, milestones, platforms, privacy/safety policies |
 
+## Architecture and compatibility
+
+| Document | Status | Purpose |
+| --- | --- | --- |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | current | Components, Host internals, object model, lifecycles, close/kill semantics, restart behavior, telemetry |
+| [adr/README.md](adr/README.md) | current | Architecture decision records (ADR 0001–0013) |
+| [RISK_REGISTER.md](RISK_REGISTER.md) | current | ConPTY, job objects, IPC, GUI, SSH, tmux, recovery and Claude risks with owner steps |
+| [contracts/IPC_PROTOCOL.md](contracts/IPC_PROTOCOL.md) | draft contract | Subak IPC v1: framing, handshake, methods, events, error codes |
+| [contracts/STATE_SCHEMA.md](contracts/STATE_SCHEMA.md) | draft contract | `state.json` v1 and `config.toml` v1 |
+| [TMUX_COMPATIBILITY.md](TMUX_COMPATIBILITY.md) | current (inventory) | tmux command/key/option parity matrix with status and evidence |
+| [TABBY_FEATURE_MATRIX.md](TABBY_FEATURE_MATRIX.md) | current (inventory) | Tabby feature parity matrix with status and evidence |
+
+Contract schemas live in `contracts/schemas/`, with valid and invalid examples in
+`contracts/examples/`; `cargo xtask schema-check` (also run by `cargo test`) validates them.
+
 ## Planned
 
 | Document | Status | Planned by | Purpose |
 | --- | --- | --- | --- |
-| `ARCHITECTURE.md` | planned | Step 03 | Components, process/PTY ownership, IPC, state store, portable interfaces, diagrams |
-| `adr/` | planned | Step 03 | Architecture decision records |
-| `TMUX_COMPATIBILITY.md` | planned | Step 03 | tmux command/key parity matrix with evidence |
-| `TABBY_FEATURE_MATRIX.md` | planned | Step 03 | Tabby feature parity matrix with evidence |
-| `RECOVERY.md` | planned | Step 03 / M2 | Session state, restore and Claude resume procedures |
 | `DESIGN_SYSTEM.md` | planned | Step 04 | Visual language, tokens, components, accessibility |
 | `CATALOG_FORMAT.md` | planned | Step 05 | Tool catalog manifest format |
 | `RELEASE_POLICY.md` | planned | Step 06 | Versioning, channels, signing, explicit-consent update policy |
 | `CLI_CONTRACT.md` | planned | Step 07 | Shared CLI conventions, exit codes, JSON schemas |
-| `MCP.md` | planned | M3 | MCP server guidance for Kim tools |
+| `CONPTY_PROOF.md` | planned | Step 08 | ConPTY + detached Host proof on real Windows |
+| `SESSION_MODEL.md` | planned | Step 10 | Session state machine and naming rules as implemented |
+| `SUBAK_CLI.md` | planned | Step 12 | Subak CLI reference |
+| `MILESTONE_A_VALIDATION.md` | planned | Step 14 | Persistent sessions validation evidence |
+| `MILESTONE_B_VALIDATION.md` | planned | Step 20 | GUI journey validation evidence |
+| `RECOVERY.md` | planned | Steps 29–31 | Persistence, cold recovery and Claude resume procedures |
+| `MCP_GUIDE.md` | planned | Step 37 | Subak MCP server guide for agents |
 
 ## Repository and engineering
 

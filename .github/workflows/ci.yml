@@ -37,6 +37,8 @@ jobs:
         run: cargo test --locked
       - name: Docs consistency
         run: cargo xtask docs-check
+      - name: Contract schemas
+        run: cargo xtask schema-check
 
   linux-compile:
     # Portable compile check only. Linux runtime support is NOT claimed (KIM-NFR-011, M4).

@@ -1,0 +1,1 @@
+{"type": "error", "error": {"code": "protocol_unsupported", "message": "client supports protocol 2..2, host supports 1..1", "details": {"supported": {"min": 1, "max": 1}}}}

@@ -1,0 +1,1 @@
+{"type": "response", "id": 4, "ok": false, "error": {"code": "it_broke", "message": "codes are a closed set in v1"}}

@@ -1,13 +1,20 @@
 //! `kim` — the Kim manager CLI (headless; never opens a window).
 //!
-//! Every state-changing command acts only on the tool the user named: `install`, `update`,
-//! `uninstall`. Nothing runs in the background, nothing is installed or updated implicitly, and
-//! the network is used only by `catalog refresh`, `update check --refresh`, `install` and
-//! `update` (all explicit).
+//! Follows docs/CLI_CONTRACT.md: results on stdout, diagnostics on stderr, exactly one JSON
+//! document with `--json`, documented exit codes and stable error codes, `--dry-run` for every
+//! state-changing command, and no prompts when Kim cannot ask (`--json`, `--no-input`, no
+//! terminal). Every state-changing command acts only on what the user named: nothing runs in the
+//! background, nothing is installed or updated implicitly, and the network is used only by
+//! `catalog refresh`, `update check --refresh`, `install` and `update`. No code path here starts
+//! a GUI; the only child processes are a staged tool's `--version` self-check during an explicit
+//! install and `tools describe --probe`.
 
+mod discover;
+mod meta;
 mod ops;
 
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
+use kim::capabilities::JSON_SCHEMA_VERSION;
 use kim::catalog::status::{self, ToolStatus, ToolView};
 use kim::catalog::store::{self, Loaded};
 use kim::catalog::{Channel, signature};
@@ -15,22 +22,34 @@ use kim::error::{ErrorCode, KimError};
 use kim::fetch::DefaultFetcher;
 use kim::paths::Paths;
 use kim::platform::Platform;
+use kim::redact;
 use kim::time::{format_date, now_utc, parse_utc};
 use serde_json::{Value, json};
-use std::io::Write;
+use std::ffi::OsString;
+use std::io::{IsTerminal, Write};
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
+
+const AFTER_HELP: &str = "\
+Exit codes: 0 ok · 1 failure (I/O, permission) · 2 usage · 3 not found
+            4 integrity/validation · 5 incompatible · 6 unavailable (network, offline, timeout)
+            7 conflict or confirmation needed · 8 cancelled
+--json prints exactly one JSON document on stdout, also for errors. Agents: add --json and
+--no-input; every state-changing command supports --dry-run. Contract: docs/CLI_CONTRACT.md";
 
 #[derive(Debug, Parser)]
 #[command(
     name = "kim",
     bin_name = "kim",
     version,
-    about = "Kim manager — explicit, user-controlled catalog of Kim tools",
-    long_about = "Kim lists Kim tools and their status on this machine.\n\n\
+    about = "Kim manager — explicit, user-controlled catalog and installer for Kim tools",
+    long_about = "Kim lists Kim tools, shows their status on this machine, and installs, updates \
+        or removes a tool when you ask for exactly that.\n\n\
         It never installs, updates, removes or starts a tool by itself, never runs in the \
-        background, and only uses the network when you run `kim catalog refresh`.",
-    after_help = "Exit codes: 0 ok · 1 internal/I-O · 2 usage · 3 not found · 4 integrity/trust · 6 network.\n\
-        Use --json for machine-readable output (one JSON document on stdout)."
+        background, never opens a window, and uses the network only for commands that need it \
+        and that you run explicitly (catalog refresh, update check --refresh, install, update).",
+    after_help = AFTER_HELP
 )]
 struct Cli {
     #[command(flatten)]
@@ -41,17 +60,23 @@ struct Cli {
 
 #[derive(Debug, Args)]
 struct Global {
-    /// Print one JSON document on stdout instead of human-readable text
+    /// Print exactly one JSON document on stdout instead of human-readable text
     #[arg(long, global = true)]
     json: bool,
-    /// Suppress warnings on stderr
-    #[arg(long, short, global = true)]
+    /// Print only results and errors: no warnings or progress on stderr
+    #[arg(long, short, global = true, conflicts_with = "verbose")]
     quiet: bool,
+    /// Print extra diagnostics on stderr (stdout is unchanged)
+    #[arg(long, short, global = true)]
+    verbose: bool,
+    /// Never ask questions, even on a terminal (also KIM_NO_INPUT=1); confirmations need --yes
+    #[arg(long, global = true)]
+    no_input: bool,
 }
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Query the tool catalog (read-only, works offline)
+    /// Query the tool catalog (read-only, works offline; `refresh` uses the network)
     #[command(subcommand)]
     Catalog(CatalogCommand),
     /// Install a tool (explicit; downloads, verifies, then activates)
@@ -60,6 +85,15 @@ enum Command {
     Update(ops::UpdateArgs),
     /// Remove a tool's program files (user data is kept unless --purge-data)
     Uninstall(ops::UninstallArgs),
+    /// Discover installed Kim tools and their capabilities (read-only; starts nothing)
+    #[command(subcommand)]
+    Tools(discover::ToolsCommand),
+    /// Kim version, catalog freshness, settings, installed tools and updates (read-only)
+    Status,
+    /// Kim's version and the CLI contract and schema versions it speaks (read-only)
+    Version,
+    /// Kim's own capabilities document: its commands and what each may change (read-only)
+    Capabilities,
     /// Show or change Kim settings
     #[command(subcommand)]
     Settings(ops::SettingsCommand),
@@ -68,7 +102,13 @@ enum Command {
 #[derive(Debug, Subcommand)]
 enum CatalogCommand {
     /// List tools and their status on this machine
-    List(ChannelArg),
+    List {
+        #[command(flatten)]
+        channel: ChannelArg,
+        /// Only tools installed on this machine (including Kim itself)
+        #[arg(long)]
+        installed: bool,
+    },
     /// Show one tool with its releases and packages
     Show {
         /// Tool id, e.g. `subak`
@@ -91,6 +131,9 @@ enum CatalogCommand {
         /// Source URL (https://, http://localhost or file://); `.sig` is appended for the signature
         #[arg(long, default_value = store::DEFAULT_SOURCE)]
         source: String,
+        /// Fetch and verify, report what would change, but do not update the cache
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
@@ -116,80 +159,215 @@ impl From<ChannelOpt> for Channel {
     }
 }
 
+/// Output options shared by every command (docs/CLI_CONTRACT.md §3–§4).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Ctx {
+    pub json: bool,
+    pub quiet: bool,
+    pub verbose: bool,
+    pub no_input: bool,
+}
+
+impl Ctx {
+    fn new(g: &Global) -> Self {
+        let env_no_input = std::env::var_os("KIM_NO_INPUT")
+            .is_some_and(|v| !v.is_empty() && v != "0" && v != "false");
+        Self {
+            json: g.json,
+            quiet: g.quiet,
+            verbose: g.verbose,
+            no_input: g.no_input || env_no_input,
+        }
+    }
+
+    /// Whether Kim may ask the user a question now: never with `--json` or `--no-input`, and
+    /// only when both stdin and stderr are terminals.
+    pub fn can_prompt(self) -> bool {
+        !self.json
+            && !self.no_input
+            && std::io::stdin().is_terminal()
+            && std::io::stderr().is_terminal()
+    }
+}
+
 /// Result of a command: JSON data plus a human rendering.
 pub(crate) struct Outcome {
-    command: &'static str,
-    data: Value,
-    human: String,
-    warnings: Vec<String>,
+    pub data: Value,
+    pub human: String,
+    pub warnings: Vec<String>,
+}
+
+static VERBOSE: AtomicBool = AtomicBool::new(false);
+
+/// A `--verbose` diagnostic line on stderr (redacted, never on stdout).
+pub(crate) fn diag(msg: impl AsRef<str>) {
+    if VERBOSE.load(Ordering::Relaxed) {
+        let _ = writeln!(
+            std::io::stderr().lock(),
+            "kim: {}",
+            redact::text(msg.as_ref())
+        );
+    }
 }
 
 fn main() -> ExitCode {
-    let json_requested = std::env::args().any(|a| a == "--json");
-    let cli = match Cli::try_parse() {
+    let argv: Vec<OsString> = std::env::args_os().collect();
+    let json_requested = argv.iter().skip(1).any(|a| a == "--json");
+    let cli = match Cli::try_parse_from(&argv) {
         Ok(cli) => cli,
-        Err(e) => {
-            use clap::error::ErrorKind;
-            if matches!(e.kind(), ErrorKind::DisplayHelp | ErrorKind::DisplayVersion) {
-                let _ = e.print();
-                return ExitCode::SUCCESS;
-            }
-            if json_requested {
-                let err = KimError::new(ErrorCode::Usage, first_line(&e.to_string()));
-                print_json(&error_doc("usage", &err));
-            } else {
-                let _ = e.print();
-            }
+        Err(e) => return parse_failure(&e, &argv, json_requested),
+    };
+    let ctx = Ctx::new(&cli.global);
+    VERBOSE.store(ctx.verbose, Ordering::Relaxed);
+    let Some(command) = cli.command else {
+        if ctx.json {
+            let err = KimError::new(ErrorCode::Usage, "no command given")
+                .with_hint("run `kim --help` to list the commands");
+            print_json(error_doc("kim", &err));
             return ExitCode::from(ErrorCode::Usage.exit_code());
         }
-    };
-    let Some(command) = cli.command else {
-        use clap::CommandFactory;
         let _ = Cli::command().print_help();
         return ExitCode::SUCCESS;
     };
+    let name = command_name(&command);
+    diag(format!(
+        "{name}: kim {} ({} build), CLI contract v{}",
+        kim::KIM_VERSION,
+        build_kind(),
+        kim::capabilities::CLI_CONTRACT
+    ));
+    let started = Instant::now();
     let result = match command {
         Command::Catalog(c) => run_catalog(c),
-        Command::Install(a) => ops::install(&a, cli.global.json).map_err(|e| ("install", e)),
-        Command::Update(a) => ops::update(&a, cli.global.json).map_err(|e| ("update", e)),
-        Command::Uninstall(a) => ops::uninstall(&a, cli.global.json).map_err(|e| ("uninstall", e)),
-        Command::Settings(c) => ops::settings(&c).map_err(|e| ("settings", e)),
+        Command::Install(a) => ops::install(&a, ctx),
+        Command::Update(a) => ops::update(&a, ctx),
+        Command::Uninstall(a) => ops::uninstall(&a, ctx),
+        Command::Tools(c) => discover::tools(&c),
+        Command::Status => discover::status(),
+        Command::Version => discover::version(),
+        Command::Capabilities => Ok(discover::capabilities()),
+        Command::Settings(c) => ops::settings(&c),
     };
-    match result {
+    finish(name, result, ctx, started)
+}
+
+/// The dotted command path used as the envelope's `command` (docs/CLI_CONTRACT.md §7).
+fn command_name(c: &Command) -> &'static str {
+    match c {
+        Command::Catalog(CatalogCommand::List { .. }) => "catalog.list",
+        Command::Catalog(CatalogCommand::Show { .. }) => "catalog.show",
+        Command::Catalog(CatalogCommand::Status) => "catalog.status",
+        Command::Catalog(CatalogCommand::Verify { .. }) => "catalog.verify",
+        Command::Catalog(CatalogCommand::Refresh { .. }) => "catalog.refresh",
+        Command::Install(_) => "install",
+        Command::Update(a) if a.is_check() => "update.check",
+        Command::Update(_) => "update",
+        Command::Uninstall(_) => "uninstall",
+        Command::Tools(discover::ToolsCommand::List) => "tools.list",
+        Command::Tools(discover::ToolsCommand::Describe(_)) => "tools.describe",
+        Command::Status => "status",
+        Command::Version => "version",
+        Command::Capabilities => "capabilities",
+        Command::Settings(ops::SettingsCommand::Show) => "settings.show",
+        Command::Settings(ops::SettingsCommand::Set(_)) => "settings.set",
+    }
+}
+
+/// Best-effort command path of arguments that failed to parse: the leading subcommand words.
+fn parsed_path(argv: &[OsString]) -> Vec<String> {
+    let mut cmd = Cli::command();
+    let mut path = Vec::new();
+    for arg in argv.iter().skip(1) {
+        let Some(a) = arg.to_str() else { break };
+        if a.starts_with('-') {
+            continue;
+        }
+        if path == ["update"] && a == "check" {
+            path.push("check".to_string());
+            break;
+        }
+        let Some(sub) = cmd.find_subcommand(a).cloned() else {
+            break;
+        };
+        path.push(sub.get_name().to_string());
+        cmd = sub;
+    }
+    path
+}
+
+fn parse_failure(e: &clap::Error, argv: &[OsString], json: bool) -> ExitCode {
+    use clap::error::ErrorKind;
+    if matches!(e.kind(), ErrorKind::DisplayHelp | ErrorKind::DisplayVersion) {
+        let _ = e.print();
+        return ExitCode::SUCCESS;
+    }
+    let path = parsed_path(argv);
+    let name = if path.is_empty() {
+        "kim".to_string()
+    } else {
+        path.join(".")
+    };
+    if json {
+        let words: Vec<&str> = std::iter::once("kim")
+            .chain(path.iter().map(String::as_str))
+            .collect();
+        let err = KimError::new(ErrorCode::Usage, first_line(&e.to_string()))
+            .with_hint(format!("see `{} --help`", words.join(" ")));
+        print_json(error_doc(&name, &err));
+    } else {
+        let _ = e.print();
+    }
+    ExitCode::from(ErrorCode::Usage.exit_code())
+}
+
+fn finish(name: &str, result: Result<Outcome, KimError>, ctx: Ctx, started: Instant) -> ExitCode {
+    let code = match result {
         Ok(out) => {
-            if cli.global.json {
-                print_json(&json!({
+            if ctx.json {
+                print_json(json!({
                     "ok": true,
-                    "command": out.command,
-                    "schema_version": 1,
+                    "command": name,
+                    "schema_version": JSON_SCHEMA_VERSION,
                     "data": out.data,
                     "warnings": out.warnings,
                 }));
             } else {
-                if !cli.global.quiet {
+                if !ctx.quiet {
+                    let mut err = std::io::stderr().lock();
                     for w in &out.warnings {
-                        eprintln!("kim: warning: {w}");
+                        let _ = writeln!(err, "kim: warning: {}", redact::text(w));
                     }
                 }
-                print!("{}", out.human);
+                let _ = write!(std::io::stdout().lock(), "{}", redact::text(&out.human));
             }
-            ExitCode::SUCCESS
+            0
         }
-        Err((command, err)) => {
-            if cli.global.json {
-                print_json(&error_doc(command, &err));
+        Err(err) => {
+            if ctx.json {
+                print_json(error_doc(name, &err));
             } else {
-                eprintln!("kim: error: {}", err.message);
+                let mut out = std::io::stderr().lock();
+                let _ = writeln!(out, "kim: error: {}", redact::text(&err.message));
                 for d in &err.details {
-                    eprintln!("  - {d}");
+                    let _ = writeln!(out, "  - {}", redact::text(d));
                 }
                 if let Some(h) = &err.hint {
-                    eprintln!("hint: {h}");
+                    let _ = writeln!(out, "hint: {}", redact::text(h));
                 }
             }
-            ExitCode::from(err.code.exit_code())
+            diag(format!(
+                "error code `{}` (exit code {})",
+                err.code.as_str(),
+                err.code.exit_code()
+            ));
+            err.code.exit_code()
         }
-    }
+    };
+    diag(format!(
+        "{name} finished in {} ms",
+        started.elapsed().as_millis()
+    ));
+    ExitCode::from(code)
 }
 
 fn first_line(s: &str) -> String {
@@ -204,7 +382,7 @@ fn error_doc(command: &str, err: &KimError) -> Value {
     json!({
         "ok": false,
         "command": command,
-        "schema_version": 1,
+        "schema_version": JSON_SCHEMA_VERSION,
         "error": {
             "code": err.code,
             "exit_code": err.code.exit_code(),
@@ -215,29 +393,58 @@ fn error_doc(command: &str, err: &KimError) -> Value {
     })
 }
 
-fn print_json(v: &Value) {
+/// Prints one JSON document on stdout, redacted (KIM-SEC-013).
+fn print_json(mut v: Value) {
+    redact::json(&mut v);
     let mut out = std::io::stdout().lock();
-    let _ = serde_json::to_writer_pretty(&mut out, v);
+    let _ = serde_json::to_writer_pretty(&mut out, &v);
     let _ = writeln!(out);
 }
 
-type CmdResult = Result<Outcome, (&'static str, KimError)>;
+pub(crate) fn build_kind() -> &'static str {
+    if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    }
+}
 
-fn run_catalog(c: CatalogCommand) -> CmdResult {
+/// Renders rows as aligned columns; the first row is the header, the last column is not padded.
+pub(crate) fn table(rows: &[Vec<String>]) -> String {
+    let cols = rows.first().map_or(0, Vec::len);
+    let widths: Vec<usize> = (0..cols)
+        .map(|i| {
+            rows.iter()
+                .map(|r| r.get(i).map_or(0, |c| c.chars().count()))
+                .max()
+                .unwrap_or(0)
+        })
+        .collect();
+    let mut s = String::new();
+    for r in rows {
+        let mut line = String::new();
+        for (i, cell) in r.iter().enumerate() {
+            if i + 1 == cols {
+                line.push_str(cell);
+            } else {
+                line.push_str(&format!("{cell:<w$}  ", w = widths[i]));
+            }
+        }
+        s.push_str(line.trim_end());
+        s.push('\n');
+    }
+    s
+}
+
+fn run_catalog(c: CatalogCommand) -> Result<Outcome, KimError> {
     match c {
-        CatalogCommand::List(ch) => {
-            catalog_list(ch.channel.into()).map_err(|e| ("catalog.list", e))
+        CatalogCommand::List { channel, installed } => {
+            catalog_list(channel.channel.into(), installed)
         }
-        CatalogCommand::Show { tool, channel } => {
-            catalog_show(&tool, channel.channel.into()).map_err(|e| ("catalog.show", e))
-        }
-        CatalogCommand::Status => catalog_status().map_err(|e| ("catalog.status", e)),
-        CatalogCommand::Verify { file, sig } => {
-            catalog_verify(&file, sig.as_deref()).map_err(|e| ("catalog.verify", e))
-        }
-        CatalogCommand::Refresh { source } => {
-            catalog_refresh(&source).map_err(|e| ("catalog.refresh", e))
-        }
+        CatalogCommand::Show { tool, channel } => catalog_show(&tool, channel.channel.into()),
+        CatalogCommand::Status => catalog_status(),
+        CatalogCommand::Verify { file, sig } => catalog_verify(&file, sig.as_deref()),
+        CatalogCommand::Refresh { source, dry_run } => catalog_refresh(&source, dry_run),
     }
 }
 
@@ -265,10 +472,20 @@ pub(crate) fn trusted_keys() -> Vec<signature::TrustedKey> {
 pub(crate) fn load() -> Result<(Paths, Loaded), KimError> {
     let paths = Paths::from_env()?;
     let loaded = store::load(&paths, &trusted_keys(), now_utc())?;
+    diag(format!(
+        "catalog v{} from the {} copy, signed by {}{}",
+        loaded.catalog.catalog_version,
+        match loaded.source {
+            store::Source::Bundled => "bundled",
+            store::Source::Cache => "cached",
+        },
+        loaded.signer.key_id,
+        if loaded.stale { " (stale)" } else { "" }
+    ));
     Ok((paths, loaded))
 }
 
-fn catalog_info(l: &Loaded) -> Value {
+pub(crate) fn catalog_info(l: &Loaded) -> Value {
     json!({
         "source": l.source,
         "catalog_version": l.catalog.catalog_version,
@@ -296,7 +513,7 @@ pub(crate) fn catalog_header(l: &Loaded) -> String {
     )
 }
 
-fn status_text(v: &ToolView) -> String {
+pub(crate) fn status_text(v: &ToolView) -> String {
     match v.status {
         ToolStatus::Installed => format!(
             "installed {}",
@@ -314,53 +531,46 @@ fn status_text(v: &ToolView) -> String {
     }
 }
 
-fn catalog_list(channel: Channel) -> Result<Outcome, KimError> {
+fn catalog_list(channel: Channel, installed_only: bool) -> Result<Outcome, KimError> {
     let (paths, loaded) = load()?;
     let platform = Platform::current();
-    let views = status::evaluate(&loaded.catalog, &paths, &platform, channel);
-    let mut human = catalog_header(&loaded);
-    human.push('\n');
-    let rows: Vec<[String; 4]> = views
-        .iter()
-        .map(|v| {
-            [
-                v.id.clone(),
-                v.latest_compatible
-                    .clone()
-                    .or_else(|| v.latest.clone())
-                    .unwrap_or_else(|| "-".into()),
-                status_text(v),
-                v.summary.clone(),
-            ]
+    let views: Vec<ToolView> = status::evaluate(&loaded.catalog, &paths, &platform, channel)
+        .into_iter()
+        .filter(|v| {
+            !installed_only
+                || matches!(
+                    v.status,
+                    ToolStatus::Installed | ToolStatus::UpdateAvailable | ToolStatus::Damaged
+                )
         })
         .collect();
-    let header = [
+    let mut human = catalog_header(&loaded);
+    human.push('\n');
+    let mut rows = vec![vec![
         "TOOL".to_string(),
         "LATEST".into(),
         "STATUS".into(),
         "SUMMARY".into(),
-    ];
-    let width = |i: usize| {
-        rows.iter()
-            .map(|r| r[i].chars().count())
-            .chain([header[i].len()])
-            .max()
-            .unwrap_or(0)
-    };
-    let (w0, w1, w2) = (width(0), width(1), width(2));
-    for r in std::iter::once(&header).chain(rows.iter()) {
-        human.push_str(&format!(
-            "{:<w0$}  {:<w1$}  {:<w2$}  {}\n",
-            r[0], r[1], r[2], r[3]
-        ));
-    }
+    ]];
+    rows.extend(views.iter().map(|v| {
+        vec![
+            v.id.clone(),
+            v.latest_compatible
+                .clone()
+                .or_else(|| v.latest.clone())
+                .unwrap_or_else(|| "-".into()),
+            status_text(v),
+            v.summary.clone(),
+        ]
+    }));
+    human.push_str(&table(&rows));
     human.push_str("\nKim never installs or updates tools by itself. Nothing was changed.\n");
     Ok(Outcome {
-        command: "catalog.list",
         data: json!({
             "catalog": catalog_info(&loaded),
             "platform": platform,
             "channel": channel,
+            "installed_only": installed_only,
             "tools": views,
         }),
         human,
@@ -443,7 +653,6 @@ fn catalog_show(id: &str, channel: Channel) -> Result<Outcome, KimError> {
         }
     }
     Ok(Outcome {
-        command: "catalog.show",
         data: json!({
             "catalog": catalog_info(&loaded),
             "platform": platform,
@@ -472,7 +681,6 @@ fn catalog_status() -> Result<Outcome, KimError> {
         store::DEFAULT_SOURCE
     ));
     Ok(Outcome {
-        command: "catalog.status",
         data: json!({
             "catalog": catalog_info(&loaded),
             "cache_dir": cache,
@@ -488,10 +696,7 @@ fn catalog_verify(
     file: &std::path::Path,
     sig: Option<&std::path::Path>,
 ) -> Result<Outcome, KimError> {
-    let read = |p: &std::path::Path| {
-        std::fs::read(p)
-            .map_err(|e| KimError::new(ErrorCode::Io, format!("cannot read {}: {e}", p.display())))
-    };
+    let read = |p: &std::path::Path| std::fs::read(p).map_err(|e| KimError::io(p, &e));
     let bytes = read(file)?;
     let sig_path = sig.map_or_else(
         || {
@@ -518,7 +723,6 @@ fn catalog_verify(
         }
     );
     Ok(Outcome {
-        command: "catalog.verify",
         data: json!({
             "file": file,
             "signature_file": sig_path,
@@ -533,31 +737,189 @@ fn catalog_verify(
     })
 }
 
-fn catalog_refresh(source: &str) -> Result<Outcome, KimError> {
+fn catalog_refresh(source: &str, dry_run: bool) -> Result<Outcome, KimError> {
     let paths = Paths::from_env()?;
     ops::load_settings().0.ensure_online()?;
-    let out = store::refresh(
+    diag(format!("fetching {source} and {source}.sig"));
+    let fetched = store::fetch_verified(
         &paths,
         &trusted_keys(),
         now_utc(),
         source,
         &DefaultFetcher::default(),
     )?;
-    let human = if out.updated {
-        format!(
+    if !dry_run {
+        store::commit(&paths, &fetched)?;
+    }
+    let out = &fetched.outcome;
+    let human = match (dry_run, out.updated) {
+        (false, true) => format!(
             "Catalog updated: v{} → v{} (from {}). No tool was installed or updated.\n",
             out.previous_version, out.fetched_version, out.source_url
-        )
-    } else {
-        format!(
+        ),
+        (false, false) => format!(
             "Catalog is up to date (v{}, verified from {}). No tool was installed or updated.\n",
             out.fetched_version, out.source_url
-        )
+        ),
+        (true, true) => format!(
+            "Dry run: the catalog would be updated v{} → v{} (verified from {}). The cache was not changed.\n",
+            out.previous_version, out.fetched_version, out.source_url
+        ),
+        (true, false) => format!(
+            "Dry run: the catalog is up to date (v{}, verified from {}). Nothing was changed.\n",
+            out.fetched_version, out.source_url
+        ),
     };
+    let mut data = serde_json::to_value(out).unwrap_or_default();
+    data["dry_run"] = json!(dry_run);
     Ok(Outcome {
-        command: "catalog.refresh",
-        data: serde_json::to_value(&out).unwrap_or_default(),
+        data,
         human,
         warnings: Vec::new(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    /// Every leaf command path of the clap tree, plus `update.check` (a reserved word of
+    /// `update`).
+    fn leaf_commands() -> BTreeSet<String> {
+        fn walk(cmd: &clap::Command, prefix: &str, out: &mut BTreeSet<String>) {
+            let subs: Vec<_> = cmd
+                .get_subcommands()
+                .filter(|s| s.get_name() != "help")
+                .collect();
+            if subs.is_empty() {
+                out.insert(prefix.to_string());
+            }
+            for s in subs {
+                let name = if prefix.is_empty() {
+                    s.get_name().to_string()
+                } else {
+                    format!("{prefix}.{}", s.get_name())
+                };
+                walk(s, &name, out);
+            }
+        }
+        let mut out = BTreeSet::new();
+        walk(&Cli::command(), "", &mut out);
+        out.insert("update.check".into());
+        out
+    }
+
+    fn clap_command(path: &str) -> clap::Command {
+        let path = if path == "update.check" {
+            "update"
+        } else {
+            path
+        };
+        let mut cmd = Cli::command();
+        for part in path.split('.') {
+            cmd = cmd.find_subcommand(part).expect(part).clone();
+        }
+        cmd
+    }
+
+    fn has_flag(cmd: &clap::Command, long: &str) -> bool {
+        cmd.get_arguments().any(|a| a.get_long() == Some(long))
+    }
+
+    #[test]
+    fn clap_definition_is_valid() {
+        Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn capabilities_list_exactly_the_real_commands() {
+        let caps = meta::capabilities();
+        let listed: BTreeSet<String> = caps.commands.iter().map(|c| c.name.clone()).collect();
+        assert_eq!(
+            listed,
+            leaf_commands(),
+            "kim capabilities must match the CLI"
+        );
+    }
+
+    #[test]
+    fn every_state_changing_command_supports_dry_run_and_flags_match() {
+        use kim::capabilities::Effect;
+        for c in meta::capabilities().commands {
+            let cmd = clap_command(&c.name);
+            assert_eq!(
+                c.dry_run,
+                has_flag(&cmd, "dry-run"),
+                "{}: dry_run flag",
+                c.name
+            );
+            assert_eq!(
+                c.requires_yes,
+                has_flag(&cmd, "yes"),
+                "{}: --yes flag",
+                c.name
+            );
+            if c.effect != Effect::Read {
+                assert!(c.dry_run, "{} changes state but has no --dry-run", c.name);
+            }
+            assert!(!c.opens_window, "kim never opens a window");
+        }
+    }
+
+    #[test]
+    fn command_names_cover_the_capabilities() {
+        // Each capability name is what the envelope reports for that command.
+        let parse = |args: &[&str]| {
+            let cli = Cli::try_parse_from(std::iter::once("kim").chain(args.iter().copied()))
+                .unwrap_or_else(|e| panic!("{args:?}: {e}"));
+            command_name(&cli.command.unwrap()).to_string()
+        };
+        let mut seen = BTreeSet::new();
+        for args in [
+            &["capabilities"][..],
+            &["catalog", "list"],
+            &["catalog", "show", "x"],
+            &["catalog", "status"],
+            &["catalog", "verify", "f"],
+            &["catalog", "refresh"],
+            &["install", "x"],
+            &["update", "check"],
+            &["update", "x"],
+            &["uninstall", "x"],
+            &["tools", "list"],
+            &["tools", "describe", "x"],
+            &["status"],
+            &["version"],
+            &["settings", "show"],
+            &["settings", "set", "k", "v"],
+        ] {
+            seen.insert(parse(args));
+        }
+        assert_eq!(seen, leaf_commands());
+    }
+
+    #[test]
+    fn failed_parses_report_the_command_path() {
+        let p = |args: &[&str]| {
+            let argv: Vec<OsString> = std::iter::once("kim")
+                .chain(args.iter().copied())
+                .map(OsString::from)
+                .collect();
+            parsed_path(&argv).join(".")
+        };
+        assert_eq!(p(&["catalog", "frobnicate", "--json"]), "catalog");
+        assert_eq!(p(&["--json", "tools", "describe"]), "tools.describe");
+        assert_eq!(p(&["update", "check", "--bogus"]), "update.check");
+        assert_eq!(p(&["nope"]), "");
+    }
+
+    #[test]
+    fn tables_align_columns() {
+        let t = table(&[
+            vec!["A".into(), "BB".into(), "C".into()],
+            vec!["xxx".into(), "y".into(), "last column".into()],
+        ]);
+        assert_eq!(t, "A    BB  C\nxxx  y   last column\n");
+    }
 }

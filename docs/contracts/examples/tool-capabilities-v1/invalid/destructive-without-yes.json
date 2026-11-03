@@ -1,0 +1,13 @@
+{
+  "schema": "kim.capabilities",
+  "schema_version": 1,
+  "tool": "subak",
+  "version": "0.3.0",
+  "cli_contract": 1,
+  "json_schema_version": 1,
+  "implementation": "implemented",
+  "summary": "A destructive command must need --yes when the tool cannot ask",
+  "commands": [
+    { "name": "kill", "usage": "subak kill <target> [--dry-run]", "summary": "End a Terminal", "effect": "destructive", "network": false, "dry_run": true, "requires_yes": false, "opens_window": false }
+  ]
+}

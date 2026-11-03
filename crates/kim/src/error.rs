@@ -1,5 +1,6 @@
-//! Structured errors with stable codes and exit codes (see docs/CATALOG_FORMAT.md §7; the
-//! cross-tool contract is finalized in Step 07, docs/CLI_CONTRACT.md).
+//! Structured errors with stable codes and exit codes: the registry of docs/CLI_CONTRACT.md §6.
+//! Codes are never renamed or reused; new codes are additive. Tests keep the documented
+//! registry, the JSON schema (`kim-cli-v1`) and this enum in sync.
 
 use serde::Serialize;
 use std::fmt;
@@ -54,6 +55,22 @@ pub enum ErrorCode {
     OfflineMode,
     /// A destructive operation needs explicit confirmation (`--yes` in non-interactive use).
     ConfirmationRequired,
+    /// The operating system refused access (read-only or protected location). Kim never
+    /// elevates to work around it.
+    PermissionDenied,
+    /// The requested version is already installed; nothing to do.
+    AlreadyInstalled,
+    /// A tool does not publish a capabilities document (no manifest, or it does not implement
+    /// `capabilities --json`).
+    CapabilitiesUnavailable,
+    /// A tool's capabilities document is malformed or describes another tool or version.
+    CapabilitiesInvalid,
+    /// A tool does not offer a command the caller requires.
+    CapabilityMissing,
+    /// A tool's version or CLI contract does not satisfy the caller's requirement.
+    ToolIncompatible,
+    /// An operation, such as a call to another tool, did not finish within its time limit.
+    Timeout,
 }
 
 impl ErrorCode {
@@ -82,24 +99,31 @@ impl ErrorCode {
             Self::StaleCatalog => "stale_catalog",
             Self::OfflineMode => "offline_mode",
             Self::ConfirmationRequired => "confirmation_required",
+            Self::PermissionDenied => "permission_denied",
+            Self::AlreadyInstalled => "already_installed",
+            Self::CapabilitiesUnavailable => "capabilities_unavailable",
+            Self::CapabilitiesInvalid => "capabilities_invalid",
+            Self::CapabilityMissing => "capability_missing",
+            Self::ToolIncompatible => "tool_incompatible",
+            Self::Timeout => "timeout",
         }
     }
 
-    /// Process exit code for this error.
+    /// Process exit code for this error (docs/CLI_CONTRACT.md §5).
     ///
-    /// | code | meaning |
+    /// | code | class |
     /// | --- | --- |
-    /// | 1 | internal or I/O failure |
+    /// | 1 | failure: internal, I/O, permission denied |
     /// | 2 | usage error (bad arguments, refused source URL) |
-    /// | 3 | not found |
-    /// | 4 | integrity / trust failure (malformed, bad signature, untrusted key, rollback) |
-    /// | 5 | no compatible release |
-    /// | 6 | network unavailable / offline mode |
+    /// | 3 | not found: unknown or not installed tool |
+    /// | 4 | integrity / validation: malformed, bad signature, untrusted key, rollback |
+    /// | 5 | incompatible: no fitting release, tool too old, missing capability |
+    /// | 6 | unavailable: network, offline mode, timeout |
     /// | 7 | conflict: running tool, busy, missing dependency, stale catalog, needs confirmation |
     /// | 8 | cancelled by the user |
     pub fn exit_code(self) -> u8 {
         match self {
-            Self::Internal | Self::Io => 1,
+            Self::Internal | Self::Io | Self::PermissionDenied => 1,
             Self::Usage | Self::UnsupportedSource => 2,
             Self::ToolNotFound | Self::NotInstalled => 3,
             Self::CatalogInvalid
@@ -108,14 +132,20 @@ impl ErrorCode {
             | Self::CatalogRollback
             | Self::IntegrityFailed
             | Self::PackageInvalid
-            | Self::SelfCheckFailed => 4,
-            Self::NoRelease | Self::Incompatible => 5,
-            Self::NetworkUnavailable | Self::OfflineMode => 6,
+            | Self::SelfCheckFailed
+            | Self::CapabilitiesInvalid => 4,
+            Self::NoRelease
+            | Self::Incompatible
+            | Self::CapabilitiesUnavailable
+            | Self::CapabilityMissing
+            | Self::ToolIncompatible => 5,
+            Self::NetworkUnavailable | Self::OfflineMode | Self::Timeout => 6,
             Self::ToolRunning
             | Self::Busy
             | Self::DependencyMissing
             | Self::StaleCatalog
-            | Self::ConfirmationRequired => 7,
+            | Self::ConfirmationRequired
+            | Self::AlreadyInstalled => 7,
             Self::Cancelled => 8,
         }
     }
@@ -145,6 +175,13 @@ impl ErrorCode {
         Self::StaleCatalog,
         Self::OfflineMode,
         Self::ConfirmationRequired,
+        Self::PermissionDenied,
+        Self::AlreadyInstalled,
+        Self::CapabilitiesUnavailable,
+        Self::CapabilitiesInvalid,
+        Self::CapabilityMissing,
+        Self::ToolIncompatible,
+        Self::Timeout,
     ];
 }
 
@@ -179,6 +216,23 @@ impl KimError {
         self.details = details;
         self
     }
+
+    /// A file-system error on `path`. Access refusals become `permission_denied` with a hint;
+    /// Kim never elevates to work around them (KIM-SEC-004).
+    pub fn io(path: &std::path::Path, e: &std::io::Error) -> Self {
+        if e.kind() == std::io::ErrorKind::PermissionDenied {
+            Self::new(
+                ErrorCode::PermissionDenied,
+                format!("access denied: {}: {e}", path.display()),
+            )
+            .with_hint(
+                "Kim works per user and never elevates; check the folder's permissions \
+                 (read-only or protected location)",
+            )
+        } else {
+            Self::new(ErrorCode::Io, format!("{}: {e}", path.display()))
+        }
+    }
 }
 
 impl fmt::Display for KimError {
@@ -206,6 +260,14 @@ mod tests {
         assert_eq!(ErrorCode::Incompatible.exit_code(), 5);
         assert_eq!(ErrorCode::ToolRunning.exit_code(), 7);
         assert_eq!(ErrorCode::Cancelled.exit_code(), 8);
+        assert_eq!(ErrorCode::PermissionDenied.exit_code(), 1);
+        assert_eq!(ErrorCode::AlreadyInstalled.exit_code(), 7);
+        assert_eq!(ErrorCode::CapabilitiesInvalid.exit_code(), 4);
+        assert_eq!(ErrorCode::CapabilityMissing.exit_code(), 5);
+        assert_eq!(ErrorCode::Timeout.exit_code(), 6);
+        for code in ErrorCode::ALL {
+            assert!((1..=8).contains(&code.exit_code()), "{code:?}");
+        }
     }
 
     #[test]
@@ -222,5 +284,18 @@ mod tests {
             let json = serde_json::to_string(&code).unwrap();
             assert_eq!(json, format!("\"{}\"", code.as_str()));
         }
+    }
+
+    #[test]
+    fn permission_errors_get_their_own_code() {
+        let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        let e = KimError::io(std::path::Path::new("x"), &denied);
+        assert_eq!(e.code, ErrorCode::PermissionDenied);
+        assert!(e.hint.unwrap().contains("never elevates"));
+        let other = std::io::Error::from(std::io::ErrorKind::NotFound);
+        assert_eq!(
+            KimError::io(std::path::Path::new("x"), &other).code,
+            ErrorCode::Io
+        );
     }
 }

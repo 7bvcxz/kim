@@ -1,0 +1,63 @@
+{
+  "command": "tools.describe",
+  "data": {
+    "capabilities": {
+      "cli_contract": 1,
+      "commands": [
+        {
+          "dry_run": false,
+          "effect": "read",
+          "name": "capabilities",
+          "network": false,
+          "opens_window": false,
+          "requires_yes": false,
+          "summary": "s",
+          "usage": "example-tool capabilities"
+        },
+        {
+          "dry_run": false,
+          "effect": "read",
+          "name": "greet",
+          "network": false,
+          "opens_window": false,
+          "requires_yes": false,
+          "summary": "s",
+          "usage": "example-tool greet"
+        }
+      ],
+      "implementation": "implemented",
+      "json_schema_version": 1,
+      "schema": "kim.capabilities",
+      "schema_version": 1,
+      "summary": "test tool",
+      "tool": "example-tool",
+      "version": "1.0.0"
+    },
+    "capabilities_source": "manifest",
+    "requirements": {
+      "commands": [
+        "greet"
+      ],
+      "satisfied": true,
+      "version": ">=1.0"
+    },
+    "tool": {
+      "capabilities": {
+        "cli_contract": 1,
+        "commands": 2,
+        "source": "manifest"
+      },
+      "damaged": null,
+      "entrypoint": "C:\\Users\\me\\AppData\\Local\\Programs\\mouv\\example-tool\\versions\\1.0.0\\tool.exe",
+      "id": "example-tool",
+      "managed": true,
+      "name": "Example",
+      "status": "installed",
+      "update_available": null,
+      "version": "1.0.0"
+    }
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

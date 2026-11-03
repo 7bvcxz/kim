@@ -1,0 +1,7 @@
+{
+  "ok": true,
+  "command": "tools.list",
+  "schema_version": 1,
+  "data": { "tools": [] },
+  "warnings": []
+}

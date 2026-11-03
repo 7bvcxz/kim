@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/7bvcxz/kim/blob/main/docs/contracts/schemas/tool-capabilities-v1.schema.json",
+  "title": "Kim tool capabilities document, schema_version 1",
+  "description": "The `data` of `<tool> capabilities --json`, and the optional `capabilities.json` manifest at the root of an installed version (docs/CLI_CONTRACT.md §9). Every command that is not `read` supports --dry-run; every `destructive` command needs --yes when the tool cannot ask. The same definitions are embedded in kim-cli-v1 (a test keeps them identical).",
+  "type": "object",
+  "required": ["schema", "schema_version", "tool", "version", "cli_contract", "json_schema_version", "implementation", "summary", "commands"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": { "const": "kim.capabilities" },
+    "schema_version": { "const": 1 },
+    "tool": { "$ref": "#/$defs/tool_id" },
+    "version": { "$ref": "#/$defs/semver" },
+    "cli_contract": { "type": "integer", "minimum": 1 },
+    "json_schema_version": { "type": "integer", "minimum": 1 },
+    "implementation": { "enum": ["implemented", "placeholder"] },
+    "summary": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "commands": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/capability" } }
+  },
+  "$defs": {
+    "tool_id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,31}$" },
+    "semver": { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$" },
+    "command_name": {
+      "description": "Dotted command path, e.g. `catalog.list`; the tool name alone (e.g. `kim`) when the arguments could not be parsed.",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)*$"
+    },
+    "capability": {
+      "type": "object",
+      "required": ["name", "usage", "summary", "effect", "network", "dry_run", "requires_yes", "opens_window"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "$ref": "#/$defs/command_name" },
+        "usage": { "type": "string", "minLength": 1 },
+        "summary": { "type": "string", "minLength": 1 },
+        "effect": { "enum": ["read", "write", "install", "destructive"] },
+        "network": { "type": "boolean" },
+        "dry_run": { "type": "boolean" },
+        "requires_yes": { "type": "boolean" },
+        "opens_window": { "type": "boolean" }
+      },
+      "allOf": [
+        {
+          "description": "State-changing commands support --dry-run.",
+          "anyOf": [
+            { "properties": { "effect": { "const": "read" } } },
+            { "properties": { "dry_run": { "const": true } } }
+          ]
+        },
+        {
+          "description": "Destructive commands need --yes when the tool cannot ask.",
+          "anyOf": [
+            { "properties": { "effect": { "enum": ["read", "write", "install"] } } },
+            { "properties": { "requires_yes": { "const": true } } }
+          ]
+        }
+      ]
+    }
+  }
+}

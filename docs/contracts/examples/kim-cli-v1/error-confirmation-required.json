@@ -1,0 +1,12 @@
+{
+  "command": "uninstall",
+  "error": {
+    "code": "confirmation_required",
+    "details": [],
+    "exit_code": 7,
+    "hint": "re-run with --yes (or --dry-run to preview); nothing was changed",
+    "message": "uninstalling example-tool needs confirmation"
+  },
+  "ok": false,
+  "schema_version": 1
+}

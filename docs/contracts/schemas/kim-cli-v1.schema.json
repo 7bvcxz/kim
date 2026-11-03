@@ -1,0 +1,612 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/7bvcxz/kim/blob/main/docs/contracts/schemas/kim-cli-v1.schema.json",
+  "title": "kim --json output, schema_version 1",
+  "description": "Every document `kim ... --json` prints: the cli-envelope-v1 envelope, the `data` of each command (selected by `command`), and the error-code registry with its exit codes (docs/CLI_CONTRACT.md §6, docs/KIM_CLI.md). Objects are closed so regression tests notice any change; consumers must still ignore unknown fields and tolerate new enum values (§8).",
+  "oneOf": [
+    { "$ref": "#/$defs/failure" },
+    { "$ref": "#/$defs/ok_capabilities" },
+    { "$ref": "#/$defs/ok_catalog_list" },
+    { "$ref": "#/$defs/ok_catalog_show" },
+    { "$ref": "#/$defs/ok_catalog_status" },
+    { "$ref": "#/$defs/ok_catalog_verify" },
+    { "$ref": "#/$defs/ok_catalog_refresh" },
+    { "$ref": "#/$defs/ok_install" },
+    { "$ref": "#/$defs/ok_update" },
+    { "$ref": "#/$defs/ok_update_check" },
+    { "$ref": "#/$defs/ok_uninstall" },
+    { "$ref": "#/$defs/ok_tools_list" },
+    { "$ref": "#/$defs/ok_tools_describe" },
+    { "$ref": "#/$defs/ok_status" },
+    { "$ref": "#/$defs/ok_version" },
+    { "$ref": "#/$defs/ok_settings_show" },
+    { "$ref": "#/$defs/ok_settings_set" }
+  ],
+  "$defs": {
+    "tool_id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,31}$" },
+    "semver": { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$" },
+    "command_name": {
+      "description": "Dotted command path, e.g. `catalog.list`; the tool name alone (e.g. `kim`) when the arguments could not be parsed.",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)*$"
+    },
+    "capability": {
+      "type": "object",
+      "required": ["name", "usage", "summary", "effect", "network", "dry_run", "requires_yes", "opens_window"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "$ref": "#/$defs/command_name" },
+        "usage": { "type": "string", "minLength": 1 },
+        "summary": { "type": "string", "minLength": 1 },
+        "effect": { "enum": ["read", "write", "install", "destructive"] },
+        "network": { "type": "boolean" },
+        "dry_run": { "type": "boolean" },
+        "requires_yes": { "type": "boolean" },
+        "opens_window": { "type": "boolean" }
+      },
+      "allOf": [
+        {
+          "description": "State-changing commands support --dry-run.",
+          "anyOf": [
+            { "properties": { "effect": { "const": "read" } } },
+            { "properties": { "dry_run": { "const": true } } }
+          ]
+        },
+        {
+          "description": "Destructive commands need --yes when the tool cannot ask.",
+          "anyOf": [
+            { "properties": { "effect": { "enum": ["read", "write", "install"] } } },
+            { "properties": { "requires_yes": { "const": true } } }
+          ]
+        }
+      ]
+    },
+    "capabilities": {
+      "type": "object",
+      "required": ["schema", "schema_version", "tool", "version", "cli_contract", "json_schema_version", "implementation", "summary", "commands"],
+      "additionalProperties": false,
+      "properties": {
+        "schema": { "const": "kim.capabilities" },
+        "schema_version": { "const": 1 },
+        "tool": { "$ref": "#/$defs/tool_id" },
+        "version": { "$ref": "#/$defs/semver" },
+        "cli_contract": { "type": "integer", "minimum": 1 },
+        "json_schema_version": { "type": "integer", "minimum": 1 },
+        "implementation": { "enum": ["implemented", "placeholder"] },
+        "summary": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "commands": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/capability" } }
+      }
+    },
+
+    "error_code": {
+      "enum": [
+        "usage", "tool_not_found", "catalog_invalid", "signature_invalid", "untrusted_key",
+        "catalog_rollback", "network_unavailable", "unsupported_source", "io", "internal",
+        "no_release", "incompatible", "not_installed", "dependency_missing", "tool_running",
+        "busy", "integrity_failed", "package_invalid", "self_check_failed", "cancelled",
+        "stale_catalog", "offline_mode", "confirmation_required", "permission_denied",
+        "already_installed", "capabilities_unavailable", "capabilities_invalid",
+        "capability_missing", "tool_incompatible", "timeout"
+      ]
+    },
+    "error": {
+      "type": "object",
+      "required": ["code", "exit_code", "message", "hint", "details"],
+      "additionalProperties": false,
+      "properties": {
+        "code": { "$ref": "#/$defs/error_code" },
+        "exit_code": { "type": "integer", "minimum": 1, "maximum": 8 },
+        "message": { "type": "string", "minLength": 1 },
+        "hint": { "type": ["string", "null"] },
+        "details": { "type": "array", "items": { "type": "string" } }
+      },
+      "oneOf": [
+        { "properties": { "exit_code": { "const": 1 }, "code": { "enum": ["io", "internal", "permission_denied"] } } },
+        { "properties": { "exit_code": { "const": 2 }, "code": { "enum": ["usage", "unsupported_source"] } } },
+        { "properties": { "exit_code": { "const": 3 }, "code": { "enum": ["tool_not_found", "not_installed"] } } },
+        { "properties": { "exit_code": { "const": 4 }, "code": { "enum": ["catalog_invalid", "signature_invalid", "untrusted_key", "catalog_rollback", "integrity_failed", "package_invalid", "self_check_failed", "capabilities_invalid"] } } },
+        { "properties": { "exit_code": { "const": 5 }, "code": { "enum": ["no_release", "incompatible", "capabilities_unavailable", "capability_missing", "tool_incompatible"] } } },
+        { "properties": { "exit_code": { "const": 6 }, "code": { "enum": ["network_unavailable", "offline_mode", "timeout"] } } },
+        { "properties": { "exit_code": { "const": 7 }, "code": { "enum": ["tool_running", "busy", "dependency_missing", "stale_catalog", "confirmation_required", "already_installed"] } } },
+        { "properties": { "exit_code": { "const": 8 }, "code": { "enum": ["cancelled"] } } }
+      ]
+    },
+    "warnings": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "success": {
+      "type": "object",
+      "required": ["ok", "command", "schema_version", "data", "warnings"],
+      "additionalProperties": false,
+      "properties": {
+        "ok": { "const": true },
+        "command": { "$ref": "#/$defs/command_name" },
+        "schema_version": { "const": 1 },
+        "data": { "type": "object" },
+        "warnings": { "$ref": "#/$defs/warnings" }
+      }
+    },
+    "failure": {
+      "type": "object",
+      "required": ["ok", "command", "schema_version", "error"],
+      "additionalProperties": false,
+      "properties": {
+        "ok": { "const": false },
+        "command": { "$ref": "#/$defs/command_name" },
+        "schema_version": { "const": 1 },
+        "error": { "$ref": "#/$defs/error" }
+      }
+    },
+
+    "ok_capabilities": { "allOf": [ { "$ref": "#/$defs/success" }, { "properties": { "command": { "const": "capabilities" }, "data": { "$ref": "#/$defs/capabilities" } } } ] },
+    "ok_catalog_list": { "allOf": [ { "$ref": "#/$defs/success" }, { "properties": { "command": { "const": "catalog.list" }, "data": { "$ref": "#/$defs/catalog_list" } } } ] },
+    "ok_catalog_show": { "allOf": [ { "$ref": "#/$defs/success" }, { "properties": { "command": { "const": "catalog.show" }, "data": { "$ref": "#/$defs/catalog_show" } } } ] },
+    "ok_catalog_status": { "allOf": [ { "$ref": "#/$defs/success" }, { "properties": { "command": { "const": "catalog.status" }, "data": { "$ref": "#/$defs/catalog_status" } } } ] },
+    "ok_catalog_verify": { "allOf": [ { "$ref": "#/$defs/success" }, { "properties": { "command": { "const": "catalog.verify" }, "data": { "$ref": "#/$defs/catalog_verify" } } } ] },
+    "ok_catalog_refresh": { "allOf": [ { "$ref": "#/$defs/success" }, { "properties": { "command": { "const": "catalog.refresh" }, "data": { "$ref": "#/$defs/catalog_refresh" } } } ] },
+    "ok_install": { "allOf": [ { "$ref": "#/$defs/success" }, { "properties": { "command": { "const": "install" }, "data": { "$ref": "#/$defs/install_data" } } } ] },
+    "ok_update": { "allOf": [ { "$ref": "#/$defs/success" }, { "properties": { "command": { "const": "update" }, "data": { "$ref": "#/$defs/install_data" } } } ] },
+    "ok_update_check": { "allOf": [ { "$ref": "#/$defs/success" }, { "properties": { "command": { "const": "update.check" }, "data": { "$ref": "#/$defs/update_check" } } } ] },
+    "ok_uninstall": { "allOf": [ { "$ref": "#/$defs/success" }, { "properties": { "command": { "const": "uninstall" }, "data": { "$ref": "#/$defs/uninstall_data" } } } ] },
+    "ok_tools_list": { "allOf": [ { "$ref": "#/$defs/success" }, { "properties": { "command": { "const": "tools.list" }, "data": { "$ref": "#/$defs/tools_list" } } } ] },
+    "ok_tools_describe": { "allOf": [ { "$ref": "#/$defs/success" }, { "properties": { "command": { "const": "tools.describe" }, "data": { "$ref": "#/$defs/tools_describe" } } } ] },
+    "ok_status": { "allOf": [ { "$ref": "#/$defs/success" }, { "properties": { "command": { "const": "status" }, "data": { "$ref": "#/$defs/status" } } } ] },
+    "ok_version": { "allOf": [ { "$ref": "#/$defs/success" }, { "properties": { "command": { "const": "version" }, "data": { "$ref": "#/$defs/version" } } } ] },
+    "ok_settings_show": { "allOf": [ { "$ref": "#/$defs/success" }, { "properties": { "command": { "const": "settings.show" }, "data": { "$ref": "#/$defs/settings_show" } } } ] },
+    "ok_settings_set": { "allOf": [ { "$ref": "#/$defs/success" }, { "properties": { "command": { "const": "settings.set" }, "data": { "$ref": "#/$defs/settings_set" } } } ] },
+
+    "nullable_string": { "type": ["string", "null"] },
+    "nullable_semver": { "anyOf": [ { "$ref": "#/$defs/semver" }, { "type": "null" } ] },
+    "path": { "type": "string", "minLength": 1 },
+    "timestamp": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$" },
+    "channel": { "enum": ["stable", "preview"] },
+    "tool_status": { "enum": ["installed", "update-available", "available", "incompatible", "unreleased", "damaged"] },
+    "signer": {
+      "type": "object",
+      "required": ["key_id", "label"],
+      "additionalProperties": false,
+      "properties": {
+        "key_id": { "type": "string", "pattern": "^[0-9a-f]{16}$" },
+        "label": { "type": "string", "minLength": 1 }
+      }
+    },
+    "catalog_info": {
+      "type": "object",
+      "required": ["source", "catalog_version", "publisher", "generated_at", "expires_at", "stale", "signed_by"],
+      "additionalProperties": false,
+      "properties": {
+        "source": { "enum": ["bundled", "cache"] },
+        "catalog_version": { "type": "integer", "minimum": 0 },
+        "publisher": { "type": "string" },
+        "generated_at": { "$ref": "#/$defs/timestamp" },
+        "expires_at": { "$ref": "#/$defs/timestamp" },
+        "stale": { "type": "boolean" },
+        "signed_by": { "$ref": "#/$defs/signer" }
+      }
+    },
+    "platform": {
+      "type": "object",
+      "required": ["os", "arch", "os_build"],
+      "additionalProperties": false,
+      "properties": {
+        "os": { "enum": ["windows", "linux", "macos"] },
+        "arch": { "type": "string", "minLength": 1 },
+        "os_build": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "tool_view": {
+      "type": "object",
+      "required": ["id", "name", "summary", "support", "status", "installed_version", "latest_compatible", "latest", "incompatible_reason", "note"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/tool_id" },
+        "name": { "type": "string", "minLength": 1 },
+        "summary": { "type": "string" },
+        "support": { "enum": ["stable", "preview", "in-development", "deprecated"] },
+        "status": { "$ref": "#/$defs/tool_status" },
+        "installed_version": { "$ref": "#/$defs/nullable_semver" },
+        "latest_compatible": { "$ref": "#/$defs/nullable_semver" },
+        "latest": { "$ref": "#/$defs/nullable_semver" },
+        "incompatible_reason": { "$ref": "#/$defs/nullable_string" },
+        "note": { "$ref": "#/$defs/nullable_string" }
+      }
+    },
+    "asset": {
+      "type": "object",
+      "required": ["os", "arch", "min_os_build", "url", "size", "sha256", "kind", "entrypoint"],
+      "additionalProperties": false,
+      "properties": {
+        "os": { "type": "string" },
+        "arch": { "type": "string" },
+        "min_os_build": { "type": ["integer", "null"], "minimum": 0 },
+        "url": { "type": "string", "minLength": 1 },
+        "size": { "type": "integer", "minimum": 1 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "kind": { "enum": ["zip", "exe"] },
+        "entrypoint": { "type": "string", "minLength": 1 }
+      }
+    },
+    "dependency": {
+      "type": "object",
+      "required": ["tool", "version_req"],
+      "additionalProperties": false,
+      "properties": {
+        "tool": { "$ref": "#/$defs/tool_id" },
+        "version_req": { "type": "string", "minLength": 1 }
+      }
+    },
+    "release_view": {
+      "type": "object",
+      "required": ["version", "channel", "published_at", "release_notes", "compatible", "incompatible_reason", "package_for_this_machine", "dependencies"],
+      "additionalProperties": false,
+      "properties": {
+        "version": { "$ref": "#/$defs/semver" },
+        "channel": { "$ref": "#/$defs/channel" },
+        "published_at": { "$ref": "#/$defs/timestamp" },
+        "release_notes": { "type": "string" },
+        "compatible": { "type": "boolean" },
+        "incompatible_reason": { "$ref": "#/$defs/nullable_string" },
+        "package_for_this_machine": { "anyOf": [ { "$ref": "#/$defs/asset" }, { "type": "null" } ] },
+        "dependencies": { "type": "array", "items": { "$ref": "#/$defs/dependency" } }
+      }
+    },
+    "running_process": {
+      "type": "object",
+      "required": ["pid", "image"],
+      "additionalProperties": false,
+      "properties": {
+        "pid": { "type": "integer", "minimum": 0 },
+        "image": { "type": "string" }
+      }
+    },
+    "string_list": { "type": "array", "items": { "type": "string" } },
+
+    "catalog_list": {
+      "type": "object",
+      "required": ["catalog", "platform", "channel", "installed_only", "tools"],
+      "additionalProperties": false,
+      "properties": {
+        "catalog": { "$ref": "#/$defs/catalog_info" },
+        "platform": { "$ref": "#/$defs/platform" },
+        "channel": { "$ref": "#/$defs/channel" },
+        "installed_only": { "type": "boolean" },
+        "tools": { "type": "array", "items": { "$ref": "#/$defs/tool_view" } }
+      }
+    },
+    "catalog_show": {
+      "type": "object",
+      "required": ["catalog", "platform", "tool", "description", "license", "homepage", "releases"],
+      "additionalProperties": false,
+      "properties": {
+        "catalog": { "$ref": "#/$defs/catalog_info" },
+        "platform": { "$ref": "#/$defs/platform" },
+        "tool": { "$ref": "#/$defs/tool_view" },
+        "description": { "type": "string" },
+        "license": { "type": "string" },
+        "homepage": { "$ref": "#/$defs/nullable_string" },
+        "releases": { "type": "array", "items": { "$ref": "#/$defs/release_view" } }
+      }
+    },
+    "catalog_status": {
+      "type": "object",
+      "required": ["catalog", "cache_dir", "default_source", "trusted_keys"],
+      "additionalProperties": false,
+      "properties": {
+        "catalog": { "$ref": "#/$defs/catalog_info" },
+        "cache_dir": { "$ref": "#/$defs/path" },
+        "default_source": { "type": "string", "pattern": "^https://" },
+        "trusted_keys": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/signer" } }
+      }
+    },
+    "catalog_verify": {
+      "type": "object",
+      "required": ["file", "signature_file", "valid", "catalog_version", "tools", "stale", "signed_by"],
+      "additionalProperties": false,
+      "properties": {
+        "file": { "$ref": "#/$defs/path" },
+        "signature_file": { "$ref": "#/$defs/path" },
+        "valid": { "const": true },
+        "catalog_version": { "type": "integer", "minimum": 0 },
+        "tools": { "type": "integer", "minimum": 0 },
+        "stale": { "type": "boolean" },
+        "signed_by": { "$ref": "#/$defs/signer" }
+      }
+    },
+    "refresh_outcome": {
+      "type": "object",
+      "required": ["source_url", "previous_version", "fetched_version", "updated"],
+      "additionalProperties": false,
+      "properties": {
+        "source_url": { "type": "string", "minLength": 1 },
+        "previous_version": { "type": "integer", "minimum": 0 },
+        "fetched_version": { "type": "integer", "minimum": 0 },
+        "updated": { "type": "boolean" }
+      }
+    },
+    "catalog_refresh": {
+      "type": "object",
+      "required": ["source_url", "previous_version", "fetched_version", "updated", "dry_run"],
+      "additionalProperties": false,
+      "properties": {
+        "source_url": { "type": "string", "minLength": 1 },
+        "previous_version": { "type": "integer", "minimum": 0 },
+        "fetched_version": { "type": "integer", "minimum": 0 },
+        "updated": { "type": "boolean" },
+        "dry_run": { "type": "boolean" }
+      }
+    },
+    "plan": {
+      "type": "object",
+      "required": ["tool", "action", "from", "to", "channel", "release_notes", "asset", "catalog_version", "tool_dir", "running", "notes"],
+      "additionalProperties": false,
+      "properties": {
+        "tool": { "$ref": "#/$defs/tool_id" },
+        "action": { "enum": ["install", "update", "downgrade", "reinstall"] },
+        "from": { "$ref": "#/$defs/nullable_semver" },
+        "to": { "$ref": "#/$defs/semver" },
+        "channel": { "$ref": "#/$defs/channel" },
+        "release_notes": { "type": "string" },
+        "asset": { "$ref": "#/$defs/asset" },
+        "catalog_version": { "type": "integer", "minimum": 0 },
+        "tool_dir": { "$ref": "#/$defs/path" },
+        "running": { "type": "array", "items": { "$ref": "#/$defs/running_process" } },
+        "notes": { "$ref": "#/$defs/string_list" }
+      }
+    },
+    "install_result": {
+      "type": "object",
+      "required": ["tool", "action", "from", "to", "entrypoint", "removed_versions", "kept_in_use", "running"],
+      "additionalProperties": false,
+      "properties": {
+        "tool": { "$ref": "#/$defs/tool_id" },
+        "action": { "enum": ["install", "update", "downgrade", "reinstall"] },
+        "from": { "$ref": "#/$defs/nullable_semver" },
+        "to": { "$ref": "#/$defs/semver" },
+        "entrypoint": { "$ref": "#/$defs/path" },
+        "removed_versions": { "$ref": "#/$defs/string_list" },
+        "kept_in_use": { "$ref": "#/$defs/string_list" },
+        "running": { "type": "array", "items": { "$ref": "#/$defs/running_process" } }
+      }
+    },
+    "install_data": {
+      "description": "Data of `install` and `update <tool>`. With --dry-run, `result` is null and nothing was downloaded or changed.",
+      "type": "object",
+      "required": ["plan", "dry_run", "result"],
+      "additionalProperties": false,
+      "properties": {
+        "plan": { "$ref": "#/$defs/plan" },
+        "dry_run": { "type": "boolean" },
+        "result": { "anyOf": [ { "$ref": "#/$defs/install_result" }, { "type": "null" } ] }
+      },
+      "oneOf": [
+        { "properties": { "dry_run": { "const": true }, "result": { "type": "null" } } },
+        { "properties": { "dry_run": { "const": false }, "result": { "type": "object" } } }
+      ]
+    },
+    "update_info": {
+      "type": "object",
+      "required": ["tool", "installed", "available", "release_notes"],
+      "additionalProperties": false,
+      "properties": {
+        "tool": { "$ref": "#/$defs/tool_id" },
+        "installed": { "$ref": "#/$defs/semver" },
+        "available": { "$ref": "#/$defs/semver" },
+        "release_notes": { "type": "string" }
+      }
+    },
+    "update_check": {
+      "type": "object",
+      "required": ["updates", "refreshed", "refresh", "dry_run"],
+      "additionalProperties": false,
+      "properties": {
+        "updates": { "type": "array", "items": { "$ref": "#/$defs/update_info" } },
+        "refreshed": { "type": "boolean" },
+        "refresh": { "anyOf": [ { "$ref": "#/$defs/refresh_outcome" }, { "type": "null" } ] },
+        "dry_run": { "type": "boolean" }
+      }
+    },
+    "uninstall_plan": {
+      "type": "object",
+      "required": ["tool", "version", "tool_dir", "running", "data_dirs", "purge_data"],
+      "additionalProperties": false,
+      "properties": {
+        "tool": { "$ref": "#/$defs/tool_id" },
+        "version": { "$ref": "#/$defs/nullable_semver" },
+        "tool_dir": { "$ref": "#/$defs/path" },
+        "running": { "type": "array", "items": { "$ref": "#/$defs/running_process" } },
+        "data_dirs": { "$ref": "#/$defs/string_list" },
+        "purge_data": { "type": "boolean" }
+      }
+    },
+    "uninstall_result": {
+      "type": "object",
+      "required": ["tool", "removed_version", "leftovers", "purged_data", "kept_data"],
+      "additionalProperties": false,
+      "properties": {
+        "tool": { "$ref": "#/$defs/tool_id" },
+        "removed_version": { "$ref": "#/$defs/nullable_semver" },
+        "leftovers": { "$ref": "#/$defs/string_list" },
+        "purged_data": { "$ref": "#/$defs/string_list" },
+        "kept_data": { "$ref": "#/$defs/string_list" }
+      }
+    },
+    "uninstall_data": {
+      "type": "object",
+      "required": ["plan", "dry_run", "result"],
+      "additionalProperties": false,
+      "properties": {
+        "plan": { "$ref": "#/$defs/uninstall_plan" },
+        "dry_run": { "type": "boolean" },
+        "result": { "anyOf": [ { "$ref": "#/$defs/uninstall_result" }, { "type": "null" } ] }
+      },
+      "oneOf": [
+        { "properties": { "dry_run": { "const": true }, "result": { "type": "null" } } },
+        { "properties": { "dry_run": { "const": false }, "result": { "type": "object" } } }
+      ]
+    },
+    "capabilities_summary": {
+      "type": "object",
+      "required": ["source", "cli_contract", "commands"],
+      "additionalProperties": false,
+      "properties": {
+        "source": { "enum": ["builtin", "manifest", "probe", "none", "invalid"] },
+        "cli_contract": { "type": ["integer", "null"], "minimum": 1 },
+        "commands": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "installed_tool": {
+      "type": "object",
+      "required": ["id", "name", "version", "managed", "entrypoint", "status", "update_available", "damaged", "capabilities"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/tool_id" },
+        "name": { "type": "string", "minLength": 1 },
+        "version": { "$ref": "#/$defs/nullable_semver" },
+        "managed": { "type": "boolean" },
+        "entrypoint": { "$ref": "#/$defs/nullable_string" },
+        "status": { "$ref": "#/$defs/tool_status" },
+        "update_available": { "$ref": "#/$defs/nullable_semver" },
+        "damaged": { "$ref": "#/$defs/nullable_string" },
+        "capabilities": { "$ref": "#/$defs/capabilities_summary" }
+      }
+    },
+    "tools_list": {
+      "type": "object",
+      "required": ["tools"],
+      "additionalProperties": false,
+      "properties": {
+        "tools": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/installed_tool" } }
+      }
+    },
+    "requirements": {
+      "type": "object",
+      "required": ["version", "commands", "satisfied"],
+      "additionalProperties": false,
+      "properties": {
+        "version": { "$ref": "#/$defs/nullable_string" },
+        "commands": { "type": "array", "items": { "$ref": "#/$defs/command_name" } },
+        "satisfied": { "const": true }
+      }
+    },
+    "tools_describe": {
+      "type": "object",
+      "required": ["tool", "capabilities", "capabilities_source", "requirements"],
+      "additionalProperties": false,
+      "properties": {
+        "tool": { "$ref": "#/$defs/installed_tool" },
+        "capabilities": { "anyOf": [ { "$ref": "#/$defs/capabilities" }, { "type": "null" } ] },
+        "capabilities_source": { "enum": ["builtin", "manifest", "probe", "none"] },
+        "requirements": { "anyOf": [ { "$ref": "#/$defs/requirements" }, { "type": "null" } ] }
+      }
+    },
+    "status": {
+      "type": "object",
+      "required": ["kim", "catalog", "settings", "paths", "platform", "tools", "updates", "problems"],
+      "additionalProperties": false,
+      "properties": {
+        "kim": {
+          "type": "object",
+          "required": ["version", "build", "executable", "cli_contract"],
+          "additionalProperties": false,
+          "properties": {
+            "version": { "$ref": "#/$defs/semver" },
+            "build": { "enum": ["debug", "release"] },
+            "executable": { "$ref": "#/$defs/nullable_string" },
+            "cli_contract": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "catalog": { "$ref": "#/$defs/catalog_info" },
+        "settings": {
+          "type": "object",
+          "required": ["check_updates_on_launch", "offline_mode", "path"],
+          "additionalProperties": false,
+          "properties": {
+            "check_updates_on_launch": { "type": "boolean" },
+            "offline_mode": { "type": "boolean" },
+            "path": { "$ref": "#/$defs/nullable_string" }
+          }
+        },
+        "paths": {
+          "type": "object",
+          "required": ["programs", "kim_data"],
+          "additionalProperties": false,
+          "properties": {
+            "programs": { "$ref": "#/$defs/path" },
+            "kim_data": { "$ref": "#/$defs/path" }
+          }
+        },
+        "platform": { "$ref": "#/$defs/platform" },
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "version", "status"],
+            "additionalProperties": false,
+            "properties": {
+              "id": { "$ref": "#/$defs/tool_id" },
+              "version": { "$ref": "#/$defs/nullable_semver" },
+              "status": { "$ref": "#/$defs/tool_status" }
+            }
+          }
+        },
+        "updates": { "type": "array", "items": { "$ref": "#/$defs/update_info" } },
+        "problems": { "$ref": "#/$defs/string_list" }
+      }
+    },
+    "version": {
+      "type": "object",
+      "required": ["tool", "version", "build", "cli_contract", "json_schema_version", "schemas", "platform", "catalog_latest", "newer_available"],
+      "additionalProperties": false,
+      "properties": {
+        "tool": { "const": "kim" },
+        "version": { "$ref": "#/$defs/semver" },
+        "build": { "enum": ["debug", "release"] },
+        "cli_contract": { "type": "integer", "minimum": 1 },
+        "json_schema_version": { "type": "integer", "minimum": 1 },
+        "schemas": {
+          "type": "object",
+          "required": ["catalog", "capabilities", "install_record"],
+          "additionalProperties": false,
+          "properties": {
+            "catalog": { "type": "integer", "minimum": 1 },
+            "capabilities": { "type": "integer", "minimum": 1 },
+            "install_record": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "platform": { "$ref": "#/$defs/platform" },
+        "catalog_latest": { "$ref": "#/$defs/nullable_semver" },
+        "newer_available": { "type": "boolean" }
+      }
+    },
+    "settings_values": {
+      "type": "object",
+      "required": ["check_updates_on_launch", "offline_mode"],
+      "additionalProperties": false,
+      "properties": {
+        "check_updates_on_launch": { "type": "boolean" },
+        "offline_mode": { "type": "boolean" }
+      }
+    },
+    "settings_show": {
+      "type": "object",
+      "required": ["settings", "path"],
+      "additionalProperties": false,
+      "properties": {
+        "settings": { "$ref": "#/$defs/settings_values" },
+        "path": { "$ref": "#/$defs/path" }
+      }
+    },
+    "settings_set": {
+      "type": "object",
+      "required": ["settings", "path", "key", "previous", "value", "changed", "dry_run"],
+      "additionalProperties": false,
+      "properties": {
+        "settings": { "$ref": "#/$defs/settings_values" },
+        "path": { "$ref": "#/$defs/path" },
+        "key": { "enum": ["check_updates_on_launch", "offline_mode"] },
+        "previous": { "type": "boolean" },
+        "value": { "type": "boolean" },
+        "changed": { "type": "boolean" },
+        "dry_run": { "type": "boolean" }
+      }
+    }
+  }
+}

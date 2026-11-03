@@ -1,0 +1,41 @@
+{
+  "command": "update",
+  "data": {
+    "dry_run": false,
+    "plan": {
+      "action": "update",
+      "asset": {
+        "arch": "x86_64",
+        "entrypoint": "tool.exe",
+        "kind": "zip",
+        "min_os_build": null,
+        "os": "windows",
+        "sha256": "5f0c8e8a0d6b3e1f9a7c2b4d6e8f0a1c3e5b7d9f1a3c5e7b9d1f3a5c7e9b1d3f",
+        "size": 4194304,
+        "url": "http://127.0.0.1:8080/2.zip"
+      },
+      "catalog_version": 101,
+      "channel": "stable",
+      "from": "1.0.0",
+      "notes": [],
+      "release_notes": "notes 2.0.0",
+      "running": [],
+      "to": "2.0.0",
+      "tool": "example-tool",
+      "tool_dir": "C:\\Users\\me\\AppData\\Local\\Programs\\mouv\\example-tool"
+    },
+    "result": {
+      "action": "update",
+      "entrypoint": "C:\\Users\\me\\AppData\\Local\\Programs\\mouv\\example-tool\\versions\\2.0.0\\tool.exe",
+      "from": "1.0.0",
+      "kept_in_use": [],
+      "removed_versions": [],
+      "running": [],
+      "to": "2.0.0",
+      "tool": "example-tool"
+    }
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

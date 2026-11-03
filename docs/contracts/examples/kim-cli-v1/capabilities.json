@@ -1,0 +1,178 @@
+{
+  "command": "capabilities",
+  "data": {
+    "cli_contract": 1,
+    "commands": [
+      {
+        "dry_run": false,
+        "effect": "read",
+        "name": "capabilities",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "This document: Kim's commands and what each one may change",
+        "usage": "kim capabilities"
+      },
+      {
+        "dry_run": false,
+        "effect": "read",
+        "name": "catalog.list",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "Tools in the signed catalog and their status on this machine",
+        "usage": "kim catalog list [--channel stable|preview] [--installed]"
+      },
+      {
+        "dry_run": false,
+        "effect": "read",
+        "name": "catalog.show",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "One tool with its releases and the package for this machine",
+        "usage": "kim catalog show <tool> [--channel stable|preview]"
+      },
+      {
+        "dry_run": false,
+        "effect": "read",
+        "name": "catalog.status",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "Catalog in use (bundled or cached), signer, freshness and cache location",
+        "usage": "kim catalog status"
+      },
+      {
+        "dry_run": false,
+        "effect": "read",
+        "name": "catalog.verify",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "Verify any catalog file and its signature",
+        "usage": "kim catalog verify <file> [--sig <file>]"
+      },
+      {
+        "dry_run": true,
+        "effect": "write",
+        "name": "catalog.refresh",
+        "network": true,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "Fetch and verify the catalog, then update the local cache",
+        "usage": "kim catalog refresh [--source <url>] [--dry-run]"
+      },
+      {
+        "dry_run": true,
+        "effect": "install",
+        "name": "install",
+        "network": true,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "Download, verify and activate a tool (explicit; never implicit)",
+        "usage": "kim install <tool> [--version <v>] [--channel stable|preview] [--reinstall] [--allow-stale] [--dry-run]"
+      },
+      {
+        "dry_run": true,
+        "effect": "write",
+        "name": "update.check",
+        "network": true,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "List available updates; never downloads a package (--refresh updates the catalog cache first)",
+        "usage": "kim update check [--refresh [--source <url>]] [--channel stable|preview] [--dry-run]"
+      },
+      {
+        "dry_run": true,
+        "effect": "install",
+        "name": "update",
+        "network": true,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "Install the newest compatible release of an installed tool (explicit)",
+        "usage": "kim update <tool> [--channel stable|preview] [--allow-stale] [--dry-run]"
+      },
+      {
+        "dry_run": true,
+        "effect": "destructive",
+        "name": "uninstall",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": true,
+        "summary": "Remove a tool's program files; user data is kept unless --purge-data",
+        "usage": "kim uninstall <tool> [--purge-data] [--yes] [--dry-run]"
+      },
+      {
+        "dry_run": false,
+        "effect": "read",
+        "name": "tools.list",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "Installed Kim tools with version, executable and capabilities (reads files only)",
+        "usage": "kim tools list"
+      },
+      {
+        "dry_run": false,
+        "effect": "read",
+        "name": "tools.describe",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "One installed tool and its capabilities; optionally checks requirements",
+        "usage": "kim tools describe <tool> [--probe [--timeout <s>]] [--require-version <req>] [--require-command <name>]..."
+      },
+      {
+        "dry_run": false,
+        "effect": "read",
+        "name": "status",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "Kim version, catalog freshness, settings, installed tools and available updates",
+        "usage": "kim status"
+      },
+      {
+        "dry_run": false,
+        "effect": "read",
+        "name": "version",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "Kim's version and the CLI contract and schema versions it speaks",
+        "usage": "kim version"
+      },
+      {
+        "dry_run": false,
+        "effect": "read",
+        "name": "settings.show",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "Settings and the file they are stored in",
+        "usage": "kim settings show"
+      },
+      {
+        "dry_run": true,
+        "effect": "write",
+        "name": "settings.set",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "Change one setting",
+        "usage": "kim settings set <check_updates_on_launch|offline_mode> <true|false> [--dry-run]"
+      }
+    ],
+    "implementation": "implemented",
+    "json_schema_version": 1,
+    "schema": "kim.capabilities",
+    "schema_version": 1,
+    "summary": "Explicit, user-controlled catalog and installer for Kim tools",
+    "tool": "kim",
+    "version": "0.0.1"
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

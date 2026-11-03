@@ -1,0 +1,25 @@
+{
+  "command": "version",
+  "data": {
+    "build": "debug",
+    "catalog_latest": null,
+    "cli_contract": 1,
+    "json_schema_version": 1,
+    "newer_available": false,
+    "platform": {
+      "arch": "x86_64",
+      "os": "windows",
+      "os_build": 19045
+    },
+    "schemas": {
+      "capabilities": 1,
+      "catalog": 1,
+      "install_record": 1
+    },
+    "tool": "kim",
+    "version": "0.0.1"
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

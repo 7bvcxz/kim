@@ -50,8 +50,7 @@ impl Settings {
     }
 
     pub fn save_to(&self, path: &Path) -> Result<()> {
-        let io =
-            |e: std::io::Error| KimError::new(ErrorCode::Io, format!("{}: {e}", path.display()));
+        let io = |e: std::io::Error| KimError::io(path, &e);
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(io)?;
         }
@@ -59,7 +58,20 @@ impl Settings {
         let json = serde_json::to_vec_pretty(self)
             .map_err(|e| KimError::new(ErrorCode::Internal, e.to_string()))?;
         std::fs::write(&tmp, json).map_err(io)?;
-        std::fs::rename(&tmp, path).map_err(io)
+        std::fs::rename(&tmp, path).map_err(|e| {
+            // Leave no stray temp file behind; the old settings stay exactly as they were.
+            let _ = std::fs::remove_file(&tmp);
+            io(e)
+        })
+    }
+
+    /// Current value of a setting by name (`None` for an unknown name).
+    pub fn get(&self, key: &str) -> Option<bool> {
+        match key {
+            "check_updates_on_launch" => Some(self.check_updates_on_launch),
+            "offline_mode" => Some(self.offline_mode),
+            _ => None,
+        }
     }
 
     pub fn set(&mut self, key: &str, value: &str) -> Result<()> {

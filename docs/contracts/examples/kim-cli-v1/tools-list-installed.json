@@ -1,0 +1,40 @@
+{
+  "command": "tools.list",
+  "data": {
+    "tools": [
+      {
+        "capabilities": {
+          "cli_contract": 1,
+          "commands": 16,
+          "source": "builtin"
+        },
+        "damaged": null,
+        "entrypoint": "C:\\Users\\me\\bin\\kim.exe",
+        "id": "kim",
+        "managed": false,
+        "name": "kim",
+        "status": "installed",
+        "update_available": null,
+        "version": "0.0.1"
+      },
+      {
+        "capabilities": {
+          "cli_contract": 1,
+          "commands": 2,
+          "source": "manifest"
+        },
+        "damaged": null,
+        "entrypoint": "C:\\Users\\me\\AppData\\Local\\Programs\\mouv\\example-tool\\versions\\1.0.0\\tool.exe",
+        "id": "example-tool",
+        "managed": true,
+        "name": "Example",
+        "status": "installed",
+        "update_available": null,
+        "version": "1.0.0"
+      }
+    ]
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

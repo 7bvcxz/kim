@@ -1,0 +1,6 @@
+{
+  "ok": false,
+  "command": "install",
+  "schema_version": 1,
+  "error": { "code": "usage", "exit_code": 0, "message": "failures never exit 0", "hint": null, "details": [] }
+}

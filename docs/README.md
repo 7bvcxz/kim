@@ -17,7 +17,9 @@ did.
 | Document | Status | Purpose |
 | --- | --- | --- |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | current | Components, Host internals, object model, lifecycles, close/kill semantics, restart behavior, telemetry |
-| [adr/README.md](adr/README.md) | current | Architecture decision records (ADR 0001–0014) |
+| [adr/README.md](adr/README.md) | current | Architecture decision records (ADR 0001–0015) |
+| [CLI_CONTRACT.md](CLI_CONTRACT.md) | current (contract v1) | Cross-tool CLI contract: names, help, streams, `--json` envelope, exit codes, error-code registry, dry-run/confirmation, versioning, capabilities and tool-to-tool invocation, secret redaction |
+| [KIM_CLI.md](KIM_CLI.md) | current | `kim` command reference, files and environment, sample agent workflows |
 | [CATALOG_FORMAT.md](CATALOG_FORMAT.md) | current | Kim catalog format, signatures and trust, sources/offline/freshness, tool status, read-only catalog CLI and exit codes |
 | [RELEASE_POLICY.md](RELEASE_POLICY.md) | current | Consent rules, install transaction, channels, signing keys, publishing checklist |
 | [DESIGN_SYSTEM.md](DESIGN_SYSTEM.md) | current | Kim visual language: tokens, components, keyboard, high-DPI, contrast, Korean/Unicode, reduced motion |
@@ -32,12 +34,14 @@ enforces declared contrast pairs). GUI toolkit evidence: [`research/gui-eval/`](
 
 Contract schemas live in `contracts/schemas/`, with valid and invalid examples in
 `contracts/examples/`; `cargo xtask schema-check` (also run by `cargo test`) validates them.
+The CLI schemas (`cli-envelope-v1`, `kim-cli-v1`, `tool-capabilities-v1`) are additionally
+checked against the real `kim` and `subak` binaries by their integration tests; the
+`kim-cli-v1` examples are golden files generated from real runs.
 
 ## Planned
 
 | Document | Status | Planned by | Purpose |
 | --- | --- | --- | --- |
-| `CLI_CONTRACT.md` | planned | Step 07 | Shared CLI conventions, exit codes, JSON schemas |
 | `CONPTY_PROOF.md` | planned | Step 08 | ConPTY + detached Host proof on real Windows |
 | `SESSION_MODEL.md` | planned | Step 10 | Session state machine and naming rules as implemented |
 | `SUBAK_CLI.md` | planned | Step 12 | Subak CLI reference |

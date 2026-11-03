@@ -31,8 +31,10 @@ flowchart LR
 ```
 
 - **Kim** and **Subak** are separate packages and binaries ([ADR 0002](adr/0002-independent-tool-binaries.md)).
-  Kim touches Subak only through Subak's public CLI (`subak host status --json`) and the file
-  system layout of its own installs.
+  Kim touches Subak only through Subak's public CLI (`subak host status --json`,
+  `subak capabilities --json`) and the file system layout of its own installs. Tools discover
+  each other through capabilities documents, without a resident orchestrator
+  ([ADR 0015](adr/0015-cli-contract-and-tool-discovery.md)).
 - **Only the Host owns processes.** Every other box is a client that can disappear at any time
   without consequences for sessions.
 
@@ -40,7 +42,7 @@ flowchart LR
 
 | Component | Binary / crate | Responsibility | Requirements |
 | --- | --- | --- | --- |
-| Kim CLI | `kim.exe` / `crates/kim` | Catalog queries, explicit install/update/uninstall, update check, tool discovery | KIM-FR-003…010, KIM-SEC-001…005 |
+| Kim CLI | `kim.exe` / `crates/kim` | Catalog queries, explicit install/update/uninstall, update check, status, tool and capability discovery ([CLI_CONTRACT](CLI_CONTRACT.md), [KIM_CLI](KIM_CLI.md)) | KIM-FR-003…011, KIM-FR-020, KIM-SEC-001…005 |
 | Kim Manager GUI | `kim-manager.exe` (Step 06) | Same operations with a GUI; never runs headless paths through the GUI | KIM-FR-009, KIM-FR-013 |
 | Subak CLI | `subak.exe` / `crates/subak` | Terminal CRUD, attach/detach, capture, host control, Claude hook reporter | SUBAK-FR-011…015, SUBAK-FR-053 |
 | Subak Host | `subak.exe host serve` | Owns Terminals/Windows/Panes, ConPTYs, jobs, VT state, history, state store, IPC server, metrics | SUBAK-FR-001…004, SUBAK-FR-016, SUBAK-FR-040 |
@@ -223,7 +225,7 @@ they return `unsupported_platform` until milestone M4.
 | Design system, GUI toolkit ADR | planned | 04 |
 | Kim catalog (signed, offline, read-only CLI + explicit refresh) | implemented | 05 |
 | Kim installer (transactional, explicit) + Kim Manager GUI | implemented | 06 |
-| Kim CLI contract (shared conventions) | planned | 07 |
+| Kim CLI contract v1, JSON schemas, headless management (`status`, `version`, `tools list\|describe`), capability discovery | implemented | 07 |
 | ConPTY + detached Host proof | planned | 08 |
 | IPC v1, supervisor | planned | 09 |
 | Session lifecycle, PTY management, CLI, replay | planned | 10–14 |

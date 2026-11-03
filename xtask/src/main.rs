@@ -7,6 +7,7 @@ mod catalog_tools;
 mod deps;
 mod design;
 mod docs;
+mod jsonschema;
 mod ledger;
 mod schema;
 

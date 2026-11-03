@@ -1,0 +1,18 @@
+{
+  "command": "uninstall",
+  "data": {
+    "dry_run": true,
+    "plan": {
+      "data_dirs": [],
+      "purge_data": false,
+      "running": [],
+      "tool": "example-tool",
+      "tool_dir": "C:\\Users\\me\\AppData\\Local\\Programs\\mouv\\example-tool",
+      "version": "2.0.0"
+    },
+    "result": null
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

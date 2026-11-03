@@ -1,0 +1,19 @@
+{
+  "command": "update.check",
+  "data": {
+    "dry_run": false,
+    "refresh": null,
+    "refreshed": false,
+    "updates": [
+      {
+        "available": "2.0.0",
+        "installed": "1.0.0",
+        "release_notes": "notes 2.0.0",
+        "tool": "example-tool"
+      }
+    ]
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

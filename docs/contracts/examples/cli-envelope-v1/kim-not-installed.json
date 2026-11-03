@@ -1,0 +1,12 @@
+{
+  "command": "tools.describe",
+  "error": {
+    "code": "not_installed",
+    "details": [],
+    "exit_code": 3,
+    "hint": "install it explicitly with `kim install subak`",
+    "message": "subak is not installed"
+  },
+  "ok": false,
+  "schema_version": 1
+}

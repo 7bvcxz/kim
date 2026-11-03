@@ -1,0 +1,28 @@
+{
+  "command": "catalog.status",
+  "data": {
+    "cache_dir": "C:\\Users\\me\\AppData\\Local\\mouv\\kim\\catalog",
+    "catalog": {
+      "catalog_version": 1,
+      "expires_at": "2027-05-04T00:00:00Z",
+      "generated_at": "2026-11-04T00:00:00Z",
+      "publisher": "mouv",
+      "signed_by": {
+        "key_id": "4466fe26eca99520",
+        "label": "mouv catalog development key 2026-11 (preview catalogs only)"
+      },
+      "source": "bundled",
+      "stale": false
+    },
+    "default_source": "https://raw.githubusercontent.com/7bvcxz/kim/main/catalog/catalog.json",
+    "trusted_keys": [
+      {
+        "key_id": "4466fe26eca99520",
+        "label": "mouv catalog development key 2026-11 (preview catalogs only)"
+      }
+    ]
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

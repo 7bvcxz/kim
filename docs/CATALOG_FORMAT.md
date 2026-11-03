@@ -192,5 +192,7 @@ JSON error envelope (also on stdout when `--json` is given):
 | 6 | `network_unavailable` |
 
 Human output goes to stdout, diagnostics and warnings to stderr. The shared, cross-tool CLI
-contract (including `--dry-run`, `--verbose` and the full error-code registry) is finalized in
-Step 07 (`CLI_CONTRACT.md`); these codes are its first entries.
+contract — `--dry-run` (also `catalog refresh --dry-run`: fetch and verify, write nothing),
+`--verbose`, `--no-input`, exit-code classes and the full error-code registry — is
+[CLI_CONTRACT.md](CLI_CONTRACT.md) (Step 07); these codes are its first entries. Every command
+of `kim` is listed in [KIM_CLI.md](KIM_CLI.md).

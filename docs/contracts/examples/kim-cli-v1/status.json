@@ -1,0 +1,43 @@
+{
+  "command": "status",
+  "data": {
+    "catalog": {
+      "catalog_version": 1,
+      "expires_at": "2027-05-04T00:00:00Z",
+      "generated_at": "2026-11-04T00:00:00Z",
+      "publisher": "mouv",
+      "signed_by": {
+        "key_id": "4466fe26eca99520",
+        "label": "mouv catalog development key 2026-11 (preview catalogs only)"
+      },
+      "source": "bundled",
+      "stale": false
+    },
+    "kim": {
+      "build": "debug",
+      "cli_contract": 1,
+      "executable": "C:\\Users\\me\\bin\\kim.exe",
+      "version": "0.0.1"
+    },
+    "paths": {
+      "kim_data": "C:\\Users\\me\\AppData\\Local\\mouv\\kim",
+      "programs": "C:\\Users\\me\\AppData\\Local\\Programs\\mouv"
+    },
+    "platform": {
+      "arch": "x86_64",
+      "os": "windows",
+      "os_build": 19045
+    },
+    "problems": [],
+    "settings": {
+      "check_updates_on_launch": false,
+      "offline_mode": false,
+      "path": "C:\\Users\\me\\AppData\\Roaming\\mouv\\kim\\settings.json"
+    },
+    "tools": [],
+    "updates": []
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

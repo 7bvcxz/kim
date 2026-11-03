@@ -1,0 +1,12 @@
+{
+  "ok": false,
+  "command": "subak",
+  "schema_version": 1,
+  "error": {
+    "code": "usage",
+    "exit_code": 2,
+    "message": "unsupported arguments; no terminal commands are implemented yet",
+    "hint": "see `subak --help`",
+    "details": []
+  }
+}

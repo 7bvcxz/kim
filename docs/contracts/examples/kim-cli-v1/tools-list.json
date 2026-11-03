@@ -1,0 +1,25 @@
+{
+  "command": "tools.list",
+  "data": {
+    "tools": [
+      {
+        "capabilities": {
+          "cli_contract": 1,
+          "commands": 16,
+          "source": "builtin"
+        },
+        "damaged": null,
+        "entrypoint": "C:\\Users\\me\\bin\\kim.exe",
+        "id": "kim",
+        "managed": false,
+        "name": "Kim",
+        "status": "installed",
+        "update_available": null,
+        "version": "0.0.1"
+      }
+    ]
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

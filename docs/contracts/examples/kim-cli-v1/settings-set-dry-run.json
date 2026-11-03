@@ -1,0 +1,18 @@
+{
+  "command": "settings.set",
+  "data": {
+    "changed": true,
+    "dry_run": true,
+    "key": "offline_mode",
+    "path": "C:\\Users\\me\\AppData\\Roaming\\mouv\\kim\\settings.json",
+    "previous": false,
+    "settings": {
+      "check_updates_on_launch": false,
+      "offline_mode": false
+    },
+    "value": true
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

@@ -15,3 +15,8 @@ path = "src/main.rs"
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+# tests/cli.rs validates `subak --json` output with xtask/src/jsonschema.rs (test-only).
+regex = "1.13.1"
+serde_json = "1.0.154"

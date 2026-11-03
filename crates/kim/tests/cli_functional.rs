@@ -10,7 +10,7 @@ mod common;
 
 use common::{Sandbox, Server, file_url, manifest, package, release};
 use serde_json::Value;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 fn assert_valid(doc: &Value) {
@@ -184,7 +184,7 @@ fn missing_and_damaged_tools_are_reported_not_guessed() {
 /// rights are used (`WD`, `AD`, `DE`, `DC`, …): icacls' simple rights such as `W` or `D` include
 /// SYNCHRONIZE and would block reading as well.
 #[cfg(windows)]
-struct Deny(PathBuf);
+struct Deny(std::path::PathBuf);
 
 /// "Read-only directory": no new files or subdirectories, no attribute changes; reads work.
 #[cfg(windows)]

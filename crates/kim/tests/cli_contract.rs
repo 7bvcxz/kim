@@ -153,6 +153,10 @@ fn normalize(v: &mut Value, sb: &Sandbox, port: Option<u16>) {
 }
 
 fn golden(name: &str, actual: &Value) {
+    if !cfg!(windows) {
+        // Golden files hold Windows-shaped paths; elsewhere only the schemas are checked.
+        return;
+    }
     let path = repo().join(format!("docs/contracts/examples/kim-cli-v1/{name}.json"));
     let rendered = format!("{}\n", serde_json::to_string_pretty(actual).unwrap());
     if std::env::var_os("KIM_BLESS").is_some() {
@@ -174,7 +178,6 @@ fn golden(name: &str, actual: &Value) {
 }
 
 #[test]
-#[cfg(windows)] // golden paths and the os_build field are Windows-shaped
 fn every_command_matches_the_schemas_and_stable_outputs_match_golden_files() {
     let mut ck = Checker::new();
 

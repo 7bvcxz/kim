@@ -1,0 +1,14 @@
+[package]
+name = "kim-e2e"
+version = "0.0.0"
+description = "End-to-end suite for Kim tools. Runs only via `cargo xtask e2e` (AGENTS.md §4)."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[lints]
+workspace = true

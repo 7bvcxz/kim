@@ -1,0 +1,44 @@
+[workspace]
+resolver = "3"
+members = ["crates/kim", "crates/subak", "xtask", "e2e"]
+# `cargo build` / `cargo test` at the root never touch the e2e suite (AGENTS.md §4).
+default-members = ["crates/kim", "crates/subak", "xtask"]
+
+[workspace.package]
+edition = "2024"
+# MSRV policy (CONTRIBUTING.md): Kim ships binaries, so the MSRV equals the pinned toolchain
+# in rust-toolchain.toml and is bumped deliberately, together with it.
+rust-version = "1.99"
+license = "MIT OR Apache-2.0"
+authors = ["mouv"]
+repository = "https://github.com/7bvcxz/kim"
+publish = false
+
+[workspace.lints.rust]
+# Unsafe code is denied by default. FFI modules that need it opt in locally with
+# `#[allow(unsafe_code)]` and document every block (clippy::undocumented_unsafe_blocks).
+unsafe_code = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+missing_debug_implementations = "warn"
+unused_qualifications = "warn"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"
+undocumented_unsafe_blocks = "warn"
+semicolon_if_nothing_returned = "warn"
+needless_pass_by_value = "warn"
+redundant_clone = "warn"
+
+[profile.dev]
+# Faster local builds; full debug info is rarely needed for this codebase.
+debug = "line-tables-only"
+
+[profile.release]
+# Small, fast binaries (KIM-NFR-003). Keep unwinding: the Subak Host must be able to contain a
+# panic in one request handler without taking every terminal session down with it.
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+opt-level = 3

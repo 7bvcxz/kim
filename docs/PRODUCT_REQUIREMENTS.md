@@ -145,8 +145,8 @@ changed by an ADR with measurements.
 
 | ID | Requirement | Pri | MS | Verify |
 | --- | --- | --- | --- | --- |
-| SUBAK-FR-050 | Each pane has one of five Claude states: `none`, `idle`, `working`, `needs-attention`, `done` (unseen completion; becomes `idle` when viewed). | P1 | M2 | T |
-| SUBAK-FR-051 | States aggregate to Window, tab and floating icon with priority `needs-attention` > `done` > `working` > `idle` > `none`. | P1 | M2 | T |
+| SUBAK-FR-050 | Each pane running Claude Code has one of five states — `idle`, `in-progress`, `need-input`, `error`, `done` (unseen completion; becomes `idle` when viewed) — or `unknown` when evidence is missing or stale; panes without Claude are `none`. | P1 | M2 | T |
+| SUBAK-FR-051 | States aggregate to Window, tab, session manager and floating icon with priority `need-input` > `error` > `done` > `in-progress` > `unknown` > `idle` > `none`, each with a text label (not color alone). | P1 | M2 | T |
 | SUBAK-FR-052 | State detection is local and never stores or transmits conversation content. | P0 | M2 | I |
 | SUBAK-FR-053 | Claude state is queryable through the CLI as JSON. | P1 | M2 | T |
 

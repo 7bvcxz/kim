@@ -10,6 +10,10 @@ pub struct Paths {
     pub kim_data: PathBuf,
     /// Root of per-user tool installs: `%LOCALAPPDATA%\Programs\mouv`.
     pub programs: PathBuf,
+    /// Per-user local data root of all mouv tools: `%LOCALAPPDATA%\mouv`.
+    pub local_data: PathBuf,
+    /// Per-user roaming data root of all mouv tools: `%APPDATA%\mouv`.
+    pub roaming_data: PathBuf,
 }
 
 impl Paths {
@@ -18,6 +22,8 @@ impl Paths {
         Ok(Self {
             kim_data: base.join("mouv").join("kim"),
             programs: programs_base(&base),
+            local_data: base.join("mouv"),
+            roaming_data: roaming_base().unwrap_or_else(|| base.join("mouv")),
         })
     }
 
@@ -27,7 +33,28 @@ impl Paths {
         Self {
             kim_data: root.join("mouv").join("kim"),
             programs: root.join("Programs").join("mouv"),
+            local_data: root.join("mouv"),
+            roaming_data: root.join("Roaming").join("mouv"),
         }
+    }
+
+    /// `<programs>\<tool>`: everything Kim installed for a tool (program files only).
+    pub fn tool_dir(&self, tool_id: &str) -> PathBuf {
+        self.programs.join(tool_id)
+    }
+
+    /// The tool's *user data* locations (configuration, state). Uninstall keeps them unless the
+    /// user separately confirms deleting them (KIM-SEC-005).
+    pub fn user_data_dirs(&self, tool_id: &str) -> Vec<PathBuf> {
+        vec![
+            self.roaming_data.join(tool_id),
+            self.local_data.join(tool_id),
+        ]
+    }
+
+    /// Scratch space for downloads and unpacking; leftovers are removed by the next operation.
+    pub fn staging_dir(&self) -> PathBuf {
+        self.programs.join(".staging")
     }
 
     pub fn catalog_cache_dir(&self) -> PathBuf {
@@ -46,6 +73,22 @@ fn local_data_base() -> Result<PathBuf> {
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
         .ok_or_else(|| KimError::new(ErrorCode::Io, "%LOCALAPPDATA% is not set"))
+}
+
+#[cfg(windows)]
+fn roaming_base() -> Option<PathBuf> {
+    std::env::var_os("APPDATA")
+        .filter(|v| !v.is_empty())
+        .map(|a| PathBuf::from(a).join("mouv"))
+}
+
+#[cfg(not(windows))]
+fn roaming_base() -> Option<PathBuf> {
+    std::env::var_os("XDG_CONFIG_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
+        .map(|b| b.join("mouv"))
 }
 
 #[cfg(windows)]

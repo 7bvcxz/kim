@@ -96,6 +96,35 @@ impl Default for DefaultFetcher {
     }
 }
 
+impl DefaultFetcher {
+    /// Agent for small documents: one global deadline for the whole request.
+    fn agent(&self) -> ureq::Agent {
+        self.agent_with(Some(self.timeout))
+    }
+
+    /// Agent for package downloads: bounded connect/response wait, but no deadline on the body
+    /// (large packages on slow links); the user can cancel at any time.
+    fn download_agent(&self) -> ureq::Agent {
+        self.agent_with(None)
+    }
+
+    fn agent_with(&self, global: Option<Duration>) -> ureq::Agent {
+        let tls = ureq::tls::TlsConfig::builder()
+            .provider(ureq::tls::TlsProvider::NativeTls)
+            .root_certs(ureq::tls::RootCerts::PlatformVerifier)
+            .build();
+        ureq::Agent::config_builder()
+            .tls_config(tls)
+            .timeout_global(global)
+            .timeout_connect(Some(self.timeout))
+            .timeout_recv_response(Some(self.timeout))
+            .max_redirects(5)
+            .user_agent(format!("kim/{}", crate::KIM_VERSION))
+            .build()
+            .new_agent()
+    }
+}
+
 impl Fetcher for DefaultFetcher {
     fn get(&self, url: &str, limit: u64) -> Result<Vec<u8>> {
         check_source_url(url)?;
@@ -121,18 +150,7 @@ impl Fetcher for DefaultFetcher {
             })?;
             return check_limit(buf, limit, url);
         }
-        let tls = ureq::tls::TlsConfig::builder()
-            .provider(ureq::tls::TlsProvider::NativeTls)
-            .root_certs(ureq::tls::RootCerts::PlatformVerifier)
-            .build();
-        let agent = ureq::Agent::config_builder()
-            .tls_config(tls)
-            .timeout_global(Some(self.timeout))
-            .max_redirects(5)
-            .user_agent(format!("kim/{}", crate::KIM_VERSION))
-            .build()
-            .new_agent();
-        let mut response = agent.get(url).call().map_err(|e| match e {
+        let mut response = self.agent().get(url).call().map_err(|e| match e {
             ureq::Error::StatusCode(code) => KimError::new(
                 ErrorCode::NetworkUnavailable,
                 format!("the server answered HTTP {code} for {url}"),
@@ -159,6 +177,111 @@ impl Fetcher for DefaultFetcher {
                 )
             })?;
         check_limit(buf, limit, url)
+    }
+}
+
+/// Streaming download of a package with progress and cancellation (installer, Step 06).
+pub trait Downloader {
+    /// Writes `url` to `dest`. Fails with `integrity_failed` as soon as more than `expected`
+    /// bytes arrive, and with `cancelled` when `cancel` becomes true.
+    fn download(
+        &self,
+        url: &str,
+        dest: &std::path::Path,
+        expected: u64,
+        on_progress: &mut dyn FnMut(u64),
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<()>;
+}
+
+impl Downloader for DefaultFetcher {
+    fn download(
+        &self,
+        url: &str,
+        dest: &std::path::Path,
+        expected: u64,
+        on_progress: &mut dyn FnMut(u64),
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Result<()> {
+        check_source_url(url)?;
+        let reader: Box<dyn Read> = if url.starts_with("file://") {
+            let path = file_url_to_path(url).ok_or_else(|| {
+                KimError::new(
+                    ErrorCode::UnsupportedSource,
+                    format!("bad file URL `{url}`"),
+                )
+            })?;
+            Box::new(std::fs::File::open(&path).map_err(|e| {
+                KimError::new(
+                    ErrorCode::NetworkUnavailable,
+                    format!("cannot open {}: {e}", path.display()),
+                )
+            })?)
+        } else {
+            let response = self
+                .download_agent()
+                .get(url)
+                .call()
+                .map_err(|e| map_http_error(url, e))?;
+            Box::new(response.into_body().into_reader())
+        };
+        copy_with_progress(reader, dest, expected, on_progress, cancel, url)
+    }
+}
+
+pub(crate) fn copy_with_progress(
+    mut reader: Box<dyn Read>,
+    dest: &std::path::Path,
+    expected: u64,
+    on_progress: &mut dyn FnMut(u64),
+    cancel: &std::sync::atomic::AtomicBool,
+    url: &str,
+) -> Result<()> {
+    use std::io::Write;
+    use std::sync::atomic::Ordering;
+    let io = |e: std::io::Error| KimError::new(ErrorCode::Io, format!("{}: {e}", dest.display()));
+    let mut out = std::fs::File::create(dest).map_err(io)?;
+    let mut buf = vec![0u8; 64 * 1024];
+    let mut done = 0u64;
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(KimError::new(ErrorCode::Cancelled, "download cancelled"));
+        }
+        let n = reader.read(&mut buf).map_err(|e| {
+            KimError::new(
+                ErrorCode::NetworkUnavailable,
+                format!("download of {url} failed: {e}"),
+            )
+        })?;
+        if n == 0 {
+            break;
+        }
+        done += n as u64;
+        if done > expected {
+            return Err(KimError::new(
+                ErrorCode::IntegrityFailed,
+                format!("{url} is larger than the {expected} bytes the signed catalog promises"),
+            ));
+        }
+        out.write_all(&buf[..n]).map_err(io)?;
+        on_progress(done);
+    }
+    out.sync_all().map_err(io)?;
+    Ok(())
+}
+
+fn map_http_error(url: &str, e: ureq::Error) -> KimError {
+    match e {
+        ureq::Error::StatusCode(code) => KimError::new(
+            ErrorCode::NetworkUnavailable,
+            format!("the server answered HTTP {code} for {url}"),
+        )
+        .with_hint("the source URL may be wrong or not published yet; nothing was changed"),
+        other => KimError::new(
+            ErrorCode::NetworkUnavailable,
+            format!("cannot fetch {url}: {other}"),
+        )
+        .with_hint("check the network connection; nothing was changed"),
     }
 }
 

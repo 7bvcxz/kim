@@ -1,8 +1,11 @@
-//! `kim` — the Kim manager CLI.
+//! `kim` — the Kim manager CLI (headless; never opens a window).
 //!
-//! Step 05 scope: read-only catalog commands plus an explicit catalog refresh. Nothing here
-//! installs, updates, removes or starts a tool, and nothing opens a window. Network access happens
-//! only in `kim catalog refresh`.
+//! Every state-changing command acts only on the tool the user named: `install`, `update`,
+//! `uninstall`. Nothing runs in the background, nothing is installed or updated implicitly, and
+//! the network is used only by `catalog refresh`, `update check --refresh`, `install` and
+//! `update` (all explicit).
+
+mod ops;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use kim::catalog::status::{self, ToolStatus, ToolView};
@@ -51,6 +54,15 @@ enum Command {
     /// Query the tool catalog (read-only, works offline)
     #[command(subcommand)]
     Catalog(CatalogCommand),
+    /// Install a tool (explicit; downloads, verifies, then activates)
+    Install(ops::InstallArgs),
+    /// `update check` shows available updates; `update <tool>` installs one (both explicit)
+    Update(ops::UpdateArgs),
+    /// Remove a tool's program files (user data is kept unless --purge-data)
+    Uninstall(ops::UninstallArgs),
+    /// Show or change Kim settings
+    #[command(subcommand)]
+    Settings(ops::SettingsCommand),
 }
 
 #[derive(Debug, Subcommand)]
@@ -90,7 +102,7 @@ struct ChannelArg {
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
-enum ChannelOpt {
+pub(crate) enum ChannelOpt {
     Stable,
     Preview,
 }
@@ -105,7 +117,7 @@ impl From<ChannelOpt> for Channel {
 }
 
 /// Result of a command: JSON data plus a human rendering.
-struct Outcome {
+pub(crate) struct Outcome {
     command: &'static str,
     data: Value,
     human: String,
@@ -138,6 +150,10 @@ fn main() -> ExitCode {
     };
     let result = match command {
         Command::Catalog(c) => run_catalog(c),
+        Command::Install(a) => ops::install(&a, cli.global.json).map_err(|e| ("install", e)),
+        Command::Update(a) => ops::update(&a, cli.global.json).map_err(|e| ("update", e)),
+        Command::Uninstall(a) => ops::uninstall(&a, cli.global.json).map_err(|e| ("uninstall", e)),
+        Command::Settings(c) => ops::settings(&c).map_err(|e| ("settings", e)),
     };
     match result {
         Ok(out) => {
@@ -225,9 +241,30 @@ fn run_catalog(c: CatalogCommand) -> CmdResult {
     }
 }
 
-fn load() -> Result<(Paths, Loaded), KimError> {
+/// Keys trusted by this build. Debug builds additionally accept one development key from
+/// `KIM_DEV_TRUSTED_KEY` (hex public key) so integration tests can use test-signed catalogs;
+/// release builds compile this out entirely.
+pub(crate) fn trusted_keys() -> Vec<signature::TrustedKey> {
+    #[allow(unused_mut)]
+    let mut keys = signature::TRUSTED_KEYS.to_vec();
+    #[cfg(debug_assertions)]
+    if let Ok(hex) = std::env::var("KIM_DEV_TRUSTED_KEY")
+        && let Some(bytes) = signature::unhex::<32>(hex.trim())
+    {
+        let id: &'static str = Box::leak(signature::key_id(&bytes).into_boxed_str());
+        let public: &'static str = Box::leak(hex.trim().to_string().into_boxed_str());
+        keys.push(signature::TrustedKey {
+            key_id: id,
+            public_key_hex: public,
+            label: "development key from KIM_DEV_TRUSTED_KEY (debug build only)",
+        });
+    }
+    keys
+}
+
+pub(crate) fn load() -> Result<(Paths, Loaded), KimError> {
     let paths = Paths::from_env()?;
-    let loaded = store::load(&paths, signature::TRUSTED_KEYS, now_utc())?;
+    let loaded = store::load(&paths, &trusted_keys(), now_utc())?;
     Ok((paths, loaded))
 }
 
@@ -243,7 +280,7 @@ fn catalog_info(l: &Loaded) -> Value {
     })
 }
 
-fn catalog_header(l: &Loaded) -> String {
+pub(crate) fn catalog_header(l: &Loaded) -> String {
     let date = |s: &str| parse_utc(s).map_or_else(|| s.to_string(), format_date);
     format!(
         "Catalog v{} ({}, signed by {}) · generated {} · expires {}{}\n",
@@ -465,7 +502,7 @@ fn catalog_verify(
         std::path::Path::to_path_buf,
     );
     let sig_bytes = read(&sig_path)?;
-    let (cat, signer) = store::verify_document(&bytes, &sig_bytes, signature::TRUSTED_KEYS)?;
+    let (cat, signer) = store::verify_document(&bytes, &sig_bytes, &trusted_keys())?;
     let stale = store::is_stale(&cat, now_utc());
     let human = format!(
         "OK: {} is a valid Kim catalog v{} ({} tools), signed by {} ({}){}\n",
@@ -498,9 +535,10 @@ fn catalog_verify(
 
 fn catalog_refresh(source: &str) -> Result<Outcome, KimError> {
     let paths = Paths::from_env()?;
+    ops::load_settings().0.ensure_online()?;
     let out = store::refresh(
         &paths,
-        signature::TRUSTED_KEYS,
+        &trusted_keys(),
         now_utc(),
         source,
         &DefaultFetcher::default(),

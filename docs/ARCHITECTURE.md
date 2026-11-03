@@ -221,7 +221,8 @@ they return `unsupported_platform` until milestone M4.
 | Workspace, CI, placeholder binaries | implemented | 02 |
 | This architecture, ADRs, contracts | current (design) | 03 |
 | Design system, GUI toolkit ADR | planned | 04 |
-| Kim catalog / installer / CLI | planned | 05–07 |
+| Kim catalog (signed, offline, read-only CLI + explicit refresh) | implemented | 05 |
+| Kim installer / manager GUI / CLI contract | planned | 06–07 |
 | ConPTY + detached Host proof | planned | 08 |
 | IPC v1, supervisor | planned | 09 |
 | Session lifecycle, PTY management, CLI, replay | planned | 10–14 |

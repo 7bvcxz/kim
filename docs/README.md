@@ -18,6 +18,7 @@ did.
 | --- | --- | --- |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | current | Components, Host internals, object model, lifecycles, close/kill semantics, restart behavior, telemetry |
 | [adr/README.md](adr/README.md) | current | Architecture decision records (ADR 0001–0014) |
+| [CATALOG_FORMAT.md](CATALOG_FORMAT.md) | current | Kim catalog format, signatures and trust, sources/offline/freshness, tool status, read-only catalog CLI and exit codes |
 | [DESIGN_SYSTEM.md](DESIGN_SYSTEM.md) | current | Kim visual language: tokens, components, keyboard, high-DPI, contrast, Korean/Unicode, reduced motion |
 | [RISK_REGISTER.md](RISK_REGISTER.md) | current | ConPTY, job objects, IPC, GUI, SSH, tmux, recovery and Claude risks with owner steps |
 | [contracts/IPC_PROTOCOL.md](contracts/IPC_PROTOCOL.md) | draft contract | Subak IPC v1: framing, handshake, methods, events, error codes |
@@ -35,7 +36,6 @@ Contract schemas live in `contracts/schemas/`, with valid and invalid examples i
 
 | Document | Status | Planned by | Purpose |
 | --- | --- | --- | --- |
-| `CATALOG_FORMAT.md` | planned | Step 05 | Tool catalog manifest format |
 | `RELEASE_POLICY.md` | planned | Step 06 | Versioning, channels, signing, explicit-consent update policy |
 | `CLI_CONTRACT.md` | planned | Step 07 | Shared CLI conventions, exit codes, JSON schemas |
 | `CONPTY_PROOF.md` | planned | Step 08 | ConPTY + detached Host proof on real Windows |

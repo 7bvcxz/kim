@@ -3,3 +3,6 @@
 *.png binary
 *.ico binary
 *.jpg binary
+
+# Signed documents: the signature covers exact bytes, so git must never convert them.
+/catalog/** -text

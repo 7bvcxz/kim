@@ -11,5 +11,7 @@ publish = false
 workspace = true
 
 [dependencies]
+getrandom = "0.4.3"
+kim = { version = "0.0.1", path = "../crates/kim" }
 regex = "1.13.1"
 serde_json = "1.0.154"

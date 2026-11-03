@@ -3,6 +3,7 @@
 //! Deliberately small: std plus `serde_json` and `regex` (for contract schema checks). Never
 //! shipped to users.
 
+mod catalog_tools;
 mod design;
 mod docs;
 mod ledger;
@@ -21,6 +22,10 @@ COMMANDS:
                       pass, examples/<name>/invalid/ must fail)
     design-check [--verbose]
                       Check design/tokens.json: colors and declared WCAG contrast pairs
+    catalog-keygen --out <file>
+                      Create a new catalog signing key (secret; never commit it)
+    catalog-sign --key <file> [<catalog.json>]
+                      Sign a catalog (default: catalog/catalog.json) -> <catalog>.sig
     ci                Run the CI gate locally: fmt --check, clippy -D warnings, tests,
                       docs-check, schema-check, design-check
     e2e [--force]     Build release binaries and run the e2e suite. Refuses unless the
@@ -34,6 +39,21 @@ fn main() -> ExitCode {
     let root = repo_root();
     let result = match args.first().map(String::as_str) {
         Some("docs-check") => run_docs_check(&root),
+        Some("catalog-keygen") => flag_value(&args, "--out")
+            .ok_or_else(|| "usage: cargo xtask catalog-keygen --out <file>".to_string())
+            .and_then(|out| catalog_tools::keygen(Path::new(&out))),
+        Some("catalog-sign") => flag_value(&args, "--key")
+            .ok_or_else(|| {
+                "usage: cargo xtask catalog-sign --key <file> [<catalog.json>]".to_string()
+            })
+            .and_then(|key| {
+                let catalog = args
+                    .iter()
+                    .skip(1)
+                    .rfind(|a| !a.starts_with("--") && **a != key)
+                    .map_or_else(|| root.join("catalog").join("catalog.json"), PathBuf::from);
+                catalog_tools::sign(Path::new(&key), &catalog)
+            }),
         Some("design-check") => run_design_check(&root, args.iter().any(|a| a == "--verbose")),
         Some("schema-check") => run_schema_check(&root, args.iter().any(|a| a == "--verbose")),
         Some("ci") => run_ci(&root),
@@ -57,6 +77,13 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+fn flag_value(args: &[String], flag: &str) -> Option<String> {
+    args.iter()
+        .position(|a| a == flag)
+        .and_then(|i| args.get(i + 1))
+        .cloned()
 }
 
 fn repo_root() -> PathBuf {

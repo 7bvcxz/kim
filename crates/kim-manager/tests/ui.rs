@@ -366,6 +366,306 @@ fn keyboard_shortcuts_follow_hotkeys_json_and_never_skip_confirmation() {
     assert!(!h.state().shortcuts_visible(), "all shortcuts are off");
 }
 
+// --- Step 47: Noeul and Ddalgak in the catalog ----------------------------------------------
+
+/// The real bundled catalog, its trusted keys and nothing installed: a fresh machine.
+fn bundled_backend(sb: &Sandbox) -> Backend {
+    Backend {
+        paths: Paths::under(&sb.0),
+        keys: signature::TRUSTED_KEYS.to_vec(),
+        downloader: Arc::new(kim::fetch::DefaultFetcher::default()),
+        settings_path: Some(sb.0.join("settings.json")),
+        platform: Platform::current(),
+        catalog_source: "http://127.0.0.1:9/never-used.json".into(),
+    }
+}
+
+fn programs_entries(paths: &Paths) -> Vec<String> {
+    std::fs::read_dir(&paths.programs)
+        .map(|rd| {
+            rd.flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .filter(|n| !n.starts_with('.'))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// KIM-FR-002, KIM-FR-050, KIM-FR-051, KIM-SEC-006: on a fresh machine Kim Manager lists Noeul
+/// and Ddalgak as planned (no download offered), shows their features, shortcuts, permissions,
+/// entry points, install location and manual-only updates, and creates nothing.
+#[test]
+fn bundled_catalog_shows_noeul_and_ddalgak_as_planned_with_their_metadata() {
+    let sb = Sandbox::new("bundled-tools");
+    let be = bundled_backend(&sb);
+    let paths = be.paths.clone();
+    let mut h = harness(KimManagerApp::new(be, None));
+    h.run();
+    for row in ["Subak, planned", "Noeul, planned", "Ddalgak, planned"] {
+        assert!(h.query_by_label(row).is_some(), "list row `{row}`");
+    }
+
+    h.state_mut().select("noeul");
+    h.run();
+    for text in [
+        "Planned · no release has been published yet",
+        "In development",
+        "Keeps running in the notification area until you quit it",
+        "Nothing to install yet: no signed release of Noeul has been published.",
+        "Capture a region",
+        "F1",
+        "F3",
+        "Registers system-wide shortcuts",
+        "Captures the screen",
+        "Reads and writes the clipboard",
+        "Can start when you sign in (only after you turn it on)",
+        "noeul capture --region <x,y,w,h> --output <file> --json",
+        "Manual only: Kim never installs, updates or removes Noeul by itself.",
+    ] {
+        assert!(h.query_by_label(text).is_some(), "noeul details: `{text}`");
+    }
+    assert!(h.query_by_label_contains("Program files: ").is_some());
+    assert_eq!(
+        h.query_all_by_label_contains("Your data (kept on uninstall): ")
+            .count(),
+        2
+    );
+    assert!(
+        h.query_by_label_contains("issues/53").is_some(),
+        "docs link"
+    );
+    assert!(
+        h.query_by_label_contains("Install 0").is_none() && h.query_by_label("Repair").is_none(),
+        "a planned tool offers no download"
+    );
+    assert!(
+        h.query_by_label("Installs a low-level keyboard hook")
+            .is_none()
+    );
+
+    h.state_mut().select("ddalgak");
+    h.run();
+    for text in [
+        "Installs a low-level keyboard hook (only after you turn it on)",
+        "Injects keyboard and mouse input (only after you turn it on)",
+        "Starts programs and opens websites (only after you turn it on)",
+        "Ctrl+Alt+Shift+Escape",
+        "system-wide while it runs · fixed",
+        "ddalgak rule list --json",
+    ] {
+        assert!(
+            h.query_by_label(text).is_some(),
+            "ddalgak details: `{text}`"
+        );
+    }
+    let d = h.state().tool_details("ddalgak").unwrap();
+    assert_eq!(d.shortcuts.as_ref().unwrap().source, "catalog");
+    assert!(
+        programs_entries(&paths).is_empty() && !paths.programs.exists(),
+        "opening Kim Manager installs nothing (KIM-FR-002)"
+    );
+}
+
+/// A zip whose entrypoint is cmd.exe (passes the `--version` self-check), with a long-running
+/// helper (a copy of PING.EXE stands in for Noeul's tray process) and Noeul's hotkey manifest.
+#[cfg(windows)]
+fn noeul_package() -> Vec<u8> {
+    let manifest = std::fs::read(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/contracts/examples/kim-hotkey-manifest-v1/noeul.json"),
+    )
+    .unwrap();
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let o = zip::write::SimpleFileOptions::default();
+    for (name, bytes) in [
+        (
+            "noeul.exe",
+            std::fs::read(r"C:\Windows\System32\cmd.exe").unwrap(),
+        ),
+        (
+            "noeul-tray.exe",
+            std::fs::read(r"C:\Windows\System32\PING.EXE").unwrap(),
+        ),
+        ("hotkeys.manifest.json", manifest),
+    ] {
+        zip.start_file(name, o).unwrap();
+        zip.write_all(&bytes).unwrap();
+    }
+    zip.finish().unwrap().into_inner()
+}
+
+/// The bundled Noeul and Ddalgak entries (real metadata), with a test release for Noeul only,
+/// test-signed into the sandbox cache.
+#[cfg(windows)]
+fn released_noeul_backend(sb: &Sandbox) -> Backend {
+    let paths = Paths::under(&sb.0);
+    let body = noeul_package();
+    let url = serve(body.clone());
+    let bundled: serde_json::Value =
+        serde_json::from_slice(kim::catalog::store::BUNDLED_CATALOG).unwrap();
+    let tool = |id: &str| {
+        bundled["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["id"] == id)
+            .unwrap()
+            .clone()
+    };
+    let mut noeul = tool("noeul");
+    noeul["releases"] = json!([{"version": "0.1.0", "channel": "stable",
+        "published_at": "2026-11-01T00:00:00Z", "release_notes": "test release",
+        "assets": [{"os": "windows", "arch": "x86_64", "url": url, "size": body.len(),
+                    "sha256": signature::hex(&Sha256::digest(&body)), "kind": "zip",
+                    "entrypoint": "noeul.exe"}]}]);
+    let doc = json!({
+        "schema": "kim.catalog", "schema_version": 1, "catalog_version": 500,
+        "generated_at": "2026-11-01T00:00:00Z", "expires_at": "2099-01-01T00:00:00Z",
+        "publisher": "test",
+        "tools": [tool("kim"), tool("subak"), noeul, tool("ddalgak")]
+    });
+    let bytes = serde_json::to_vec_pretty(&doc).unwrap();
+    let sig = serde_json::to_vec(&signature::sign(&bytes, &SEED)).unwrap();
+    let dir = paths.catalog_cache_dir();
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("catalog.json"), bytes).unwrap();
+    std::fs::write(dir.join("catalog.json.sig"), sig).unwrap();
+    let mut keys = keys();
+    keys.extend_from_slice(signature::TRUSTED_KEYS);
+    Backend {
+        paths,
+        keys,
+        downloader: Arc::new(kim::fetch::DefaultFetcher::default()),
+        settings_path: Some(sb.0.join("settings.json")),
+        platform: Platform::current(),
+        catalog_source: "http://127.0.0.1:9/never-used.json".into(),
+    }
+}
+
+/// KIM-FR-001, KIM-FR-034, KIM-FR-052, KIM-SEC-006: once Noeul has a release, its permissions
+/// are on screen before the Install button is pressed; installing it installs nothing else;
+/// its shortcuts then come from the installed manifest and the user's hotkeys.json; and while
+/// its background process runs, uninstall is refused with a tray-specific hint and the process
+/// is never stopped.
+#[test]
+#[cfg(windows)]
+fn a_released_background_utility_installs_alone_and_is_never_stopped() {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let sb = Sandbox::new("noeul-release");
+    let be = released_noeul_backend(&sb);
+    let paths = be.paths.clone();
+    let mut h = harness(KimManagerApp::new(be, None));
+    h.run();
+    assert!(h.query_by_label("Noeul, available").is_some());
+    assert!(h.query_by_label("Ddalgak, planned").is_some());
+    h.state_mut().select("noeul");
+    h.run();
+    assert!(
+        h.query_by_label("Captures the screen").is_some(),
+        "disclosed before the button is pressed"
+    );
+    assert!(!paths.install_record("noeul").exists());
+
+    h.get_by_label("Install 0.1.0").click();
+    h.run();
+    assert!(h.state_mut().wait_idle(Duration::from_secs(60)));
+    h.run();
+    assert!(
+        matches!(h.state().banner(), Some(Banner::Success(_))),
+        "{:?}",
+        h.state().banner()
+    );
+    assert_eq!(
+        programs_entries(&paths),
+        ["noeul"],
+        "installing Noeul installs no other tool"
+    );
+
+    // Shortcuts now come from the installed manifest plus the user's own change.
+    let layer = paths.roaming_data.join("noeul").join("hotkeys.json");
+    std::fs::create_dir_all(layer.parent().unwrap()).unwrap();
+    std::fs::write(
+        &layer,
+        json!({"schema": "kim.hotkeys", "schema_version": 1, "tool": "noeul",
+               "overrides": [{"action": "capture.region", "bindings": ["Shift+F1"]}]})
+        .to_string(),
+    )
+    .unwrap();
+    // Details are cached, never read per frame; they are re-read when the window regains focus
+    // (e.g. after `noeul hotkeys set` in a terminal).
+    h.event(egui::Event::WindowFocused(true));
+    h.run();
+    assert!(h.query_by_label("Shift+F1").is_some(), "the user's binding");
+    assert!(
+        h.query_by_label_contains("From the installed Noeul and your changes")
+            .is_some()
+    );
+    let tray = paths
+        .tool_dir("noeul")
+        .join("versions")
+        .join("0.1.0")
+        .join("noeul-tray.exe");
+    let mut child = std::process::Command::new(&tray)
+        .args(["-n", "60", "127.0.0.1"])
+        .stdout(std::process::Stdio::null())
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn()
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+
+    h.get_by_label("Uninstall…").click();
+    h.run();
+    h.get_by_label("Uninstall").click();
+    h.run();
+    assert!(h.state_mut().wait_idle(Duration::from_secs(30)));
+    h.run();
+    let refused = h.state().banner().cloned();
+    let still_running = child.try_wait().unwrap().is_none();
+    let record_kept = paths.install_record("noeul").exists();
+    let shortcuts = h.state().tool_details("noeul").unwrap().shortcuts.clone();
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(
+        matches!(&refused, Some(Banner::Error { code, message })
+            if code == "tool_running" && message.contains("quit it from its tray icon")),
+        "{refused:?}"
+    );
+    assert!(
+        still_running,
+        "Kim never stops a running background utility"
+    );
+    assert!(record_kept, "nothing was removed");
+    let s = shortcuts.unwrap();
+    assert_eq!(s.source, "installed", "{:?}", s.note);
+    let capture = s
+        .actions
+        .iter()
+        .find(|a| a.action == "capture.region")
+        .unwrap();
+    assert_eq!(
+        (capture.keys.clone(), capture.state.as_str()),
+        (vec!["Shift+F1".to_string()], "user")
+    );
+
+    // Once the user quit it, uninstall works and keeps the user's shortcuts file.
+    h.state_mut().dismiss_banner();
+    h.run();
+    h.get_by_label("Uninstall…").click();
+    h.run();
+    h.get_by_label("Uninstall").click();
+    h.run();
+    assert!(h.state_mut().wait_idle(Duration::from_secs(30)));
+    h.run();
+    assert!(
+        matches!(h.state().banner(), Some(Banner::Success(_))),
+        "{:?}",
+        h.state().banner()
+    );
+    assert!(!paths.install_record("noeul").exists());
+    assert!(layer.exists(), "user data is kept (KIM-SEC-005)");
+}
+
 /// `--no-hotkeys` starts with every shortcut off without touching hotkeys.json (KIM-SEC-023).
 #[test]
 fn no_hotkeys_start_flag_turns_every_shortcut_off() {

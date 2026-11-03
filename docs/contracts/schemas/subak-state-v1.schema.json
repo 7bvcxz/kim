@@ -1,0 +1,145 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/7bvcxz/kim/docs/contracts/schemas/subak-state-v1.schema.json",
+  "title": "Subak persisted state, schema version 1 (draft)",
+  "description": "Contents of %LOCALAPPDATA%\\mouv\\subak\\state\\state.json. See docs/contracts/STATE_SCHEMA.md.",
+  "type": "object",
+  "required": ["schema", "schema_version", "written_at", "writer", "crc32", "terminals"],
+  "properties": {
+    "schema": { "const": "subak.state" },
+    "schema_version": { "const": 1 },
+    "written_at": { "$ref": "#/$defs/timestamp" },
+    "writer": {
+      "type": "object",
+      "required": ["version"],
+      "properties": { "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+" } }
+    },
+    "crc32": { "type": "string", "pattern": "^[0-9a-f]{8}$" },
+    "terminals": { "type": "array", "items": { "$ref": "#/$defs/terminal" } }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "timestamp": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$" },
+    "terminal_id": { "type": "string", "pattern": "^t-[0-9a-f]{12}$" },
+    "window_id": { "type": "string", "pattern": "^w-[0-9a-f]{12}$" },
+    "pane_id": { "type": "string", "pattern": "^p-[0-9a-f]{12}$" },
+    "terminal_name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[^\\-:.\\x00-\\x1f\\x7f][^:.\\x00-\\x1f\\x7f]*$"
+    },
+    "command": {
+      "type": "object",
+      "required": ["program", "args"],
+      "properties": {
+        "program": { "type": "string", "minLength": 1 },
+        "args": { "type": "array", "items": { "type": "string" } }
+      },
+      "additionalProperties": false
+    },
+    "env_map": {
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "layout": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type", "pane"],
+          "properties": { "type": { "const": "pane" }, "pane": { "$ref": "#/$defs/pane_id" } },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "direction", "children"],
+          "properties": {
+            "type": { "const": "split" },
+            "direction": { "enum": ["horizontal", "vertical"] },
+            "children": {
+              "type": "array",
+              "minItems": 2,
+              "items": {
+                "type": "object",
+                "required": ["size", "node"],
+                "properties": {
+                  "size": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+                  "node": { "$ref": "#/$defs/layout" }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "pane": {
+      "type": "object",
+      "required": ["id", "index", "cwd", "command", "restart_command", "env", "env_secret_refs", "title", "claude", "scrollback"],
+      "properties": {
+        "id": { "$ref": "#/$defs/pane_id" },
+        "index": { "type": "integer", "minimum": 0 },
+        "cwd": { "type": "string", "minLength": 1 },
+        "command": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/command" }] },
+        "restart_command": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/command" }] },
+        "env": { "$ref": "#/$defs/env_map" },
+        "env_secret_refs": { "$ref": "#/$defs/env_map" },
+        "title": { "type": ["string", "null"] },
+        "claude": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "required": ["session_id", "resume"],
+              "properties": {
+                "session_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+                "resume": { "type": "boolean" }
+              },
+              "additionalProperties": false
+            }
+          ]
+        },
+        "scrollback": {
+          "type": "object",
+          "required": ["persisted"],
+          "properties": {
+            "persisted": { "type": "boolean" },
+            "file": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "window": {
+      "type": "object",
+      "required": ["id", "index", "name", "automatic_name", "active_pane", "layout", "panes"],
+      "properties": {
+        "id": { "$ref": "#/$defs/window_id" },
+        "index": { "type": "integer", "minimum": 0 },
+        "name": { "type": "string", "maxLength": 128 },
+        "automatic_name": { "type": "boolean" },
+        "active_pane": { "$ref": "#/$defs/pane_id" },
+        "layout": { "$ref": "#/$defs/layout" },
+        "panes": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/pane" } }
+      },
+      "additionalProperties": false
+    },
+    "terminal": {
+      "type": "object",
+      "required": ["id", "name", "created_at", "profile", "restore", "remain_on_exit", "active_window", "windows"],
+      "properties": {
+        "id": { "$ref": "#/$defs/terminal_id" },
+        "name": { "$ref": "#/$defs/terminal_name" },
+        "created_at": { "$ref": "#/$defs/timestamp" },
+        "profile": { "type": ["string", "null"] },
+        "restore": { "enum": ["ask", "auto", "never"] },
+        "remain_on_exit": { "type": "boolean" },
+        "active_window": { "$ref": "#/$defs/window_id" },
+        "windows": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/window" } }
+      },
+      "additionalProperties": false
+    }
+  }
+}

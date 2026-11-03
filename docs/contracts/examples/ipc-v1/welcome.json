@@ -1,0 +1,1 @@
+{"type": "welcome", "protocol": 1, "host": {"version": "0.1.0", "pid": 4242, "started_at": "2026-11-03T12:00:00Z"}, "features": ["terminal.crud", "pane.attach"]}

@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/7bvcxz/kim/docs/contracts/schemas/ipc-v1.schema.json",
+  "title": "Subak IPC v1 control message (draft)",
+  "description": "One JSON control frame (kind 0x01). See docs/contracts/IPC_PROTOCOL.md.",
+  "oneOf": [
+    { "$ref": "#/$defs/hello" },
+    { "$ref": "#/$defs/welcome" },
+    { "$ref": "#/$defs/handshake_error" },
+    { "$ref": "#/$defs/request" },
+    { "$ref": "#/$defs/response_ok" },
+    { "$ref": "#/$defs/response_err" },
+    { "$ref": "#/$defs/event" }
+  ],
+  "$defs": {
+    "u64": { "type": "integer", "minimum": 0 },
+    "version_string": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+([-+][0-9A-Za-z.-]+)?$" },
+    "timestamp": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$" },
+    "terminal_id": { "type": "string", "pattern": "^t-[0-9a-f]{12}$" },
+    "window_id": { "type": "string", "pattern": "^w-[0-9a-f]{12}$" },
+    "pane_id": { "type": "string", "pattern": "^p-[0-9a-f]{12}$" },
+    "error_code": {
+      "enum": [
+        "protocol_error", "protocol_unsupported", "unknown_request", "invalid_params",
+        "unauthorized", "target_not_found", "ambiguous_target", "invalid_name", "name_conflict",
+        "busy", "spawn_failed", "invalid_state", "state_from_newer_version",
+        "unsupported_platform", "host_stopping", "timeout", "internal_error"
+      ]
+    },
+    "error": {
+      "type": "object",
+      "required": ["code", "message"],
+      "properties": {
+        "code": { "$ref": "#/$defs/error_code" },
+        "message": { "type": "string", "minLength": 1 },
+        "details": { "type": "object" }
+      },
+      "additionalProperties": false
+    },
+    "hello": {
+      "type": "object",
+      "required": ["type", "protocol", "client"],
+      "properties": {
+        "type": { "const": "hello" },
+        "protocol": {
+          "type": "object",
+          "required": ["min", "max"],
+          "properties": {
+            "min": { "type": "integer", "minimum": 1 },
+            "max": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "client": {
+          "type": "object",
+          "required": ["name", "version", "kind"],
+          "properties": {
+            "name": { "type": "string", "minLength": 1, "maxLength": 64 },
+            "version": { "$ref": "#/$defs/version_string" },
+            "kind": { "enum": ["cli", "gui", "hook", "mcp"] }
+          }
+        }
+      }
+    },
+    "welcome": {
+      "type": "object",
+      "required": ["type", "protocol", "host", "features"],
+      "properties": {
+        "type": { "const": "welcome" },
+        "protocol": { "type": "integer", "minimum": 1 },
+        "host": {
+          "type": "object",
+          "required": ["version", "pid", "started_at"],
+          "properties": {
+            "version": { "$ref": "#/$defs/version_string" },
+            "pid": { "type": "integer", "minimum": 1 },
+            "started_at": { "$ref": "#/$defs/timestamp" }
+          }
+        },
+        "features": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "handshake_error": {
+      "type": "object",
+      "required": ["type", "error"],
+      "properties": {
+        "type": { "const": "error" },
+        "error": { "$ref": "#/$defs/error" }
+      }
+    },
+    "request": {
+      "type": "object",
+      "required": ["type", "id", "method"],
+      "properties": {
+        "type": { "const": "request" },
+        "id": { "$ref": "#/$defs/u64" },
+        "method": { "type": "string", "pattern": "^[a-z]+(\\.[a-z_]+)+$" },
+        "params": { "type": "object" }
+      }
+    },
+    "response_ok": {
+      "type": "object",
+      "required": ["type", "id", "ok", "result"],
+      "properties": {
+        "type": { "const": "response" },
+        "id": { "$ref": "#/$defs/u64" },
+        "ok": { "const": true },
+        "result": { "type": "object" }
+      },
+      "additionalProperties": false
+    },
+    "response_err": {
+      "type": "object",
+      "required": ["type", "id", "ok", "error"],
+      "properties": {
+        "type": { "const": "response" },
+        "id": { "$ref": "#/$defs/u64" },
+        "ok": { "const": false },
+        "error": { "$ref": "#/$defs/error" }
+      },
+      "additionalProperties": false
+    },
+    "event": {
+      "type": "object",
+      "required": ["type", "seq", "event", "data"],
+      "properties": {
+        "type": { "const": "event" },
+        "seq": { "$ref": "#/$defs/u64" },
+        "event": { "type": "string", "pattern": "^[a-z]+\\.[a-z_]+$" },
+        "data": { "type": "object" }
+      }
+    }
+  }
+}

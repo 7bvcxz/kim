@@ -1,0 +1,1 @@
+{"type": "response", "id": 2, "ok": false, "error": {"code": "name_conflict", "message": "a Terminal named 'Work' already exists", "details": {"existing": "t-3fa9c0d21b7e"}}}

@@ -13,6 +13,12 @@ AI contributor. Security problems go through [SECURITY.md](SECURITY.md), never p
      *Desktop development with C++* workload. Requires administrator rights to install.
    - **GNU (no administrator rights):** `rustup-init.exe --default-host x86_64-pc-windows-gnu`.
      rustup ships the needed MinGW linker. Note that release builds are produced with MSVC.
+     Crates using `windows-sys` (raw-dylib) need an **x86_64** GNU `dlltool` *and* `as` on
+     `PATH`; the rustup bundle ships `dlltool` without `as`. Unzip the `as.exe`/`dlltool.exe`
+     (plus their DLLs) from a checksum-verified [WinLibs](https://winlibs.com) x86_64 UCRT
+     release into a user directory and put it first on `PATH`. Symptoms otherwise:
+     `dlltool … Invalid bfd target` (an old 32-bit MinGW on `PATH`) or `dlltool … CreateProcess`
+     (no `as`).
 3. **Clone and verify:**
 
    ```sh
@@ -33,6 +39,7 @@ milestone M4 (`KIM-NFR-011`); macOS is out of scope.
 | Lint (warnings are errors) | `cargo clippy --workspace --all-targets -- -D warnings` |
 | Tests (unit + integration; never e2e) | `cargo test` |
 | Documentation consistency | `cargo xtask docs-check` |
+| Contract schemas vs examples | `cargo xtask schema-check [--verbose]` |
 | Dependency policy | `cargo deny check` (see SECURITY.md) |
 | E2E status | `cargo xtask e2e-status` |
 | E2E suite (only when due) | `cargo xtask e2e` |
@@ -43,7 +50,7 @@ milestone M4 (`KIM-NFR-011`); macOS is out of scope.
 | --- | --- | --- |
 | `crates/kim` | `kim` | Kim manager CLI (binary `kim`) |
 | `crates/subak` | `subak` | Subak CLI (binary `subak`); Host and GUI arrive in later steps |
-| `xtask` | `xtask` | Repository automation; never shipped |
+| `xtask` | `xtask` | Repository automation (docs/schema checks, CI gate, gated e2e runner); never shipped |
 | `e2e` | `kim-e2e` | End-to-end suite; excluded from `default-members` and CI |
 
 Every tool is its own package and binary with its own version — no tool depends on another

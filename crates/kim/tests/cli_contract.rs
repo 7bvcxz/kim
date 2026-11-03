@@ -32,6 +32,7 @@ fn schema(name: &str) -> Value {
 struct Checker {
     envelope: Value,
     kim: Value,
+    hotkeys: Value,
     commands: BTreeSet<String>,
     error_codes: BTreeSet<String>,
 }
@@ -41,16 +42,25 @@ impl Checker {
         Self {
             envelope: schema("cli-envelope-v1"),
             kim: schema("kim-cli-v1"),
+            hotkeys: schema("hotkeys-cli-v1"),
             commands: BTreeSet::new(),
             error_codes: BTreeSet::new(),
         }
     }
 
     fn check(&mut self, args: &[&str], code: i32, doc: &Value) {
-        for (name, s) in [
+        let mut schemas = vec![
             ("cli-envelope-v1", &self.envelope),
             ("kim-cli-v1", &self.kim),
-        ] {
+        ];
+        // `kim hotkeys …` data is specified by hotkeys-cli-v1 (HOTKEY_CONTRACT §10).
+        if doc["command"]
+            .as_str()
+            .is_some_and(|c| c.starts_with("hotkeys"))
+        {
+            schemas.push(("hotkeys-cli-v1", &self.hotkeys));
+        }
+        for (name, s) in schemas {
             let errors = jsonschema::Validator::new(s)
                 .validate(doc)
                 .expect("schema uses supported keywords");
@@ -242,6 +252,34 @@ fn every_command_matches_the_schemas_and_stable_outputs_match_golden_files() {
     assert!(sb.cache_dir().join("catalog.json").exists());
     ck.run(&sb, &["settings", "set", "offline_mode", "false"]);
 
+    // --- hotkeys (HOTKEY_CONTRACT §10): every command, success and refusals ------------------
+    let import = sb.root.join("import.json");
+    std::fs::write(
+        &import,
+        r#"{"schema":"kim.hotkeys","schema_version":1,"tool":"kim","overrides":[{"action":"catalog.refresh","bindings":["Ctrl+R"]}]}"#,
+    )
+    .unwrap();
+    let import = import.to_str().unwrap();
+    for args in [
+        &["hotkeys", "list"][..],
+        &["hotkeys", "show", "catalog.refresh"],
+        &["hotkeys", "check", "--all-tools"],
+        &["hotkeys", "export"],
+        &["hotkeys", "set", "catalog.refresh", "Ctrl+R", "--dry-run"],
+        &["hotkeys", "set", "catalog.refresh", "Ctrl+R"],
+        &["hotkeys", "disable", "help.show"],
+        &["hotkeys", "enable", "--all"],
+        &["hotkeys", "import", import],
+        &["hotkeys", "reset", "--all"],
+        &["hotkeys", "reset", "--all", "--yes"],
+        &["hotkeys", "set", "help.show", "Win+L"],
+        &["hotkeys", "set", "help.show", "Hyper+K"],
+        &["hotkeys", "show", "nope.action"],
+        &["hotkeys", "set", "help.show"],
+    ] {
+        ck.run(&sb, args);
+    }
+
     // --- a machine with an installed tool (test-signed catalog, loopback downloads) -----------
     let sb = Sandbox::new("contract-tool");
     let srv = Server::start();
@@ -359,6 +397,10 @@ fn every_command_matches_the_schemas_and_stable_outputs_match_golden_files() {
         "not_installed",
         "tool_not_found",
         "already_installed",
+        "hotkey_reserved",
+        "hotkey_invalid",
+        "action_not_found",
+        "confirmation_required",
     ] {
         assert!(ck.error_codes.contains(code), "{code} was not exercised");
     }

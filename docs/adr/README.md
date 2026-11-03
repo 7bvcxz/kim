@@ -8,9 +8,9 @@ the requirements it serves. ADRs are immutable once **Accepted**; a later ADR ma
 | --- | --- | --- |
 | [0001](0001-record-architecture-decisions.md) | Record architecture decisions | Accepted |
 | [0002](0002-independent-tool-binaries.md) | Independent tool binaries and workspace boundaries | Accepted (note: Step 07) |
-| [0003](0003-subak-host-process-model.md) | Subak Host process model | Accepted |
-| [0004](0004-pty-and-process-ownership.md) | PTY and process ownership on Windows | Accepted (validated in Step 08) |
-| [0005](0005-local-ipc.md) | Local IPC transport, security and versioning | Accepted (implemented in Step 09) |
+| [0003](0003-subak-host-process-model.md) | Subak Host process model | Accepted (validated in Step 08, see 0016) |
+| [0004](0004-pty-and-process-ownership.md) | PTY and process ownership on Windows | Accepted (validated in Step 08, see 0016) |
+| [0005](0005-local-ipc.md) | Local IPC transport, security and versioning | Accepted (prototype in Step 08; implemented in Step 09) |
 | [0006](0006-state-and-configuration-storage.md) | State and configuration storage | Accepted |
 | [0007](0007-object-identity-and-naming.md) | Object identity, naming and targets | Accepted |
 | [0008](0008-attach-replay-and-backpressure.md) | Attach, replay and backpressure | Accepted (refined in Step 13) |
@@ -21,6 +21,7 @@ the requirements it serves. ADRs are immutable once **Accepted**; a later ADR ma
 | [0013](0013-kim-manager-architecture.md) | Kim manager: catalog and explicit installer | Accepted (refined in Steps 05–07) |
 | [0014](0014-gui-technology.md) | GUI technology: egui + glow for chrome, dedicated terminal renderer | Accepted (re-validated in Steps 15–16) |
 | [0015](0015-cli-contract-and-tool-discovery.md) | CLI contract v1 and orchestrator-free tool discovery | Accepted |
+| [0016](0016-conpty-host-validation.md) | ConPTY ownership and the detached Host, validated on Windows | Accepted |
 | [0017](0017-universal-customizable-hotkeys.md) | Universal customizable hotkeys without a shared hook or daemon | Accepted (implemented from Step 46) |
 
 "Accepted (validated in Step N)" means the decision is made, but the named Step must confirm it

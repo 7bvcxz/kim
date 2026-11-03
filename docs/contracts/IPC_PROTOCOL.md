@@ -7,6 +7,12 @@ Machine-readable schema: [schemas/ipc-v1.schema.json](schemas/ipc-v1.schema.json
 invalid example messages live in [examples/ipc-v1/](examples/ipc-v1/hello.json) and are checked
 by `cargo xtask schema-check` (part of `cargo test`).
 
+The Step 08 prototype (`subak host …`, [CONPTY_PROOF](../CONPTY_PROOF.md),
+[ADR 0016](../adr/0016-conpty-host-validation.md)) already uses the §1 framing with protocol
+major **0** and a subset of methods (`host.status`, `host.stop`, `pane.attach`, `pane.resize`,
+`pane.detach`). It is not v1 and has no identity checks. Measured in that prototype: pipe handles
+must be overlapped on both ends.
+
 ## 1. Transport and framing
 
 Per-user named pipe `\\.\pipe\mouv-subak-<SID>-s<session id>` (ADR 0005). Each frame:

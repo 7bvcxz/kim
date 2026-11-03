@@ -11,7 +11,9 @@ prove. Every "verified" line below comes from a run on this machine. Everything 
 **not verified** and says why.
 
 Machine: Windows 10 Pro 22H2, build **10.0.19045.6466**, x64, Windows session 1, inbox ConPTY
-(no bundled `conpty.dll`), `subak` 0.0.1 debug build, toolchain 1.99.1 (GNU).
+(no bundled `conpty.dll`), `subak` 0.0.1 debug build, toolchain 1.99.1 (GNU). The same tests also
+run on every push on the GitHub `windows-2025` runner (Windows Server 2025, build 26100, a newer
+inbox ConPTY). Differences seen there are listed in §6.
 
 ## 1. Result
 
@@ -124,7 +126,7 @@ final `tasklist /FI "IMAGENAME eq subak.exe"` showed none.
 | **Explicit stop** | `stop_needs_consent_and_ends_host_shell_and_console_host` | without `--yes`: `confirmation_required` (7), nothing ended; `--dry-run` listed the pids; `--yes`: Host 83312 exit 0, shell 91916 exit `0xC000013A` (graceful `CTRL_CLOSE_EVENT`, not forced), console host 85764 ended, 0 processes left in the job; an attached client printed "the Host stopped (stop_requested)" and exited 0; then `host_not_running` (3) |
 | **Shell exits** (`exit 7`) | `shell_exit_ends_the_host_and_its_clients` | shell exit code 7 reported to the client; Host exited; `host_not_running` |
 | **Ctrl+C** typed into the pane | `ctrl_c_typed_into_the_pane_interrupts_a_running_command` | `ping -n 60` in shell 20516 interrupted after 57 ms; Host and shell alive. **Fails without the ADR 0016 fix** (marker not seen within 20 s) |
-| **Console attach** (the client's stdin/stdout are a real console: an invisible outer pseudo console owned by the test) | `console_attach_sends_raw_keys_and_follows_window_resizes` | raw keys reach the shell; the pane starts at the window size (100 columns per `mode con`); a **window resize to 90×24 reaches the shell** (`mode con` → 90); Ctrl+C is a key for the shell; `Ctrl+B d` → exit 0 |
+| **Console attach** (the client's stdin/stdout are a real console: an outer pseudo console owned by the test, which has no visible window) | `console_attach_sends_raw_keys_and_follows_window_resizes` | No window owned by the client or its pseudo console host is visible. Raw keys reach the shell. The pane starts at the window size (100 columns per `mode con`), and a **window resize to 90×24 reaches the shell** (`mode con` → 90). Ctrl+C typed in the console interrupts a running `ping` and does not end the client. `Ctrl+B d` → exit 0. With `-v` the client logged the key records it read: on 19045 Ctrl+C and Ctrl+B arrive as `vk=0x00 char=0x0003`/`0x0002` with no Ctrl state |
 | **Resize and replay** | `resize_reaches_the_shell_and_reattach_replays_recent_output` | `--size 100x30` → `mode con` 100; reattach with `132x40` → 132, status 132×40; output from before the attach replayed |
 | **Handle hygiene** | `attach_detach_cycles_and_status_calls_do_not_leak_host_handles` | Host 31592 handle count 88 → 88 over 20 attach/detach cycles plus status calls |
 | One Host per endpoint, dry runs | `only_one_host_per_endpoint_and_start_dry_run_changes_nothing` | duplicate `start`/`serve` → `host_already_running` (7); a dry run starts nothing; a bad `--shell` → `spawn_failed` (1) and no Host left |
@@ -192,6 +194,8 @@ As in ADR 0004, with the corrections recorded in ADR 0016:
 | VS Code integrated terminal, SSH session (OpenSSH server) | These may run shells inside jobs. If such a job forbids breakaway, the R-03 row applies | **not verified**: needs the respective environment |
 | Host crash or `TerminateProcess` | Every pane process ends (by design, ADR 0004: no orphans) | verified |
 | Lagging client (≥ 4096 queued frames) | That client is disconnected; the pane is never blocked | implemented; not stress-tested |
+| Newer inbox ConPTY (Windows Server 2025, build 26100, the CI runner): pseudo console close | `ClosePseudoConsole` alone did not end the shell within 10 s, while on 19045 it does. The Host's teardown (grace period, then `TerminateJobObject`) ends it either way | observed in CI (unit test, before the test followed the Host's teardown order) |
+| Newer inbox ConPTY: control keys in a console client | `Ctrl+B d` typed into a console client did not detach, while plain keys and resizes worked. The client now derives Ctrl+letter from the virtual key and the Ctrl state; `-v` logs the records | observed in CI; fix confirmed on 19045, CI result in the PR checks |
 | Lock screen, fast user switching, RDP *disconnect* | The logon session stays, so the Host and shells keep running | **not verified (manual run pending)**, §7.3 |
 | Sleep (S3 / modern standby) and hibernate (S4) | All processes are frozen and resumed; the Host and shell survive, wall-clock gaps appear, and network connections inside the shell may break | **not verified (manual run pending)**, §7.2 |
 | **Logoff / sign out**, RDP *logoff* | Every process of the logon session ends, including the Host: no live process can survive | **not verified (manual run pending)**, §7.3; restore is Steps 29–31 |

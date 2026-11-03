@@ -87,7 +87,11 @@ needed corrections, and what remains open.
   or a power transition on the maintainer's desktop. Procedures and the smoke script are in
   [CONPTY_PROOF §7](../CONPTY_PROOF.md). Logoff, shutdown and restart end every user process by
   design; sleep and hibernate are expected to preserve the Host.
-- Only one Windows build was measured (risk R-01 stays open for 1809–11 differences).
+- Measured on Windows 10 19045 and, through CI, Windows Server 2025 (build 26100). The newer
+  inbox ConPTY differs in two ways. `ClosePseudoConsole` alone may leave the shell running, so
+  the job kill after the grace period is required, not optional. Control keys reach a console
+  client in a different shape, so the client derives Ctrl+letter from the virtual key and the
+  Ctrl state (`host attach -v` logs the records). Risk R-01 stays open for the builds between.
 
 ## Alternatives considered
 

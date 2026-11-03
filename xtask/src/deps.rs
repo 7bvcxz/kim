@@ -19,7 +19,7 @@ pub const GUI_CRATES: &[&str] = &[
 ];
 
 /// Packages that must stay headless.
-pub const HEADLESS: &[&str] = &["kim", "subak"];
+pub const HEADLESS: &[&str] = &["kim", "kim-hotkeys", "subak"];
 
 /// Parses `[[package]]` entries of a Cargo.lock into name → dependency names.
 pub fn parse_lock(text: &str) -> BTreeMap<String, Vec<String>> {

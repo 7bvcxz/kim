@@ -10,6 +10,7 @@
 //! install and `tools describe --probe`.
 
 mod discover;
+mod hotkeys_cmd;
 mod meta;
 mod ops;
 
@@ -97,6 +98,10 @@ enum Command {
     /// Show or change Kim settings
     #[command(subcommand)]
     Settings(ops::SettingsCommand),
+    /// Kim Manager's keyboard shortcuts: list, change, disable, reset, check conflicts across
+    /// installed tools (never registers a hotkey or opens a window)
+    #[command(subcommand)]
+    Hotkeys(hotkeys_cmd::HotkeysCommand),
 }
 
 #[derive(Debug, Subcommand)]
@@ -247,6 +252,7 @@ fn main() -> ExitCode {
         Command::Version => discover::version(),
         Command::Capabilities => Ok(discover::capabilities()),
         Command::Settings(c) => ops::settings(&c),
+        Command::Hotkeys(c) => hotkeys_cmd::run(&c, ctx),
     };
     finish(name, result, ctx, started)
 }
@@ -270,6 +276,7 @@ fn command_name(c: &Command) -> &'static str {
         Command::Capabilities => "capabilities",
         Command::Settings(ops::SettingsCommand::Show) => "settings.show",
         Command::Settings(ops::SettingsCommand::Set(_)) => "settings.set",
+        Command::Hotkeys(c) => hotkeys_cmd::command_name(c),
     }
 }
 
@@ -893,6 +900,15 @@ mod tests {
             &["version"],
             &["settings", "show"],
             &["settings", "set", "k", "v"],
+            &["hotkeys", "list"],
+            &["hotkeys", "show", "help.show"],
+            &["hotkeys", "set", "help.show", "F2"],
+            &["hotkeys", "disable", "--all"],
+            &["hotkeys", "enable", "--all"],
+            &["hotkeys", "reset", "--all"],
+            &["hotkeys", "check"],
+            &["hotkeys", "export"],
+            &["hotkeys", "import", "f.json"],
         ] {
             seen.insert(parse(args));
         }

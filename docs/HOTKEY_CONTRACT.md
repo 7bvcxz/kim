@@ -1,6 +1,7 @@
 # Kim hotkey contract
 
-Status: **current** · Hotkey contract **v1** (specification; no tool implements it yet) · Step 45 ·
+Status: **current** · Hotkey contract **v1** · Step 45 (specification) · Step 46: implemented by the
+shared `kim-hotkeys` library and by `kim` / Kim Manager (§17) ·
 Decision: [ADR 0017](adr/0017-universal-customizable-hotkeys.md) · Requirements: `KIM-FR-040…046`,
 `KIM-NFR-020…022`, `KIM-SEC-020…023`, `SUBAK-FR-033`, `SUBAK-FR-034`, `KIM-NFR-012`
 
@@ -13,8 +14,8 @@ commands, and the safety rules no tool may break. The CLI rules it builds on are
 
 Words: **MUST**/**MUST NOT** are requirements; **SHOULD** is a strong default that needs a
 written reason to break. Windows behavior cited from Microsoft documentation is marked
-*documented*; nothing in this Step was run against real hotkey APIs (§14 lists who verifies
-what).
+*documented*; Step 45 ran nothing against real hotkey APIs (§14 lists who verifies what and
+what Step 46 ran).
 
 ## 1. Scope and conformance
 
@@ -38,7 +39,7 @@ what).
 
 | Tool | GUI shortcuts today | Contract status |
 | --- | --- | --- |
-| Kim Manager (`kim`) | None of its own. egui provides focus navigation only: `Tab`/`Shift+Tab`, `Enter`/`Space`, and `Esc` in the uninstall dialog. These are the reserved navigation keys of §7.2. | Conforms when Step 46 adds the manifest, the `kim hotkeys` commands and at least `catalog.refresh` and `help.show` (§13.2). |
+| Kim Manager (`kim`) | Step 46: `catalog.refresh` `F5`, `help.show` `F1` (shortcut list), `tool.install`/`tool.update`/`tool.uninstall` unbound by default, plus the reserved navigation keys of §7.2. | **Conforms** since Step 46: compiled-in manifest (`crates/kim/src/hotkeys.manifest.json`), `kim hotkeys` commands, `focus` backend (§13.2, §17). The binding editor of §11.2 is not implemented yet. |
 | Subak (`subak`) | Not implemented yet. Defaults are specified: `Ctrl+T`, `Ctrl+W`, `Ctrl+Tab`, `Ctrl+Shift+Tab`, the `Ctrl+B` prefix table (`SUBAK-FR-033`), and `F1` / `Ctrl+B ?` help ([DESIGN_SYSTEM §4.1](DESIGN_SYSTEM.md)). | Steps 17 and 23 implement them on this contract; §13.1 maps ADR 0009 onto it. |
 | Noeul (`noeul`) | Planned (Steps 48+). `F1` region capture and `F3` floating paste are requested defaults. | Steps 48, 61 and 62 follow §13.3. |
 | Ddalgak (`ddalgak`) | Planned (Steps 65+). An automation engine with its own rule model. | Steps 66, 73 and 81 follow §13.4. |
@@ -649,8 +650,8 @@ change exits with its error's class (CLI_CONTRACT §5).
 
 ### 10.4 Error codes for the `hotkeys` commands
 
-These codes are registered in CLI_CONTRACT §6 for the `hotkeys` command group. No tool
-implements them yet (Step 46).
+These codes are registered in CLI_CONTRACT §6 for the `hotkeys` command group. `kim`
+implements them since Step 46 (`ErrorCode` in `crates/kim/src/error.rs`).
 
 | Code | Exit | Meaning |
 | --- | --- | --- |
@@ -796,9 +797,18 @@ action without a default; the user may bind it. The `[keys]` table of the draft 
 is superseded by `hotkeys.json` (§8.4). Floating icon and session manager actions (Step 18) are
 added as actions in the same way.
 
+**Hand-off (Step 46 → Steps 17 and 23).** Step 46 did not change `crates/subak`. Subak's GUI
+Steps use the shared `kim-hotkeys` crate exactly as Kim does: ship the manifest
+(`docs/contracts/examples/kim-hotkey-manifest-v1/subak.json` is the starting point) as
+`hotkeys.manifest.json`, implement `subak hotkeys …` with `kim_hotkeys::{store, edit, view,
+check}` (see `crates/kim/src/hotkeys_cmd.rs`), match keys with `keys::steps_overlap` (see
+`crates/kim-manager/src/shortcuts.rs`, including sequences, the IME guard and reload), and
+register `gui.show` with `register::GlobalHotkeys` only while the GUI runs and the binding is
+enabled. Leaders, the pass-through rule and `copy-mode` dispatch remain Subak's own code.
+
 ### 13.2 Kim Manager
 
-Today it only uses reserved navigation keys (§1.1). The minimum for conformance (Step 46):
+Implemented in Step 46 (§17). The minimum for conformance:
 `catalog.refresh` `F5` (app), `help.show` `F1` (app, shows the shortcut list), and
 `tool.install`, `tool.update`, `tool.uninstall` without defaults (`destructive` where it
 applies). Each opens the same confirmation as its button; a shortcut is an explicit user action,
@@ -852,13 +862,13 @@ library compiled into each tool: no process, no GUI dependency in headless binar
 | Area | Windows | Linux (M4, not claimed) | Verified by |
 | --- | --- | --- | --- |
 | `app`/`context` keys | winit/egui key events (logical key, physical scan code, text) | same toolkit | Step 46 (library and Kim Manager), Steps 17 and 23 (Subak) |
-| `global` (`register`) | `RegisterHotKey`/`UnregisterHotKey` on a message-only window, `MOD_NOREPEAT` | X11 `XGrabKey`; Wayland only through the desktop portal's global-shortcuts interface, where the compositor and the user decide | Step 46 (Windows); Steps 64 and 83 (Linux) |
+| `global` (`register`) | `RegisterHotKey`/`UnregisterHotKey`, `MOD_NOREPEAT`. Step 46 registers on a dedicated thread's message queue (null window handle) instead of a message-only window: no window at all, same API and semantics | X11 `XGrabKey`; Wayland only through the desktop portal's global-shortcuts interface, where the compositor and the user decide | **Step 46: tested on Windows 10 19045** (register, `taken`, release on drop, lost registration; obscure chords only); Steps 64 and 83 (Linux) |
 | `hook` | `WH_KEYBOARD_LL` with `LLKHF_INJECTED` to tell its own injected input apart | to be designed | Steps 66 and 73 |
 | IME after a leader | `VK_PROCESSKEY` + `ImmGetVirtualKey` | to be designed | Step 23 |
-| Layout mapping | `MapVirtualKeyEx`, `ToUnicodeEx` with the foreground layout | XKB | Step 46 |
+| Layout mapping | `MapVirtualKeyEx`, `ToUnicodeEx` with the foreground layout. Step 46: app keys use the logical and physical keys winit/egui report (no own `MapVirtualKeyEx` call); global logical keys map to virtual keys, which Windows assigns per layout | XKB | Step 46 for the US layout of this machine; other layouts **not tested** (Steps 17/23 with Korean IME, Step 61) |
 | Secure desktop, UIPI | not reachable by design | not applicable | inspection in each tool step, manual check in Steps 61 and 82 |
 
-**Nothing in this table was run in Step 45.** This Step is a specification. Its machine checks
+**Nothing in this table was run in Step 45.** Step 46 ran the rows it names (§17). Step 45 is a specification. Its machine checks
 cover the syntax, the reserved keys, the conflict rules and the override workflow (§15), not OS
 behavior. Stored bindings contain no Windows virtual-key numbers (`KIM-NFR-022`). Each platform
 maps the key names of §5.2.
@@ -882,7 +892,9 @@ deliberately limited to this contract's rules: no OS calls, no `profiles`, no Dd
 triggers (so no `hook_overrides_global`), no input aliases, no `set @<leader>`, and
 `char:`/named key overlap only for ASCII letters and digits. It exists so that the fixtures are
 proven consistent, and it is not a library. Step 46's real implementation MUST pass the same
-scenarios; once it does, Step 46 may replace the reference checker with it.
+scenarios; once it does, Step 46 may replace the reference checker with it. **It does**: the
+`kim-hotkeys` library recomputes all 17 scenarios in `crates/kim-hotkeys/tests/contract.rs`.
+Both are kept on purpose, so the fixtures are checked by two independent implementations.
 
 | Scenario | Shows |
 | --- | --- |
@@ -913,3 +925,26 @@ scenarios; once it does, Step 46 may replace the reference checker with it.
   treat unknown conflict codes by their severity.
 - Incompatible changes (syntax meaning, layering, precedence) need contract v2, a new schema
   major and a migration (§8.4), recorded in an ADR.
+
+## 17. Implementation (Step 46)
+
+| Part | Where | Notes |
+| --- | --- | --- |
+| Shared library | `crates/kim-hotkeys` (headless; listed in `cargo xtask deps-check`) | Key model and aliases (§5), manifest and user layer (§3.4, §8.2) keeping unknown fields, safe mode, atomic writes, backups and a migration chain (§8.3–§8.4; v1 is the first version, so the shipped chain is empty and the mechanism is tested with a test chain), reserved keys (§7), layering with profiles, conflicts, subjects, order and offers (§9), the override workflow and switches (§9.6, §12.4), `list`/`show` views (§10.2), `RegisterHotKey` backend (§4.2) |
+| `kim hotkeys …` | `crates/kim/src/hotkeys_cmd.rs`, `crates/kim/src/hotkeys.rs` | All commands of §10.1, including `export`/`import` and `--profile`; `check --all-tools` reads `hotkeys.manifest.json` of each installed version and its `hotkeys.json`, never starts a tool ([KIM_CLI §5](KIM_CLI.md#5-keyboard-shortcuts)) |
+| Kim Manager | `crates/kim-manager/src/shortcuts.rs` | `focus` backend from egui key events; re-reads `hotkeys.json` when the window regains focus instead of a `ReadDirectoryChangesW` watcher (an event, no polling; a focus-only tool has no global registration to release); `--no-hotkeys`, `KIM_NO_HOTKEYS` |
+| Not implemented | — | The binding editor with keyboard capture (§11.2); `hook_overrides_global` (no tool has rules yet, Step 81); `char:`/named overlap beyond ASCII letters and digits (as in the reference checker) |
+
+**Privilege boundaries (documented, not tested).** The `register` backend cannot see the secure
+desktop, UAC prompts or the lock screen, and Windows does not deliver keys from an elevated
+window to a non-elevated tool (UIPI); Kim never elevates or installs a service to change that
+(§12.1, `KIM-SEC-021`). Step 46 adds no hook, service, `UIAccess` manifest or elevated
+component, so there is nothing to test here beyond the inspection that none exists; Steps 61 and
+82 check it manually on real Windows.
+
+**Performance.** Measured on Windows 10 19045 (debug build, `register_windows` test): starting
+the registration thread about 0.15 ms, one `RegisterHotKey` about 0.2 ms, unregistering and
+joining the thread on drop about 0.2 ms. The thread sleeps in `GetMessageW` (no idle wake-ups).
+The library's eight behaviour tests (full checks over the example manifests) finish in about
+10 ms together; `kim hotkeys check --all-tools` is a short-lived process that reads a few small
+files and starts nothing.

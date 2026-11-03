@@ -156,7 +156,7 @@ table matches its code.
 
 Codes registered for the `hotkeys` command group of every GUI tool
 ([HOTKEY_CONTRACT §10](HOTKEY_CONTRACT.md)). They are registered so that no tool gives them
-another meaning; no tool implements them yet (Step 46):
+another meaning; `kim` implements them since Step 46:
 
 | Code | Exit | Meaning |
 | --- | --- | --- |

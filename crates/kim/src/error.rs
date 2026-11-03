@@ -71,6 +71,20 @@ pub enum ErrorCode {
     ToolIncompatible,
     /// An operation, such as a call to another tool, did not finish within its time limit.
     Timeout,
+    /// Keys that do not parse, or a scope/leader the action does not have (HOTKEY_CONTRACT §10.4).
+    HotkeyInvalid,
+    /// A chord reserved by the OS, Kim's GUI rules or the IME, or an action that is not bindable.
+    HotkeyReserved,
+    /// The tool has no action with this ID.
+    ActionNotFound,
+    /// The stored `hotkeys.json` is malformed or invalid; the tool runs in safe mode.
+    HotkeysInvalid,
+    /// The binding needs an input capability the tool does not have.
+    HotkeyUnsupported,
+    /// `hotkeys.json` was written by a newer version and is read-only.
+    HotkeysFromNewerVersion,
+    /// The change conflicts with another binding; nothing was changed.
+    HotkeyConflict,
 }
 
 impl ErrorCode {
@@ -106,6 +120,13 @@ impl ErrorCode {
             Self::CapabilityMissing => "capability_missing",
             Self::ToolIncompatible => "tool_incompatible",
             Self::Timeout => "timeout",
+            Self::HotkeyInvalid => "hotkey_invalid",
+            Self::HotkeyReserved => "hotkey_reserved",
+            Self::ActionNotFound => "action_not_found",
+            Self::HotkeysInvalid => "hotkeys_invalid",
+            Self::HotkeyUnsupported => "hotkey_unsupported",
+            Self::HotkeysFromNewerVersion => "hotkeys_from_newer_version",
+            Self::HotkeyConflict => "hotkey_conflict",
         }
     }
 
@@ -124,8 +145,8 @@ impl ErrorCode {
     pub fn exit_code(self) -> u8 {
         match self {
             Self::Internal | Self::Io | Self::PermissionDenied => 1,
-            Self::Usage | Self::UnsupportedSource => 2,
-            Self::ToolNotFound | Self::NotInstalled => 3,
+            Self::Usage | Self::UnsupportedSource | Self::HotkeyInvalid | Self::HotkeyReserved => 2,
+            Self::ToolNotFound | Self::NotInstalled | Self::ActionNotFound => 3,
             Self::CatalogInvalid
             | Self::SignatureInvalid
             | Self::UntrustedKey
@@ -133,19 +154,23 @@ impl ErrorCode {
             | Self::IntegrityFailed
             | Self::PackageInvalid
             | Self::SelfCheckFailed
-            | Self::CapabilitiesInvalid => 4,
+            | Self::CapabilitiesInvalid
+            | Self::HotkeysInvalid => 4,
             Self::NoRelease
             | Self::Incompatible
             | Self::CapabilitiesUnavailable
             | Self::CapabilityMissing
-            | Self::ToolIncompatible => 5,
+            | Self::ToolIncompatible
+            | Self::HotkeyUnsupported
+            | Self::HotkeysFromNewerVersion => 5,
             Self::NetworkUnavailable | Self::OfflineMode | Self::Timeout => 6,
             Self::ToolRunning
             | Self::Busy
             | Self::DependencyMissing
             | Self::StaleCatalog
             | Self::ConfirmationRequired
-            | Self::AlreadyInstalled => 7,
+            | Self::AlreadyInstalled
+            | Self::HotkeyConflict => 7,
             Self::Cancelled => 8,
         }
     }
@@ -182,6 +207,13 @@ impl ErrorCode {
         Self::CapabilityMissing,
         Self::ToolIncompatible,
         Self::Timeout,
+        Self::HotkeyInvalid,
+        Self::HotkeyReserved,
+        Self::ActionNotFound,
+        Self::HotkeysInvalid,
+        Self::HotkeyUnsupported,
+        Self::HotkeysFromNewerVersion,
+        Self::HotkeyConflict,
     ];
 }
 

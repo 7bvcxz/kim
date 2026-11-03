@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/hellomouv/kim/blob/main/docs/contracts/schemas/kim-cli-v1.schema.json",
   "title": "kim --json output, schema_version 1",
-  "description": "Every document `kim ... --json` prints: the cli-envelope-v1 envelope, the `data` of each command (selected by `command`), and the error-code registry with its exit codes (docs/CLI_CONTRACT.md §6, docs/KIM_CLI.md). Objects are closed so regression tests notice any change; consumers must still ignore unknown fields and tolerate new enum values (§8).",
+  "description": "Every document `kim ... --json` prints: the cli-envelope-v1 envelope, the `data` of each command (selected by `command`), and the error-code registry with its exit codes (docs/CLI_CONTRACT.md §6, docs/KIM_CLI.md). Objects are closed so regression tests notice any change; consumers must still ignore unknown fields and tolerate new enum values (§8). The `data` of the `hotkeys.*` commands is specified by hotkeys-cli-v1 (docs/HOTKEY_CONTRACT.md §10); this schema only checks their envelope.",
   "oneOf": [
     { "$ref": "#/$defs/failure" },
     { "$ref": "#/$defs/ok_capabilities" },
@@ -20,7 +20,8 @@
     { "$ref": "#/$defs/ok_status" },
     { "$ref": "#/$defs/ok_version" },
     { "$ref": "#/$defs/ok_settings_show" },
-    { "$ref": "#/$defs/ok_settings_set" }
+    { "$ref": "#/$defs/ok_settings_set" },
+    { "$ref": "#/$defs/ok_hotkeys" }
   ],
   "$defs": {
     "tool_id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,31}$" },
@@ -86,7 +87,9 @@
         "busy", "integrity_failed", "package_invalid", "self_check_failed", "cancelled",
         "stale_catalog", "offline_mode", "confirmation_required", "permission_denied",
         "already_installed", "capabilities_unavailable", "capabilities_invalid",
-        "capability_missing", "tool_incompatible", "timeout"
+        "capability_missing", "tool_incompatible", "timeout", "hotkey_invalid",
+        "hotkey_reserved", "action_not_found", "hotkeys_invalid", "hotkey_unsupported",
+        "hotkeys_from_newer_version", "hotkey_conflict"
       ]
     },
     "error": {
@@ -102,12 +105,12 @@
       },
       "oneOf": [
         { "properties": { "exit_code": { "const": 1 }, "code": { "enum": ["io", "internal", "permission_denied"] } } },
-        { "properties": { "exit_code": { "const": 2 }, "code": { "enum": ["usage", "unsupported_source"] } } },
-        { "properties": { "exit_code": { "const": 3 }, "code": { "enum": ["tool_not_found", "not_installed"] } } },
-        { "properties": { "exit_code": { "const": 4 }, "code": { "enum": ["catalog_invalid", "signature_invalid", "untrusted_key", "catalog_rollback", "integrity_failed", "package_invalid", "self_check_failed", "capabilities_invalid"] } } },
-        { "properties": { "exit_code": { "const": 5 }, "code": { "enum": ["no_release", "incompatible", "capabilities_unavailable", "capability_missing", "tool_incompatible"] } } },
+        { "properties": { "exit_code": { "const": 2 }, "code": { "enum": ["usage", "unsupported_source", "hotkey_invalid", "hotkey_reserved"] } } },
+        { "properties": { "exit_code": { "const": 3 }, "code": { "enum": ["tool_not_found", "not_installed", "action_not_found"] } } },
+        { "properties": { "exit_code": { "const": 4 }, "code": { "enum": ["catalog_invalid", "signature_invalid", "untrusted_key", "catalog_rollback", "integrity_failed", "package_invalid", "self_check_failed", "capabilities_invalid", "hotkeys_invalid"] } } },
+        { "properties": { "exit_code": { "const": 5 }, "code": { "enum": ["no_release", "incompatible", "capabilities_unavailable", "capability_missing", "tool_incompatible", "hotkey_unsupported", "hotkeys_from_newer_version"] } } },
         { "properties": { "exit_code": { "const": 6 }, "code": { "enum": ["network_unavailable", "offline_mode", "timeout"] } } },
-        { "properties": { "exit_code": { "const": 7 }, "code": { "enum": ["tool_running", "busy", "dependency_missing", "stale_catalog", "confirmation_required", "already_installed"] } } },
+        { "properties": { "exit_code": { "const": 7 }, "code": { "enum": ["tool_running", "busy", "dependency_missing", "stale_catalog", "confirmation_required", "already_installed", "hotkey_conflict"] } } },
         { "properties": { "exit_code": { "const": 8 }, "code": { "enum": ["cancelled"] } } }
       ]
     },
@@ -152,6 +155,10 @@
     "ok_version": { "allOf": [ { "$ref": "#/$defs/success" }, { "properties": { "command": { "const": "version" }, "data": { "$ref": "#/$defs/version" } } } ] },
     "ok_settings_show": { "allOf": [ { "$ref": "#/$defs/success" }, { "properties": { "command": { "const": "settings.show" }, "data": { "$ref": "#/$defs/settings_show" } } } ] },
     "ok_settings_set": { "allOf": [ { "$ref": "#/$defs/success" }, { "properties": { "command": { "const": "settings.set" }, "data": { "$ref": "#/$defs/settings_set" } } } ] },
+    "ok_hotkeys": {
+      "description": "`kim hotkeys ...`: the data is specified by hotkeys-cli-v1 (list_data, show_data, change_data, check_data, export_data).",
+      "allOf": [ { "$ref": "#/$defs/success" }, { "properties": { "command": { "enum": ["hotkeys.list", "hotkeys.show", "hotkeys.set", "hotkeys.disable", "hotkeys.enable", "hotkeys.reset", "hotkeys.check", "hotkeys.export", "hotkeys.import"] } } } ]
+    },
 
     "nullable_string": { "type": ["string", "null"] },
     "nullable_semver": { "anyOf": [ { "$ref": "#/$defs/semver" }, { "type": "null" } ] },

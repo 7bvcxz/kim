@@ -227,3 +227,159 @@ fn incompatible_and_unreleased_tools_offer_no_install_button() {
     assert!(h.query_by_label_contains("Not installable here").is_some());
     assert!(h.state().views().iter().any(|v| v.id == "example-tool"));
 }
+
+/// Kim Manager's shortcuts (Step 46, HOTKEY_CONTRACT §13.2; KIM-FR-041, KIM-FR-043,
+/// KIM-FR-044, KIM-SEC-001): F1 lists them, F5 refreshes like the button, a binding changed in
+/// hotkeys.json applies when the window regains focus, the tool-wide switch turns them off, and
+/// a destructive shortcut opens the same confirmation as its button. Focus backend only: no
+/// hotkey is registered and no hook is installed.
+#[test]
+fn keyboard_shortcuts_follow_hotkeys_json_and_never_skip_confirmation() {
+    let sb = Sandbox::new("shortcuts");
+    let mut be = backend(&sb);
+    // A source Kim refuses before any network access, so the result is deterministic (and its
+    // message is Kim's own, not a localized OS error the test font cannot draw).
+    be.catalog_source = "ftp://never-used.invalid/catalog.json".into();
+    let layer = be.paths.roaming_data.join("kim").join("hotkeys.json");
+    let mut h = harness(KimManagerApp::new(be, None));
+    h.run();
+
+    // F5 does what "Refresh catalog" does (here: the source is refused).
+    assert!(h.state().banner().is_none());
+    h.key_press(egui::Key::F5);
+    h.run();
+    assert!(h.state_mut().wait_idle(Duration::from_secs(30)));
+    h.run();
+    assert!(
+        matches!(h.state().banner(), Some(Banner::Error { code, .. }) if code == "unsupported_source"),
+        "{:?}",
+        h.state().banner()
+    );
+    // (The long refusal text pushes the Dismiss button out of the test window; dismiss directly.)
+    h.state_mut().dismiss_banner();
+    h.run();
+    assert!(
+        h.state().banner().is_none(),
+        "dismissed: {:?}",
+        h.state().banner()
+    );
+
+    // F1 opens the shortcut list (the reserved keys are listed as fixed); F1 closes it again.
+    h.key_press(egui::Key::F1);
+    h.run();
+    assert!(h.state().shortcuts_visible());
+    assert!(h.query_by_label("Keyboard shortcuts").is_some());
+    assert!(h.query_by_label("Refresh the catalog").is_some());
+    assert!(h.query_by_label("Close the window").is_some());
+    h.key_press(egui::Key::F1);
+    h.run();
+    assert!(!h.state().shortcuts_visible());
+
+    // `kim hotkeys set catalog.refresh Ctrl+R` while the window is open, then focus returns.
+    std::fs::create_dir_all(layer.parent().unwrap()).unwrap();
+    std::fs::write(
+        &layer,
+        json!({"schema": "kim.hotkeys", "schema_version": 1, "tool": "kim",
+               "overrides": [{"action": "catalog.refresh", "bindings": ["Ctrl+R"]},
+                             {"action": "tool.uninstall", "bindings": ["Ctrl+Shift+U"]}]})
+        .to_string(),
+    )
+    .unwrap();
+    assert!(
+        h.state().banner().is_none(),
+        "dismissed: {:?}",
+        h.state().banner()
+    );
+    h.event(egui::Event::WindowFocused(true));
+    h.run();
+    assert!(
+        h.state().banner().is_none(),
+        "focus: {:?}",
+        h.state().banner()
+    );
+    h.key_press(egui::Key::F5);
+    h.run();
+    assert!(
+        h.state().banner().is_none() && !h.state().is_busy(),
+        "F5 is no longer bound: {:?}",
+        h.state().banner()
+    );
+    h.key_press_modifiers(egui::Modifiers::CTRL, egui::Key::R);
+    h.run();
+    assert!(h.state_mut().wait_idle(Duration::from_secs(30)));
+    h.run();
+    assert!(
+        matches!(h.state().banner(), Some(Banner::Error { .. })),
+        "Ctrl+R refreshed"
+    );
+    // (The long refusal text pushes the Dismiss button out of the test window; dismiss directly.)
+    h.state_mut().dismiss_banner();
+    h.run();
+
+    // A destructive shortcut opens the same confirmation as the button; nothing is removed.
+    h.get_by_label("Install 1.0.0").click();
+    h.run();
+    assert!(h.state_mut().wait_idle(Duration::from_secs(30)));
+    h.run();
+    let installed =
+        sb.0.join("Programs")
+            .join("mouv")
+            .join("example-tool")
+            .join("current.json");
+    assert!(installed.exists());
+    h.key_press_modifiers(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::U);
+    h.run();
+    assert_eq!(h.state().confirming(), Some("example-tool"));
+    assert!(h.query_by_label("Keep installed").is_some());
+    h.get_by_label("Keep installed").click();
+    h.run();
+    assert!(
+        installed.exists(),
+        "a shortcut never skips the confirmation"
+    );
+
+    // A file broken while the window is open keeps the current shortcuts (§8.3).
+    std::fs::write(&layer, b"{ broken").unwrap();
+    h.event(egui::Event::WindowFocused(true));
+    h.run();
+    h.key_press(egui::Key::F1);
+    h.run();
+    assert!(h.state().shortcuts_visible(), "F1 still works");
+    assert!(
+        h.query_by_label_contains("the previous shortcuts stay active")
+            .is_some()
+    );
+    h.key_press(egui::Key::F1);
+    h.run();
+
+    // The tool-wide switch (`kim hotkeys disable --all`) turns every shortcut off.
+    std::fs::write(
+        &layer,
+        json!({"schema": "kim.hotkeys", "schema_version": 1, "tool": "kim", "enabled": false})
+            .to_string(),
+    )
+    .unwrap();
+    h.event(egui::Event::WindowFocused(true));
+    h.run();
+    h.key_press(egui::Key::F1);
+    h.run();
+    assert!(!h.state().shortcuts_visible(), "all shortcuts are off");
+}
+
+/// `--no-hotkeys` starts with every shortcut off without touching hotkeys.json (KIM-SEC-023).
+#[test]
+fn no_hotkeys_start_flag_turns_every_shortcut_off() {
+    let sb = Sandbox::new("nohotkeys");
+    let be = backend(&sb);
+    let layer = be.paths.roaming_data.join("kim").join("hotkeys.json");
+    let mut app = KimManagerApp::new(be, None);
+    app.disable_hotkeys();
+    let mut h = harness(app);
+    h.run();
+    h.key_press(egui::Key::F1);
+    h.run();
+    h.key_press(egui::Key::F5);
+    h.run();
+    assert!(!h.state().shortcuts_visible() && !h.state().is_busy());
+    assert!(!layer.exists(), "the file is not touched");
+}

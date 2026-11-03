@@ -162,6 +162,96 @@
         "requires_yes": false,
         "summary": "Change one setting",
         "usage": "kim settings set <check_updates_on_launch|offline_mode> <true|false> [--dry-run]"
+      },
+      {
+        "dry_run": false,
+        "effect": "read",
+        "name": "hotkeys.list",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "Kim Manager's shortcuts: every action with its keys, scope, source and state",
+        "usage": "kim hotkeys list [--scope <scope>] [--profile <name>]"
+      },
+      {
+        "dry_run": false,
+        "effect": "read",
+        "name": "hotkeys.show",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "One shortcut action with its bindings and every conflict that involves it",
+        "usage": "kim hotkeys show <action> [--profile <name>]"
+      },
+      {
+        "dry_run": true,
+        "effect": "write",
+        "name": "hotkeys.set",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "Replace an action's bindings; a conflicting change is refused (hotkey_conflict) and nothing is written",
+        "usage": "kim hotkeys set <action> <keys>... [--scope global|app] [--trigger press|release|hold] [--hold-ms <ms>] [--repeat] [--profile <name>] [--replace] [--allow-conflict] [--dry-run]"
+      },
+      {
+        "dry_run": true,
+        "effect": "write",
+        "name": "hotkeys.disable",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "Disable one shortcut, all of them or one scope",
+        "usage": "kim hotkeys disable (<action> [--profile <name>] | --all | --scope <global|app|context>) [--dry-run]"
+      },
+      {
+        "dry_run": true,
+        "effect": "write",
+        "name": "hotkeys.enable",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "Turn all shortcuts or one scope back on",
+        "usage": "kim hotkeys enable (--all | --scope <global|app|context>) [--dry-run]"
+      },
+      {
+        "dry_run": true,
+        "effect": "destructive",
+        "name": "hotkeys.reset",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": true,
+        "summary": "Restore an action's default, or discard every change (--all keeps a backup)",
+        "usage": "kim hotkeys reset (<action> [--profile <name>] | --all [--yes]) [--dry-run]"
+      },
+      {
+        "dry_run": false,
+        "effect": "read",
+        "name": "hotkeys.check",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "Conflict report for Kim's shortcuts; --all-tools reads every installed tool's hotkey files (starts nothing)",
+        "usage": "kim hotkeys check [--all-tools] [--min-severity error|warning|info] [--profile <name>]"
+      },
+      {
+        "dry_run": false,
+        "effect": "read",
+        "name": "hotkeys.export",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "Print Kim's hotkeys.json user layer",
+        "usage": "kim hotkeys export"
+      },
+      {
+        "dry_run": true,
+        "effect": "write",
+        "name": "hotkeys.import",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "Validate a kim.hotkeys document and replace the user layer (keeps a backup)",
+        "usage": "kim hotkeys import <file> [--dry-run]"
       }
     ],
     "implementation": "implemented",

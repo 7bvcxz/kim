@@ -30,6 +30,18 @@ const fn read(name: &'static str, usage: &'static str, summary: &'static str) ->
     }
 }
 
+const fn write(name: &'static str, usage: &'static str, summary: &'static str) -> Spec {
+    Spec {
+        name,
+        usage,
+        summary,
+        effect: Effect::Write,
+        network: false,
+        dry_run: true,
+        requires_yes: false,
+    }
+}
+
 const COMMANDS: &[Spec] = &[
     read(
         "capabilities",
@@ -139,6 +151,59 @@ const COMMANDS: &[Spec] = &[
         dry_run: true,
         requires_yes: false,
     },
+    read(
+        "hotkeys.list",
+        "kim hotkeys list [--scope <scope>] [--profile <name>]",
+        "Kim Manager's shortcuts: every action with its keys, scope, source and state",
+    ),
+    read(
+        "hotkeys.show",
+        "kim hotkeys show <action> [--profile <name>]",
+        "One shortcut action with its bindings and every conflict that involves it",
+    ),
+    write(
+        "hotkeys.set",
+        "kim hotkeys set <action> <keys>... [--scope global|app] [--trigger press|release|hold] \
+         [--hold-ms <ms>] [--repeat] [--profile <name>] [--replace] [--allow-conflict] [--dry-run]",
+        "Replace an action's bindings; a conflicting change is refused (hotkey_conflict) and \
+         nothing is written",
+    ),
+    write(
+        "hotkeys.disable",
+        "kim hotkeys disable (<action> [--profile <name>] | --all | --scope <global|app|context>) \
+         [--dry-run]",
+        "Disable one shortcut, all of them or one scope",
+    ),
+    write(
+        "hotkeys.enable",
+        "kim hotkeys enable (--all | --scope <global|app|context>) [--dry-run]",
+        "Turn all shortcuts or one scope back on",
+    ),
+    Spec {
+        name: "hotkeys.reset",
+        usage: "kim hotkeys reset (<action> [--profile <name>] | --all [--yes]) [--dry-run]",
+        summary: "Restore an action's default, or discard every change (--all keeps a backup)",
+        effect: Effect::Destructive,
+        network: false,
+        dry_run: true,
+        requires_yes: true,
+    },
+    read(
+        "hotkeys.check",
+        "kim hotkeys check [--all-tools] [--min-severity error|warning|info] [--profile <name>]",
+        "Conflict report for Kim's shortcuts; --all-tools reads every installed tool's hotkey \
+         files (starts nothing)",
+    ),
+    read(
+        "hotkeys.export",
+        "kim hotkeys export",
+        "Print Kim's hotkeys.json user layer",
+    ),
+    write(
+        "hotkeys.import",
+        "kim hotkeys import <file> [--dry-run]",
+        "Validate a kim.hotkeys document and replace the user layer (keeps a backup)",
+    ),
 ];
 
 /// Kim's capabilities document.

@@ -20,6 +20,7 @@ Run with `cargo xtask e2e`, which refuses unless the counter below has reached 1
 | 7 | #7 Step 07 – Kim CLI contract and headless foundation | `step07_cli_contract.rs` (4 tests): JSON envelope/schemas on real output, capabilities and `tools list/describe`, headless (no GUI/child processes), redaction | 7 |
 | 8 | #50 Step 45 – Universal customizable hotkey contract (specification) | none (no executable feature; 17 conflict scenarios are recomputed by `cargo xtask schema-check`, and Step 46 adds the e2e scenario for `kim hotkeys`) | 8 |
 | 9 | #8 Step 08 – Subak ConPTY Host proof (merged; issue open for manual Windows Terminal close, sleep and logoff checks) | `step08_conpty_host.rs`: real `subak host start/status/attach/stop` on a private endpoint, Host survives client kill, reattach sees earlier shell state, explicit stop needs `--yes` and leaves nothing behind | 9 |
+| 10 | #51 Step 46 – Shared hotkey configuration and conflict detection | `step46_hotkeys.rs` (3 tests): `kim hotkeys` list/set/disable/enable/reset cycle in an isolated profile, cross-tool `check --all-tools` conflicts read from files only, a broken `hotkeys.json` means safe mode and explicit recovery | 10 |
 
 ## E2E runs
 

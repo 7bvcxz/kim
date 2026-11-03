@@ -13,26 +13,176 @@ pub const MAX_STEPS: usize = 4;
 
 /// Logical key names (§5.2), in canonical spelling.
 pub const NAMED_KEYS: &[&str] = &[
-    "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S",
-    "T", "U", "V", "W", "X", "Y", "Z", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "F1", "F2",
-    "F3", "F4", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12", "F13", "F14", "F15", "F16", "F17",
-    "F18", "F19", "F20", "F21", "F22", "F23", "F24", "Escape", "Tab", "Enter", "Space", "Backspace",
-    "Insert", "Delete", "Home", "End", "PageUp", "PageDown", "Up", "Down", "Left", "Right", "Plus",
-    "Minus", "Comma", "Period", "Numpad0", "Numpad1", "Numpad2", "Numpad3", "Numpad4", "Numpad5",
-    "Numpad6", "Numpad7", "Numpad8", "Numpad9", "NumpadAdd", "NumpadSubtract", "NumpadMultiply",
-    "NumpadDivide", "NumpadDecimal", "NumpadEnter", "PrintScreen", "Pause", "ScrollLock",
-    "ContextMenu", "MediaPlayPause", "MediaStop", "MediaNext", "MediaPrevious", "VolumeUp",
-    "VolumeDown", "VolumeMute", "HangulMode", "Hanja", "KanaMode", "Convert", "NonConvert",
+    "A",
+    "B",
+    "C",
+    "D",
+    "E",
+    "F",
+    "G",
+    "H",
+    "I",
+    "J",
+    "K",
+    "L",
+    "M",
+    "N",
+    "O",
+    "P",
+    "Q",
+    "R",
+    "S",
+    "T",
+    "U",
+    "V",
+    "W",
+    "X",
+    "Y",
+    "Z",
+    "0",
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+    "9",
+    "F1",
+    "F2",
+    "F3",
+    "F4",
+    "F5",
+    "F6",
+    "F7",
+    "F8",
+    "F9",
+    "F10",
+    "F11",
+    "F12",
+    "F13",
+    "F14",
+    "F15",
+    "F16",
+    "F17",
+    "F18",
+    "F19",
+    "F20",
+    "F21",
+    "F22",
+    "F23",
+    "F24",
+    "Escape",
+    "Tab",
+    "Enter",
+    "Space",
+    "Backspace",
+    "Insert",
+    "Delete",
+    "Home",
+    "End",
+    "PageUp",
+    "PageDown",
+    "Up",
+    "Down",
+    "Left",
+    "Right",
+    "Plus",
+    "Minus",
+    "Comma",
+    "Period",
+    "Numpad0",
+    "Numpad1",
+    "Numpad2",
+    "Numpad3",
+    "Numpad4",
+    "Numpad5",
+    "Numpad6",
+    "Numpad7",
+    "Numpad8",
+    "Numpad9",
+    "NumpadAdd",
+    "NumpadSubtract",
+    "NumpadMultiply",
+    "NumpadDivide",
+    "NumpadDecimal",
+    "NumpadEnter",
+    "PrintScreen",
+    "Pause",
+    "ScrollLock",
+    "ContextMenu",
+    "MediaPlayPause",
+    "MediaStop",
+    "MediaNext",
+    "MediaPrevious",
+    "VolumeUp",
+    "VolumeDown",
+    "VolumeMute",
+    "HangulMode",
+    "Hanja",
+    "KanaMode",
+    "Convert",
+    "NonConvert",
 ];
 
 /// Physical key names after `code:` (W3C UI Events `code` values, §5.2).
 pub const CODE_KEYS: &[&str] = &[
-    "KeyA", "KeyB", "KeyC", "KeyD", "KeyE", "KeyF", "KeyG", "KeyH", "KeyI", "KeyJ", "KeyK", "KeyL",
-    "KeyM", "KeyN", "KeyO", "KeyP", "KeyQ", "KeyR", "KeyS", "KeyT", "KeyU", "KeyV", "KeyW", "KeyX",
-    "KeyY", "KeyZ", "Digit0", "Digit1", "Digit2", "Digit3", "Digit4", "Digit5", "Digit6", "Digit7",
-    "Digit8", "Digit9", "Minus", "Equal", "BracketLeft", "BracketRight", "Backslash", "Semicolon",
-    "Quote", "Backquote", "Comma", "Period", "Slash", "IntlBackslash", "IntlRo", "IntlYen", "Lang1",
-    "Lang2", "Lang3", "Lang4", "Lang5",
+    "KeyA",
+    "KeyB",
+    "KeyC",
+    "KeyD",
+    "KeyE",
+    "KeyF",
+    "KeyG",
+    "KeyH",
+    "KeyI",
+    "KeyJ",
+    "KeyK",
+    "KeyL",
+    "KeyM",
+    "KeyN",
+    "KeyO",
+    "KeyP",
+    "KeyQ",
+    "KeyR",
+    "KeyS",
+    "KeyT",
+    "KeyU",
+    "KeyV",
+    "KeyW",
+    "KeyX",
+    "KeyY",
+    "KeyZ",
+    "Digit0",
+    "Digit1",
+    "Digit2",
+    "Digit3",
+    "Digit4",
+    "Digit5",
+    "Digit6",
+    "Digit7",
+    "Digit8",
+    "Digit9",
+    "Minus",
+    "Equal",
+    "BracketLeft",
+    "BracketRight",
+    "Backslash",
+    "Semicolon",
+    "Quote",
+    "Backquote",
+    "Comma",
+    "Period",
+    "Slash",
+    "IntlBackslash",
+    "IntlRo",
+    "IntlYen",
+    "Lang1",
+    "Lang2",
+    "Lang3",
+    "Lang4",
+    "Lang5",
 ];
 
 /// Input-method mode keys, always reserved (§7.3).
@@ -135,7 +285,9 @@ impl Key {
         match self {
             Key::Char(_) | Key::Code(_) => true,
             Key::Named(n) => {
-                n.len() == 1 || ["Plus", "Minus", "Comma", "Period"].contains(n) || n.starts_with("Numpad")
+                n.len() == 1
+                    || ["Plus", "Minus", "Comma", "Period"].contains(n)
+                    || n.starts_with("Numpad")
             }
         }
     }
@@ -333,7 +485,8 @@ pub fn is_name_id(s: &str) -> bool {
     !b.is_empty()
         && b.len() <= 32
         && b[0].is_ascii_lowercase()
-        && b.iter().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'-')
+        && b.iter()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'-')
 }
 
 /// `^[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*){1,3}$`: action IDs (§3.1).
@@ -344,7 +497,8 @@ pub fn is_action_id(s: &str) -> bool {
             let b = g.as_bytes();
             !b.is_empty()
                 && b[0].is_ascii_lowercase()
-                && b.iter().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'-')
+                && b.iter()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'-')
         })
 }
 
@@ -412,19 +566,19 @@ fn parse_step(s: &str, _lenient: bool) -> Result<Step, ParseError> {
         rank = r;
         *slot(&mut m, r) = side;
     }
-    let key = match key.strip_prefix("code:") {
-        Some(code) => Key::Code(
-            lookup(CODE_KEYS, code)
-                .ok_or_else(|| ParseError::new(s, &format!("unknown physical key `code:{code}`")))?,
-        ),
-        None if key.starts_with("char:") => {
-            return Err(ParseError::new(s, "a char: key takes no modifiers"));
-        }
-        None => Key::Named(
-            lookup(NAMED_KEYS, key)
-                .ok_or_else(|| ParseError::new(s, &format!("unknown key `{key}`")))?,
-        ),
-    };
+    let key =
+        match key.strip_prefix("code:") {
+            Some(code) => Key::Code(lookup(CODE_KEYS, code).ok_or_else(|| {
+                ParseError::new(s, &format!("unknown physical key `code:{code}`"))
+            })?),
+            None if key.starts_with("char:") => {
+                return Err(ParseError::new(s, "a char: key takes no modifiers"));
+            }
+            None => Key::Named(
+                lookup(NAMED_KEYS, key)
+                    .ok_or_else(|| ParseError::new(s, &format!("unknown key `{key}`")))?,
+            ),
+        };
     Ok(Step::Chord(Chord { mods: m, key }))
 }
 
@@ -440,13 +594,14 @@ fn slot(m: &mut Mods, rank: u8) -> &mut Side {
 fn single_char(step: &str, c: &str) -> Result<Step, ParseError> {
     let mut it = c.chars();
     match (it.next(), it.next()) {
-        (Some(ch), None) if !ch.is_whitespace() && !ch.is_control() => {
-            Ok(Step::Chord(Chord {
-                mods: Mods::default(),
-                key: Key::Char(ch),
-            }))
-        }
-        _ => Err(ParseError::new(step, "char: takes exactly one visible character")),
+        (Some(ch), None) if !ch.is_whitespace() && !ch.is_control() => Ok(Step::Chord(Chord {
+            mods: Mods::default(),
+            key: Key::Char(ch),
+        })),
+        _ => Err(ParseError::new(
+            step,
+            "char: takes exactly one visible character",
+        )),
     }
 }
 
@@ -472,7 +627,10 @@ fn parse_input_step(raw: &str, after_first: bool) -> Result<Step, ParseError> {
         return if is_name_id(l) {
             Ok(Step::Leader(l.to_string()))
         } else {
-            Err(ParseError::new(raw, "a leader is written @<id> (lowercase)"))
+            Err(ParseError::new(
+                raw,
+                "a leader is written @<id> (lowercase)",
+            ))
         };
     }
     if raw.len() > 5 && raw[..5].eq_ignore_ascii_case("char:") {
@@ -497,7 +655,11 @@ fn parse_input_step(raw: &str, after_first: bool) -> Result<Step, ParseError> {
     }
     // A single character after the first step is a character key (`Ctrl+B c` → `char:c`),
     // unless it is a key name of its own (`0`…`9`, `A`…`Z`).
-    if after_first && m.is_empty() && rest.chars().count() == 1 && lookup(NAMED_KEYS, rest).is_none() {
+    if after_first
+        && m.is_empty()
+        && rest.chars().count() == 1
+        && lookup(NAMED_KEYS, rest).is_none()
+    {
         return single_char(raw, rest);
     }
     let parts: Vec<&str> = rest.split('+').collect();
@@ -521,21 +683,22 @@ fn parse_input_step(raw: &str, after_first: bool) -> Result<Step, ParseError> {
             "shift" => (Side::Any, "shift"),
             "win" | "windows" | "super" | "cmd" => (Side::Any, "win"),
             _ => {
-                return Err(ParseError::new(
-                    raw,
-                    &format!("unknown modifier `{token}`"),
-                ));
+                return Err(ParseError::new(raw, &format!("unknown modifier `{token}`")));
             }
         };
         add_modifier(&mut m, family, side, raw)?;
     }
     let key = if key.len() > 5 && key[..5].eq_ignore_ascii_case("code:") {
-        Key::Code(lookup_ci(CODE_KEYS, &key[5..]).ok_or_else(|| {
-            ParseError::new(raw, &format!("unknown physical key `{key}`"))
-        })?)
+        Key::Code(
+            lookup_ci(CODE_KEYS, &key[5..])
+                .ok_or_else(|| ParseError::new(raw, &format!("unknown physical key `{key}`")))?,
+        )
     } else if key.len() > 5 && key[..5].eq_ignore_ascii_case("char:") {
         return Err(ParseError::new(raw, "a char: key takes no modifiers"));
-    } else if let Some((_, canon)) = KEY_ALIASES.iter().find(|(a, _)| a.eq_ignore_ascii_case(key)) {
+    } else if let Some((_, canon)) = KEY_ALIASES
+        .iter()
+        .find(|(a, _)| a.eq_ignore_ascii_case(key))
+    {
         Key::Named(lookup(NAMED_KEYS, canon).expect("alias targets are key names"))
     } else {
         Key::Named(
@@ -569,7 +732,10 @@ fn add_modifier(m: &mut Mods, family: &str, side: Side, raw: &str) -> Result<(),
         }
     }
     if m.altgr && (m.ctrl.on() || m.alt.on()) {
-        return Err(ParseError::new(raw, "AltGr never combines with Ctrl or Alt"));
+        return Err(ParseError::new(
+            raw,
+            "AltGr never combines with Ctrl or Alt",
+        ));
     }
     Ok(())
 }
@@ -601,7 +767,9 @@ fn char_matches(c: char, chord: &Chord) -> bool {
         return false;
     }
     if c.is_ascii_alphabetic() {
-        n.len() == 1 && n.starts_with(c.to_ascii_uppercase()) && m.shift.on() == c.is_ascii_uppercase()
+        n.len() == 1
+            && n.starts_with(c.to_ascii_uppercase())
+            && m.shift.on() == c.is_ascii_uppercase()
     } else if c.is_ascii_digit() {
         n.len() == 1 && n.starts_with(c) && !m.shift.on()
     } else {
@@ -618,7 +786,9 @@ mod tests {
     }
 
     fn input(s: &str) -> String {
-        Sequence::parse_input(s).unwrap_or_else(|e| panic!("{e}")).to_string()
+        Sequence::parse_input(s)
+            .unwrap_or_else(|e| panic!("{e}"))
+            .to_string()
     }
 
     #[test]
@@ -683,8 +853,18 @@ mod tests {
         assert_eq!(input("ctrl+code:keyz"), "Ctrl+code:KeyZ");
         assert_eq!(input("rctrl+lalt+f5"), "RCtrl+LAlt+F5");
         assert_eq!(input("  F1  "), "F1");
-        for bad in ["Hyper+K", "Ctrl+Ctrl+T", "AltGr+Ctrl+Q", "Ctrl+Foo", "", "Ctrl+char:x"] {
-            assert!(Sequence::parse_input(bad).is_err(), "{bad} must be rejected");
+        for bad in [
+            "Hyper+K",
+            "Ctrl+Ctrl+T",
+            "AltGr+Ctrl+Q",
+            "Ctrl+Foo",
+            "",
+            "Ctrl+char:x",
+        ] {
+            assert!(
+                Sequence::parse_input(bad).is_err(),
+                "{bad} must be rejected"
+            );
         }
     }
 

@@ -1,0 +1,10 @@
+[package]
+name = "eval-winit"
+version = "0.0.0"
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+winit = "=0.30.13"
+softbuffer = "=0.4.8"

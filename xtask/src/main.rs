@@ -3,6 +3,7 @@
 //! Deliberately small: std plus `serde_json` and `regex` (for contract schema checks). Never
 //! shipped to users.
 
+mod design;
 mod docs;
 mod ledger;
 mod schema;
@@ -18,8 +19,10 @@ COMMANDS:
     schema-check [--verbose]
                       Validate contract examples against docs/contracts/schemas (valid must
                       pass, examples/<name>/invalid/ must fail)
+    design-check [--verbose]
+                      Check design/tokens.json: colors and declared WCAG contrast pairs
     ci                Run the CI gate locally: fmt --check, clippy -D warnings, tests,
-                      docs-check, schema-check
+                      docs-check, schema-check, design-check
     e2e [--force]     Build release binaries and run the e2e suite. Refuses unless the
                       e2e ledger says 15 Step issues were processed since the last run
                       (AGENTS.md §4); --force overrides and must be justified in the ledger.
@@ -31,6 +34,7 @@ fn main() -> ExitCode {
     let root = repo_root();
     let result = match args.first().map(String::as_str) {
         Some("docs-check") => run_docs_check(&root),
+        Some("design-check") => run_design_check(&root, args.iter().any(|a| a == "--verbose")),
         Some("schema-check") => run_schema_check(&root, args.iter().any(|a| a == "--verbose")),
         Some("ci") => run_ci(&root),
         Some("e2e") => run_e2e(&root, args.iter().any(|a| a == "--force")),
@@ -77,6 +81,33 @@ fn run_docs_check(root: &Path) -> Result<(), String> {
         }
         Err(format!(
             "docs-check: FAIL ({} problems)",
+            report.problems.len()
+        ))
+    }
+}
+
+fn run_design_check(root: &Path, verbose: bool) -> Result<(), String> {
+    let report = design::check(root)?;
+    if verbose {
+        for (theme, fg, bg, ratio, min) in &report.pairs {
+            println!("  {theme}: {fg:<22} on {bg:<20} {ratio:>6.2}:1 (min {min})");
+        }
+    }
+    println!(
+        "design-check: {} theme(s), {} colors, {} contrast pairs",
+        report.themes,
+        report.colors,
+        report.pairs.len()
+    );
+    if report.problems.is_empty() {
+        println!("design-check: PASS");
+        Ok(())
+    } else {
+        for p in &report.problems {
+            eprintln!("  - {p}");
+        }
+        Err(format!(
+            "design-check: FAIL ({} problems)",
             report.problems.len()
         ))
     }
@@ -137,7 +168,8 @@ fn run_ci(root: &Path) -> Result<(), String> {
     )?;
     cargo(root, &["test"])?;
     run_docs_check(root)?;
-    run_schema_check(root, false)
+    run_schema_check(root, false)?;
+    run_design_check(root, false)
 }
 
 fn e2e_status(root: &Path) -> Result<u32, String> {

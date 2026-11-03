@@ -71,3 +71,8 @@ Bindings are configurable per profile.
 
 `SUBAK-FR-003`, `SUBAK-FR-014`, `SUBAK-FR-015`, `SUBAK-FR-031`, `SUBAK-FR-033`,
 `SUBAK-FR-034`, `KIM-NFR-012`.
+
+## Notes
+
+- 2026-11-04 (Step 04): the toolkit decision is [ADR 0014](0014-gui-technology.md) — egui +
+  glow for chrome, a dedicated cell-grid renderer for terminal content.

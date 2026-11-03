@@ -40,9 +40,9 @@ is retired or re-assessed with evidence.
 
 | ID | Risk | L | I | Mitigation | Owner step |
 | --- | --- | --- | --- | --- | --- |
-| R-12 | Glyph quality (ClearType expectations), CJK/emoji fallback and wide-char alignment in a non-native renderer | H | M | Toolkit evaluation with Korean/emoji fixtures; font fallback chain; screenshot tests | 04, 15 |
+| R-12 | Glyph quality (ClearType expectations), CJK/emoji fallback and wide-char alignment in a non-native renderer | H | M | **Step 04 evidence:** egui text has no color emoji and no cell grid → dedicated terminal renderer (ADR 0014); fallback A = DirectWrite surface | 15 |
 | R-13 | Korean IME composition breaks shortcuts or duplicates characters | M | H | IME guard in key dispatch (ADR 0009); manual IME test matrix | 16, 23 |
-| R-14 | GPU-based UI keeps high idle memory/CPU or fails on RDP/VMs | M | M | Measure idle working set; reactive repaint only; software fallback | 04, 16 |
+| R-14 | GPU-based UI keeps high idle memory/CPU or fails on RDP/VMs | M | M | **Step 04 measured:** 0 idle CPU; glow ~69 MiB vs wgpu ~300 MiB → glow chosen; WARP/CPU fallbacks defined (ADR 0014); RDP/VM untested | 16 |
 | R-15 | Accessibility (screen readers) weak in custom-rendered UIs | M | M | Toolkit with UI Automation support (e.g. AccessKit); manual Narrator checks | 04, 20 |
 
 ## SSH and credentials

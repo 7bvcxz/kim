@@ -40,6 +40,7 @@ milestone M4 (`KIM-NFR-011`); macOS is out of scope.
 | Tests (unit + integration; never e2e) | `cargo test` |
 | Documentation consistency | `cargo xtask docs-check` |
 | Contract schemas vs examples | `cargo xtask schema-check [--verbose]` |
+| Design token contrast | `cargo xtask design-check [--verbose]` |
 | Dependency policy | `cargo deny check` (see SECURITY.md) |
 | E2E status | `cargo xtask e2e-status` |
 | E2E suite (only when due) | `cargo xtask e2e` |

@@ -1,0 +1,16 @@
+# Standalone research workspace (NOT part of the main Kim workspace, not built by CI).
+# Evidence for docs/adr/0014-gui-technology.md. See README.md for how to reproduce.
+[workspace]
+resolver = "3"
+members = ["eval-egui", "eval-winit"]
+
+[workspace.package]
+edition = "2024"
+publish = false
+license = "MIT OR Apache-2.0"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+opt-level = 3

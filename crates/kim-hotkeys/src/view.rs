@@ -89,13 +89,12 @@ pub fn reserved_views(tool: &ToolState) -> Vec<Value> {
     RESERVED_NAVIGATION
         .iter()
         .filter(|(id, _, _)| tool.manifest.action(id).is_none())
-        .map(|(id, title, keys)| reserved_view(tool, id, title, keys))
+        .map(|(id, title, keys)| reserved_view(id, title, keys))
         .collect()
 }
 
-fn reserved_view(tool: &ToolState, id: &str, title: &str, keys: &[&str]) -> Value {
-    // Fixed safety keys stay on even when the tool's shortcuts are off (§8.3 6).
-    let _ = tool;
+/// Fixed safety keys stay on even when the tool's shortcuts are off (§8.3 6).
+fn reserved_view(id: &str, title: &str, keys: &[&str]) -> Value {
     json!({
         "id": id, "title": title, "scope": "app", "bindable": false, "source": "reserved",
         "defaults": keys,
@@ -163,7 +162,7 @@ pub fn show_data(
             let (id, title, keys) = RESERVED_NAVIGATION
                 .iter()
                 .find(|(id, _, _)| *id == action)?;
-            reserved_view(tool, id, title, keys)
+            reserved_view(id, title, keys)
         }
     };
     let conflicts: Vec<Value> = analysis

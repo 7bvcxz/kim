@@ -19,7 +19,11 @@ pub fn processes_under(dir: &Path) -> Vec<RunningProcess> {
     imp::all_images()
         .into_iter()
         .filter(|(_, image)| {
-            let n = normalize(image);
+            // Compare canonical long paths: an image may be reported with 8.3 short names
+            // (e.g. C:\Users\RUNNER~1\...) while `dir` is canonicalized to the long form.
+            let canonical = std::fs::canonicalize(image)
+                .map_or_else(|_| image.clone(), |p| p.display().to_string());
+            let n = normalize(&canonical);
             n.starts_with(&prefix) && n[prefix.len()..].starts_with('\\')
         })
         .map(|(pid, image)| RunningProcess { pid, image })

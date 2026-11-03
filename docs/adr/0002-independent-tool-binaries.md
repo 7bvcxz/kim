@@ -42,3 +42,13 @@ interoperate without a monolithic runtime (`KIM-FR-020`).
 ## Requirements
 
 `KIM-FR-001`, `KIM-FR-002`, `KIM-FR-012`, `KIM-FR-020`, `KIM-NFR-003`.
+
+## Notes
+
+- 2026-11-04 (Step 07): `kim-cli` is **not** created yet. The cross-tool CLI contract is shared
+  as a document and JSON schemas ([CLI_CONTRACT](../CLI_CONTRACT.md),
+  [ADR 0015](0015-cli-contract-and-tool-discovery.md)); only `kim` implements it in Rust today,
+  and Subak's placeholder emits static documents. The crate is created in Step 12, when Subak's
+  real CLI becomes the second consumer. Tools discover each other through
+  `<tool> capabilities --json` and `capabilities.json` manifests (point 4 above), never by
+  loading each other's code.

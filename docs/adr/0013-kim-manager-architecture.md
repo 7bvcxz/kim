@@ -66,3 +66,11 @@ user without elevation (`KIM-SEC-004`), and a failed update must leave the old v
   source selection, staleness and rollback rules are specified in
   [CATALOG_FORMAT.md](../CATALOG_FORMAT.md). The first trusted key is a development key for
   preview catalogs; release-grade key custody follows in Step 06/40.
+- 2026-11-04 (Step 07): the headless management surface is complete and follows
+  [CLI_CONTRACT](../CLI_CONTRACT.md): `kim status`, `kim version`, `kim tools list|describe`,
+  `kim catalog list --installed`, plus `--dry-run` on `catalog refresh`, `update check
+  --refresh` and `settings set`. Point 4 ("Kim asks the tool whether it is running") is still
+  done by process inspection; asking `subak host status --json` follows the invocation rules of
+  CLI_CONTRACT §9.5 once Subak's CLI exists (Step 12). Install records store a redacted
+  `source_url` (KIM-SEC-013). The `%LOCALAPPDATA%\Programs\mouv\bin` launcher of point 2 is not
+  implemented yet.

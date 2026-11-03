@@ -40,6 +40,7 @@ milestone M4 (`KIM-NFR-011`); macOS is out of scope.
 | Tests (unit + integration; never e2e) | `cargo test` |
 | Documentation consistency | `cargo xtask docs-check` |
 | Contract schemas vs examples | `cargo xtask schema-check [--verbose]` |
+| Refresh `kim --json` golden examples after an intended output change (review the diff) | `KIM_BLESS=1 cargo test -p kim --test cli_contract` |
 | Design token contrast | `cargo xtask design-check [--verbose]` |
 | Dependency policy | `cargo deny check` (see SECURITY.md) |
 | E2E status | `cargo xtask e2e-status` |
@@ -49,7 +50,7 @@ milestone M4 (`KIM-NFR-011`); macOS is out of scope.
 
 | Path | Package | What it is |
 | --- | --- | --- |
-| `crates/kim` | `kim` | Kim manager library + CLI (binary `kim`): catalog, signatures, status |
+| `crates/kim` | `kim` | Kim manager library + CLI (binary `kim`): catalog, signatures, installer, status, tool discovery ([CLI contract](docs/CLI_CONTRACT.md)) |
 | `catalog/` | — | The signed catalog bundled into `kim` and published for `kim catalog refresh` ([format](docs/CATALOG_FORMAT.md)) |
 | `crates/kim-manager` | `kim-manager` | Kim Manager GUI (egui + glow, ADR 0014); the only package allowed to depend on GUI crates so far |
 | `crates/subak` | `subak` | Subak CLI (binary `subak`); Host and GUI arrive in later steps |

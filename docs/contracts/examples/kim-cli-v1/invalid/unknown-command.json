@@ -1,0 +1,7 @@
+{
+  "ok": true,
+  "command": "catalog.frobnicate",
+  "schema_version": 1,
+  "data": {},
+  "warnings": []
+}

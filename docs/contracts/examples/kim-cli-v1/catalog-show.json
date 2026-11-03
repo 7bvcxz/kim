@@ -1,0 +1,41 @@
+{
+  "command": "catalog.show",
+  "data": {
+    "catalog": {
+      "catalog_version": 1,
+      "expires_at": "2027-05-04T00:00:00Z",
+      "generated_at": "2026-11-04T00:00:00Z",
+      "publisher": "mouv",
+      "signed_by": {
+        "key_id": "4466fe26eca99520",
+        "label": "mouv catalog development key 2026-11 (preview catalogs only)"
+      },
+      "source": "bundled",
+      "stale": false
+    },
+    "description": "Sessions live in a per-user background Host and survive closing every window. Headless CLI, optional native GUI, Claude Code status. Not released yet.",
+    "homepage": "https://github.com/7bvcxz/kim",
+    "license": "MIT OR Apache-2.0",
+    "platform": {
+      "arch": "x86_64",
+      "os": "windows",
+      "os_build": 19045
+    },
+    "releases": [],
+    "tool": {
+      "id": "subak",
+      "incompatible_reason": null,
+      "installed_version": null,
+      "latest": null,
+      "latest_compatible": null,
+      "name": "Subak",
+      "note": null,
+      "status": "unreleased",
+      "summary": "Persistent Windows-first terminal with a separate Host and Clients",
+      "support": "in-development"
+    }
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

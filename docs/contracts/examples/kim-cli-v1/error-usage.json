@@ -1,0 +1,12 @@
+{
+  "command": "catalog",
+  "error": {
+    "code": "usage",
+    "details": [],
+    "exit_code": 2,
+    "hint": "see `kim catalog --help`",
+    "message": "unrecognized subcommand 'frobnicate'"
+  },
+  "ok": false,
+  "schema_version": 1
+}

@@ -231,7 +231,7 @@ pub fn plan_install(
         }
         Installed::Version(v) => {
             return Err(KimError::new(
-                ErrorCode::Usage,
+                ErrorCode::AlreadyInstalled,
                 format!("{tool_id} {v} is already installed (newest compatible: {to})"),
             )
             .with_hint(
@@ -379,11 +379,7 @@ impl Drop for ToolLock {
 }
 
 fn io_err(path: &Path, e: &std::io::Error) -> KimError {
-    let mut err = KimError::new(ErrorCode::Io, format!("{}: {e}", path.display()));
-    if e.kind() == std::io::ErrorKind::PermissionDenied {
-        err = err.with_hint("Kim installs per user and never elevates; check folder permissions");
-    }
-    err
+    KimError::io(path, e)
 }
 
 /// Removes staging leftovers of `tool` (safe while holding the tool lock).
@@ -552,7 +548,8 @@ pub fn execute(
         ),
         installed_at: now_rfc3339(),
         sha256: plan.asset.sha256.clone(),
-        source_url: plan.asset.url.clone(),
+        // Never store credentials that a download URL may carry (KIM-SEC-013).
+        source_url: crate::redact::url(&plan.asset.url),
         catalog_version: plan.catalog_version,
         previous_version: plan.from.clone(),
     };
@@ -581,11 +578,19 @@ pub fn execute(
         action: plan.action,
         from: plan.from.clone(),
         to: plan.to.clone(),
-        entrypoint: plan.tool_dir.join(&record.entrypoint),
+        entrypoint: entrypoint_path(&plan.tool_dir, &record.entrypoint),
         removed_versions,
         kept_in_use,
         running: plan.running.clone(),
     })
+}
+
+/// Absolute path of a record's `/`-separated entrypoint, with the platform's separators.
+pub fn entrypoint_path(tool_dir: &Path, entrypoint: &str) -> PathBuf {
+    entrypoint
+        .split('/')
+        .filter(|p| !p.is_empty())
+        .fold(tool_dir.to_path_buf(), |acc, part| acc.join(part))
 }
 
 fn now_rfc3339() -> String {
@@ -611,7 +616,11 @@ fn write_record(paths: &Paths, record: &InstallRecord) -> Result<()> {
         f.write_all(&json).map_err(|e| io_err(&tmp, &e))?;
         f.sync_all().map_err(|e| io_err(&tmp, &e))?;
     }
-    std::fs::rename(&tmp, &path).map_err(|e| io_err(&path, &e))
+    std::fs::rename(&tmp, &path).map_err(|e| {
+        // The commit point failed: leave no temp file; the old record stays authoritative.
+        let _ = std::fs::remove_file(&tmp);
+        io_err(&path, &e)
+    })
 }
 
 fn prune_versions(

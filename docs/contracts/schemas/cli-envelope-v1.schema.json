@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/7bvcxz/kim/blob/main/docs/contracts/schemas/cli-envelope-v1.schema.json",
+  "title": "Kim CLI --json envelope, schema_version 1 (every Kim tool)",
+  "description": "The one JSON document every Kim tool prints on stdout with --json, for success and failure (docs/CLI_CONTRACT.md §7). `data` is command-specific and always an object; tool-specific schemas such as kim-cli-v1 describe it. Exit codes 1-8 are the classes of docs/CLI_CONTRACT.md §5.",
+  "oneOf": [
+    { "$ref": "#/$defs/success" },
+    { "$ref": "#/$defs/failure" }
+  ],
+  "$defs": {
+    "command_name": {
+      "description": "Dotted command path, e.g. `catalog.list`; the tool name alone (e.g. `kim`) when the arguments could not be parsed.",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)*$"
+    },
+    "success": {
+      "type": "object",
+      "required": ["ok", "command", "schema_version", "data", "warnings"],
+      "additionalProperties": false,
+      "properties": {
+        "ok": { "const": true },
+        "command": { "$ref": "#/$defs/command_name" },
+        "schema_version": { "const": 1 },
+        "data": { "type": "object" },
+        "warnings": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "failure": {
+      "type": "object",
+      "required": ["ok", "command", "schema_version", "error"],
+      "additionalProperties": false,
+      "properties": {
+        "ok": { "const": false },
+        "command": { "$ref": "#/$defs/command_name" },
+        "schema_version": { "const": 1 },
+        "error": { "$ref": "#/$defs/error" }
+      }
+    },
+    "error": {
+      "type": "object",
+      "required": ["code", "exit_code", "message", "hint", "details"],
+      "additionalProperties": false,
+      "properties": {
+        "code": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+        "exit_code": { "type": "integer", "minimum": 1, "maximum": 8 },
+        "message": { "type": "string", "minLength": 1 },
+        "hint": { "type": ["string", "null"] },
+        "details": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

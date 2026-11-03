@@ -42,7 +42,9 @@ weaken them in code, defaults, tests or docs.
   feature. Placeholders must say so in code, `--help`, and docs.
 - **Stable CLI contract.** Every command supports human output and `--json`; uses documented
   exit codes; writes data to stdout and diagnostics to stderr; and supports `--dry-run` for
-  state-changing operations (contract to be finalized in `docs/CLI_CONTRACT.md`).
+  state-changing operations. The binding rules, error-code registry and schemas are in
+  [docs/CLI_CONTRACT.md](docs/CLI_CONTRACT.md); a new command or error code updates that
+  document, the JSON schemas and the golden examples in the same change.
 - **Portable boundaries, Windows first.** Put OS-specific code behind narrow interfaces so Linux
   can be added later; do not implement Linux support prematurely, and never claim it.
 - **Verification.** Run formatting, lint, build and tests relevant to the change, plus a manual

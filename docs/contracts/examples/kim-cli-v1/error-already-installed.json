@@ -1,0 +1,12 @@
+{
+  "command": "install",
+  "error": {
+    "code": "already_installed",
+    "details": [],
+    "exit_code": 7,
+    "hint": "nothing to do; use --reinstall to repair, or --version to pick another release",
+    "message": "example-tool 1.0.0 is already installed (newest compatible: 1.0.0)"
+  },
+  "ok": false,
+  "schema_version": 1
+}

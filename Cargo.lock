@@ -1584,6 +1584,7 @@ dependencies = [
  "clap",
  "ctrlc",
  "ed25519-dalek",
+ "regex",
  "semver",
  "serde",
  "serde_json",
@@ -1598,6 +1599,7 @@ name = "kim-e2e"
 version = "0.0.0"
 dependencies = [
  "kim",
+ "regex",
  "serde_json",
  "sha2",
  "zip",
@@ -2832,6 +2834,10 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 [[package]]
 name = "subak"
 version = "0.0.1"
+dependencies = [
+ "regex",
+ "serde_json",
+]
 
 [[package]]
 name = "subtle"

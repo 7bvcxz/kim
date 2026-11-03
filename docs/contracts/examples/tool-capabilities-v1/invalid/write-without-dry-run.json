@@ -1,0 +1,13 @@
+{
+  "schema": "kim.capabilities",
+  "schema_version": 1,
+  "tool": "example-tool",
+  "version": "1.0.0",
+  "cli_contract": 1,
+  "json_schema_version": 1,
+  "implementation": "implemented",
+  "summary": "A state-changing command must support --dry-run",
+  "commands": [
+    { "name": "config.set", "usage": "example-tool config set <k> <v>", "summary": "Change a setting", "effect": "write", "network": false, "dry_run": false, "requires_yes": false, "opens_window": false }
+  ]
+}

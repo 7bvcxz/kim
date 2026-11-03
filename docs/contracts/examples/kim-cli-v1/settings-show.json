@@ -1,0 +1,13 @@
+{
+  "command": "settings.show",
+  "data": {
+    "path": "C:\\Users\\me\\AppData\\Roaming\\mouv\\kim\\settings.json",
+    "settings": {
+      "check_updates_on_launch": false,
+      "offline_mode": false
+    }
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

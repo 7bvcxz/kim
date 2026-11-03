@@ -239,7 +239,7 @@ pub(crate) fn copy_with_progress(
 ) -> Result<()> {
     use std::io::Write;
     use std::sync::atomic::Ordering;
-    let io = |e: std::io::Error| KimError::new(ErrorCode::Io, format!("{}: {e}", dest.display()));
+    let io = |e: std::io::Error| KimError::io(dest, &e);
     let mut out = std::fs::File::create(dest).map_err(io)?;
     let mut buf = vec![0u8; 64 * 1024];
     let mut done = 0u64;

@@ -147,6 +147,42 @@ pub struct RefreshOutcome {
     pub updated: bool,
 }
 
+/// A fetched, verified catalog that passed rollback protection but is not written yet.
+#[derive(Debug, Clone)]
+pub struct Fetched {
+    pub outcome: RefreshOutcome,
+    pub catalog: Catalog,
+    pub signer: VerifiedSigner,
+    bytes: Vec<u8>,
+    sig: Vec<u8>,
+}
+
+impl Fetched {
+    /// The catalog Kim would use after committing this refresh (the newer of the two).
+    pub fn effective(&self, current: Loaded, now: i64) -> Loaded {
+        if self.outcome.updated {
+            let stale = is_stale(&self.catalog, now);
+            let warnings = if stale {
+                vec![format!(
+                    "the catalog expired on {}; run `kim catalog refresh` when online",
+                    self.catalog.expires_at
+                )]
+            } else {
+                Vec::new()
+            };
+            Loaded {
+                catalog: self.catalog.clone(),
+                source: Source::Cache,
+                signer: self.signer.clone(),
+                stale,
+                warnings,
+            }
+        } else {
+            current
+        }
+    }
+}
+
 /// Explicit refresh: fetch catalog and signature, verify, enforce rollback protection, then
 /// write the cache atomically. On any failure the existing cache is left untouched.
 pub fn refresh(
@@ -156,11 +192,30 @@ pub fn refresh(
     source_url: &str,
     fetcher: &dyn Fetcher,
 ) -> Result<RefreshOutcome> {
+    let fetched = fetch_verified(paths, keys, now, source_url, fetcher)?;
+    commit(paths, &fetched)?;
+    Ok(fetched.outcome)
+}
+
+/// Writes a verified refresh into the cache (atomically, see [`refresh`]).
+pub fn commit(paths: &Paths, fetched: &Fetched) -> Result<()> {
+    write_cache(paths, &fetched.bytes, &fetched.sig)
+}
+
+/// The read-only half of [`refresh`] (used by `--dry-run`): fetches, verifies and checks for
+/// rollback, but writes nothing.
+pub fn fetch_verified(
+    paths: &Paths,
+    keys: &[TrustedKey],
+    now: i64,
+    source_url: &str,
+    fetcher: &dyn Fetcher,
+) -> Result<Fetched> {
     crate::fetch::check_source_url(source_url)?;
     let current = load(paths, keys, now)?;
     let bytes = fetcher.get(source_url, MAX_CATALOG_BYTES)?;
     let sig = fetcher.get(&format!("{source_url}.sig"), signature::MAX_SIGNATURE_BYTES)?;
-    let (fetched, _) = verify_document(&bytes, &sig, keys)?;
+    let (fetched, signer) = verify_document(&bytes, &sig, keys)?;
     let previous_version = current.catalog.catalog_version;
     if fetched.catalog_version < previous_version {
         return Err(KimError::new(
@@ -180,23 +235,24 @@ pub fn refresh(
         .with_hint("a publisher must bump catalog_version for every change; nothing was changed"));
     }
     let updated = fetched.catalog_version > previous_version;
-    write_cache(paths, &bytes, &sig)?;
-    Ok(RefreshOutcome {
-        source_url: source_url.to_string(),
-        previous_version,
-        fetched_version: fetched.catalog_version,
-        updated,
+    Ok(Fetched {
+        outcome: RefreshOutcome {
+            // Never echo credentials from a user-supplied source URL (KIM-SEC-013).
+            source_url: crate::redact::url(source_url),
+            previous_version,
+            fetched_version: fetched.catalog_version,
+            updated,
+        },
+        catalog: fetched,
+        signer,
+        bytes,
+        sig,
     })
 }
 
 fn write_cache(paths: &Paths, bytes: &[u8], sig: &[u8]) -> Result<()> {
     let dir = paths.catalog_cache_dir();
-    std::fs::create_dir_all(&dir).map_err(|e| {
-        KimError::new(
-            ErrorCode::Io,
-            format!("cannot create {}: {e}", dir.display()),
-        )
-    })?;
+    std::fs::create_dir_all(&dir).map_err(|e| KimError::io(&dir, &e))?;
     // Write both temp files first, then replace: a crash in between leaves a pair that fails
     // verification and is ignored on the next load (never a trusted half-update).
     let tmp_cat = dir.join(format!("{CACHE_FILE}.tmp"));
@@ -209,7 +265,7 @@ fn write_cache(paths: &Paths, bytes: &[u8], sig: &[u8]) -> Result<()> {
 
 fn write_synced(path: &Path, data: &[u8]) -> Result<()> {
     use std::io::Write;
-    let io = |e: std::io::Error| KimError::new(ErrorCode::Io, format!("{}: {e}", path.display()));
+    let io = |e: std::io::Error| KimError::io(path, &e);
     let mut f = std::fs::File::create(path).map_err(io)?;
     f.write_all(data).map_err(io)?;
     f.sync_all().map_err(io)
@@ -218,12 +274,7 @@ fn write_synced(path: &Path, data: &[u8]) -> Result<()> {
 fn replace(from: &Path, to: &Path) -> Result<()> {
     // std::fs::rename replaces an existing file atomically on Windows (MoveFileExW with
     // MOVEFILE_REPLACE_EXISTING) and on Unix (rename(2)).
-    std::fs::rename(from, to).map_err(|e| {
-        KimError::new(
-            ErrorCode::Io,
-            format!("cannot replace {}: {e}", to.display()),
-        )
-    })
+    std::fs::rename(from, to).map_err(|e| KimError::io(to, &e))
 }
 
 #[cfg(test)]

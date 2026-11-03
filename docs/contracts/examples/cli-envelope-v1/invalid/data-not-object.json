@@ -1,0 +1,7 @@
+{
+  "ok": true,
+  "command": "tools.list",
+  "schema_version": 1,
+  "data": ["data is always an object so it can grow additively"],
+  "warnings": []
+}

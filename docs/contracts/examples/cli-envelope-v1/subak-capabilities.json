@@ -1,0 +1,28 @@
+{
+  "ok": true,
+  "command": "capabilities",
+  "schema_version": 1,
+  "data": {
+    "schema": "kim.capabilities",
+    "schema_version": 1,
+    "tool": "subak",
+    "version": "0.0.1",
+    "cli_contract": 1,
+    "json_schema_version": 1,
+    "implementation": "placeholder",
+    "summary": "Pre-alpha placeholder: no terminal features yet (no Host, sessions, attach or GUI)",
+    "commands": [
+      {
+        "name": "capabilities",
+        "usage": "subak capabilities [--json]",
+        "summary": "This document; Subak offers no terminal commands yet",
+        "effect": "read",
+        "network": false,
+        "dry_run": false,
+        "requires_yes": false,
+        "opens_window": false
+      }
+    ]
+  },
+  "warnings": []
+}

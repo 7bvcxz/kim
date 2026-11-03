@@ -1,0 +1,15 @@
+{
+  "ok": true,
+  "command": "settings.set",
+  "schema_version": 1,
+  "data": {
+    "settings": { "check_updates_on_launch": false, "offline_mode": false },
+    "path": "C:\\Users\\me\\AppData\\Roaming\\mouv\\kim\\settings.json",
+    "key": "auto_update",
+    "previous": false,
+    "value": true,
+    "changed": true,
+    "dry_run": false
+  },
+  "warnings": []
+}

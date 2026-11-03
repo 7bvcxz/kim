@@ -1,0 +1,6 @@
+{
+  "ok": false,
+  "command": "catalog.show",
+  "schema_version": 1,
+  "error": { "code": "tool_not_found", "exit_code": 4, "message": "tool_not_found belongs to exit code 3", "hint": null, "details": [] }
+}

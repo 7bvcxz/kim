@@ -1,0 +1,13 @@
+{
+  "schema": "kim.capabilities",
+  "schema_version": 1,
+  "tool": "Subak",
+  "version": "0.0.1",
+  "cli_contract": 1,
+  "json_schema_version": 1,
+  "implementation": "placeholder",
+  "summary": "Tool ids are lowercase catalog ids",
+  "commands": [
+    { "name": "capabilities", "usage": "subak capabilities", "summary": "s", "effect": "read", "network": false, "dry_run": false, "requires_yes": false, "opens_window": false }
+  ]
+}

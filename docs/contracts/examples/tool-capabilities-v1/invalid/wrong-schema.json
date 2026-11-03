@@ -1,0 +1,13 @@
+{
+  "schema": "kim.catalog",
+  "schema_version": 1,
+  "tool": "example-tool",
+  "version": "1.0.0",
+  "cli_contract": 1,
+  "json_schema_version": 1,
+  "implementation": "implemented",
+  "summary": "Not a capabilities document",
+  "commands": [
+    { "name": "capabilities", "usage": "example-tool capabilities", "summary": "s", "effect": "read", "network": false, "dry_run": false, "requires_yes": false, "opens_window": false }
+  ]
+}

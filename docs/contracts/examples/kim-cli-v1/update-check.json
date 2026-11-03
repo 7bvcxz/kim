@@ -1,0 +1,12 @@
+{
+  "command": "update.check",
+  "data": {
+    "dry_run": false,
+    "refresh": null,
+    "refreshed": false,
+    "updates": []
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

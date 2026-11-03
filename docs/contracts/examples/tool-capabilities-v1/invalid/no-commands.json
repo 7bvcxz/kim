@@ -1,0 +1,11 @@
+{
+  "schema": "kim.capabilities",
+  "schema_version": 1,
+  "tool": "example-tool",
+  "version": "1.0.0",
+  "cli_contract": 1,
+  "json_schema_version": 1,
+  "implementation": "implemented",
+  "summary": "Every tool offers at least the capabilities command",
+  "commands": []
+}

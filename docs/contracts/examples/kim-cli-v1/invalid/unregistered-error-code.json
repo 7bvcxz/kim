@@ -1,0 +1,6 @@
+{
+  "ok": false,
+  "command": "install",
+  "schema_version": 1,
+  "error": { "code": "kaboom", "exit_code": 1, "message": "every code must be in the registry", "hint": null, "details": [] }
+}

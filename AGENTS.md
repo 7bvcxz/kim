@@ -57,7 +57,11 @@ weaken them in code, defaults, tests or docs.
   compatibility and recovery docs that your change affects, and the status column in
   [docs/README.md](docs/README.md).
 - **Requirement traceability.** Reference requirement IDs (e.g. `SUBAK-FR-010`) in tests, ADRs
-  and commit messages when a change implements or affects them.
+  and commit messages when a change implements or affects them. Platform, Kim and Subak IDs live
+  in `docs/PRODUCT_REQUIREMENTS.md`; a tool with its own requirements document uses
+  `docs/<TOOL>_REQUIREMENTS.md` with IDs `<TOOL>-FR|NFR|SEC-ddd` (registered prefixes:
+  `KIM`, `SUBAK`, `NOEUL`, `DDALGAK` in `xtask/src/docs.rs`) and milestones `M1…M9` or a tool
+  letter (`N1`, `D1`, …). `cargo xtask docs-check` validates all of them.
 
 ## 4. Development cadence, tests and e2e (maintainer rules)
 

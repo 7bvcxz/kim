@@ -1,0 +1,9 @@
+{
+  "schema": "kim.hotkey-manifest",
+  "schema_version": 1,
+  "hotkey_contract": 1,
+  "tool": "kim",
+  "version": "0.1.0",
+  "backend": "focus",
+  "actions": [{"title": "Help", "scopes": ["app"], "defaults": ["F1"]}]
+}

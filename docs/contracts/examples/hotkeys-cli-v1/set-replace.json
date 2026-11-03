@@ -1,0 +1,25 @@
+{
+  "ok": true,
+  "command": "hotkeys.set",
+  "schema_version": 1,
+  "data": {
+    "tool": "subak",
+    "dry_run": false,
+    "written": true,
+    "path": "C:\\Users\\me\\AppData\\Roaming\\mouv\\subak\\hotkeys.json",
+    "changes": [
+      {
+        "action": "pane.zoom",
+        "before": {"source": "default", "bindings": ["@prefix char:z"]},
+        "after": {"source": "user", "bindings": ["Ctrl+Shift+R"]}
+      },
+      {
+        "action": "terminal.rename",
+        "before": {"source": "user", "bindings": ["Ctrl+Shift+R"]},
+        "after": {"source": "disabled", "bindings": []}
+      }
+    ],
+    "conflicts": []
+  },
+  "warnings": []
+}

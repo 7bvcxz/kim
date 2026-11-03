@@ -14,13 +14,14 @@ the requirements it serves. ADRs are immutable once **Accepted**; a later ADR ma
 | [0006](0006-state-and-configuration-storage.md) | State and configuration storage | Accepted |
 | [0007](0007-object-identity-and-naming.md) | Object identity, naming and targets | Accepted |
 | [0008](0008-attach-replay-and-backpressure.md) | Attach, replay and backpressure | Accepted (refined in Step 13) |
-| [0009](0009-gui-clients-and-keyboard-dispatch.md) | GUI clients and keyboard dispatch | Accepted (toolkit chosen in Step 04) |
+| [0009](0009-gui-clients-and-keyboard-dispatch.md) | GUI clients and keyboard dispatch | Accepted (toolkit chosen in Step 04; bindings follow ADR 0017) |
 | [0010](0010-claude-code-integration.md) | Claude Code status integration | Accepted (refined in Step 27) |
 | [0011](0011-portability-boundary.md) | Portability boundary for Linux | Accepted |
 | [0012](0012-local-metrics-no-telemetry.md) | Local performance metrics, no telemetry | Accepted |
 | [0013](0013-kim-manager-architecture.md) | Kim manager: catalog and explicit installer | Accepted (refined in Steps 05–07) |
 | [0014](0014-gui-technology.md) | GUI technology: egui + glow for chrome, dedicated terminal renderer | Accepted (re-validated in Steps 15–16) |
 | [0015](0015-cli-contract-and-tool-discovery.md) | CLI contract v1 and orchestrator-free tool discovery | Accepted |
+| [0017](0017-universal-customizable-hotkeys.md) | Universal customizable hotkeys without a shared hook or daemon | Accepted (implemented from Step 46) |
 
 "Accepted (validated in Step N)" means the decision is made, but the named Step must confirm it
 on real Windows; if validation fails, that Step writes a superseding ADR.

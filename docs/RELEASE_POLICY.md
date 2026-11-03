@@ -13,7 +13,10 @@ Status: **current** · Step 06 · Decisions: [ADR 0013](adr/0013-kim-manager-arc
 2. **Update checks only show information.** `kim update check` and Kim Manager list newer
    versions; they never download a package. Kim Manager refreshes the catalog at start-up only
    when the user enabled *Check for updates when Kim starts* (off by default); `offline_mode`
-   blocks every network operation (`KIM-SEC-002`).
+   blocks every network operation (`KIM-SEC-002`). A settings file that exists but cannot be
+   read or parsed **fails closed**: Kim treats it as offline (error `offline_mode`, explaining
+   the unreadable file) until the file is fixed or removed, because it may contain the user's
+   offline choice.
 3. **Dependencies are never installed implicitly.** A release that needs another tool fails with
    `dependency_missing` and names what to install first.
 4. **Kim never stops a running program.** Uninstall is refused (`tool_running`, exit 7) while any

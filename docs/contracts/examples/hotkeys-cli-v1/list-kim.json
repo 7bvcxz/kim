@@ -1,0 +1,127 @@
+{
+  "ok": true,
+  "command": "hotkeys.list",
+  "schema_version": 1,
+  "data": {
+    "tool": "kim",
+    "enabled": true,
+    "config": {"path": "C:\\Users\\me\\AppData\\Roaming\\mouv\\kim\\hotkeys.json", "state": "user"},
+    "disabled_scopes": [],
+    "leaders": [],
+    "actions": [
+      {
+        "id": "catalog.refresh",
+        "title": "Refresh the catalog",
+        "scope": "app",
+        "bindable": true,
+        "source": "user",
+        "defaults": ["F5"],
+        "bindings": [
+          {
+            "keys": "Ctrl+R",
+            "scope": "app",
+            "trigger": "press",
+            "active": true,
+            "registration": "not_applicable"
+          }
+        ]
+      },
+      {
+        "id": "help.show",
+        "title": "Show keyboard shortcuts",
+        "scope": "app",
+        "bindable": true,
+        "source": "default",
+        "defaults": ["F1"],
+        "bindings": [
+          {
+            "keys": "F1",
+            "scope": "app",
+            "trigger": "press",
+            "active": true,
+            "registration": "not_applicable"
+          }
+        ]
+      },
+      {
+        "id": "tool.install",
+        "title": "Install the selected tool",
+        "scope": "app",
+        "bindable": true,
+        "source": "unbound",
+        "defaults": [],
+        "bindings": []
+      },
+      {
+        "id": "tool.update",
+        "title": "Update the selected tool",
+        "scope": "app",
+        "bindable": true,
+        "source": "unbound",
+        "defaults": [],
+        "bindings": []
+      },
+      {
+        "id": "tool.uninstall",
+        "title": "Uninstall the selected tool (confirms)",
+        "scope": "app",
+        "bindable": true,
+        "source": "disabled",
+        "defaults": [],
+        "bindings": []
+      },
+      {
+        "id": "nav.next-control",
+        "title": "Next control",
+        "scope": "app",
+        "bindable": false,
+        "source": "reserved",
+        "defaults": ["Tab"],
+        "bindings": [
+          {
+            "keys": "Tab",
+            "scope": "app",
+            "trigger": "press",
+            "active": true,
+            "registration": "not_applicable"
+          }
+        ]
+      },
+      {
+        "id": "nav.cancel",
+        "title": "Cancel or close",
+        "scope": "app",
+        "bindable": false,
+        "source": "reserved",
+        "defaults": ["Escape"],
+        "bindings": [
+          {
+            "keys": "Escape",
+            "scope": "app",
+            "trigger": "press",
+            "active": true,
+            "registration": "not_applicable"
+          }
+        ]
+      },
+      {
+        "id": "window.close",
+        "title": "Close the window",
+        "scope": "app",
+        "bindable": false,
+        "source": "reserved",
+        "defaults": ["Alt+F4"],
+        "bindings": [
+          {
+            "keys": "Alt+F4",
+            "scope": "app",
+            "trigger": "press",
+            "active": true,
+            "registration": "not_applicable"
+          }
+        ]
+      }
+    ]
+  },
+  "warnings": []
+}

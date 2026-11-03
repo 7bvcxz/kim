@@ -1,0 +1,12 @@
+{
+  "ok": false,
+  "command": "hotkeys.set",
+  "schema_version": 1,
+  "error": {
+    "code": "hotkey_unsupported",
+    "exit_code": 5,
+    "message": "Noeul cannot use a key sequence as a global shortcut",
+    "hint": "use a single chord, or the app scope (--scope app)",
+    "details": ["invalid_binding (backend_unsupported): Ctrl+K Ctrl+C"]
+  }
+}

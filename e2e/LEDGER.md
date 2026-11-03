@@ -17,6 +17,8 @@ Run with `cargo xtask e2e`, which refuses unless the counter below has reached 1
 | 4 | #4 Step 04 – Kim native design system (design) | none (no product feature; token contrast is checked by `cargo test` via `design-check`) | 4 |
 | 5 | #5 Step 05 – Kim tool catalog | `step05_catalog.rs`: offline signed listing writes nothing, explicit refresh from a local mirror, tampered catalog exit 4, unknown tool exit 3; `step02` help check updated for the real `kim` CLI | 5 |
 | 6 | #6 Step 06 – Kim Manager and manual installer | `step06_installer.rs`: debug `kim` explicit install → update check → tampered update refused → update → uninstall needs `--yes`, keeps data; release `kim` ignores the development key | 6 |
+| 7 | #7 Step 07 – Kim CLI contract and headless foundation | `step07_cli_contract.rs` (4 tests): JSON envelope/schemas on real output, capabilities and `tools list/describe`, headless (no GUI/child processes), redaction | 7 |
+| 8 | #50 Step 45 – Universal customizable hotkey contract (specification) | none (no executable feature; 17 conflict scenarios are recomputed by `cargo xtask schema-check`, and Step 46 adds the e2e scenario for `kim hotkeys`) | 8 |
 
 ## E2E runs
 

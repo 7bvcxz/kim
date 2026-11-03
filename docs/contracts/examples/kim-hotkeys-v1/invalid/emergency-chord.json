@@ -1,0 +1,6 @@
+{
+  "schema": "kim.hotkeys",
+  "schema_version": 1,
+  "tool": "ddalgak",
+  "overrides": [{"action": "engine.toggle", "bindings": ["Ctrl+Alt+Shift+Escape"]}]
+}

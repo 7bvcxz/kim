@@ -3,7 +3,7 @@
 //! Supported keywords: `$ref` (local `#/$defs/...`), `type`, `enum`, `const`, `properties`,
 //! `required`, `additionalProperties`, `items`, `minItems`, `maxItems`, `minLength`,
 //! `maxLength`, `pattern`, `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`,
-//! `oneOf`, `anyOf`, `allOf`. Annotation keywords are ignored. Any other keyword is a hard
+//! `oneOf`, `anyOf`, `allOf`, `not`. Annotation keywords are ignored. Any other keyword is a hard
 //! error, so a schema can never silently claim a constraint this validator does not enforce.
 //!
 //! This file is self-contained (std, `serde_json`, `regex`) on purpose: `cargo xtask
@@ -230,6 +230,19 @@ impl<'a> Validator<'a> {
                         ));
                     }
                 }
+                "not" => {
+                    // Used for reserved values (e.g. OS-reserved hotkey chords). The sibling
+                    // `description`, when present, names what was matched.
+                    let mut sub_errs = Vec::new();
+                    self.check(value, inst, path, &mut sub_errs)?;
+                    if sub_errs.is_empty() {
+                        let why = obj
+                            .get("description")
+                            .and_then(Value::as_str)
+                            .map_or_else(|| format!("matches {value}"), str::to_string);
+                        errs.push(format!("{path}: {inst} is not allowed: {why}"));
+                    }
+                }
                 other => return Err(format!("unsupported schema keyword `{other}` at {path}")),
             }
         }
@@ -344,6 +357,23 @@ mod tests {
         assert_eq!(errors(s.clone(), json!({"id": "t-XYZ"})).len(), 1);
         assert_eq!(errors(s.clone(), json!({"size": 0})).len(), 1);
         assert_eq!(errors(s, json!({"name": "abcd"})).len(), 1);
+    }
+
+    #[test]
+    fn not_rejects_matching_instances_and_names_the_reason() {
+        let s = json!({
+            "type": "string",
+            "allOf": [{
+                "description": "reserved by the OS",
+                "not": {"type": "string", "pattern": "(^| )Win\\+"}
+            }]
+        });
+        assert!(errors(s.clone(), json!("Ctrl+T")).is_empty());
+        let e = errors(s, json!("Win+L"));
+        assert_eq!(e.len(), 1);
+        assert!(e[0].contains("reserved by the OS"), "{e:?}");
+        // The `type` inside `not` keeps non-strings from being rejected by accident.
+        assert!(errors(json!({"not": {"type": "string", "pattern": "x"}}), json!(1)).is_empty());
     }
 
     #[test]

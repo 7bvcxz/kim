@@ -226,6 +226,8 @@ they return `unsupported_platform` until milestone M4.
 | Kim catalog (signed, offline, read-only CLI + explicit refresh) | implemented | 05 |
 | Kim installer (transactional, explicit) + Kim Manager GUI | implemented | 06 |
 | Kim CLI contract v1, JSON schemas, headless management (`status`, `version`, `tools list\|describe`), capability discovery | implemented | 07 |
+| Hotkey contract v1 for every GUI tool (specification, schemas, conflict scenarios; [HOTKEY_CONTRACT](HOTKEY_CONTRACT.md)) | current (design) | 45 |
+| Shared hotkey library, `hotkeys` CLI, conflict detection | planned | 46 |
 | ConPTY + detached Host proof | planned | 08 |
 | IPC v1, supervisor | planned | 09 |
 | Session lifecycle, PTY management, CLI, replay | planned | 10–14 |

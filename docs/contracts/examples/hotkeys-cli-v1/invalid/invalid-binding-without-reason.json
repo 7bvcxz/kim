@@ -1,0 +1,23 @@
+{
+  "ok": true,
+  "command": "hotkeys.check",
+  "schema_version": 1,
+  "data": {
+    "tools": [],
+    "summary": {"errors": 1, "warnings": 0, "infos": 0},
+    "conflicts": [
+      {
+        "code": "invalid_binding",
+        "severity": "error",
+        "tool": "noeul",
+        "action": "capture.region",
+        "keys": "Ctrl+K Ctrl+C",
+        "scope": "global",
+        "source": "user",
+        "with": null,
+        "offers": [{"kind": "reset"}]
+      }
+    ]
+  },
+  "warnings": []
+}

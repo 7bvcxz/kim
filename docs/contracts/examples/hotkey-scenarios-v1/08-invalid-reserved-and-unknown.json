@@ -1,0 +1,92 @@
+{
+  "schema": "kim.hotkey-scenario",
+  "schema_version": 1,
+  "title": "Scope-dependent reservations, backend limits and unknown actions",
+  "description": "The schema accepts these user layers, but the contract does not: F6 is a reserved navigation key in app scope, F12 is reserved for debuggers in global scope, a key sequence is beyond Noeul's `register` backend, and catalog.search does not exist in this Kim version (kept, ignored).",
+  "tools": [
+    {
+      "manifest": "kim",
+      "config": {
+        "schema": "kim.hotkeys",
+        "schema_version": 1,
+        "tool": "kim",
+        "overrides": [
+          {"action": "help.show", "bindings": ["F6"]},
+          {"action": "catalog.search", "bindings": ["Ctrl+F"]}
+        ]
+      }
+    },
+    {
+      "manifest": "noeul",
+      "config": {
+        "schema": "kim.hotkeys",
+        "schema_version": 1,
+        "tool": "noeul",
+        "overrides": [
+          {"action": "capture.region", "bindings": [{"keys": "Ctrl+K Ctrl+C", "scope": "global"}]},
+          {"action": "paste.float", "bindings": ["F12"]}
+        ]
+      }
+    }
+  ],
+  "expected": {
+    "report": {
+      "tools": [
+        {"tool": "kim", "version": "0.1.0", "enabled": true, "source": "manifest"},
+        {"tool": "noeul", "version": "0.1.0", "enabled": true, "source": "manifest"}
+      ],
+      "conflicts": [
+        {
+          "code": "kim_reserved",
+          "severity": "error",
+          "tool": "kim",
+          "action": "help.show",
+          "keys": "F6",
+          "scope": "app",
+          "source": "user",
+          "with": {"reserved": "kim", "keys": "F6", "name": "Navigation key"},
+          "offers": [
+            {"kind": "rebind", "keys": "Ctrl+Shift+F6"},
+            {"kind": "rebind", "keys": "Alt+Shift+F6"},
+            {"kind": "disable"}
+          ]
+        },
+        {
+          "code": "invalid_binding",
+          "severity": "error",
+          "reason": "backend_unsupported",
+          "tool": "noeul",
+          "action": "capture.region",
+          "keys": "Ctrl+K Ctrl+C",
+          "scope": "global",
+          "source": "user",
+          "with": null,
+          "offers": [{"kind": "reset"}]
+        },
+        {
+          "code": "os_reserved",
+          "severity": "error",
+          "tool": "noeul",
+          "action": "paste.float",
+          "keys": "F12",
+          "scope": "global",
+          "source": "user",
+          "with": {"reserved": "os", "keys": "F12", "name": "Reserved for debuggers"},
+          "offers": [{"kind": "disable"}]
+        },
+        {
+          "code": "unknown_action",
+          "severity": "warning",
+          "tool": "kim",
+          "action": "catalog.search",
+          "keys": "Ctrl+F",
+          "scope": null,
+          "source": "user",
+          "with": null,
+          "offers": [{"kind": "reset"}]
+        }
+      ],
+      "summary": {"errors": 3, "warnings": 1, "infos": 0}
+    }
+  }
+}

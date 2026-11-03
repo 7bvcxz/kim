@@ -1,0 +1,16 @@
+{
+  "ok": true,
+  "command": "hotkeys.export",
+  "schema_version": 1,
+  "data": {
+    "tool": "kim",
+    "path": "C:\\Users\\me\\AppData\\Roaming\\mouv\\kim\\hotkeys.json",
+    "document": {
+      "schema": "kim.hotkeys",
+      "schema_version": 1,
+      "tool": "kim",
+      "overrides": [{"action": "catalog.refresh", "bindings": ["Ctrl+R"]}]
+    }
+  },
+  "warnings": []
+}

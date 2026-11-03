@@ -1,0 +1,6 @@
+{
+  "schema": "kim.hotkeys",
+  "schema_version": 1,
+  "tool": "subak",
+  "overrides": [{"action": "terminal.new", "bindings": ["Hyper+T"]}]
+}

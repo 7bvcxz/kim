@@ -1,0 +1,44 @@
+{
+  "schema": "kim.hotkey-scenario",
+  "schema_version": 1,
+  "title": "Two tools want the same global chord",
+  "description": "The user bound Ddalgak's engine toggle to F3, which is Noeul's global floating-paste default. Global chords are first come, first served at the OS level, so this is an error. The user binding is the subject; the offers never touch Noeul.",
+  "tools": [
+    {"manifest": "noeul", "config": null},
+    {
+      "manifest": "ddalgak",
+      "config": {
+        "schema": "kim.hotkeys",
+        "schema_version": 1,
+        "tool": "ddalgak",
+        "overrides": [{"action": "engine.toggle", "bindings": ["F3"]}]
+      }
+    }
+  ],
+  "expected": {
+    "report": {
+      "tools": [
+        {"tool": "ddalgak", "version": "0.1.0", "enabled": true, "source": "manifest"},
+        {"tool": "noeul", "version": "0.1.0", "enabled": true, "source": "manifest"}
+      ],
+      "conflicts": [
+        {
+          "code": "cross_tool_global",
+          "severity": "error",
+          "tool": "ddalgak",
+          "action": "engine.toggle",
+          "keys": "F3",
+          "scope": "global",
+          "source": "user",
+          "with": {"tool": "noeul", "action": "paste.float", "keys": "F3", "scope": "global"},
+          "offers": [
+            {"kind": "rebind", "keys": "Shift+F3"},
+            {"kind": "rebind", "keys": "Ctrl+Shift+F3"},
+            {"kind": "disable"}
+          ]
+        }
+      ],
+      "summary": {"errors": 1, "warnings": 0, "infos": 0}
+    }
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "schema": "kim.hotkey-scenario",
+  "schema_version": 1,
+  "title": "`set` refuses a conflict with the leader",
+  "description": "`subak hotkeys set tab.next Ctrl+B` would collide with the prefix. It is refused with hotkey_conflict (exit 7); --replace cannot take a leader's chord away.",
+  "tools": [{"manifest": "subak", "config": null}],
+  "request": {"command": "set", "tool": "subak", "action": "tab.next", "bindings": ["Ctrl+B"], "replace": true},
+  "expected": {
+    "outcome": "refused",
+    "error": {"code": "hotkey_conflict", "exit_code": 7},
+    "conflicts": [
+      {
+        "code": "duplicate_binding",
+        "severity": "error",
+        "tool": "subak",
+        "action": "tab.next",
+        "keys": "Ctrl+B",
+        "scope": "app",
+        "source": "user",
+        "with": {"tool": "subak", "action": "@prefix", "keys": "Ctrl+B", "scope": "app"},
+        "offers": [{"kind": "rebind", "keys": "Ctrl+Shift+B"}, {"kind": "disable"}]
+      }
+    ]
+  }
+}

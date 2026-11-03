@@ -148,6 +148,20 @@ and exit code above. `crates/subak/src/output.rs` tests that this table matches 
 | `host_disconnected` | 6 | The Host closed the connection unexpectedly (crashed, killed, or shutting down). |
 | `host_already_running` | 7 | A Host already serves the endpoint; attach to it or stop it explicitly. |
 
+Codes registered for the `hotkeys` command group of every GUI tool
+([HOTKEY_CONTRACT §10](HOTKEY_CONTRACT.md)). They are registered so that no tool gives them
+another meaning; no tool implements them yet (Step 46):
+
+| Code | Exit | Meaning |
+| --- | --- | --- |
+| `hotkey_invalid` | 2 | The keys do not parse, or use a key, modifier, scope or leader the action does not have. |
+| `hotkey_reserved` | 2 | The chord is reserved by the OS, by Kim's GUI rules or by the IME, or the action is not bindable. |
+| `action_not_found` | 3 | The tool has no action with this ID. |
+| `hotkeys_invalid` | 4 | The stored `hotkeys.json` is malformed or invalid; the tool runs in safe mode. |
+| `hotkey_unsupported` | 5 | The binding needs an input capability the tool does not have. |
+| `hotkeys_from_newer_version` | 5 | `hotkeys.json` was written by a newer version and is read-only. |
+| `hotkey_conflict` | 7 | The change conflicts with another binding; nothing was changed. |
+
 Subak's IPC error codes ([IPC_PROTOCOL](contracts/IPC_PROTOCOL.md)) are a separate namespace;
 the CLI maps them onto the codes above (for example IPC `invalid_params` → `usage`). Step 12
 extends this table for Subak's real CLI. `host attach` is the one command whose stdout is not a

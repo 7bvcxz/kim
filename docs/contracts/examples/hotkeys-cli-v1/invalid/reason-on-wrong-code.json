@@ -1,0 +1,46 @@
+{
+  "ok": true,
+  "command": "hotkeys.show",
+  "schema_version": 1,
+  "data": {
+    "tool": "subak",
+    "action": {
+      "id": "help.show",
+      "title": "Show keyboard shortcuts",
+      "scope": "app",
+      "bindable": true,
+      "source": "default",
+      "defaults": ["F1"],
+      "bindings": [
+        {
+          "keys": "F1",
+          "scope": "app",
+          "trigger": "press",
+          "active": true,
+          "registration": "not_applicable"
+        }
+      ]
+    },
+    "conflicts": [
+      {
+        "code": "global_shadows_app",
+        "severity": "warning",
+        "tool": "subak",
+        "action": "help.show",
+        "keys": "F1",
+        "scope": "app",
+        "source": "default",
+        "with": {"tool": "noeul", "action": "capture.region", "keys": "F1", "scope": "global"},
+        "offers": [
+          {"kind": "rebind", "keys": "Shift+F1"},
+          {"kind": "rebind", "keys": "Ctrl+Shift+F1"},
+          {"kind": "disable"},
+          {"kind": "keep"}
+        ],
+        "message": "While Noeul runs, F1 starts its region capture, so Subak's \"Show keyboard shortcuts\" never receives F1.",
+        "reason": "backend_unsupported"
+      }
+    ]
+  },
+  "warnings": []
+}

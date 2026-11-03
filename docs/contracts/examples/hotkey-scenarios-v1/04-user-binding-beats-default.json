@@ -1,0 +1,69 @@
+{
+  "schema": "kim.hotkey-scenario",
+  "schema_version": 1,
+  "title": "A user binding wins over a default",
+  "description": "The user bound tab.next to Ctrl+T, Subak's default for terminal.new. The user layer wins: terminal.new's default becomes inactive and is reported as an info (default_suppressed), not as an error.",
+  "tools": [
+    {
+      "manifest": "subak",
+      "config": {
+        "schema": "kim.hotkeys",
+        "schema_version": 1,
+        "tool": "subak",
+        "overrides": [{"action": "tab.next", "bindings": ["Ctrl+T"]}]
+      }
+    }
+  ],
+  "expected": {
+    "report": {
+      "tools": [{"tool": "subak", "version": "0.1.0", "enabled": true, "source": "manifest"}],
+      "conflicts": [
+        {
+          "code": "shadows_terminal_input",
+          "severity": "info",
+          "tool": "subak",
+          "action": "@prefix",
+          "keys": "Ctrl+B",
+          "scope": "app",
+          "source": "default",
+          "with": null,
+          "offers": []
+        },
+        {
+          "code": "shadows_terminal_input",
+          "severity": "info",
+          "tool": "subak",
+          "action": "tab.next",
+          "keys": "Ctrl+T",
+          "scope": "app",
+          "source": "user",
+          "with": null,
+          "offers": []
+        },
+        {
+          "code": "shadows_terminal_input",
+          "severity": "info",
+          "tool": "subak",
+          "action": "terminal.close",
+          "keys": "Ctrl+W",
+          "scope": "app",
+          "source": "default",
+          "with": null,
+          "offers": []
+        },
+        {
+          "code": "default_suppressed",
+          "severity": "info",
+          "tool": "subak",
+          "action": "terminal.new",
+          "keys": "Ctrl+T",
+          "scope": "app",
+          "source": "default",
+          "with": {"tool": "subak", "action": "tab.next", "keys": "Ctrl+T", "scope": "app"},
+          "offers": []
+        }
+      ],
+      "summary": {"errors": 0, "warnings": 0, "infos": 4}
+    }
+  }
+}

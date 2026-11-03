@@ -1,0 +1,48 @@
+{
+  "schema": "kim.hotkey-scenario",
+  "schema_version": 1,
+  "title": "Subak's defaults are conflict-free",
+  "description": "Subak's defaults (SUBAK-FR-033, ADR 0009) produce no error or warning. The app keys that terminal programs also use (Ctrl+T, Ctrl+W, the Ctrl+B prefix) are reported as infos, because the program only receives them through the prefix pass-through.",
+  "tools": [{"manifest": "subak", "config": null}],
+  "expected": {
+    "report": {
+      "tools": [{"tool": "subak", "version": "0.1.0", "enabled": true, "source": "manifest"}],
+      "conflicts": [
+        {
+          "code": "shadows_terminal_input",
+          "severity": "info",
+          "tool": "subak",
+          "action": "@prefix",
+          "keys": "Ctrl+B",
+          "scope": "app",
+          "source": "default",
+          "with": null,
+          "offers": []
+        },
+        {
+          "code": "shadows_terminal_input",
+          "severity": "info",
+          "tool": "subak",
+          "action": "terminal.close",
+          "keys": "Ctrl+W",
+          "scope": "app",
+          "source": "default",
+          "with": null,
+          "offers": []
+        },
+        {
+          "code": "shadows_terminal_input",
+          "severity": "info",
+          "tool": "subak",
+          "action": "terminal.new",
+          "keys": "Ctrl+T",
+          "scope": "app",
+          "source": "default",
+          "with": null,
+          "offers": []
+        }
+      ],
+      "summary": {"errors": 0, "warnings": 0, "infos": 3}
+    }
+  }
+}

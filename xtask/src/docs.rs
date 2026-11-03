@@ -15,13 +15,24 @@ pub struct Report {
     pub problems: Vec<String>,
 }
 
-const SKIP_DIRS: &[&str] = &["target", ".git", "node_modules"];
+/// `.claude` holds local agent worktrees (other branches checked out inside this checkout).
+const SKIP_DIRS: &[&str] = &["target", ".git", "node_modules", ".claude"];
 
 pub fn check(root: &Path) -> Result<Report, String> {
     let mut report = Report::default();
-    let req_path = root.join("docs").join("PRODUCT_REQUIREMENTS.md");
-    let req_text = read(&req_path)?;
-    let defined = parse_requirement_table(&req_text, &mut report.problems);
+    // Requirement tables: the platform document plus one `<TOOL>_REQUIREMENTS.md` per tool that
+    // has its own (e.g. NOEUL_REQUIREMENTS.md). IDs must be unique across all of them.
+    let mut defined = BTreeMap::new();
+    for req_path in requirement_documents(root)? {
+        let req_text = read(&req_path)?;
+        for (id, row) in parse_requirement_table(&req_text, &mut report.problems) {
+            if defined.insert(id.clone(), row).is_some() {
+                report.problems.push(format!(
+                    "{id}: defined in more than one requirements document"
+                ));
+            }
+        }
+    }
     report.requirement_ids = defined.len();
 
     let mut files = Vec::new();
@@ -81,11 +92,39 @@ fn collect_markdown(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
 }
 
 /// Returns `id -> row` for every requirement row and records malformed or duplicate rows.
+/// Product prefixes of requirement IDs (`<PRODUCT>-<FR|NFR|SEC>-ddd`).
+pub const PRODUCTS: &[&str] = &["KIM-", "SUBAK-", "NOEUL-", "DDALGAK-"];
+
+/// `docs/PRODUCT_REQUIREMENTS.md` plus every `docs/<TOOL>_REQUIREMENTS.md`.
+fn requirement_documents(root: &Path) -> Result<Vec<PathBuf>, String> {
+    let docs = root.join("docs");
+    let mut out = vec![docs.join("PRODUCT_REQUIREMENTS.md")];
+    let mut extra: Vec<PathBuf> = std::fs::read_dir(&docs)
+        .map_err(|e| format!("cannot list {}: {e}", docs.display()))?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.ends_with("_REQUIREMENTS.md") && n != "PRODUCT_REQUIREMENTS.md")
+        })
+        .collect();
+    extra.sort();
+    out.extend(extra);
+    Ok(out)
+}
+
+fn is_valid_milestone(m: &str) -> bool {
+    // `M1`…`M9` for the platform; tools may use their own letter, e.g. `N1` (Noeul), `D2`.
+    let b = m.as_bytes();
+    b.len() == 2 && b[0].is_ascii_uppercase() && b[1].is_ascii_digit() && b[1] != b'0'
+}
+
 pub fn parse_requirement_table(text: &str, problems: &mut Vec<String>) -> BTreeMap<String, String> {
     let mut defined = BTreeMap::new();
     for line in text.lines() {
         let t = line.trim();
-        if !(t.starts_with("| KIM-") || t.starts_with("| SUBAK-")) {
+        if !PRODUCTS.iter().any(|p| t.starts_with(&format!("| {p}"))) {
             continue;
         }
         let cells: Vec<&str> = t.trim_matches('|').split('|').map(str::trim).collect();
@@ -102,7 +141,7 @@ pub fn parse_requirement_table(text: &str, problems: &mut Vec<String>) -> BTreeM
             if !matches!(cells[2], "P0" | "P1" | "P2") {
                 problems.push(format!("{id}: invalid priority `{}`", cells[2]));
             }
-            if !matches!(cells[3], "M1" | "M2" | "M3" | "M4") {
+            if !is_valid_milestone(cells[3]) {
                 problems.push(format!("{id}: invalid milestone `{}`", cells[3]));
             }
             if cells[1].is_empty() || cells[4].is_empty() {
@@ -116,12 +155,10 @@ pub fn parse_requirement_table(text: &str, problems: &mut Vec<String>) -> BTreeM
     defined
 }
 
-/// Parses `KIM|SUBAK - FR|NFR|SEC - ddd` starting at byte `i`; returns the ID and its length.
+/// Parses `<PRODUCT> - FR|NFR|SEC - ddd` starting at byte `i`; returns the ID and its length.
 fn parse_id_at(text: &str, i: usize) -> Option<(String, usize)> {
     let rest = &text[i..];
-    let product = ["KIM-", "SUBAK-"]
-        .into_iter()
-        .find(|p| rest.starts_with(p))?;
+    let product = PRODUCTS.iter().copied().find(|p| rest.starts_with(p))?;
     let after_product = &rest[product.len()..];
     let kind = ["FR-", "NFR-", "SEC-"]
         .into_iter()
@@ -275,6 +312,31 @@ mod tests {
     }
 
     #[test]
+    fn tool_specific_prefixes_and_milestones() {
+        let ids: Vec<_> = referenced_ids("NOEUL-FR-001 and DDALGAK-SEC-002…004")
+            .into_iter()
+            .collect();
+        assert_eq!(ids, ["DDALGAK-SEC-002", "DDALGAK-SEC-004", "NOEUL-FR-001"]);
+        let mut problems = Vec::new();
+        let defined = parse_requirement_table(
+            "| NOEUL-FR-001 | F1 starts selection | P0 | N1 | T |
+| DDALGAK-FR-001 | x | P1 | M0 | T |
+",
+            &mut problems,
+        );
+        assert_eq!(defined.len(), 2);
+        assert!(
+            problems
+                .join(
+                    "
+"
+                )
+                .contains("invalid milestone `M0`"),
+            "{problems:?}"
+        );
+    }
+
+    #[test]
     fn ignores_lookalikes() {
         assert!(referenced_ids("XKIM-FR-001 KIM-FR-01 KIM-FR-0001 KIM-XX-001").is_empty());
     }
@@ -292,7 +354,7 @@ mod tests {
 | KIM-FR-001 | ok | P0 | M1 | T |
 | KIM-FR-001 | duplicate | P0 | M1 | T |
 | KIM-FR-002 | bad priority | P9 | M1 | T |
-| KIM-FR-003 | bad milestone | P1 | M7 | T |
+| KIM-FR-003 | bad milestone | P1 | M10 | T |
 | KIM-FR-004 | missing column | P1 | M1 |
 | KIM-FR-05 | malformed | P1 | M1 | T |
 ";
@@ -301,7 +363,7 @@ mod tests {
         let joined = problems.join("\n");
         assert!(joined.contains("KIM-FR-001: duplicate"));
         assert!(joined.contains("invalid priority `P9`"));
-        assert!(joined.contains("invalid milestone `M7`"));
+        assert!(joined.contains("invalid milestone `M10`"));
         assert!(joined.contains("expected 5 columns"));
         assert!(joined.contains("malformed requirement ID `KIM-FR-05`"));
     }

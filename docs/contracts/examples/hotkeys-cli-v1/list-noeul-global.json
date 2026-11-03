@@ -1,0 +1,66 @@
+{
+  "ok": true,
+  "command": "hotkeys.list",
+  "schema_version": 1,
+  "data": {
+    "tool": "noeul",
+    "enabled": true,
+    "config": {"path": "C:\\Users\\me\\AppData\\Roaming\\mouv\\noeul\\hotkeys.json", "state": "default"},
+    "disabled_scopes": [],
+    "leaders": [],
+    "actions": [
+      {
+        "id": "capture.region",
+        "title": "Capture a region (F1)",
+        "scope": "global",
+        "bindable": true,
+        "source": "default",
+        "defaults": ["F1"],
+        "bindings": [
+          {
+            "keys": "F1",
+            "scope": "global",
+            "trigger": "press",
+            "active": false,
+            "registration": "taken"
+          }
+        ]
+      },
+      {
+        "id": "paste.float",
+        "title": "Paste the clipboard as a floating pin (F3)",
+        "scope": "global",
+        "bindable": true,
+        "source": "default",
+        "defaults": ["F3"],
+        "bindings": [
+          {
+            "keys": "F3",
+            "scope": "global",
+            "trigger": "press",
+            "active": true,
+            "registration": "unknown"
+          }
+        ]
+      },
+      {
+        "id": "pin.close",
+        "title": "Close the pin",
+        "scope": "context:pin",
+        "bindable": true,
+        "source": "default",
+        "defaults": ["Escape"],
+        "bindings": [
+          {
+            "keys": "Escape",
+            "scope": "context:pin",
+            "trigger": "press",
+            "active": true,
+            "registration": "not_applicable"
+          }
+        ]
+      }
+    ]
+  },
+  "warnings": []
+}

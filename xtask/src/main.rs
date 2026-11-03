@@ -4,6 +4,7 @@
 //! shipped to users.
 
 mod catalog_tools;
+mod deps;
 mod design;
 mod docs;
 mod ledger;
@@ -20,6 +21,7 @@ COMMANDS:
     schema-check [--verbose]
                       Validate contract examples against docs/contracts/schemas (valid must
                       pass, examples/<name>/invalid/ must fail)
+    deps-check        Fail if a headless package (kim, subak) depends on GUI crates (ADR 0014)
     design-check [--verbose]
                       Check design/tokens.json: colors and declared WCAG contrast pairs
     catalog-keygen --out <file>
@@ -27,7 +29,7 @@ COMMANDS:
     catalog-sign --key <file> [<catalog.json>]
                       Sign a catalog (default: catalog/catalog.json) -> <catalog>.sig
     ci                Run the CI gate locally: fmt --check, clippy -D warnings, tests,
-                      docs-check, schema-check, design-check
+                      docs-check, schema-check, design-check, deps-check
     e2e [--force]     Build release binaries and run the e2e suite. Refuses unless the
                       e2e ledger says 15 Step issues were processed since the last run
                       (AGENTS.md §4); --force overrides and must be justified in the ledger.
@@ -54,6 +56,7 @@ fn main() -> ExitCode {
                     .map_or_else(|| root.join("catalog").join("catalog.json"), PathBuf::from);
                 catalog_tools::sign(Path::new(&key), &catalog)
             }),
+        Some("deps-check") => run_deps_check(&root),
         Some("design-check") => run_design_check(&root, args.iter().any(|a| a == "--verbose")),
         Some("schema-check") => run_schema_check(&root, args.iter().any(|a| a == "--verbose")),
         Some("ci") => run_ci(&root),
@@ -110,6 +113,22 @@ fn run_docs_check(root: &Path) -> Result<(), String> {
             "docs-check: FAIL ({} problems)",
             report.problems.len()
         ))
+    }
+}
+
+fn run_deps_check(root: &Path) -> Result<(), String> {
+    let problems = deps::check(root)?;
+    if problems.is_empty() {
+        println!(
+            "deps-check: headless packages {:?} have no GUI dependencies: PASS",
+            deps::HEADLESS
+        );
+        Ok(())
+    } else {
+        for p in &problems {
+            eprintln!("  - {p}");
+        }
+        Err(format!("deps-check: FAIL ({} problems)", problems.len()))
     }
 }
 
@@ -196,7 +215,8 @@ fn run_ci(root: &Path) -> Result<(), String> {
     cargo(root, &["test"])?;
     run_docs_check(root)?;
     run_schema_check(root, false)?;
-    run_design_check(root, false)
+    run_design_check(root, false)?;
+    run_deps_check(root)
 }
 
 fn e2e_status(root: &Path) -> Result<u32, String> {
@@ -226,6 +246,8 @@ fn run_e2e(root: &Path, force: bool) -> Result<(), String> {
             "subak",
         ],
     )?;
+    // Debug `kim` accepts a development catalog key (KIM_DEV_TRUSTED_KEY); some scenarios need it.
+    cargo(root, &["build", "--package", "kim"])?;
     let bin_dir = root.join("target").join("release");
     let cargo_bin = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
     println!("$ cargo test --package kim-e2e -- --ignored --test-threads=1");
@@ -240,6 +262,7 @@ fn run_e2e(root: &Path, force: bool) -> Result<(), String> {
         ])
         .env("KIM_E2E", "1")
         .env("KIM_E2E_BIN_DIR", &bin_dir)
+        .env("KIM_E2E_DEBUG_BIN_DIR", root.join("target").join("debug"))
         .current_dir(root)
         .status()
         .map_err(|e| format!("failed to run cargo: {e}"))?;

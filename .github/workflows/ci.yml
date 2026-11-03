@@ -41,6 +41,8 @@ jobs:
         run: cargo xtask schema-check
       - name: Design tokens (contrast)
         run: cargo xtask design-check
+      - name: Headless binaries have no GUI dependencies
+        run: cargo xtask deps-check
 
   linux-compile:
     # Portable compile check only. Linux runtime support is NOT claimed (KIM-NFR-011, M4).

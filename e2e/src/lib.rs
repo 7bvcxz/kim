@@ -25,6 +25,18 @@ pub fn bin(name: &str) -> PathBuf {
     path
 }
 
+/// Path of a *debug* binary built by `cargo xtask e2e`. Debug builds accept a development
+/// catalog key from `KIM_DEV_TRUSTED_KEY` (compiled out of release builds), which scenarios need
+/// to install test-signed packages.
+pub fn bin_debug(name: &str) -> PathBuf {
+    require_e2e();
+    let dir =
+        std::env::var_os("KIM_E2E_DEBUG_BIN_DIR").expect("KIM_E2E_DEBUG_BIN_DIR is set by xtask");
+    let path = Path::new(&dir).join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+    assert!(path.exists(), "missing e2e debug binary {}", path.display());
+    path
+}
+
 /// A unique, empty directory under the system temp dir, removed on drop.
 #[derive(Debug)]
 pub struct TempDir(PathBuf);

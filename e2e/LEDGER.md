@@ -16,6 +16,7 @@ Run with `cargo xtask e2e`, which refuses unless the counter below has reached 1
 | 3 | #3 Step 03 – Architecture and compatibility specifications (design) | none (no product feature; contract fixtures are checked by `cargo test` and will be reused by Step 09 e2e) | 3 |
 | 4 | #4 Step 04 – Kim native design system (design) | none (no product feature; token contrast is checked by `cargo test` via `design-check`) | 4 |
 | 5 | #5 Step 05 – Kim tool catalog | `step05_catalog.rs`: offline signed listing writes nothing, explicit refresh from a local mirror, tampered catalog exit 4, unknown tool exit 3; `step02` help check updated for the real `kim` CLI | 5 |
+| 6 | #6 Step 06 – Kim Manager and manual installer | `step06_installer.rs`: debug `kim` explicit install → update check → tampered update refused → update → uninstall needs `--yes`, keeps data; release `kim` ignores the development key | 6 |
 
 ## E2E runs
 

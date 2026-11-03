@@ -1,0 +1,28 @@
+[package]
+name = "kim-manager"
+version = "0.0.1"
+description = "Kim Manager: small native GUI for the explicit Kim installer (never runs in the background)"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "kim-manager"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+eframe = { version = "=0.37.0", default-features = false, features = ["glow", "accesskit", "default_fonts"] }
+kim = { version = "0.0.1", path = "../kim" }
+serde_json = "1.0.154"
+
+[dev-dependencies]
+egui_kittest = "=0.37.0"
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+zip = { version = "=9.0.5", default-features = false, features = ["deflate-flate2-zlib-rs"] }

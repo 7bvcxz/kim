@@ -124,7 +124,7 @@ fn version_and_help() {
 #[test]
 fn usage_errors_exit_2_and_are_json_when_asked() {
     let s = Sandbox::new("usage");
-    let out = s.run(&["install", "subak"]);
+    let out = s.run(&["frobnicate", "subak"]);
     assert_eq!(out.status.code(), Some(2));
     assert!(out.stdout.is_empty(), "errors go to stderr in human mode");
     let (code, v) = s.json(&["catalog", "frobnicate", "--json"]);

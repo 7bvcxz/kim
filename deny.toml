@@ -7,7 +7,14 @@ all-features = true
 version = 2
 yanked = "deny"
 # Every ignored advisory needs an issue link and an expiry rationale.
-ignore = []
+ignore = [
+    # zbus / zvariant family marked *unmaintained* (not a vulnerability). Pulled in only on Linux
+    # by accesskit_unix (screen-reader support of the egui GUI, ADR 0014). No Linux GUI ships
+    # before Step 42 (issue #42); re-evaluate there and remove these entries.
+    { id = "RUSTSEC-2026-0370", reason = "Linux-only GUI accessibility dependency; revisit in Step 42 (#42)" },
+    { id = "RUSTSEC-2026-0371", reason = "Linux-only GUI accessibility dependency; revisit in Step 42 (#42)" },
+    { id = "RUSTSEC-2026-0372", reason = "Linux-only GUI accessibility dependency; revisit in Step 42 (#42)" },
+]
 
 [licenses]
 version = 2
@@ -29,8 +36,12 @@ allow = [
 # Reviewed exceptions (crate-scoped, never global):
 # - webpki-root-certs: Mozilla CA root data under the permissive CDLA-Permissive-2.0 data
 #   license; required by ureq's native-tls connector (kim catalog refresh, Step 05).
+# - epaint_default_fonts: egui's bundled fallback fonts (Ubuntu-Light, Hack, emoji-icon-font)
+#   under the permissive font licenses OFL-1.1 and Ubuntu-font-1.0 (Step 06, ADR 0014). They keep
+#   GUI text rendering deterministic when system fonts are missing (and in headless UI tests).
 exceptions = [
     { crate = "webpki-root-certs", allow = ["CDLA-Permissive-2.0"] },
+    { crate = "epaint_default_fonts", allow = ["OFL-1.1", "Ubuntu-font-1.0"] },
 ]
 
 [licenses.private]

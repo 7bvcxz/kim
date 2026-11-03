@@ -97,6 +97,8 @@ pub enum AssetKind {
 }
 
 const KNOWN_OS: &[&str] = &["windows", "linux"];
+/// Ids that would collide with CLI words (`kim update check`, …).
+const RESERVED_IDS: &[&str] = &["check", "all", "self", "list"];
 const KNOWN_ARCH: &[&str] = &["x86_64", "aarch64"];
 const MAX_ASSET_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
@@ -199,6 +201,9 @@ pub fn validate(c: &Catalog) -> Vec<String> {
             p.push(format!(
                 "tool `{t}`: id must match ^[a-z][a-z0-9-]{{1,31}}$"
             ));
+        }
+        if RESERVED_IDS.contains(&t.as_str()) {
+            p.push(format!("tool `{t}`: id is reserved by the Kim CLI"));
         }
         if tool.name.trim().is_empty() || tool.name.chars().count() > 64 {
             p.push(format!("tool `{t}`: name must be 1-64 characters"));
@@ -429,6 +434,17 @@ mod tests {
         assert!(all.contains("duplicate id"), "{all}");
         assert!(all.contains("duplicate version"), "{all}");
         assert!(all.contains("duplicate os/arch"), "{all}");
+    }
+
+    #[test]
+    fn reserved_ids_are_rejected() {
+        let mut v = minimal();
+        v["tools"][0]["id"] = "check".into();
+        let all = parse_value(&v).unwrap_err().details.join(
+            "
+",
+        );
+        assert!(all.contains("reserved"), "{all}");
     }
 
     #[test]

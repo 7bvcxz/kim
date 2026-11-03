@@ -140,6 +140,17 @@ pub fn current_process_in_job() -> bool {
     ok != 0 && result != 0
 }
 
+/// Restores normal Ctrl+C processing for this process, which every child inherits.
+///
+/// A process created with `CREATE_NEW_PROCESS_GROUP` starts with Ctrl+C *ignored*, and that flag
+/// is inherited: without this call, Ctrl+C typed into a pane (sent as `0x03` through ConPTY)
+/// would not interrupt the shell's programs (measured in Step 08; ADR 0016). Works without a
+/// console.
+pub fn enable_ctrl_c_for_children() -> bool {
+    // SAFETY: a null handler with FALSE only clears the process's "ignore Ctrl+C" flag.
+    unsafe { windows_sys::Win32::System::Console::SetConsoleCtrlHandler(None, 0) != 0 }
+}
+
 /// The Windows (Terminal Services) session id of the current process.
 pub fn session_id() -> u32 {
     let mut id = 0u32;

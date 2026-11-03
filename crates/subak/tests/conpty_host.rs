@@ -821,6 +821,33 @@ fn host_crash_ends_the_whole_pane_tree() {
 }
 
 #[test]
+fn ctrl_c_typed_into_the_pane_interrupts_a_running_command() {
+    // Regression: the Host is created with CREATE_NEW_PROCESS_GROUP, which makes Windows ignore
+    // Ctrl+C in it and in every child it starts, unless the Host re-enables it (ADR 0016).
+    let h = HostGuard::start("ctrlc");
+    let mut c = Child::attach(&h.ep, "80x25", false);
+    c.send(b"ping -n 60 127.0.0.1\r");
+    c.expect("Pinging 127.0.0.1");
+    let started = Instant::now();
+    c.send(&[0x03]);
+    c.send(b"echo mark^er-interrupted\r");
+    c.expect("marker-interrupted");
+    assert!(
+        started.elapsed() < Duration::from_secs(15),
+        "Ctrl+C did not interrupt ping (took {:?})",
+        started.elapsed()
+    );
+    assert!(children(h.shell.pid, "ping.exe").is_empty(), "ping ended");
+    h.assert_alive("after Ctrl+C: only the foreground command ends");
+    eprintln!(
+        "EVIDENCE ctrl-c: ping in shell={} interrupted after {:?}; host={} and shell alive",
+        h.shell.pid,
+        started.elapsed(),
+        h.host.pid
+    );
+}
+
+#[test]
 fn shell_exit_ends_the_host_and_its_clients() {
     let h = HostGuard::start("exit");
     let mut c = Child::attach(&h.ep, "80x25", false);

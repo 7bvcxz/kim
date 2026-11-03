@@ -459,6 +459,7 @@ fn input(
     }
     let mut stdin = io::stdin().lock();
     let mut buf = [0u8; 8192];
+    let mut first = true;
     loop {
         let n = match stdin.read(&mut buf) {
             Ok(0) | Err(_) => 0,
@@ -468,7 +469,9 @@ fn input(
             request("pane.detach", json!({})); // end of piped input = detach
             return;
         }
-        match forward(&buf[..n]) {
+        let bytes = proto::strip_leading_bom(first, &buf[..n]);
+        first = false;
+        match forward(bytes) {
             Some(false) => {}
             Some(true) => {
                 request("pane.detach", json!({}));

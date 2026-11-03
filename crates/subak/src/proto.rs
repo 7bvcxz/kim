@@ -205,6 +205,16 @@ impl DetachKeys {
     }
 }
 
+/// Drops a UTF-8 byte order mark at the very start of redirected input: it is never a keystroke,
+/// and .NET Framework (Windows PowerShell 5.1) writes one to a child's stdin before any data.
+pub fn strip_leading_bom(first_chunk: bool, bytes: &[u8]) -> &[u8] {
+    if first_chunk {
+        bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(bytes)
+    } else {
+        bytes
+    }
+}
+
 /// RFC 3339 UTC timestamp with second precision, without a date crate.
 pub fn rfc3339(t: std::time::SystemTime) -> String {
     let secs = t
@@ -315,6 +325,13 @@ mod tests {
             "prefix carried across reads"
         );
         assert_eq!(k.feed(&[b'z', PREFIX, b'd', b'q']), (b"z".to_vec(), true));
+    }
+
+    #[test]
+    fn only_a_leading_bom_is_dropped() {
+        assert_eq!(strip_leading_bom(true, b"\xEF\xBB\xBFdir\r"), b"dir\r");
+        assert_eq!(strip_leading_bom(true, b"dir\r"), b"dir\r");
+        assert_eq!(strip_leading_bom(false, b"\xEF\xBB\xBFx"), b"\xEF\xBB\xBFx");
     }
 
     #[test]

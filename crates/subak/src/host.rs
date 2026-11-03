@@ -103,6 +103,8 @@ pub fn serve(opts: &ServeOpts) -> Result<Value, CliError> {
             CliError::new(Code::Io, format!("cannot create the Host pipe: {e}"))
         }
     })?;
+    // However the Host was started, panes must receive Ctrl+C normally.
+    win::enable_ctrl_c_for_children();
     let (cols, rows) = DEFAULT_SIZE;
     let pty = Pty::spawn(&opts.shell, profile_dir().as_deref(), cols, rows).map_err(|e| {
         CliError::new(

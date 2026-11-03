@@ -323,7 +323,7 @@ the reference checker rejects the rest. On the CLI, a reserved chord fails with
 | Chord | Owner | Scopes |
 | --- | --- | --- |
 | `Ctrl+Alt+Delete`, `Ctrl+Alt+NumpadDecimal` (also with Shift and side variants) | Secure Attention Sequence: always the OS, on the secure desktop | all |
-| Any chord with `Win`, `LWin` or `RWin` (`Win+L` lock, `Win+D`, `Win+Space`, `Win+Ctrl+Shift+B`, …) | Windows shell; reserved for the OS by the `RegisterHotKey` documentation | all |
+| Any chord with `Win`, `LWin` or `RWin` (`Win+L` lock, `Win+D`, `Win+Space`, `Ctrl+Shift+Win+B`, …; written in canonical order) | Windows shell; reserved for the OS by the `RegisterHotKey` documentation | all |
 | `Ctrl+Shift+Escape` | Task Manager, the user's emergency exit | all |
 | `Ctrl+Escape` | Start menu | all |
 | `Alt+Tab`, `Alt+Shift+Tab`, `Ctrl+Alt+Tab` (and with Shift) | Task switching | all |
@@ -451,6 +451,9 @@ manifest and configuration schemas are therefore open; the CLI output schema is 
    polling) or through its own IPC where it has one (Subak). It re-validates the file. A valid
    file is applied, so global hotkeys are released or registered at once. An invalid file is
    reported and the **previous effective bindings stay**.
+6. **Fixed safety keys are not configuration.** `enabled: false`, `disabled_scopes`, safe mode
+   and the start flags never turn off reserved navigation (§3.5) or Ddalgak's emergency chord
+   (§12.5) while its hook is active.
 
 ### 8.4 Versioning and migrations
 
@@ -486,9 +489,9 @@ From first to last:
    4. `app` bindings;
    5. the focused control or, in a passthrough context, the program.
 
-Inside one tool, a binding named as the **subject** of an error conflict (§9.4) is inactive;
-the other binding keeps working. A user binding beats a default (`default_suppressed`), and
-nothing beats a leader.
+Inside one tool, a binding that is reserved or invalid is inactive, and so is the **subject**
+(§9.4) of a `duplicate_binding` or `sequence_prefix` conflict, while the other binding keeps
+working. A user binding beats a default (`default_suppressed`), and nothing beats a leader.
 
 ### 9.2 What is checked
 
@@ -522,7 +525,7 @@ window (`KIM-FR-045`).
 | `unknown_action` | warning | An override names an action this tool version does not have | Ignored, kept in the file |
 | `context_override` | info | A context binding has the same keys as an `app` binding of the same tool | Inside the context the context binding wins (intended) |
 | `default_suppressed` | info | A default has the same keys as a user binding of another action of the same tool | The user binding wins; the default is inactive |
-| `shadows_terminal_input` | info | In a tool with a passthrough context, an `app` chord of exactly `Ctrl` or `Alt` plus a letter (or a leader) | The program does not receive that chord; `@leader <chord>` sends it (ADR 0009) |
+| `shadows_terminal_input` | info | In a tool with a passthrough context, an `app` chord (a leader included) of exactly `Ctrl` or `Alt` plus a letter | The program does not receive that chord; `@leader <chord>` sends it (ADR 0009) |
 
 **Overlapping scopes** (within one tool): `global` overlaps every scope; `app` overlaps `app`;
 a context overlaps itself. An `app` binding and a context binding with the same keys are a
@@ -542,8 +545,9 @@ Each conflict is one entry in the report, never two mirrored entries:
 - **Choosing the subject:** for `global_shadows_app`, the shadowed binding; for
   `context_override`, the hidden `app` binding; for `default_suppressed`, the suppressed
   default. Otherwise the binding with the **higher layer** (profile, then user, then default);
-  a leader is never the subject; on a tie, the shorter binding for `sequence_prefix`, else the
-  one whose `tool`, then `action`, sorts last.
+  a leader is never the subject of a conflict with another binding of its own tool; on a tie,
+  the shorter binding for `sequence_prefix`, else the one whose `tool`, then `action`, sorts
+  last.
 - **Order:** errors, then warnings, then infos; within a severity by `tool`, `action`, `keys`
   and `code`. Reports are deterministic, so fixtures and tests can compare them exactly.
 
@@ -553,9 +557,12 @@ Every error and warning comes with `offers`, in this order:
 
 1. up to two `rebind` suggestions for a single-chord subject: the subject's chord with `Shift`,
    then `Ctrl+Shift`, then `Alt+Shift` added, keeping only candidates that are valid for the
-   action and backend, not reserved, and free of any error or warning against every known
-   binding and every chord known to be taken;
-2. `disable`;
+   action and backend, not reserved, not used by any other binding of the same tool in an
+   overlapping scope (so no other action loses its key), and free of any error or warning
+   against other tools' bindings and every chord known to be taken. Suggestions only add
+   modifiers, so a chord whose problem is a modifier it already has (`altgr_collision`) gets
+   none;
+2. `disable` (not for a leader: a leader is changed, never disabled);
 3. `keep`, for warnings only: the user accepts the conflict;
 4. `reset` instead of the above for `unknown_action` and `invalid_binding`.
 
@@ -868,8 +875,12 @@ maps the key names of §5.2.
 `cargo xtask schema-check` validates every example against its schema. For the scenarios it
 also validates each embedded manifest, user layer and expected report against their own
 schemas. A small **reference checker** (`xtask/src/hotkeys.rs`) then recomputes every expected
-report and outcome from the inputs and fails on any difference. The checker is deliberately
-limited to this contract's rules (no OS calls, no profiles). It exists so that the fixtures are
+report and outcome from the inputs and fails on any difference (conflict `message`s are not
+compared). It also checks that the shared `$defs` of the four hotkey schemas are identical and
+that its own reserved-chord rules agree with the schemas' `reserved_free`. The checker is
+deliberately limited to this contract's rules: no OS calls, no `profiles`, no Ddalgak rule
+triggers (so no `hook_overrides_global`), no input aliases, no `set @<leader>`, and
+`char:`/named key overlap only for ASCII letters and digits. It exists so that the fixtures are
 proven consistent, and it is not a library. Step 46's real implementation MUST pass the same
 scenarios; once it does, Step 46 may replace the reference checker with it.
 
@@ -882,15 +893,16 @@ scenarios; once it does, Step 46 may replace the reference checker with it.
 | `05-binding-collides-with-leader` | A binding equal to the prefix key is an error; the leader is never the subject |
 | `06-taken-by-another-program` | A failed registration (`taken`) with remap offers; nothing is stolen |
 | `07-layout-and-ime-warnings` | `altgr_collision` and `ime_toggle` |
-| `08-invalid-for-backend-and-unknown-action` | `invalid_binding` (`backend_unsupported`) and `unknown_action` |
+| `08-invalid-reserved-and-unknown` | Scope-dependent `kim_reserved` (`F6` in app scope) and `os_reserved` (global `F12`), `invalid_binding` (`backend_unsupported`) and `unknown_action` |
 | `09-disabled-switches` | `enabled: false` and `disabled_scopes` remove conflicts entirely |
 | `10-context-override` | Context bindings win inside their context (`context_override`) |
 | `11-set-refused-reserved` | `set` with `Win+L` is refused with `hotkey_reserved`; nothing is written |
 | `12-set-refused-conflict` | `set` onto the leader is refused with `hotkey_conflict` |
-| `13-set-replace-same-tool` | `--replace` moves a binding within one tool and lists both changes |
+| `13-set-replace-same-tool` | `--replace` takes a user binding away from another action of the same tool and lists both changes |
 | `14-set-allow-cross-tool` | `--allow-conflict` keeps a cross-tool conflict; the other tool's file is untouched |
 | `15-set-dry-run` | `--dry-run` writes nothing |
-| `16-reset-and-disable` | `reset` brings the default back; `disable` turns an action off |
+| `16-reset-restores-default` | `reset` removes the override, so the default is active again |
+| `17-disable-one-action` | `disable` writes a disabled override for one action |
 
 ## 16. Versioning of this contract
 

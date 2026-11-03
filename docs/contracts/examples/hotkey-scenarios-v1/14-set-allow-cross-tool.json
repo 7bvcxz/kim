@@ -1,0 +1,48 @@
+{
+  "schema": "kim.hotkey-scenario",
+  "schema_version": 1,
+  "title": "`--allow-conflict` keeps a cross-tool conflict",
+  "description": "`ddalgak hotkeys set engine.toggle F3 --allow-conflict`: the user accepts that the first tool to register F3 wins. The error stays in the report, and Noeul's configuration is not touched.",
+  "tools": [{"manifest": "noeul", "config": null}, {"manifest": "ddalgak", "config": null}],
+  "request": {
+    "command": "set",
+    "tool": "ddalgak",
+    "action": "engine.toggle",
+    "bindings": ["F3"],
+    "allow_conflict": true
+  },
+  "expected": {
+    "outcome": "applied",
+    "written": true,
+    "config_after": {
+      "schema": "kim.hotkeys",
+      "schema_version": 1,
+      "tool": "ddalgak",
+      "overrides": [{"action": "engine.toggle", "bindings": ["F3"]}]
+    },
+    "changes": [
+      {
+        "action": "engine.toggle",
+        "before": {"bindings": [], "source": "default"},
+        "after": {"bindings": ["F3"], "source": "user"}
+      }
+    ],
+    "conflicts": [
+      {
+        "code": "cross_tool_global",
+        "severity": "error",
+        "tool": "ddalgak",
+        "action": "engine.toggle",
+        "keys": "F3",
+        "scope": "global",
+        "source": "user",
+        "with": {"tool": "noeul", "action": "paste.float", "keys": "F3", "scope": "global"},
+        "offers": [
+          {"kind": "rebind", "keys": "Shift+F3"},
+          {"kind": "rebind", "keys": "Ctrl+Shift+F3"},
+          {"kind": "disable"}
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "schema": "kim.hotkey-scenario",
+  "schema_version": 1,
+  "title": "Context bindings win inside their context",
+  "description": "The user bound Noeul's settings to Ctrl+C in app scope. Inside the capture overlay and in pin windows, Ctrl+C keeps copying; these are intended overrides and reported as infos.",
+  "tools": [
+    {
+      "manifest": "noeul",
+      "config": {
+        "schema": "kim.hotkeys",
+        "schema_version": 1,
+        "tool": "noeul",
+        "overrides": [{"action": "settings.open", "bindings": ["Ctrl+C"]}]
+      }
+    }
+  ],
+  "expected": {
+    "report": {
+      "tools": [{"tool": "noeul", "version": "0.1.0", "enabled": true, "source": "manifest"}],
+      "conflicts": [
+        {
+          "code": "context_override",
+          "severity": "info",
+          "tool": "noeul",
+          "action": "settings.open",
+          "keys": "Ctrl+C",
+          "scope": "app",
+          "source": "user",
+          "with": {
+            "tool": "noeul",
+            "action": "capture.copy",
+            "keys": "Ctrl+C",
+            "scope": "context:capture-overlay"
+          },
+          "offers": []
+        },
+        {
+          "code": "context_override",
+          "severity": "info",
+          "tool": "noeul",
+          "action": "settings.open",
+          "keys": "Ctrl+C",
+          "scope": "app",
+          "source": "user",
+          "with": {"tool": "noeul", "action": "pin.copy", "keys": "Ctrl+C", "scope": "context:pin"},
+          "offers": []
+        }
+      ],
+      "summary": {"errors": 0, "warnings": 0, "infos": 2}
+    }
+  }
+}

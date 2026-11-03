@@ -1,0 +1,20 @@
+{
+  "ok": true,
+  "command": "hotkeys.set",
+  "schema_version": 1,
+  "data": {
+    "tool": "kim",
+    "dry_run": true,
+    "written": false,
+    "path": "C:\\Users\\me\\AppData\\Roaming\\mouv\\kim\\hotkeys.json",
+    "changes": [
+      {
+        "action": "catalog.refresh",
+        "before": {"source": "default", "bindings": ["F5"]},
+        "after": {"source": "user", "bindings": ["Ctrl+R"]}
+      }
+    ],
+    "conflicts": []
+  },
+  "warnings": []
+}

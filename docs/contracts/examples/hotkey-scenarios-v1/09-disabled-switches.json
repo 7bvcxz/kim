@@ -1,0 +1,68 @@
+{
+  "schema": "kim.hotkey-scenario",
+  "schema_version": 1,
+  "title": "Switching shortcuts off removes their conflicts",
+  "description": "Noeul's shortcuts are switched off entirely (enabled: false) and Ddalgak's global scope is disabled, so neither Noeul's F1 nor Ddalgak's F1 shadows Subak's help any more.",
+  "tools": [
+    {
+      "manifest": "noeul",
+      "config": {"schema": "kim.hotkeys", "schema_version": 1, "tool": "noeul", "enabled": false}
+    },
+    {
+      "manifest": "ddalgak",
+      "config": {
+        "schema": "kim.hotkeys",
+        "schema_version": 1,
+        "tool": "ddalgak",
+        "disabled_scopes": ["global"],
+        "overrides": [{"action": "engine.toggle", "bindings": ["F1"]}]
+      }
+    },
+    {"manifest": "subak", "config": null}
+  ],
+  "expected": {
+    "report": {
+      "tools": [
+        {"tool": "ddalgak", "version": "0.1.0", "enabled": true, "source": "manifest"},
+        {"tool": "noeul", "version": "0.1.0", "enabled": false, "source": "manifest"},
+        {"tool": "subak", "version": "0.1.0", "enabled": true, "source": "manifest"}
+      ],
+      "conflicts": [
+        {
+          "code": "shadows_terminal_input",
+          "severity": "info",
+          "tool": "subak",
+          "action": "@prefix",
+          "keys": "Ctrl+B",
+          "scope": "app",
+          "source": "default",
+          "with": null,
+          "offers": []
+        },
+        {
+          "code": "shadows_terminal_input",
+          "severity": "info",
+          "tool": "subak",
+          "action": "terminal.close",
+          "keys": "Ctrl+W",
+          "scope": "app",
+          "source": "default",
+          "with": null,
+          "offers": []
+        },
+        {
+          "code": "shadows_terminal_input",
+          "severity": "info",
+          "tool": "subak",
+          "action": "terminal.new",
+          "keys": "Ctrl+T",
+          "scope": "app",
+          "source": "default",
+          "with": null,
+          "offers": []
+        }
+      ],
+      "summary": {"errors": 0, "warnings": 0, "infos": 3}
+    }
+  }
+}

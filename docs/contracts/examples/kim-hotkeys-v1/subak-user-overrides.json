@@ -1,0 +1,16 @@
+{
+  "schema": "kim.hotkeys",
+  "schema_version": 1,
+  "tool": "subak",
+  "enabled": true,
+  "disabled_scopes": [],
+  "leaders": {"prefix": "Ctrl+A"},
+  "overrides": [
+    {"action": "terminal.close", "disabled": true},
+    {"action": "tab.next", "bindings": ["Ctrl+PageDown", "Ctrl+Tab"]},
+    {"action": "tab.previous", "bindings": ["Ctrl+PageUp", "Ctrl+Shift+Tab"]},
+    {"action": "pane.resize-up", "bindings": [{"keys": "@prefix Ctrl+Up", "repeat": true}]},
+    {"action": "help.show", "bindings": ["F1", "@prefix char:?"]}
+  ],
+  "profiles": {"wsl": {"overrides": [{"action": "terminal.new", "disabled": true}]}}
+}

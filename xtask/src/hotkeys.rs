@@ -1606,4 +1606,52 @@ mod tests {
         assert!(report.scenarios >= 16, "expected the documented scenarios");
         assert!(report.problems.is_empty(), "{}", report.problems.join("\n"));
     }
+
+    /// A fixture whose expectation is wrong must fail: the checker is not a rubber stamp.
+    #[test]
+    fn a_wrong_expectation_is_reported() {
+        let contracts = root();
+        let schema = |n: &str| {
+            read_json(&contracts.join("schemas").join(format!("{n}.schema.json"))).unwrap()
+        };
+        let (config, manifest, cli) = (schema(SCHEMAS[0]), schema(SCHEMAS[1]), schema(SCHEMAS[2]));
+        let defs = [
+            def_schema(&cli, "check_data"),
+            def_schema(&cli, "conflict"),
+            def_schema(&cli, "change"),
+            def_schema(&config, "binding_syntax"),
+        ];
+        let mut s = read_json(
+            &contracts.join("examples/hotkey-scenarios-v1/02-noeul-f1-shadows-subak-help.json"),
+        )
+        .unwrap();
+        // Claim that Noeul's global F1 is harmless: drop the warning and fix up the summary.
+        s["expected"]["report"]["conflicts"]
+            .as_array_mut()
+            .unwrap()
+            .remove(0);
+        s["expected"]["report"]["summary"]["warnings"] = json!(0);
+        let dir = std::env::temp_dir().join(format!("kim-hotkeys-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("wrong.json");
+        std::fs::write(&path, serde_json::to_string(&s).unwrap()).unwrap();
+        let problems = check_scenario(
+            &contracts,
+            &path,
+            &Validator::new(&config),
+            &Validator::new(&manifest),
+            &Validator::new(&defs[0]),
+            &Validator::new(&defs[1]),
+            &Validator::new(&defs[2]),
+            &Validator::new(&defs[3]),
+        )
+        .unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(
+            problems[0].contains("global_shadows_app"),
+            "{}",
+            problems[0]
+        );
+    }
 }

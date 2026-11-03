@@ -35,7 +35,7 @@
       "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*){1,3}$"
     },
     "name_id": {
-      "description": "Leader, context or profile-free identifier (HOTKEY_CONTRACT §3.2, §3.3).",
+      "description": "Identifier of a leader or a context (HOTKEY_CONTRACT §3.2, §3.3).",
       "type": "string",
       "pattern": "^[a-z][a-z0-9-]{0,31}$"
     },

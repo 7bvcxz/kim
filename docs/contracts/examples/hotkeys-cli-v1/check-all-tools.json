@@ -1,0 +1,45 @@
+{
+  "ok": true,
+  "command": "hotkeys.check",
+  "schema_version": 1,
+  "data": {
+    "tools": [
+      {"tool": "kim", "version": "0.1.0", "source": "manifest", "enabled": true},
+      {"tool": "noeul", "version": "0.1.0", "source": "manifest", "enabled": true},
+      {"tool": "subak", "version": "0.1.0", "source": "self", "enabled": true}
+    ],
+    "conflicts": [
+      {
+        "code": "global_shadows_app",
+        "severity": "warning",
+        "tool": "subak",
+        "action": "help.show",
+        "keys": "F1",
+        "scope": "app",
+        "source": "default",
+        "with": {"tool": "noeul", "action": "capture.region", "keys": "F1", "scope": "global"},
+        "offers": [
+          {"kind": "rebind", "keys": "Shift+F1"},
+          {"kind": "rebind", "keys": "Ctrl+Shift+F1"},
+          {"kind": "disable"},
+          {"kind": "keep"}
+        ],
+        "message": "While Noeul runs, F1 starts its region capture, so Subak's \"Show keyboard shortcuts\" never receives F1."
+      },
+      {
+        "code": "shadows_terminal_input",
+        "severity": "info",
+        "tool": "subak",
+        "action": "terminal.close",
+        "keys": "Ctrl+W",
+        "scope": "app",
+        "source": "default",
+        "with": null,
+        "offers": [],
+        "message": "Programs in a Subak pane do not receive Ctrl+W; press Ctrl+B Ctrl+W to send it."
+      }
+    ],
+    "summary": {"errors": 0, "warnings": 1, "infos": 1}
+  },
+  "warnings": []
+}

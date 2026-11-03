@@ -1,0 +1,6 @@
+{
+  "schema": "kim.hotkeys",
+  "schema_version": 1,
+  "tool": "subak",
+  "leaders": {"prefix": "Ctrl+Shift+Escape"}
+}

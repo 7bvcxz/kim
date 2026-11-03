@@ -1,0 +1,43 @@
+{
+  "schema": "kim.hotkey-scenario",
+  "schema_version": 1,
+  "title": "`reset` brings the default back",
+  "description": "terminal.close was disabled by the user. `subak hotkeys reset terminal.close` removes the override, so Ctrl+W is active again (with its terminal pass-through info).",
+  "tools": [
+    {
+      "manifest": "subak",
+      "config": {
+        "schema": "kim.hotkeys",
+        "schema_version": 1,
+        "tool": "subak",
+        "overrides": [{"action": "terminal.close", "disabled": true}]
+      }
+    }
+  ],
+  "request": {"command": "reset", "tool": "subak", "action": "terminal.close"},
+  "expected": {
+    "outcome": "applied",
+    "written": true,
+    "config_after": {"schema": "kim.hotkeys", "schema_version": 1, "tool": "subak", "overrides": []},
+    "changes": [
+      {
+        "action": "terminal.close",
+        "before": {"bindings": [], "source": "disabled"},
+        "after": {"bindings": ["Ctrl+W"], "source": "default"}
+      }
+    ],
+    "conflicts": [
+      {
+        "code": "shadows_terminal_input",
+        "severity": "info",
+        "tool": "subak",
+        "action": "terminal.close",
+        "keys": "Ctrl+W",
+        "scope": "app",
+        "source": "default",
+        "with": null,
+        "offers": []
+      }
+    ]
+  }
+}

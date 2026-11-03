@@ -1,0 +1,12 @@
+{
+  "ok": false,
+  "command": "hotkeys.set",
+  "schema_version": 1,
+  "error": {
+    "code": "hotkey_reserved",
+    "exit_code": 2,
+    "message": "Win+L is reserved by Windows (Windows key shortcut)",
+    "hint": "choose a chord without the Windows key",
+    "details": ["os_reserved: Win+L"]
+  }
+}

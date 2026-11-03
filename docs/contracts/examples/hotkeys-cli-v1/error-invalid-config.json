@@ -1,0 +1,12 @@
+{
+  "ok": false,
+  "command": "hotkeys.set",
+  "schema_version": 1,
+  "error": {
+    "code": "hotkeys_invalid",
+    "exit_code": 4,
+    "message": "hotkeys.json is invalid; nothing was changed",
+    "hint": "fix the file, or run `subak hotkeys reset --all --yes` (keeps a backup)",
+    "details": ["overrides[2].bindings[0]: unknown key `Hyper`"]
+  }
+}

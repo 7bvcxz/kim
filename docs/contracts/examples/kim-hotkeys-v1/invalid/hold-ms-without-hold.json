@@ -1,0 +1,6 @@
+{
+  "schema": "kim.hotkeys",
+  "schema_version": 1,
+  "tool": "kim",
+  "overrides": [{"action": "catalog.refresh", "bindings": [{"keys": "F5", "hold_ms": 600}]}]
+}

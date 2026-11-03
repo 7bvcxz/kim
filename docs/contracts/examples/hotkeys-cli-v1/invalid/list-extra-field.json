@@ -1,0 +1,15 @@
+{
+  "ok": true,
+  "command": "hotkeys.list",
+  "schema_version": 1,
+  "data": {
+    "tool": "kim",
+    "enabled": true,
+    "config": {"path": "C:\\Users\\me\\AppData\\Roaming\\mouv\\kim\\hotkeys.json", "state": "default"},
+    "disabled_scopes": [],
+    "leaders": [],
+    "actions": [],
+    "keylog": []
+  },
+  "warnings": []
+}

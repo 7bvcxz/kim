@@ -1,0 +1,50 @@
+{
+  "schema": "kim.hotkey-scenario",
+  "schema_version": 1,
+  "title": "`--replace` moves a binding within one tool",
+  "description": "Ctrl+Shift+R is already the user's binding for terminal.rename. `subak hotkeys set pane.zoom Ctrl+Shift+R --replace` takes it away from terminal.rename (disabled, since it had no other binding) and lists both changes.",
+  "tools": [
+    {
+      "manifest": "subak",
+      "config": {
+        "schema": "kim.hotkeys",
+        "schema_version": 1,
+        "tool": "subak",
+        "overrides": [{"action": "terminal.rename", "bindings": ["Ctrl+Shift+R"]}]
+      }
+    }
+  ],
+  "request": {
+    "command": "set",
+    "tool": "subak",
+    "action": "pane.zoom",
+    "bindings": ["Ctrl+Shift+R"],
+    "replace": true
+  },
+  "expected": {
+    "outcome": "applied",
+    "written": true,
+    "config_after": {
+      "schema": "kim.hotkeys",
+      "schema_version": 1,
+      "tool": "subak",
+      "overrides": [
+        {"action": "terminal.rename", "disabled": true},
+        {"action": "pane.zoom", "bindings": ["Ctrl+Shift+R"]}
+      ]
+    },
+    "changes": [
+      {
+        "action": "pane.zoom",
+        "before": {"bindings": ["@prefix char:z"], "source": "default"},
+        "after": {"bindings": ["Ctrl+Shift+R"], "source": "user"}
+      },
+      {
+        "action": "terminal.rename",
+        "before": {"bindings": ["Ctrl+Shift+R"], "source": "user"},
+        "after": {"bindings": [], "source": "disabled"}
+      }
+    ],
+    "conflicts": []
+  }
+}

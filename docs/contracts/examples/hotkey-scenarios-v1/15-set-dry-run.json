@@ -1,0 +1,27 @@
+{
+  "schema": "kim.hotkey-scenario",
+  "schema_version": 1,
+  "title": "`--dry-run` writes nothing",
+  "description": "`kim hotkeys set catalog.refresh Ctrl+R --dry-run` reports the change and writes no file.",
+  "tools": [{"manifest": "kim", "config": null}],
+  "request": {
+    "command": "set",
+    "tool": "kim",
+    "action": "catalog.refresh",
+    "bindings": ["Ctrl+R"],
+    "dry_run": true
+  },
+  "expected": {
+    "outcome": "applied",
+    "written": false,
+    "config_after": null,
+    "changes": [
+      {
+        "action": "catalog.refresh",
+        "before": {"bindings": ["F5"], "source": "default"},
+        "after": {"bindings": ["Ctrl+R"], "source": "user"}
+      }
+    ],
+    "conflicts": []
+  }
+}

@@ -52,6 +52,7 @@ milestone M4 (`KIM-NFR-011`); macOS is out of scope.
 | --- | --- | --- |
 | `crates/kim` | `kim` | Kim manager library + CLI (binary `kim`): catalog, signatures, installer, status, tool discovery ([CLI contract](docs/CLI_CONTRACT.md)) |
 | `catalog/` | — | The signed catalog bundled into `kim` and published for `kim catalog refresh` ([format](docs/CATALOG_FORMAT.md)) |
+| `crates/kim-hotkeys` | `kim-hotkeys` | Shared hotkey library (key syntax, `hotkeys.json`, conflict checks, `RegisterHotKey` backend; [HOTKEY_CONTRACT](docs/HOTKEY_CONTRACT.md)); headless, used by `kim` and Kim Manager, later Subak, Noeul and Ddalgak (ADR 0002, ADR 0017) |
 | `crates/kim-manager` | `kim-manager` | Kim Manager GUI (egui + glow, ADR 0014); the only package allowed to depend on GUI crates so far |
 | `crates/subak` | `subak` | Subak CLI (binary `subak`): `capabilities` and the Step 08 ConPTY Host prototype (`subak host …`, [CONPTY_PROOF](docs/CONPTY_PROOF.md)); sessions and GUI arrive in later steps |
 | `xtask` | `xtask` | Repository automation (docs/schema checks, CI gate, gated e2e runner); never shipped |

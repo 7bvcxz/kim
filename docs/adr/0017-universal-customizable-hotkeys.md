@@ -115,3 +115,18 @@ tool's shortcuts, also headlessly, without one tool stealing another's keys or t
 `KIM-FR-040…046`, `KIM-NFR-020…022`, `KIM-SEC-020…023`, `KIM-FR-012`, `KIM-FR-013`,
 `KIM-NFR-001`, `KIM-NFR-012`, `KIM-SEC-001`, `KIM-SEC-004`, `KIM-SEC-013`, `SUBAK-FR-033`,
 `SUBAK-FR-034`.
+
+## Notes
+
+- **2026-11-04 (Step 46, implementation).** The shared crate is `crates/kim-hotkeys`, a headless
+  library (in `deps-check`'s headless list) used by `kim` and Kim Manager; Subak, Noeul and
+  Ddalgak use it in their GUI Steps. Two implementation choices within this decision:
+  1. The `register` backend registers on a dedicated thread's message queue (null window
+     handle) rather than on a message-only window. Same API, same exclusivity and
+     `ERROR_HOTKEY_ALREADY_REGISTERED` behavior, and no window at all.
+  2. Kim Manager (backend `focus`) re-reads `hotkeys.json` when its window regains focus
+     instead of watching the folder with `ReadDirectoryChangesW`. It has no global hotkey to
+     release, so a focus event is enough and adds no thread; tools with global bindings still
+     follow HOTKEY_CONTRACT §8.3 5.
+  The xtask reference checker stays next to the library: both recompute the 17 scenarios.
+  No decision changed; HOTKEY_CONTRACT §17 records the details.

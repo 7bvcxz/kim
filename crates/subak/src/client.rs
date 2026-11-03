@@ -23,6 +23,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
+use windows_sys::Win32::Foundation::ERROR_PIPE_BUSY;
 
 /// The executable a genuine Host runs as (ADR 0005).
 pub const HOST_IMAGE: &str = "subak.exe";
@@ -236,6 +237,18 @@ impl Session {
                     format!("access to `{}` was denied", pipe::path(endpoint)),
                 )
                 .hint("the endpoint belongs to another user, or this process runs sandboxed (low integrity)"),
+            ),
+            // The Host always keeps one instance listening; one that stays busy is not served.
+            _ if e.raw_os_error() == Some(ERROR_PIPE_BUSY as i32) => other(
+                CliError::new(
+                    Code::HostUnresponsive,
+                    format!(
+                        "`{}` exists, but no pipe instance became free within {} ms",
+                        pipe::path(endpoint),
+                        wait.as_millis()
+                    ),
+                )
+                .hint("the Host may be busy or hung; it was neither stopped nor replaced"),
             ),
             _ => other(CliError::new(
                 Code::Io,

@@ -256,7 +256,13 @@ impl Listener {
             stop: Arc::new(Event::new()?),
         };
         l.next = Some(l.instance(true).map_err(|e| {
-            if e.raw_os_error() == Some(ERROR_ACCESS_DENIED as i32) {
+            // ACCESS_DENIED: an instance exists (FILE_FLAG_FIRST_PIPE_INSTANCE). PIPE_BUSY: an
+            // instance exists and its creator's instance limit is reached (measured with a
+            // squatter that allows one instance, Step 09).
+            if matches!(
+                e.raw_os_error().map(|c| c as u32),
+                Some(ERROR_ACCESS_DENIED | ERROR_PIPE_BUSY)
+            ) {
                 io::Error::new(io::ErrorKind::AlreadyExists, "endpoint already served")
             } else {
                 e

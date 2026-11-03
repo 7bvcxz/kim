@@ -601,7 +601,7 @@ mod tests {
         let quitter = {
             let name = name.clone();
             std::thread::spawn(move || {
-                std::mem::forget(NamedLock::acquire(&name, Duration::from_secs(1)).unwrap())
+                std::mem::forget(NamedLock::acquire(&name, Duration::from_secs(1)).unwrap());
             })
         };
         quitter.join().unwrap();

@@ -43,12 +43,16 @@ regex = "1.13.1"
 
 [target."cfg(windows)".dev-dependencies]
 # tests/conpty_host.rs drives the real Host: hidden consoles, job objects, window-close messages.
+# tests/host_ipc.rs speaks raw IPC v1 (overlapped pipe I/O), squats a pipe name, suspends a Host
+# and lowers a token's integrity level.
 windows-sys = { version = "0.61.2", features = [
     "Win32_Foundation",
     "Win32_Security",
+    "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
     "Win32_System_Console",
     "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_IO",
     "Win32_System_JobObjects",
     "Win32_System_Pipes",
     "Win32_System_Threading",

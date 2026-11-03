@@ -313,7 +313,7 @@ pub fn serve(opts: &ServeOpts) -> Result<Value, CliError> {
                         backoff = Duration::from_millis(50);
                         host.lock().pending += 1;
                         let host = Arc::clone(&host);
-                        thread::spawn(move || host.serve_conn(Arc::new(p)));
+                        thread::spawn(move || host.serve_conn(&Arc::new(p)));
                     }
                     Ok(None) => return,
                     // Out of resources for a new instance: retry with a bounded backoff.
@@ -578,16 +578,16 @@ impl Host {
         None
     }
 
-    fn serve_conn(self: Arc<Self>, pipe: Arc<Pipe>) {
+    fn serve_conn(self: Arc<Self>, pipe: &Arc<Pipe>) {
         let (tx, rx) = mpsc::sync_channel::<Out>(QUEUE_FRAMES);
         let queued = Arc::new(AtomicUsize::new(0));
         let sink = Sink {
             tx,
             queued: Arc::clone(&queued),
-            pipe: Arc::clone(&pipe),
+            pipe: Arc::clone(pipe),
         };
         let writer = thread::spawn({
-            let pipe = Arc::clone(&pipe);
+            let pipe = Arc::clone(pipe);
             move || {
                 for out in rx {
                     let ok = pipe.write_all_bytes(&out.bytes).is_ok();
@@ -602,7 +602,7 @@ impl Host {
                 }
             }
         });
-        let hs = catch_unwind(AssertUnwindSafe(|| self.handshake(&pipe, &sink)));
+        let hs = catch_unwind(AssertUnwindSafe(|| self.handshake(pipe, &sink)));
         {
             let mut st = self.lock();
             st.pending = st.pending.saturating_sub(1);
@@ -611,7 +611,7 @@ impl Host {
             }
         }
         if let Ok(Some(id)) = hs {
-            let r = catch_unwind(AssertUnwindSafe(|| self.requests(id, &pipe, &sink)));
+            let r = catch_unwind(AssertUnwindSafe(|| self.requests(id, pipe, &sink)));
             let mut st = self.lock();
             if r.is_err() {
                 st.stats.panics += 1;

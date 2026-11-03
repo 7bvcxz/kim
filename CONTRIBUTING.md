@@ -1,0 +1,98 @@
+# Contributing to Kim
+
+Thank you for helping. Read [AGENTS.md](AGENTS.md) first: its rules apply to every human and
+AI contributor. Security problems go through [SECURITY.md](SECURITY.md), never public issues.
+
+## Developer setup (Windows first)
+
+1. **Install Rust with rustup** — <https://rustup.rs>. The exact toolchain (and `rustfmt`,
+   `clippy`) is pinned in `rust-toolchain.toml`; rustup installs it automatically on first use
+   in this repository (or run `rustup toolchain install`).
+2. **Choose a Windows C toolchain** — either works for development:
+   - **MSVC (recommended, used by CI and releases):** Visual Studio Build Tools with the
+     *Desktop development with C++* workload. Requires administrator rights to install.
+   - **GNU (no administrator rights):** `rustup-init.exe --default-host x86_64-pc-windows-gnu`.
+     rustup ships the needed MinGW linker. Note that release builds are produced with MSVC.
+3. **Clone and verify:**
+
+   ```sh
+   git clone https://github.com/7bvcxz/kim
+   cd kim
+   cargo xtask ci
+   ```
+
+Linux and macOS can compile the workspace, but **Linux runtime support is not claimed** until
+milestone M4 (`KIM-NFR-011`); macOS is out of scope.
+
+## Everyday commands
+
+| Purpose | Command |
+| --- | --- |
+| Everything CI checks (fmt, clippy, tests, docs) | `cargo xtask ci` |
+| Format | `cargo fmt --all` |
+| Lint (warnings are errors) | `cargo clippy --workspace --all-targets -- -D warnings` |
+| Tests (unit + integration; never e2e) | `cargo test` |
+| Documentation consistency | `cargo xtask docs-check` |
+| Dependency policy | `cargo deny check` (see SECURITY.md) |
+| E2E status | `cargo xtask e2e-status` |
+| E2E suite (only when due) | `cargo xtask e2e` |
+
+## Workspace layout
+
+| Path | Package | What it is |
+| --- | --- | --- |
+| `crates/kim` | `kim` | Kim manager CLI (binary `kim`) |
+| `crates/subak` | `subak` | Subak CLI (binary `subak`); Host and GUI arrive in later steps |
+| `xtask` | `xtask` | Repository automation; never shipped |
+| `e2e` | `kim-e2e` | End-to-end suite; excluded from `default-members` and CI |
+
+Every tool is its own package and binary with its own version — no tool depends on another
+tool's crate (`KIM-FR-001`). Shared library crates are created only when real reuse appears,
+and must not drag GUI runtimes into headless binaries. Nothing in the workspace installs a
+background service.
+
+## Tests and the e2e cadence
+
+- Every feature ships with tests in the same change, and those tests run in `cargo test`.
+- Every feature also gets an e2e scenario in `e2e/tests/` (one file per Step,
+  `stepNN_<topic>.rs`). E2E tests are `#[ignore]`d **and** refuse to run unless started by
+  `cargo xtask e2e`.
+- The e2e suite runs **once per 15 processed Step issues**. `cargo xtask e2e` checks
+  [e2e/LEDGER.md](e2e/LEDGER.md) and refuses otherwise. Record every processed Step and every
+  e2e run in the ledger.
+
+## Versioning conventions
+
+- Each tool follows [Semantic Versioning](https://semver.org) **independently** (the `version`
+  in its own `Cargo.toml`). Pre-1.0 (`0.y.z`) minor bumps may break compatibility; this is
+  called out in release notes.
+- Release tags are per tool: `kim-v0.1.0`, `subak-v0.1.0`.
+- Schemas that cross process or version boundaries (CLI `--json` output, IPC, stored state,
+  catalog manifests) carry their own schema version, independent of the tool version
+  (`KIM-NFR-014`).
+- Details of channels, signing and update consent: `docs/RELEASE_POLICY.md` (planned, Step 06).
+
+## Minimum supported Rust version (MSRV)
+
+Kim ships binaries, not libraries, so the MSRV **equals the pinned toolchain** in
+`rust-toolchain.toml` (mirrored as `rust-version` in the workspace `Cargo.toml`). Bump both
+together in a dedicated PR, at most once per Rust release cycle, after `cargo xtask ci` passes.
+
+## Build profiles
+
+- `dev`: line-table debug info for faster builds.
+- `release`: thin LTO, one codegen unit, stripped symbols, panics unwind (so the Subak Host can
+  isolate a failing request without losing every session).
+
+## Pull requests
+
+- Branch per issue; reference the issue (`Refs #N`) and requirement IDs in commits.
+- CI must pass: Windows fmt/clippy/tests/docs, the Linux compile check, and the dependency
+  policy.
+- Keep changes focused; update the docs your change affects.
+
+## License
+
+Kim is dual-licensed under **MIT OR Apache-2.0** ([LICENSE-MIT](LICENSE-MIT),
+[LICENSE-APACHE](LICENSE-APACHE)), the Rust ecosystem convention. Unless you state otherwise,
+any contribution you submit is licensed the same way, without additional terms.

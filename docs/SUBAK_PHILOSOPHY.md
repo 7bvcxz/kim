@@ -129,20 +129,27 @@ alive through an OS restart, and Subak never pretends otherwise. What Subak *can
 
 ## 7. Claude five-state indicator
 
-Each pane has a Claude status, aggregated to its Window, Terminal tab and the floating icon:
+Each pane running Claude Code has one of **five states**, aggregated to its Window, Terminal
+tab, session manager and the floating icon:
 
 | State | Meaning | Visual intent |
 | --- | --- | --- |
-| `none` | No Claude Code session detected in the pane | nothing shown |
 | `idle` | Claude Code is running and waiting for a new prompt | quiet dot |
-| `working` | Claude is generating or running tools | animated (respects reduced motion) |
-| `needs-attention` | Claude is blocked on the user: permission request, question, or error | prominent accent |
-| `done` | Claude finished a turn the user has not looked at yet; becomes `idle` once viewed | distinct "unread" dot |
+| `in-progress` | Claude is generating or running tools | animated (respects reduced motion) |
+| `need-input` | Claude is blocked on the user: permission request or question | prominent accent |
+| `error` | The last turn failed (API error, crash, failure reported by Claude Code) | error color |
+| `done` | Claude finished its task and the user has not looked at it yet; becomes `idle` once viewed | distinct "unread" dot |
 
-Aggregation priority: `needs-attention` > `done` > `working` > `idle` > `none`.
-Detection must be local, opt-in where it needs configuration (for example Claude Code hooks
-reporting to the Host through the CLI), and must never read or transmit conversation content
-beyond what is needed to compute the state. [SUBAK-FR-050…052]
+Two further values are not Claude states but honesty markers: `unknown` — Claude Code is (or
+may be) present but the evidence is missing or stale, so Subak shows "unknown" instead of
+guessing; and `none` — no Claude Code in the pane, nothing shown. A tool call finishing is not
+`done`; only the end of Claude's turn is.
+
+Aggregation priority: `need-input` > `error` > `done` > `in-progress` > `unknown` > `idle` >
+`none`. Every indicator also has a text label/tooltip, never color alone. Detection must be
+local, use official Claude Code hooks/events where possible (opt-in, installed without
+overwriting the user's settings), and never read or transmit prompts, credentials or tool
+output beyond what is needed to compute the state. [SUBAK-FR-050…053]
 
 ## 8. Durable configuration and state
 

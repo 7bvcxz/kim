@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+# The e2e suite (crate `kim-e2e`) is intentionally never run here: it runs only via
+# `cargo xtask e2e`, once per 15 processed Step issues (AGENTS.md §4).
+
+jobs:
+  windows:
+    name: Windows — fmt, clippy, runtime tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all --check
+      - name: Clippy (all targets, warnings are errors)
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Tests (Windows runtime)
+        run: cargo test --locked
+      - name: Docs consistency
+        run: cargo xtask docs-check
+
+  linux-compile:
+    # Portable compile check only. Linux runtime support is NOT claimed (KIM-NFR-011, M4).
+    name: Linux — portable compile check (no runtime tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - name: Clippy (all targets, warnings are errors)
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  dependency-policy:
+    name: Dependency policy — advisories, licenses, sources
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories licenses bans sources

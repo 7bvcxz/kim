@@ -25,11 +25,17 @@ did.
 | `CATALOG_FORMAT.md` | planned | Step 05 | Tool catalog manifest format |
 | `RELEASE_POLICY.md` | planned | Step 06 | Versioning, channels, signing, explicit-consent update policy |
 | `CLI_CONTRACT.md` | planned | Step 07 | Shared CLI conventions, exit codes, JSON schemas |
-| `SECURITY.md` (repo root) | planned | Step 02 | Security reporting, dependency audit policy |
-| `CONTRIBUTING.md` (repo root) | planned | Step 02 | Developer setup and contribution workflow |
 | `MCP.md` | planned | M3 | MCP server guidance for Kim tools |
 
-## Repository rules
+## Repository and engineering
 
-- [AGENTS.md](../AGENTS.md) — working rules for contributors and coding agents.
-- [e2e/LEDGER.md](../e2e/LEDGER.md) — processed Step issues and e2e run log.
+| Document | Status | Purpose |
+| --- | --- | --- |
+| [AGENTS.md](../AGENTS.md) | current | Working rules for contributors and coding agents |
+| [CONTRIBUTING.md](../CONTRIBUTING.md) | current | Developer setup, commands, workspace layout, versioning, MSRV |
+| [SECURITY.md](../SECURITY.md) | current | Vulnerability reporting, dependency and supply-chain policy |
+| [e2e/LEDGER.md](../e2e/LEDGER.md) | current | Processed Step issues and e2e run log |
+
+`cargo xtask docs-check` (run by CI) fails when a document in `docs/` is missing from this
+index, when a planned document already exists, when a link is broken, or when a requirement ID
+is undefined.

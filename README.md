@@ -45,7 +45,18 @@ Start with the [documentation index](docs/README.md):
 
 Contributors and coding agents must read [AGENTS.md](AGENTS.md) first.
 
+## Building
+
+Windows 10/11 with [rustup](https://rustup.rs); the toolchain is pinned in
+`rust-toolchain.toml`. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup details.
+
+```sh
+cargo xtask ci     # fmt, clippy, tests, docs consistency — the same gate as CI
+```
+
+Security issues: see [SECURITY.md](SECURITY.md).
+
 ## License
 
-Not yet selected — license selection is tracked as part of the engineering-standards step.
-Until a license file is added, all rights are reserved by the author.
+Dual-licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your
+option.

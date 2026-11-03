@@ -14,6 +14,7 @@ pub enum Cmd {
     HostServe,
     HostStart,
     HostStatus,
+    HostHealth,
     HostAttach,
     HostStop,
 }
@@ -27,6 +28,7 @@ impl Cmd {
             Self::HostServe => "host.serve",
             Self::HostStart => "host.start",
             Self::HostStatus => "host.status",
+            Self::HostHealth => "host.health",
             Self::HostAttach => "host.attach",
             Self::HostStop => "host.stop",
         }
@@ -36,9 +38,22 @@ impl Cmd {
     fn accepts(&self, opt: &str) -> bool {
         let allowed: &[&str] = match self {
             Self::Help | Self::Version | Self::Capabilities => &[],
-            Self::HostServe => &["--endpoint", "--shell", "--job-breakaway", "--dry-run"],
-            Self::HostStart => &["--endpoint", "--shell", "--dry-run"],
-            Self::HostStatus => &["--endpoint"],
+            Self::HostServe => &[
+                "--endpoint",
+                "--shell",
+                "--no-shell",
+                "--idle-exit",
+                "--job-breakaway",
+                "--dry-run",
+            ],
+            Self::HostStart => &[
+                "--endpoint",
+                "--shell",
+                "--no-shell",
+                "--idle-exit",
+                "--dry-run",
+            ],
+            Self::HostStatus | Self::HostHealth => &["--endpoint"],
             Self::HostAttach => &["--endpoint", "--size", "--dry-run"],
             Self::HostStop => &["--endpoint", "--dry-run", "--yes"],
         };
@@ -57,9 +72,16 @@ pub struct Args {
     pub yes: bool,
     pub endpoint: Option<String>,
     pub shell: Option<String>,
+    /// Start the Host without its prototype pane (it then owns no Terminal).
+    pub no_shell: bool,
+    /// Seconds the Host waits, owning no Terminal and with no client, before it exits.
+    pub idle_exit: Option<u64>,
     pub size: Option<(u16, u16)>,
     pub job_breakaway: Option<bool>,
 }
+
+/// Longest idle grace period accepted by `--idle-exit` (one day).
+pub const MAX_IDLE_EXIT_S: u64 = 86_400;
 
 /// Endpoint names are a single pipe-name component: `\\.\pipe\<name>`.
 pub fn valid_endpoint(name: &str) -> bool {
@@ -143,6 +165,22 @@ pub fn parse(raw: &[String]) -> Result<(Cmd, Args), (String, CliError)> {
                     a.shell = Some(v);
                 }
             }
+            "--no-shell" => {
+                a.no_shell = true;
+                opts.push("--no-shell");
+            }
+            "--idle-exit" => {
+                opts.push("--idle-exit");
+                if let Some(v) = value("--idle-exit") {
+                    a.idle_exit = v.parse::<u64>().ok().filter(|s| *s <= MAX_IDLE_EXIT_S);
+                    if a.idle_exit.is_none() {
+                        bad.get_or_insert(
+                            CliError::usage(format!("invalid --idle-exit `{v}`"))
+                                .hint("seconds from 0 to 86400 (default 10)"),
+                        );
+                    }
+                }
+            }
             "--size" => {
                 opts.push("--size");
                 if let Some(v) = value("--size") {
@@ -194,24 +232,32 @@ pub fn parse(raw: &[String]) -> Result<(Cmd, Args), (String, CliError)> {
         ["host", "serve"] => Cmd::HostServe,
         ["host", "start"] => Cmd::HostStart,
         ["host", "status"] => Cmd::HostStatus,
+        ["host", "health"] => Cmd::HostHealth,
         ["host", "attach"] => Cmd::HostAttach,
         ["host", "stop"] => Cmd::HostStop,
         ["host", ..] => {
             return Err((
                 "host".into(),
-                CliError::usage(format!("unknown command `{}`", words.join(" ")))
-                    .hint("host commands: serve, start, status, attach, stop (see `subak --help`)"),
+                CliError::usage(format!("unknown command `{}`", words.join(" "))).hint(
+                    "host commands: serve, start, status, health, attach, stop (see `subak --help`)",
+                ),
             ));
         }
         _ => {
             return Err((
                 "subak".into(),
                 CliError::usage(format!("unknown command `{}`", words.join(" "))).hint(
-                    "Subak is pre-alpha: only `capabilities` and the Step 08 `host` prototype exist; see `subak --help`",
+                    "Subak is pre-alpha: only `capabilities` and the `host` commands exist; see `subak --help`",
                 ),
             ));
         }
     };
+    if a.no_shell && a.shell.is_some() {
+        return Err((
+            cmd.name().into(),
+            CliError::usage("--shell and --no-shell conflict"),
+        ));
+    }
     if let Some(e) = bad {
         return Err((cmd.name().into(), e));
     }
@@ -267,6 +313,38 @@ mod tests {
         .unwrap();
         assert_eq!(a.shell.as_deref(), Some("cmd.exe /d"));
         assert_eq!(a.job_breakaway, Some(false));
+        let (cmd, a) = p(&["host", "start", "--no-shell", "--idle-exit", "0"]).unwrap();
+        assert_eq!(cmd, Cmd::HostStart);
+        assert!(a.no_shell);
+        assert_eq!(a.idle_exit, Some(0));
+        assert_eq!(p(&["host", "health", "--json"]).unwrap().0, Cmd::HostHealth);
+    }
+
+    #[test]
+    fn host_lifetime_options_are_validated() {
+        let usage = |args: &[&str]| p(args).unwrap_err().0;
+        assert_eq!(usage(&["host", "start", "--idle-exit", "-1"]), "host.start");
+        assert_eq!(
+            usage(&["host", "start", "--idle-exit", "86401"]),
+            "host.start"
+        );
+        assert_eq!(
+            usage(&["host", "serve", "--idle-exit", "ten"]),
+            "host.serve"
+        );
+        assert_eq!(
+            usage(&["host", "start", "--no-shell", "--shell", "cmd.exe"]),
+            "host.start"
+        );
+        assert_eq!(usage(&["host", "health", "--no-shell"]), "host.health");
+        assert_eq!(usage(&["host", "stop", "--idle-exit", "5"]), "host.stop");
+        assert_eq!(
+            p(&["host", "start", "--idle-exit=86400"])
+                .unwrap()
+                .1
+                .idle_exit,
+            Some(86_400)
+        );
     }
 
     #[test]
@@ -319,7 +397,7 @@ mod tests {
         for bad in ["", "x", "0x10", "10x", "1001x10", "a x b", "-1x5"] {
             assert_eq!(parse_size(bad), None, "{bad}");
         }
-        assert!(valid_endpoint("mouv-subak-proto-S-1-5-21-1-s1"));
+        assert!(valid_endpoint("mouv-subak-S-1-5-21-1-s1"));
         for bad in ["", "a\\b", "a/b", "a b", &"x".repeat(201)] {
             assert!(!valid_endpoint(bad), "{bad}");
         }

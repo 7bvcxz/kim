@@ -1,8 +1,8 @@
-//! Integration tests for the `subak` binary's CLI contract surface (Step 02, Step 07, Step 08;
-//! docs/CLI_CONTRACT.md): help, version, capabilities, structured usage errors, and the Step 08
-//! `host` prototype's errors and dry runs. JSON outputs are validated against the shared schemas
-//! with the same validator as `cargo xtask schema-check`. The live Host is exercised by
-//! `tests/conpty_host.rs`.
+//! Integration tests for the `subak` binary's CLI contract surface (Steps 02, 07, 08, 09;
+//! docs/CLI_CONTRACT.md): help, version, capabilities, structured usage errors, and the `host`
+//! commands' errors and dry runs. JSON outputs are validated against the shared schemas with the
+//! same validator as `cargo xtask schema-check`. The live Host is exercised by
+//! `tests/conpty_host.rs` (ConPTY, Step 08) and `tests/host_ipc.rs` (IPC v1, Step 09).
 
 #[path = "../../../xtask/src/jsonschema.rs"]
 mod jsonschema;
@@ -70,13 +70,15 @@ fn help_is_honest_about_the_prototype_status() {
     let out = subak(&["--help"]);
     assert!(out.status.success());
     let text = String::from_utf8_lossy(&out.stdout);
-    assert!(text.contains("pre-alpha; Step 08 ConPTY Host prototype"));
+    assert!(text.contains("pre-alpha; Host supervisor and IPC v1, one prototype pane"));
     assert!(text.contains("No command opens a window"));
-    assert!(text.contains("no Terminals, panes, GUI or recovery yet"));
+    assert!(text.contains("no Terminals, windows, GUI or recovery yet"));
+    assert!(text.contains("no Windows service exists"));
     for cmd in [
         "capabilities",
         "host start",
         "host status",
+        "host health",
         "host attach",
         "host stop",
         "host serve",
@@ -98,7 +100,7 @@ fn unknown_arguments_fail_with_usage_exit_code_on_stderr() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.starts_with("subak: error:"), "{err}");
     assert!(
-        err.contains("only `capabilities` and the Step 08 `host` prototype exist"),
+        err.contains("only `capabilities` and the `host` commands exist"),
         "{err}"
     );
 }
@@ -114,7 +116,7 @@ fn capabilities_are_honest_and_follow_the_contract() {
     assert_eq!(data["version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(
         data["implementation"], "placeholder",
-        "no Terminals or sessions yet: the Host is a Step 08 prototype"
+        "no Terminals or sessions yet: one prototype pane per Host until Step 10"
     );
     let names: Vec<&str> = data["commands"]
         .as_array()
@@ -128,13 +130,14 @@ fn capabilities_are_honest_and_follow_the_contract() {
             "capabilities",
             "host.start",
             "host.status",
+            "host.health",
             "host.attach",
             "host.stop",
             "host.serve"
         ],
         "only commands that really exist"
     );
-    let stop = &data["commands"][4];
+    let stop = &data["commands"][5];
     assert_eq!(
         (stop["effect"].as_str(), &stop["requires_yes"]),
         (Some("destructive"), &Value::Bool(true))
@@ -170,7 +173,7 @@ fn capabilities_are_honest_and_follow_the_contract() {
 
     let human = subak(&["capabilities"]);
     assert!(human.status.success());
-    assert!(String::from_utf8_lossy(&human.stdout).contains("Step 08 ConPTY Host prototype"));
+    assert!(String::from_utf8_lossy(&human.stdout).contains("one prototype pane per Host"));
 }
 
 #[test]
@@ -250,16 +253,38 @@ fn host_dry_runs_describe_the_plan_and_start_nothing() {
     assert_eq!(doc["data"]["dry_run"], true);
     let (code, _) = json(&["host", "status", "--endpoint", &ep]);
     assert_eq!(code, 3, "nothing was started");
-    // The default endpoint is per user and session, and marked as the prototype's.
+    // The default endpoint is the well-known per-user, per-session pipe of ADR 0005, and the
+    // start lock is derived from it.
     let out = subak(&["host", "start", "--dry-run", "--json"]);
     let doc: Value = serde_json::from_slice(&out.stdout).unwrap();
-    let default = doc["data"]["would_start"]["endpoint"]
-        .as_str()
-        .unwrap()
-        .to_string();
+    let plan = &doc["data"]["would_start"];
+    let default = plan["endpoint"].as_str().unwrap().to_string();
     assert!(
-        default.starts_with(r"\\.\pipe\mouv-subak-proto-S-1-5-"),
+        default.starts_with(r"\\.\pipe\mouv-subak-S-1-5-") && default.contains("-s"),
         "{default}"
+    );
+    assert_eq!(
+        plan["start_lock"].as_str().unwrap(),
+        format!(r"Local\mouv-subak-start-{}", &default[r"\\.\pipe\".len()..])
+    );
+    assert_eq!(plan["environment"], "user (CreateEnvironmentBlock)");
+    assert_eq!(plan["idle_exit_s"], 10, "ADR 0003 §4 default grace");
+    // The plan reports the job this command runs in (risk R-03).
+    assert!(plan["launcher_job"].is_null() || plan["launcher_job"]["kill_on_close"].is_boolean());
+    let (code, doc) = json(&[
+        "host",
+        "start",
+        "--endpoint",
+        &ep,
+        "--no-shell",
+        "--dry-run",
+    ]);
+    assert_eq!(code, 0);
+    assert_eq!(doc["data"]["would_start"]["shell"], Value::Null);
+    assert!(
+        doc["data"]["would_start"]["arguments"]
+            .to_string()
+            .contains("--no-shell")
     );
 }
 

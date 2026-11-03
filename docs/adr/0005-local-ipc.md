@@ -1,6 +1,7 @@
 # ADR 0005 — Local IPC transport, security and versioning
 
-Status: **Accepted** · Date: 2026-11-03 · Step 03 · Implemented in Step 09 (prototype in Step 08)
+Status: **Accepted** · Date: 2026-11-03 · Step 03 · Implemented in Step 09 (prototype in Step 08;
+see [ADR 0019](0019-secure-host-supervisor-and-ipc-v1.md))
 
 ## Context
 
@@ -95,3 +96,16 @@ The transport is a narrow trait (`connect`, `accept`, `read_frame`, `write_frame
   deadlock a duplex stream. The prototype already applies the owner-only DACL,
   `PIPE_REJECT_REMOTE_CLIENTS`, `FILE_FLAG_FIRST_PIPE_INSTANCE` and `SECURITY_IDENTIFICATION`.
   The identity checks and the final pipe name remain Step 09's job.
+- 2026-11-04 (Step 09): implemented as protocol v1; see
+  [ADR 0019](0019-secure-host-supervisor-and-ipc-v1.md) and
+  [IPC_PROTOCOL](../contracts/IPC_PROTOCOL.md). One refinement: the *server* reads the client's
+  user SID from the token of the connection (`ImpersonateNamedPipeClient` at identification
+  level), not from the process found by `GetNamedPipeClientProcessId`. That avoids pid reuse and
+  works for elevated clients. The client side is as written: server pid, token SID and
+  `subak.exe` image, checked before anything is sent; failures are `host_identity_mismatch`
+  (exit 4). Also measured: a same-user pipe squatter is refused with zero bytes sent; a
+  low-integrity process of the same user is denied by the pipe; and
+  `FILE_FLAG_FIRST_PIPE_INSTANCE` may fail with `ERROR_PIPE_BUSY` instead of
+  `ERROR_ACCESS_DENIED`. The transport boundary of "Portability" is the module split between
+  `proto` (portable) and `win::pipe`, not yet a Rust trait; the trait arrives with Linux (M4,
+  ADR 0011).

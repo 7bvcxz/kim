@@ -867,9 +867,11 @@ fn shell_exit_ends_the_host_and_its_clients() {
     c.send(b"exit 7\r");
     assert_eq!(c.finish(LONG), 0);
     assert!(c.text().contains("exit code 7"), "{}", c.text());
+    // Step 09 (ADR 0003 §4): with no pane and no client left, the Host exits after its idle
+    // grace period (10 s by default; tests/host_ipc.rs measures it).
     assert!(
         h.host.wait(LONG),
-        "the prototype Host lives as long as its shell"
+        "the Host idles out once its pane ended and no client is connected"
     );
     assert_eq!(h.shell.exit_code(), Some(7));
     let (code, _) = run(&["host", "status", "--endpoint", &h.ep]);

@@ -1,0 +1,1 @@
+{"type": "error", "error": {"code": "busy", "message": "the Host serves at most 64 connections", "details": {}}}

@@ -9,8 +9,13 @@
 //! `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` restricts inheritance to exactly that handle. Without the
 //! list, a launcher that was itself started with redirected output (an agent, a test, a CI job)
 //! would leak its pipe into the Host, and its caller would wait for EOF until the Host exits.
+//!
+//! **No inherited environment** (ADR 0003 §6, ADR 0019). The client passes the environment of a
+//! fresh logon (`CreateEnvironmentBlock`), not its own, so nothing a launching terminal set
+//! (a Git Bash `HOME`, a terminal-scoped `SSH_AUTH_SOCK`, a token in a variable) reaches the
+//! long-lived Host or its panes.
 
-use super::{AttrList, Handle, quote_arg, wide};
+use super::{AttrList, EnvBlock, Handle, quote_arg, wide};
 use std::ffi::c_void;
 use std::io;
 use std::path::Path;
@@ -61,22 +66,30 @@ fn nul_inheritable() -> io::Result<Handle> {
     })
 }
 
-/// Starts `exe args…` detached, in `cwd`. `args_for` builds the arguments given whether the
-/// attempt uses job breakaway, so the Host can report it.
+/// Starts `exe args…` detached, in `cwd`, with environment `env` (`None` inherits ours).
+/// `args_for` builds the arguments given whether the attempt uses job breakaway, so the Host can
+/// report it.
 pub fn spawn_detached(
     exe: &Path,
     args_for: impl Fn(bool) -> Vec<String>,
     cwd: &Path,
+    env: Option<&EnvBlock>,
 ) -> io::Result<Spawned> {
-    match try_spawn(exe, &args_for(true), cwd, true) {
+    match try_spawn(exe, &args_for(true), cwd, env, true) {
         Err(e) if e.raw_os_error() == Some(ERROR_ACCESS_DENIED as i32) => {
-            try_spawn(exe, &args_for(false), cwd, false)
+            try_spawn(exe, &args_for(false), cwd, env, false)
         }
         other => other,
     }
 }
 
-fn try_spawn(exe: &Path, args: &[String], cwd: &Path, breakaway: bool) -> io::Result<Spawned> {
+fn try_spawn(
+    exe: &Path,
+    args: &[String],
+    cwd: &Path,
+    env: Option<&EnvBlock>,
+    breakaway: bool,
+) -> io::Result<Spawned> {
     let nul = nul_inheritable()?;
     let handles = [nul.raw()];
     let mut attrs = AttrList::new(1)?;
@@ -113,8 +126,9 @@ fn try_spawn(exe: &Path, args: &[String], cwd: &Path, breakaway: bool) -> io::Re
         flags |= CREATE_BREAKAWAY_FROM_JOB;
     }
     let mut pi = PROCESS_INFORMATION::default();
-    // SAFETY: all strings are NUL-terminated and `line` is writable; `si`, the attribute list and
-    // `handles` are alive; only the listed NUL handle is inheritable into the child.
+    // SAFETY: all strings are NUL-terminated and `line` is writable; `si`, the attribute list,
+    // `handles` and the environment block are alive; only the listed NUL handle is inheritable
+    // into the child; the block is UTF-16 as CREATE_UNICODE_ENVIRONMENT declares.
     let ok = unsafe {
         CreateProcessW(
             app.as_ptr(),
@@ -123,7 +137,7 @@ fn try_spawn(exe: &Path, args: &[String], cwd: &Path, breakaway: bool) -> io::Re
             std::ptr::null(),
             1,
             flags,
-            std::ptr::null(),
+            env.map_or(std::ptr::null(), EnvBlock::as_ptr),
             cwd.as_ptr(),
             &raw const si.StartupInfo,
             &raw mut pi,

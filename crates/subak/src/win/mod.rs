@@ -1,4 +1,4 @@
-//! Windows platform layer for the Step 08 Host prototype (ADR 0004, ADR 0005, ADR 0016).
+//! Windows platform layer of the Host and its clients (ADR 0004, ADR 0005, ADR 0016, ADR 0019).
 //!
 //! Only this module tree calls Win32. Every `unsafe` block states why it is sound.
 
@@ -12,21 +12,28 @@ use std::io;
 use std::os::windows::ffi::OsStrExt;
 use std::time::Duration;
 use windows_sys::Win32::Foundation::{
-    CloseHandle, HANDLE, HLOCAL, INVALID_HANDLE_VALUE, LocalFree, WAIT_OBJECT_0,
+    CloseHandle, HANDLE, HLOCAL, INVALID_HANDLE_VALUE, LocalFree, WAIT_ABANDONED, WAIT_OBJECT_0,
+    WAIT_TIMEOUT,
 };
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
 };
 use windows_sys::Win32::Security::{
-    GetTokenInformation, PSECURITY_DESCRIPTOR, TOKEN_QUERY, TOKEN_USER, TokenUser,
+    GetTokenInformation, PSECURITY_DESCRIPTOR, TOKEN_DUPLICATE, TOKEN_QUERY, TOKEN_USER, TokenUser,
 };
-use windows_sys::Win32::System::JobObjects::IsProcessInJob;
+use windows_sys::Win32::System::Environment::{CreateEnvironmentBlock, DestroyEnvironmentBlock};
+use windows_sys::Win32::System::JobObjects::{
+    IsProcessInJob, JOB_OBJECT_LIMIT_BREAKAWAY_OK, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    JobObjectExtendedLimitInformation, QueryInformationJobObject,
+};
 use windows_sys::Win32::System::RemoteDesktop::ProcessIdToSessionId;
 use windows_sys::Win32::System::Threading::{
-    CreateEventW, DeleteProcThreadAttributeList, GetCurrentProcess, GetCurrentProcessId,
-    GetExitCodeProcess, INFINITE, InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST,
-    OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
-    SetEvent, UpdateProcThreadAttribute, WaitForSingleObject,
+    CreateEventW, CreateMutexW, DeleteProcThreadAttributeList, GetCurrentProcess,
+    GetCurrentProcessId, GetExitCodeProcess, INFINITE, InitializeProcThreadAttributeList,
+    LPPROC_THREAD_ATTRIBUTE_LIST, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
+    PROCESS_SYNCHRONIZE, QueryFullProcessImageNameW, ReleaseMutex, SetEvent,
+    UpdateProcThreadAttribute, WaitForSingleObject,
 };
 
 /// An owned kernel handle, closed exactly once on drop.
@@ -163,14 +170,65 @@ pub fn current_pid() -> u32 {
     std::process::id()
 }
 
+/// Open handles of this process (a local metric, ADR 0012).
+pub fn handle_count() -> u32 {
+    let mut n = 0u32;
+    // SAFETY: pseudo handle of this process; `n` is writable.
+    unsafe {
+        windows_sys::Win32::System::Threading::GetProcessHandleCount(
+            GetCurrentProcess(),
+            &raw mut n,
+        )
+    };
+    n
+}
+
 /// The string SID (`S-1-5-21-…`) of the user running this process.
 pub fn user_sid() -> io::Result<String> {
+    token_user_sid(&own_token(TOKEN_QUERY)?)
+}
+
+fn own_token(access: u32) -> io::Result<Handle> {
     let mut token = std::ptr::null_mut();
     // SAFETY: pseudo handle of the current process; `token` receives a new handle.
-    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &raw mut token) } == 0 {
+    if unsafe { OpenProcessToken(GetCurrentProcess(), access, &raw mut token) } == 0 {
         return Err(io::Error::last_os_error());
     }
-    let token = Handle::new(token)?;
+    Handle::new(token)
+}
+
+/// The string SID of the user that owns process `pid` (needs query access to its token).
+pub fn process_user_sid(pid: u32) -> io::Result<String> {
+    let process = open_query(pid)?;
+    let mut token = std::ptr::null_mut();
+    // SAFETY: valid process handle; `token` receives a new handle.
+    if unsafe { OpenProcessToken(process.raw(), TOKEN_QUERY, &raw mut token) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    token_user_sid(&Handle::new(token)?)
+}
+
+fn open_query(pid: u32) -> io::Result<Handle> {
+    // SAFETY: plain open with limited query rights; checked by Handle::new.
+    Handle::new(unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) })
+}
+
+/// The full path of the executable of process `pid`.
+pub fn process_image(pid: u32) -> io::Result<std::path::PathBuf> {
+    let process = open_query(pid)?;
+    let mut buf = vec![0u16; 32_768];
+    let mut len = u32::try_from(buf.len()).expect("small");
+    // SAFETY: `buf` has `len` writable UTF-16 units; 0 = Win32 path format.
+    if unsafe { QueryFullProcessImageNameW(process.raw(), 0, buf.as_mut_ptr(), &raw mut len) } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    buf.truncate(len as usize);
+    Ok(std::path::PathBuf::from(String::from_utf16_lossy(&buf)))
+}
+
+/// The string SID of the user of `token` (needs `TOKEN_QUERY`).
+pub(crate) fn token_user_sid(token: &Handle) -> io::Result<String> {
     let mut len = 0u32;
     // SAFETY: size query with a null buffer; fails with ERROR_INSUFFICIENT_BUFFER and sets `len`.
     unsafe {
@@ -209,6 +267,136 @@ pub fn user_sid() -> io::Result<String> {
     // SAFETY: `text` was allocated by ConvertSidToStringSidW with LocalAlloc.
     unsafe { LocalFree(text as HLOCAL) };
     Ok(sid)
+}
+
+/// A held named mutex (the per-endpoint start lock of ADR 0003 §3). Released on drop.
+///
+/// A Win32 mutex belongs to the *thread* that acquired it: drop the lock on the same thread.
+#[derive(Debug)]
+pub struct NamedLock {
+    h: Handle,
+    /// The previous owner ended without releasing it (a starter crashed mid-start).
+    pub abandoned: bool,
+}
+
+impl NamedLock {
+    /// Waits up to `timeout` for the mutex `name` (e.g. `Local\…`, per Windows session).
+    pub fn acquire(name: &str, timeout: Duration) -> io::Result<Self> {
+        let w = wide(name);
+        // SAFETY: NUL-terminated name; default security (the creator's default DACL).
+        let h = Handle::new(unsafe { CreateMutexW(std::ptr::null(), 0, w.as_ptr()) })?;
+        let ms = u32::try_from(timeout.as_millis()).unwrap_or(INFINITE - 1);
+        // SAFETY: valid mutex handle.
+        match unsafe { WaitForSingleObject(h.raw(), ms) } {
+            WAIT_OBJECT_0 => Ok(Self {
+                h,
+                abandoned: false,
+            }),
+            WAIT_ABANDONED => Ok(Self { h, abandoned: true }),
+            WAIT_TIMEOUT => Err(io::ErrorKind::TimedOut.into()),
+            _ => Err(io::Error::last_os_error()),
+        }
+    }
+}
+
+impl Drop for NamedLock {
+    fn drop(&mut self) {
+        // SAFETY: this thread owns the mutex (acquired in `acquire`); the handle closes after.
+        unsafe { ReleaseMutex(self.h.raw()) };
+    }
+}
+
+/// A Unicode environment block (`K=V\0…\0\0`) for `CreateProcessW`.
+#[derive(Debug, Clone)]
+pub struct EnvBlock(Vec<u16>);
+
+impl EnvBlock {
+    /// The environment of a fresh logon of the current user (ADR 0003 §6): system and user
+    /// variables from the registry, `USERPROFILE`, `APPDATA`, `LOCALAPPDATA`, the user's `PATH`,
+    /// and `HOME` only if the user defined it, without anything a launching terminal added.
+    pub fn for_current_user() -> io::Result<Self> {
+        let token = own_token(TOKEN_QUERY | TOKEN_DUPLICATE)?;
+        let mut block: *mut c_void = std::ptr::null_mut();
+        // SAFETY: valid primary token with the documented access; FALSE = do not inherit the
+        // current process's environment.
+        if unsafe { CreateEnvironmentBlock(&raw mut block, token.raw(), 0) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let p = block.cast::<u16>();
+        let mut len = 0usize;
+        // SAFETY: a valid block ends with an empty string (two NULs in a row); every offset up
+        // to it is in bounds.
+        unsafe {
+            while !(*p.add(len) == 0 && (len == 0 || *p.add(len - 1) == 0)) {
+                len += 1;
+            }
+        }
+        // SAFETY: `len + 1` units were just read.
+        let mut v = unsafe { std::slice::from_raw_parts(p, len + 1) }.to_vec();
+        // SAFETY: allocated by CreateEnvironmentBlock, destroyed exactly once.
+        unsafe { DestroyEnvironmentBlock(block) };
+        if v.len() < 2 {
+            v = vec![0, 0];
+        }
+        Ok(Self(v))
+    }
+
+    /// `(name, value)` pairs.
+    pub fn vars(&self) -> impl Iterator<Item = (String, String)> + '_ {
+        self.0
+            .split(|&c| c == 0)
+            .filter(|s| !s.is_empty())
+            .filter_map(|s| {
+                let text = String::from_utf16_lossy(s);
+                // `=C:=C:\…` entries start with '='; their name is up to the second '='.
+                let skip = text.chars().next()?.len_utf8();
+                let at = text[skip..].find('=')? + skip;
+                Some((text[..at].to_string(), text[at + 1..].to_string()))
+            })
+    }
+
+    /// A variable, case-insensitively as Windows does.
+    pub fn get(&self, name: &str) -> Option<String> {
+        self.vars()
+            .find(|(k, _)| k.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v)
+    }
+
+    pub fn as_ptr(&self) -> *const c_void {
+        self.0.as_ptr().cast()
+    }
+}
+
+/// The limits of the job the current process belongs to (its immediate job when nested).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct JobLimits {
+    pub kill_on_close: bool,
+    pub breakaway_ok: bool,
+    pub silent_breakaway_ok: bool,
+}
+
+/// `None` when the process is in no job (or its job cannot be queried).
+pub fn current_job_limits() -> Option<JobLimits> {
+    if !current_process_in_job() {
+        return None;
+    }
+    let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+    // SAFETY: null job = the job of the calling process; `info` is writable, of the size passed.
+    let ok = unsafe {
+        QueryInformationJobObject(
+            std::ptr::null_mut(),
+            JobObjectExtendedLimitInformation,
+            (&raw mut info).cast::<c_void>(),
+            u32::try_from(size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>()).expect("small"),
+            std::ptr::null_mut(),
+        )
+    };
+    let f = info.BasicLimitInformation.LimitFlags;
+    (ok != 0).then_some(JobLimits {
+        kill_on_close: f & JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE != 0,
+        breakaway_ok: f & JOB_OBJECT_LIMIT_BREAKAWAY_OK != 0,
+        silent_breakaway_ok: f & JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK != 0,
+    })
 }
 
 /// A self-relative security descriptor allocated by the system, freed on drop.
@@ -364,5 +552,68 @@ mod tests {
         let _ = session_id();
         let me = open_process(current_pid()).expect("open self");
         assert_eq!(exit_code(me.raw()), None, "we are running");
+        assert_eq!(process_user_sid(current_pid()).unwrap(), sid);
+        assert_eq!(
+            process_image(current_pid()).unwrap(),
+            std::env::current_exe().unwrap()
+        );
+        assert!(process_user_sid(u32::MAX - 3).is_err(), "no such process");
+    }
+
+    #[test]
+    fn the_user_environment_comes_from_the_logon_not_from_this_process() {
+        // A variable only this process has; the block must not carry it.
+        let marker = format!("SUBAK_ENV_LEAK_{}", current_pid());
+        // SAFETY: set_var is unsafe in edition 2024 because of concurrent getenv; the name is
+        // unique to this test and only read below.
+        unsafe { std::env::set_var(&marker, "leak") };
+        let env = EnvBlock::for_current_user().unwrap();
+        assert_eq!(
+            env.get(&marker),
+            None,
+            "the launcher's variables are not inherited"
+        );
+        let profile = env.get("USERPROFILE").expect("USERPROFILE");
+        assert!(std::path::Path::new(&profile).is_dir(), "{profile}");
+        assert!(env.get("path").is_some(), "case-insensitive lookup");
+        assert!(env.get("LOCALAPPDATA").is_some());
+        assert!(env.vars().all(|(k, _)| !k.is_empty()));
+    }
+
+    #[test]
+    fn named_lock_is_exclusive_and_survives_an_abandoning_owner() {
+        let name = format!("Local\\subak-unit-lock-{}", current_pid());
+        let first = NamedLock::acquire(&name, Duration::from_secs(1)).unwrap();
+        assert!(!first.abandoned);
+        let other = {
+            let name = name.clone();
+            std::thread::spawn(move || {
+                NamedLock::acquire(&name, Duration::from_millis(100)).map(|_| ())
+            })
+        };
+        assert_eq!(
+            other.join().unwrap().unwrap_err().kind(),
+            io::ErrorKind::TimedOut,
+            "a second starter waits"
+        );
+        drop(first);
+        // A starter thread that ends while holding the lock abandons it; the next one gets it.
+        let quitter = {
+            let name = name.clone();
+            std::thread::spawn(move || {
+                std::mem::forget(NamedLock::acquire(&name, Duration::from_secs(1)).unwrap());
+            })
+        };
+        quitter.join().unwrap();
+        let next = NamedLock::acquire(&name, Duration::from_secs(1)).unwrap();
+        assert!(
+            next.abandoned,
+            "an abandoned start lock is reported, not a deadlock"
+        );
+    }
+
+    #[test]
+    fn job_limits_match_membership() {
+        assert_eq!(current_job_limits().is_some(), current_process_in_job());
     }
 }

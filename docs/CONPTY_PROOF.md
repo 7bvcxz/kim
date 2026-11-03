@@ -16,6 +16,18 @@ run on every push on the GitHub `windows-2025` runner (Windows Server 2025, buil
 inbox ConPTY). All 11 Host tests of §4 pass there too (CI run 41731725304), after the two fixes
 for differences listed in §6.
 
+> **Step 09 update (2026-11-04).** This document records the Step 08 prototype as it was proven.
+> The ConPTY, job, detached-spawn and survival results below still hold, and the 11 tests of §4
+> pass unchanged against the Step 09 Host. Step 09 replaced three things
+> ([ADR 0019](adr/0019-secure-host-supervisor-and-ipc-v1.md),
+> [IPC_PROTOCOL](contracts/IPC_PROTOCOL.md)):
+> - the default endpoint is now `\\.\pipe\mouv-subak-<user SID>-s<session>` (no `proto` part);
+> - the protocol is now v1 with mutual identity checks (major 0 is refused);
+> - the Host no longer lives exactly as long as its shell. It runs while it owns a live pane or
+>   has a client, then exits after its idle grace period (default 10 s).
+>
+> Where §2, §3 and §6 say otherwise about these points, they describe Step 08.
+
 ## 1. Result
 
 | Acceptance criterion (issue #8) | Result |

@@ -1,12 +1,12 @@
 //! `subak` — Subak terminal CLI.
 //!
-//! Pre-alpha. Besides `capabilities` (docs/CLI_CONTRACT.md §9) it contains the **Step 08 ConPTY
-//! Host prototype** (docs/CONPTY_PROOF.md, ADR 0016): `subak host serve|start|status|attach|stop`.
-//! A detached per-user Host owns one pseudo console with one shell inside a kill-on-close job;
-//! independent CLI clients talk to it over a prototype named pipe. There are no Terminals,
-//! panes, sessions model, GUI or recovery yet (Steps 09+). Nothing starts by itself: the Host
-//! runs only after an explicit `subak host start` (or `host serve`), and no command opens a
-//! window. The real CLI (Step 12) follows the same contract.
+//! Pre-alpha. Besides `capabilities` (docs/CLI_CONTRACT.md §9) it contains the **Host
+//! supervisor and IPC v1** (Step 09, ADR 0019, docs/contracts/IPC_PROTOCOL.md) built on the
+//! Step 08 ConPTY proof (ADR 0016): `subak host start|status|health|attach|stop|serve`. A
+//! detached per-user Host serves an identity-checked named pipe, starts on demand under a start
+//! lock, and exits after an idle grace period; until the session model (Step 10) it owns at most
+//! one prototype pane. There are no Terminals, windows, GUI or recovery yet. Nothing starts by
+//! itself, and no command opens a window. The real CLI (Step 12) follows the same contract.
 
 // Portable modules: compiled and unit-tested on every target, but until the Linux Host (M4,
 // ADR 0011) only the Windows Host and clients use most of them.
@@ -16,6 +16,13 @@ mod cli;
 mod output;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod proto;
+
+/// The schema validator of `cargo xtask schema-check`, so unit tests can check every IPC message
+/// this build constructs against docs/contracts/schemas (ADR 0015).
+#[cfg(test)]
+#[path = "../../../xtask/src/jsonschema.rs"]
+#[allow(dead_code)]
+mod jsonschema;
 
 #[cfg(windows)]
 mod client;
@@ -32,35 +39,49 @@ use std::io::Write;
 use std::process::ExitCode;
 
 const HELP: &str = "\
-subak — Subak persistent terminal (pre-alpha; Step 08 ConPTY Host prototype)
+subak — Subak persistent terminal (pre-alpha; Host supervisor and IPC v1, one prototype pane)
 
 USAGE:
     subak [--help | --version]
     subak capabilities [--json]
-    subak host start  [--endpoint <name>] [--shell <command>] [--dry-run] [--json]
+    subak host start  [--endpoint <name>] [--shell <command> | --no-shell] [--idle-exit <secs>]
+                      [--dry-run] [--json]
     subak host status [--endpoint <name>] [--json]
+    subak host health [--endpoint <name>] [--json]
     subak host attach [--endpoint <name>] [--size <cols>x<rows>] [--dry-run [--json]]
     subak host stop   [--endpoint <name>] [--yes] [--dry-run] [--json]
-    subak host serve  [--endpoint <name>] [--shell <command>] [--dry-run] [--json]
+    subak host serve  [--endpoint <name>] [--shell <command> | --no-shell] [--idle-exit <secs>]
+                      [--dry-run] [--json]
 
-HOST PROTOTYPE (Windows only; docs/CONPTY_PROOF.md):
-    host start    Start a detached Host that owns one pseudo console (ConPTY) running one
-                  shell (default %ComSpec%) inside a kill-on-close job. Returns when the Host
-                  serves its pipe. The Host keeps running after this command, its console
-                  window or any client closes; only `host stop`, the shell exiting, logoff or
-                  shutdown end it.
-    host status   Show the Host and shell process ids, job breakaway, size and clients.
-    host attach   Connect this terminal to the shell. Ctrl+B d detaches (Ctrl+B Ctrl+B sends
+HOST (Windows only; docs/contracts/IPC_PROTOCOL.md, docs/CONPTY_PROOF.md):
+    host start    Start a detached per-user Host, unless one already serves the endpoint
+                  (`host_already_running`). Starters take a per-endpoint lock, so several at
+                  once give one Host. It gets your logon environment, not this terminal's.
+                  Until Step 10 it owns at most one pane: a pseudo console (ConPTY) running one
+                  shell (default %ComSpec%) in a kill-on-close job, or none with --no-shell.
+                  The Host runs while it owns a live pane or has a client, then exits after the
+                  idle grace period. Closing this window or any client never ends it.
+    host status   Host and pane process ids, protocol, job breakaway, environment and clients.
+    host health   Heartbeat: check that the endpoint is served by subak.exe of this user, do
+                  the handshake and report the answer time. Exit 0 only when healthy.
+    host attach   Connect this terminal to the pane. Ctrl+B d detaches (Ctrl+B Ctrl+B sends
                   Ctrl+B). With redirected input, the bytes are sent as typed and the end of
                   input detaches. Detaching or closing this window leaves the shell running.
-    host stop     End the shell and every process in its job, then the Host. Destructive:
-                  asks first, or needs --yes when it cannot ask.
+    host stop     Stop the Host. Ending a live pane and every process in its job is
+                  destructive: asks first, or needs --yes when it cannot ask.
     host serve    Run the Host in this process (what `host start` launches detached).
 
+    Every client checks, before sending anything, that the pipe is served by subak.exe of
+    this user (`host_identity_mismatch` otherwise); the Host checks each client's token. A
+    Host that does not answer is reported (`host_unresponsive`), never ended or replaced.
+
 OPTIONS:
-    --endpoint <name>  Pipe name under \\\\.\\pipe\\ (default: mouv-subak-proto-<user SID>-s<session>).
+    --endpoint <name>  Pipe name under \\\\.\\pipe\\ (default: mouv-subak-<user SID>-s<session>).
                        Use your own name for experiments; it never touches the default Host.
-    --shell <command>  Command line of the shell (start/serve).
+    --shell <command>  Command line of the pane's shell (start/serve).
+    --no-shell         Start a Host that owns no pane (start/serve).
+    --idle-exit <s>    Seconds the Host waits with no pane and no client before it exits
+                       (0..86400, default 10).
     --size <c>x<r>     Pseudo console size when attaching from a script (2..1000 each).
     --dry-run          Show what would happen; change nothing.
     -y, --yes          Confirm a destructive command (stop) without asking.
@@ -68,9 +89,8 @@ OPTIONS:
     --no-input         Never ask; fail with `confirmation_required` instead.
     -q, --quiet / -v, --verbose   Less / more diagnostics on stderr.
 
-This is a prototype: the IPC is a local, owner-only named pipe without the Step 09 identity
-checks; there are no Terminals, panes, GUI or recovery yet (docs/PRODUCT_REQUIREMENTS.md).
-No command opens a window, installs anything or uses the network.
+Pre-alpha: there are no Terminals, windows, GUI or recovery yet (docs/PRODUCT_REQUIREMENTS.md).
+No command opens a window, installs anything or uses the network; no Windows service exists.
 ";
 
 /// The capabilities document (`kim.capabilities` v1). Its `version` must equal the package
@@ -103,9 +123,10 @@ fn main() -> ExitCode {
         Cmd::Capabilities => {
             let _ = write!(
                 out,
-                "subak {} — pre-alpha (CLI contract v1)\n\
-                 Commands: capabilities; Step 08 ConPTY Host prototype: host start|status|attach|stop|serve.\n\
-                 No Terminals, panes, GUI or recovery yet.\n",
+                "subak {} — pre-alpha (CLI contract v1, IPC protocol v1)\n\
+                 Commands: capabilities; host start|status|health|attach|stop|serve \
+                 (Host supervisor, one prototype pane per Host).\n\
+                 No Terminals, windows, GUI or recovery yet.\n",
                 env!("CARGO_PKG_VERSION")
             );
             ExitCode::SUCCESS
@@ -161,22 +182,15 @@ fn run_host(cmd: &Cmd, a: &Args) -> Result<Value, CliError> {
     }
     match cmd {
         Cmd::HostServe => {
-            let opts = host::ServeOpts {
-                endpoint,
-                shell: a.shell.clone().unwrap_or_else(host::default_shell),
-                job_breakaway: a.job_breakaway,
-            };
+            let opts = client::serve_opts(a, endpoint);
             if a.dry_run {
-                return Ok(serde_json::json!({"dry_run": true, "would_serve": {
-                    "endpoint": win::pipe::path(&opts.endpoint),
-                    "shell": opts.shell,
-                    "cwd": host::profile_dir().map(|p| p.display().to_string()),
-                }}));
+                return Ok(client::serve_plan(&opts));
             }
             host::serve(&opts)
         }
         Cmd::HostStart => client::start(a, &endpoint),
         Cmd::HostStatus => client::status(&endpoint),
+        Cmd::HostHealth => client::health(&endpoint),
         Cmd::HostStop => client::stop(a, &endpoint),
         Cmd::HostAttach => client::attach(a, &endpoint),
         _ => Err(CliError::new(Code::Internal, "not a host command")),
@@ -195,18 +209,31 @@ fn run_host(_cmd: &Cmd, _a: &Args) -> Result<Value, CliError> {
 /// Risk R-03 (measured in Step 08, ADR 0016): a Host inside a job it could not leave dies when
 /// that job is closed with kill-on-close.
 fn host_warnings(cmd: &Cmd, d: &Value) -> Vec<String> {
-    if !matches!(cmd, Cmd::HostStart | Cmd::HostStatus) || d["host"]["in_job"] != true {
-        return Vec::new();
+    let mut w = Vec::new();
+    if matches!(cmd, Cmd::HostStart | Cmd::HostStatus) && d["host"]["environment"] == "inherited" {
+        w.push(
+            "the user's logon environment could not be built, so the Host inherited its \
+             launcher's environment"
+                .to_string(),
+        );
     }
-    vec![if d["host"]["job_breakaway"] == false {
+    if !matches!(cmd, Cmd::HostStart | Cmd::HostStatus) || d["host"]["in_job"] != true {
+        return w;
+    }
+    w.push(if d["host"]["job_breakaway"] == false {
         "a job of the launching terminal forbids breakaway, so the Host started inside it; \
          closing that terminal or job may end the Host and its shell (risk R-03)"
+            .to_string()
+    } else if d["host"]["job"]["kill_on_close"] == false {
+        "the Host runs inside a job object it could not leave; that job does not end its \
+         processes when closed, but an enclosing job may (risk R-03)"
             .to_string()
     } else {
         "the Host runs inside a job object it could not leave; if that job is closed with \
          kill-on-close, the Host and its shell end (risk R-03)"
             .to_string()
-    }]
+    });
+    w
 }
 
 /// Human output on stdout (results) and stderr (notices).
@@ -237,25 +264,49 @@ fn human(cmd: &Cmd, d: &Value, a: &Args) {
             d["pane"]["command"].as_str().unwrap_or("?"),
             d["endpoint"].as_str().unwrap_or("?"),
         ),
-        Cmd::HostStatus => writeln!(
+        Cmd::HostStatus => {
+            let pane = if d["pane"].is_null() {
+                "no pane (started with --no-shell)".to_string()
+            } else {
+                format!(
+                    "shell pid {} running: {} ({}), {}x{}, {} process(es) in its job",
+                    d["pane"]["pid"],
+                    d["pane"]["running"],
+                    d["pane"]["command"].as_str().unwrap_or("?"),
+                    d["pane"]["size"]["cols"],
+                    d["pane"]["size"]["rows"],
+                    d["pane"]["job_processes"],
+                )
+            };
+            writeln!(
+                out,
+                "Host pid {} since {} (session {}, protocol {}, job breakaway: {}, in a job: {}, \
+                 idle exit after {} s)\n{pane}\nclients: {} connected, {} attached\nendpoint: {}",
+                d["host"]["pid"],
+                d["host"]["started_at"].as_str().unwrap_or("?"),
+                d["host"]["session_id"],
+                d["protocol"],
+                d["host"]["job_breakaway"],
+                d["host"]["in_job"],
+                d["host"]["idle_exit_s"],
+                d["clients"]["connected"],
+                d["clients"]["attached"],
+                d["endpoint"].as_str().unwrap_or("?"),
+            )
+        }
+        Cmd::HostHealth => writeln!(
             out,
-            "Host pid {} since {} (session {}, job breakaway: {}, in a job: {})\n\
-             shell pid {} running: {} ({}), {}x{}, {} process(es) in its job\n\
-             clients: {} connected, {} attached\nendpoint: {}",
+            "healthy: Host pid {} (protocol {}, up {} s), verified as {} of this user; answered in {} ms",
             d["host"]["pid"],
-            d["host"]["started_at"].as_str().unwrap_or("?"),
-            d["host"]["session_id"],
-            d["host"]["job_breakaway"],
-            d["host"]["in_job"],
-            d["pane"]["pid"],
-            d["pane"]["running"],
-            d["pane"]["command"].as_str().unwrap_or("?"),
-            d["pane"]["size"]["cols"],
-            d["pane"]["size"]["rows"],
-            d["pane"]["job_processes"],
-            d["clients"]["connected"],
-            d["clients"]["attached"],
-            d["endpoint"].as_str().unwrap_or("?"),
+            d["host"]["protocol"],
+            d["host"]["uptime_s"],
+            d["identity"]["image"].as_str().unwrap_or("?"),
+            d["latency_ms"],
+        ),
+        Cmd::HostStop if d["shell"].is_null() => writeln!(
+            out,
+            "Host pid {} stopped (exited: {}); it owned no pane",
+            d["host"]["pid"], d["host"]["exited"],
         ),
         Cmd::HostStop => writeln!(
             out,
@@ -284,11 +335,16 @@ fn human(cmd: &Cmd, d: &Value, a: &Args) {
                         "[subak: detached; the shell keeps running in Host pid {}]",
                         d["host"]["pid"]
                     );
+                } else if let Some(reason) = d["host"]["stopped"].as_str() {
+                    eprintln!(
+                        "[subak: the shell ended (exit code {}); the Host stopped ({reason})]",
+                        d["shell_exit_code"],
+                    );
                 } else {
                     eprintln!(
-                        "[subak: the shell ended (exit code {}); the Host stopped ({})]",
+                        "[subak: the shell ended (exit code {}); the Host keeps running until \
+                         its idle grace period ends]",
                         d["shell_exit_code"],
-                        d["host"]["stopped"].as_str().unwrap_or("?")
                     );
                 }
             }

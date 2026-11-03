@@ -17,12 +17,16 @@ did.
 | Document | Status | Purpose |
 | --- | --- | --- |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | current | Components, Host internals, object model, lifecycles, close/kill semantics, restart behavior, telemetry |
-| [adr/README.md](adr/README.md) | current | Architecture decision records (ADR 0001–0013) |
+| [adr/README.md](adr/README.md) | current | Architecture decision records (ADR 0001–0014) |
+| [DESIGN_SYSTEM.md](DESIGN_SYSTEM.md) | current | Kim visual language: tokens, components, keyboard, high-DPI, contrast, Korean/Unicode, reduced motion |
 | [RISK_REGISTER.md](RISK_REGISTER.md) | current | ConPTY, job objects, IPC, GUI, SSH, tmux, recovery and Claude risks with owner steps |
 | [contracts/IPC_PROTOCOL.md](contracts/IPC_PROTOCOL.md) | draft contract | Subak IPC v1: framing, handshake, methods, events, error codes |
 | [contracts/STATE_SCHEMA.md](contracts/STATE_SCHEMA.md) | draft contract | `state.json` v1 and `config.toml` v1 |
 | [TMUX_COMPATIBILITY.md](TMUX_COMPATIBILITY.md) | current (inventory) | tmux command/key/option parity matrix with status and evidence |
 | [TABBY_FEATURE_MATRIX.md](TABBY_FEATURE_MATRIX.md) | current (inventory) | Tabby feature parity matrix with status and evidence |
+
+Design tokens and mock-ups live in [`design/`](../design/README.md) (`cargo xtask design-check`
+enforces declared contrast pairs). GUI toolkit evidence: [`research/gui-eval/`](../research/gui-eval/README.md).
 
 Contract schemas live in `contracts/schemas/`, with valid and invalid examples in
 `contracts/examples/`; `cargo xtask schema-check` (also run by `cargo test`) validates them.
@@ -31,7 +35,6 @@ Contract schemas live in `contracts/schemas/`, with valid and invalid examples i
 
 | Document | Status | Planned by | Purpose |
 | --- | --- | --- | --- |
-| `DESIGN_SYSTEM.md` | planned | Step 04 | Visual language, tokens, components, accessibility |
 | `CATALOG_FORMAT.md` | planned | Step 05 | Tool catalog manifest format |
 | `RELEASE_POLICY.md` | planned | Step 06 | Versioning, channels, signing, explicit-consent update policy |
 | `CLI_CONTRACT.md` | planned | Step 07 | Shared CLI conventions, exit codes, JSON schemas |

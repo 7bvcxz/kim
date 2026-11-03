@@ -1,5 +1,8 @@
-# Rust build output
-/target
+# Rust build output (root and research workspaces)
+target/
+
+# Research prototype binaries (rebuilt from source, see research/*/README.md)
+/research/gui-eval/bin/
 
 # Python bytecode from developer asset tools
 __pycache__/

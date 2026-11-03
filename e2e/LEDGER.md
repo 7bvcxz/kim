@@ -14,6 +14,7 @@ Run with `cargo xtask e2e`, which refuses unless the counter below has reached 1
 | 1 | #1 Step 01 – Product philosophy (docs only) | none (no executable feature) | 1 |
 | 2 | #2 Step 02 – Rust workspace and engineering standards | `step02_placeholder_binaries.rs`: `kim`/`subak` version, help, usage errors, no writes to user data dirs | 2 |
 | 3 | #3 Step 03 – Architecture and compatibility specifications (design) | none (no product feature; contract fixtures are checked by `cargo test` and will be reused by Step 09 e2e) | 3 |
+| 4 | #4 Step 04 – Kim native design system (design) | none (no product feature; token contrast is checked by `cargo test` via `design-check`) | 4 |
 
 ## E2E runs
 

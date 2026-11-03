@@ -19,6 +19,7 @@ the requirements it serves. ADRs are immutable once **Accepted**; a later ADR ma
 | [0011](0011-portability-boundary.md) | Portability boundary for Linux | Accepted |
 | [0012](0012-local-metrics-no-telemetry.md) | Local performance metrics, no telemetry | Accepted |
 | [0013](0013-kim-manager-architecture.md) | Kim manager: catalog and explicit installer | Accepted (refined in Steps 05–06) |
+| [0014](0014-gui-technology.md) | GUI technology: egui + glow for chrome, dedicated terminal renderer | Accepted (re-validated in Steps 15–16) |
 
 "Accepted (validated in Step N)" means the decision is made, but the named Step must confirm it
 on real Windows; if validation fails, that Step writes a superseding ADR.

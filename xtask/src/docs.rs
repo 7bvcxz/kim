@@ -15,7 +15,8 @@ pub struct Report {
     pub problems: Vec<String>,
 }
 
-const SKIP_DIRS: &[&str] = &["target", ".git", "node_modules"];
+/// `.claude` holds local agent worktrees (other branches checked out inside this checkout).
+const SKIP_DIRS: &[&str] = &["target", ".git", "node_modules", ".claude"];
 
 pub fn check(root: &Path) -> Result<Report, String> {
     let mut report = Report::default();

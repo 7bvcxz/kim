@@ -89,9 +89,13 @@ needed corrections, and what remains open.
   design; sleep and hibernate are expected to preserve the Host.
 - Measured on Windows 10 19045 and, through CI, Windows Server 2025 (build 26100). The newer
   inbox ConPTY differs in two ways. `ClosePseudoConsole` alone may leave the shell running, so
-  the job kill after the grace period is required, not optional. Control keys reach a console
-  client in a different shape, so the client derives Ctrl+letter from the virtual key and the
-  Ctrl state (`host attach -v` logs the records). Risk R-01 stays open for the builds between.
+  the job kill after the grace period is required, not optional. Its pane output also requests
+  win32-input-mode (`ESC[?9001h`). A client that forwards the request to its own console makes
+  that console encode every key as an escape sequence, and the client's `Ctrl+B d` never sees
+  `0x02`. A client is the pane's terminal and grants only what it implements, so `host attach`
+  drops the request (`proto::OutputFilter`), and ConPTY falls back to plain VT input. The client
+  also derives Ctrl+letter from the virtual key and the Ctrl state, and `host attach -v` logs key
+  records. Risk R-01 stays open for the builds between.
 
 ## Alternatives considered
 

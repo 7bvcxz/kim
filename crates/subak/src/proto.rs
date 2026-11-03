@@ -205,6 +205,46 @@ impl DetachKeys {
     }
 }
 
+/// Removes win32-input-mode requests (`ESC[?9001h` / `ESC[?9001l`) from pane output on its way to
+/// a client's terminal.
+///
+/// Newer inbox ConPTY (seen on Windows Server 2025, build 26100) asks its terminal for
+/// win32-input-mode. Passed through, the request switches the *client's* console into that mode:
+/// every key then arrives as an escape sequence, so `Ctrl+B d` is never seen as `0x02 d`. The
+/// client does not implement win32-input-mode, so it does not grant it; the pane's ConPTY accepts
+/// plain VT input instead. Sequences split across frames are handled.
+#[derive(Debug, Default)]
+pub struct OutputFilter {
+    pending: Vec<u8>,
+}
+
+const REFUSED: [&[u8]; 2] = [b"\x1b[?9001h", b"\x1b[?9001l"];
+
+impl OutputFilter {
+    pub fn feed(&mut self, input: &[u8]) -> Vec<u8> {
+        let mut data = std::mem::take(&mut self.pending);
+        data.extend_from_slice(input);
+        let mut out = Vec::with_capacity(data.len());
+        let mut i = 0;
+        while i < data.len() {
+            if data[i] == 0x1b {
+                let rest = &data[i..];
+                if let Some(seq) = REFUSED.iter().find(|s| rest.starts_with(s)) {
+                    i += seq.len();
+                    continue;
+                }
+                if REFUSED.iter().any(|s| s.starts_with(rest)) {
+                    self.pending = rest.to_vec(); // may complete in the next frame
+                    break;
+                }
+            }
+            out.push(data[i]);
+            i += 1;
+        }
+        out
+    }
+}
+
 /// Drops a UTF-8 byte order mark at the very start of redirected input: it is never a keystroke,
 /// and .NET Framework (Windows PowerShell 5.1) writes one to a child's stdin before any data.
 pub fn strip_leading_bom(first_chunk: bool, bytes: &[u8]) -> &[u8] {
@@ -325,6 +365,24 @@ mod tests {
             "prefix carried across reads"
         );
         assert_eq!(k.feed(&[b'z', PREFIX, b'd', b'q']), (b"z".to_vec(), true));
+    }
+
+    #[test]
+    fn win32_input_mode_requests_are_removed_even_when_split() {
+        let stream: &[u8] = b"\x1b[?25l\x1b[?9001h\x1b[?1004hC:\\>dir\r\n\x1b[?9001lend\x1b[?90";
+        let expected: &[u8] = b"\x1b[?25l\x1b[?1004hC:\\>dir\r\nend";
+        for split in 0..=stream.len() {
+            let mut f = OutputFilter::default();
+            let mut out = f.feed(&stream[..split]);
+            out.extend(f.feed(&stream[split..]));
+            assert_eq!(out, expected, "split at {split}");
+        }
+        // Other sequences, and a lone ESC that turns out not to be a request, pass unchanged.
+        let mut f = OutputFilter::default();
+        assert_eq!(f.feed(b"a\x1b[?900"), b"a");
+        assert_eq!(f.feed(b"2hb"), b"\x1b[?9002hb");
+        assert_eq!(f.feed(b"\x1b"), b"");
+        assert_eq!(f.feed(b"[1mX"), b"\x1b[1mX");
     }
 
     #[test]

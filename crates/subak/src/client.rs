@@ -354,11 +354,13 @@ pub fn attach(a: &Args, endpoint: &str) -> Result<Value, CliError> {
     let mut stdout = io::stdout().lock();
     let mut exit_code = Value::Null;
     let mut stopping = Value::Null;
+    // This client is the pane's terminal and does not grant win32-input-mode (see OutputFilter).
+    let mut filter = proto::OutputFilter::default();
     let end = loop {
         match proto::read_frame(&mut &*s.pipe) {
             Ok(Some(Frame::Data { bytes, .. })) => {
                 if stdout
-                    .write_all(&bytes)
+                    .write_all(&filter.feed(&bytes))
                     .and_then(|()| stdout.flush())
                     .is_err()
                 {

@@ -10,7 +10,7 @@
     "cli_contract": 1,
     "json_schema_version": 1,
     "implementation": "placeholder",
-    "summary": "Pre-alpha: Step 08 ConPTY Host prototype (one shell per Host, prototype pipe); no Terminals, panes, GUI or recovery yet",
+    "summary": "Pre-alpha: Host supervisor with IPC v1 (identity-checked pipe, start on demand, idle exit) and one prototype pane per Host; no Terminals, GUI or recovery yet",
     "commands": [
       {
         "name": "capabilities",
@@ -24,8 +24,8 @@
       },
       {
         "name": "host.start",
-        "usage": "subak host start [--endpoint <name>] [--shell <command>] [--dry-run] [--json]",
-        "summary": "Prototype: start a detached Host owning one ConPTY shell in a kill-on-close job",
+        "usage": "subak host start [--endpoint <name>] [--shell <command> | --no-shell] [--idle-exit <secs>] [--dry-run] [--json]",
+        "summary": "Start a detached per-user Host (one start lock per endpoint), optionally owning one prototype ConPTY pane",
         "effect": "write",
         "network": false,
         "dry_run": true,
@@ -35,7 +35,17 @@
       {
         "name": "host.status",
         "usage": "subak host status [--endpoint <name>] [--json]",
-        "summary": "Prototype: Host and shell process ids, job breakaway, size and clients",
+        "summary": "Host and pane process ids, protocol, job breakaway, environment, idle grace and clients",
+        "effect": "read",
+        "network": false,
+        "dry_run": false,
+        "requires_yes": false,
+        "opens_window": false
+      },
+      {
+        "name": "host.health",
+        "usage": "subak host health [--endpoint <name>] [--json]",
+        "summary": "Heartbeat: verify the Host's identity, complete the handshake and measure the answer time",
         "effect": "read",
         "network": false,
         "dry_run": false,
@@ -45,7 +55,7 @@
       {
         "name": "host.attach",
         "usage": "subak host attach [--endpoint <name>] [--size <cols>x<rows>] [--dry-run [--json]]",
-        "summary": "Prototype: interactive attach to the shell; Ctrl+B d or end of piped input detaches",
+        "summary": "Prototype: interactive attach to the pane; Ctrl+B d or end of piped input detaches",
         "effect": "write",
         "network": false,
         "dry_run": true,
@@ -55,7 +65,7 @@
       {
         "name": "host.stop",
         "usage": "subak host stop [--endpoint <name>] [--yes] [--dry-run] [--json]",
-        "summary": "Prototype: end the shell and every process in its job, then the Host",
+        "summary": "Stop the Host; ending a live pane and every process in its job needs consent",
         "effect": "destructive",
         "network": false,
         "dry_run": true,
@@ -64,8 +74,8 @@
       },
       {
         "name": "host.serve",
-        "usage": "subak host serve [--endpoint <name>] [--shell <command>] [--dry-run] [--json]",
-        "summary": "Prototype: run the Host in this process (what host start launches detached)",
+        "usage": "subak host serve [--endpoint <name>] [--shell <command> | --no-shell] [--idle-exit <secs>] [--dry-run] [--json]",
+        "summary": "Run the Host in this process (what host start launches detached)",
         "effect": "write",
         "network": false,
         "dry_run": true,

@@ -1,8 +1,8 @@
-//! Integration tests for the `subak` binary's CLI contract surface (Step 02, Step 07, Step 08;
-//! docs/CLI_CONTRACT.md): help, version, capabilities, structured usage errors, and the Step 08
-//! `host` prototype's errors and dry runs. JSON outputs are validated against the shared schemas
-//! with the same validator as `cargo xtask schema-check`. The live Host is exercised by
-//! `tests/conpty_host.rs`.
+//! Integration tests for the `subak` binary's CLI contract surface (Steps 02, 07, 08, 09;
+//! docs/CLI_CONTRACT.md): help, version, capabilities, structured usage errors, and the `host`
+//! commands' errors and dry runs. JSON outputs are validated against the shared schemas with the
+//! same validator as `cargo xtask schema-check`. The live Host is exercised by
+//! `tests/conpty_host.rs` (ConPTY, Step 08) and `tests/host_ipc.rs` (IPC v1, Step 09).
 
 #[path = "../../../xtask/src/jsonschema.rs"]
 mod jsonschema;
@@ -70,13 +70,15 @@ fn help_is_honest_about_the_prototype_status() {
     let out = subak(&["--help"]);
     assert!(out.status.success());
     let text = String::from_utf8_lossy(&out.stdout);
-    assert!(text.contains("pre-alpha; Step 08 ConPTY Host prototype"));
+    assert!(text.contains("pre-alpha; Host supervisor and IPC v1, one prototype pane"));
     assert!(text.contains("No command opens a window"));
-    assert!(text.contains("no Terminals, panes, GUI or recovery yet"));
+    assert!(text.contains("no Terminals, windows, GUI or recovery yet"));
+    assert!(text.contains("no Windows service exists"));
     for cmd in [
         "capabilities",
         "host start",
         "host status",
+        "host health",
         "host attach",
         "host stop",
         "host serve",
@@ -114,7 +116,7 @@ fn capabilities_are_honest_and_follow_the_contract() {
     assert_eq!(data["version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(
         data["implementation"], "placeholder",
-        "no Terminals or sessions yet: the Host is a Step 08 prototype"
+        "no Terminals or sessions yet: one prototype pane per Host until Step 10"
     );
     let names: Vec<&str> = data["commands"]
         .as_array()
@@ -128,13 +130,14 @@ fn capabilities_are_honest_and_follow_the_contract() {
             "capabilities",
             "host.start",
             "host.status",
+            "host.health",
             "host.attach",
             "host.stop",
             "host.serve"
         ],
         "only commands that really exist"
     );
-    let stop = &data["commands"][4];
+    let stop = &data["commands"][5];
     assert_eq!(
         (stop["effect"].as_str(), &stop["requires_yes"]),
         (Some("destructive"), &Value::Bool(true))
@@ -170,7 +173,7 @@ fn capabilities_are_honest_and_follow_the_contract() {
 
     let human = subak(&["capabilities"]);
     assert!(human.status.success());
-    assert!(String::from_utf8_lossy(&human.stdout).contains("Step 08 ConPTY Host prototype"));
+    assert!(String::from_utf8_lossy(&human.stdout).contains("one prototype pane per Host"));
 }
 
 #[test]

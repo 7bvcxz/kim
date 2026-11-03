@@ -22,6 +22,7 @@ Run with `cargo xtask e2e`, which refuses unless the counter below has reached 1
 | 9 | #8 Step 08 – Subak ConPTY Host proof (merged; issue open for manual Windows Terminal close, sleep and logoff checks) | `step08_conpty_host.rs`: real `subak host start/status/attach/stop` on a private endpoint, Host survives client kill, reattach sees earlier shell state, explicit stop needs `--yes` and leaves nothing behind | 9 |
 | 10 | #51 Step 46 – Shared hotkey configuration and conflict detection | `step46_hotkeys.rs` (3 tests): `kim hotkeys` list/set/disable/enable/reset cycle in an isolated profile, cross-tool `check --all-tools` conflicts read from files only, a broken `hotkeys.json` means safe mode and explicit recovery | 10 |
 | 11 | #9 Step 09 – Secure Host supervisor and IPC v1 | `step09_host_ipc.rs` (3 tests): an agent starts one healthy Host on demand that exits when idle, two terminals share one pane and a killed one changes nothing, a program holding the pipe name is refused and sent nothing | 11 |
+| 12 | #52 Step 47 – Noeul and Ddalgak in the Kim tool catalog | `step47_catalog_tools.rs`: (2 tests) a fresh machine lists Noeul and Ddalgak as planned and installs nothing; a test-signed Noeul release is disclosed, installed alone and never stopped while it runs | 12 |
 
 ## E2E runs
 

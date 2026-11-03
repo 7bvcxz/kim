@@ -432,10 +432,16 @@ fn check_requirements(
                 ErrorCode::ToolIncompatible,
                 format!("{tool} {v} does not satisfy the requirement `{text}`"),
             )
-            .with_hint(format!(
-                "`kim update check` shows whether a newer {tool} exists; updating is explicit \
-                 (`kim update {tool}`)"
-            )));
+            .with_hint(if tool == "kim" {
+                "Kim never updates itself: `kim version` shows whether the catalog lists a \
+                 newer Kim; install it manually"
+                    .to_string()
+            } else {
+                format!(
+                    "`kim update check` shows whether a newer {tool} exists; updating is \
+                     explicit (`kim update {tool}`)"
+                )
+            }));
         }
     }
     if !commands.is_empty() {

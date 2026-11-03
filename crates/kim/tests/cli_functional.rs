@@ -739,6 +739,22 @@ fn capability_negotiation_reports_absent_old_and_incompatible_tools() {
         "--json",
     ]);
     assert_eq!(err_code(&doc), "capability_missing");
+    let (_, doc, _) = sb.json(&[
+        "tools",
+        "describe",
+        "kim",
+        "--require-version",
+        ">=99",
+        "--json",
+    ]);
+    assert_eq!(err_code(&doc), "tool_incompatible");
+    assert!(
+        doc["error"]["hint"]
+            .as_str()
+            .unwrap()
+            .contains("never updates itself"),
+        "Kim must not suggest updating itself: {doc}"
+    );
 }
 
 #[test]

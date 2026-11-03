@@ -17,6 +17,13 @@ mod output;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod proto;
 
+/// The schema validator of `cargo xtask schema-check`, so unit tests can check every IPC message
+/// this build constructs against docs/contracts/schemas (ADR 0015).
+#[cfg(test)]
+#[path = "../../../xtask/src/jsonschema.rs"]
+#[allow(dead_code)]
+mod jsonschema;
+
 #[cfg(windows)]
 mod client;
 #[cfg(windows)]

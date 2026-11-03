@@ -753,10 +753,7 @@ pub fn rfc3339(t: std::time::SystemTime) -> String {
 mod tests {
     use super::*;
 
-    // Inline module of a non-mod-rs file: the path is relative to `src/proto/tests/`.
-    #[path = "../../../../../xtask/src/jsonschema.rs"]
-    #[allow(dead_code)]
-    mod jsonschema;
+    use crate::jsonschema;
 
     fn read(mut r: &[u8]) -> io::Result<Option<Frame>> {
         read_frame(&mut r, None, |t| t + FRAME_TIMEOUT)

@@ -1,9 +1,10 @@
 name: CI
 
+# No pull requests (AGENTS.md §6): every branch push runs CI, and main is checked again after
+# each local merge.
 on:
   push:
-    branches: [main]
-  pull_request:
+    branches: ['**']
   workflow_dispatch:
 
 permissions:

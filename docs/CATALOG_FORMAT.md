@@ -11,7 +11,7 @@ verify them. It is **data, not code**: reading it never installs, updates or sta
 
 | File | Where | Purpose |
 | --- | --- | --- |
-| `catalog.json` | repository [`catalog/`](../catalog/catalog.json); bundled into `kim.exe` at build time; published at `https://raw.githubusercontent.com/7bvcxz/kim/main/catalog/catalog.json` | The catalog document |
+| `catalog.json` | repository [`catalog/`](../catalog/catalog.json); bundled into `kim.exe` at build time; published at `https://raw.githubusercontent.com/hellomouv/kim/main/catalog/catalog.json` | The catalog document |
 | `catalog.json.sig` | next to it | Detached ed25519 signature (§4) |
 | cache | `%LOCALAPPDATA%\mouv\kim\catalog\catalog.json(.sig)` | Last catalog fetched by an explicit `kim catalog refresh` |
 
@@ -33,7 +33,7 @@ Signed files are marked `-text` in `.gitattributes`: the signature covers exact 
       "name": "Subak",
       "summary": "Persistent Windows-first terminal …",
       "description": "…",
-      "homepage": "https://github.com/7bvcxz/kim",
+      "homepage": "https://github.com/hellomouv/kim",
       "license": "MIT OR Apache-2.0",
       "support": "in-development",
       "releases": [
@@ -47,7 +47,7 @@ Signed files are marked `-text` in `.gitattributes`: the signature covers exact 
           "assets": [
             {
               "os": "windows", "arch": "x86_64", "min_os_build": 17763,
-              "url": "https://github.com/7bvcxz/kim/releases/download/subak-v0.1.0/subak-0.1.0-windows-x86_64.zip",
+              "url": "https://github.com/hellomouv/kim/releases/download/subak-v0.1.0/subak-0.1.0-windows-x86_64.zip",
               "size": 4194304,
               "sha256": "64 lowercase hex characters",
               "kind": "zip",

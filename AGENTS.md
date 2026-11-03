@@ -1,7 +1,7 @@
 # AGENTS.md — Repository working rules
 
 These rules apply to every contributor, human or AI (Claude Code and other coding agents), for
-the whole `7bvcxz/kim` repository. When a rule here conflicts with a convenience, the rule wins.
+the whole `hellomouv/kim` repository. When a rule here conflicts with a convenience, the rule wins.
 When a rule conflicts with an explicit, documented decision record (ADR), follow the ADR and
 update this file in the same change.
 
@@ -76,7 +76,7 @@ These rules come directly from the maintainer and are mandatory.
 3. **Every feature is added to the e2e suite.** Each feature also gets an end-to-end scenario
    in the e2e suite (`e2e/`), exercising the real binaries the way a user or agent would.
 4. **The e2e suite never runs routinely.** It must not run as part of the normal test command,
-   CI on push/PR, pre-commit hooks, or ad-hoc verification. It runs **exactly once per 15
+   CI on push, pre-commit hooks, or ad-hoc verification. It runs **exactly once per 15
    processed Step issues** (after the 15th, 30th, 45th … Step issue is processed).
 5. **Keep the ledger.** [e2e/LEDGER.md](e2e/LEDGER.md) records every processed Step issue and
    every e2e run. When a Step completes, append it; when the count since the last e2e run
@@ -96,7 +96,11 @@ These rules come directly from the maintainer and are mandatory.
   repository is the only exception.
 - Commit messages: imperative summary, then a body that references the issue
   (`Refs #N`) and the requirement IDs touched.
-- Open a pull request, let CI pass, merge with a merge commit so reported SHAs stay valid.
+- **No pull requests** (maintainer decision, 2026-11-04). Push the issue branch; CI runs on every
+  branch push. When the branch's CI is green and `cargo xtask ci` passes on the merged result,
+  merge it into `main` locally with `git merge --no-ff` (a merge commit, so reported SHAs stay
+  valid) and push `main`. Parallel agents keep using their own branch and worktree; only the
+  integrating agent (the master) merges into `main`.
 - After completing an issue, post a **Korean completion report** as a comment on that issue
   with the headings `구현 내용`, `설계 및 주요 결정`, `변경 파일`, `테스트 및 실제 결과`,
   `커밋 및 Push`, `남은 문제와 다음 Step`, giving concrete evidence (commands, outputs, SHAs).

@@ -11,7 +11,7 @@ edition = "2024"
 rust-version = "1.99"
 license = "MIT OR Apache-2.0"
 authors = ["mouv"]
-repository = "https://github.com/7bvcxz/kim"
+repository = "https://github.com/hellomouv/kim"
 publish = false
 
 [workspace.lints.rust]

@@ -1,0 +1,30 @@
+{
+  "schema": "kim.catalog",
+  "schema_version": 1,
+  "catalog_version": 1,
+  "generated_at": "2026-11-04T00:00:00Z",
+  "expires_at": "2027-05-04T00:00:00Z",
+  "publisher": "mouv",
+  "tools": [
+    {
+      "id": "kim",
+      "name": "Kim",
+      "summary": "Catalog and explicit installer for Kim tools",
+      "description": "Lists Kim tools and installs, updates or removes them only when you ask. Never installs anything by itself.",
+      "homepage": "https://github.com/7bvcxz/kim",
+      "license": "MIT OR Apache-2.0",
+      "support": "in-development",
+      "releases": []
+    },
+    {
+      "id": "subak",
+      "name": "Subak",
+      "summary": "Persistent Windows-first terminal with a separate Host and Clients",
+      "description": "Sessions live in a per-user background Host and survive closing every window. Headless CLI, optional native GUI, Claude Code status. Not released yet.",
+      "homepage": "https://github.com/7bvcxz/kim",
+      "license": "MIT OR Apache-2.0",
+      "support": "in-development",
+      "releases": []
+    }
+  ]
+}

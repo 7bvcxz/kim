@@ -9,8 +9,9 @@ equally well for humans and for AI agents. Kim is made by **mouv**.
 background **Host** that survives closing any **Client** (GUI window, CLI, agent). Linux support
 is planned but not implemented.
 
-> Status: **pre-alpha, documentation stage.** No tool is usable yet. Nothing in this repository
-> installs, updates, or starts software on your machine. See the [roadmap](#roadmap).
+> Status: **pre-alpha.** `kim catalog` (read-only, signed, offline-capable) works; nothing can be
+> installed yet and Subak is not released. Nothing in this repository installs, updates, or
+> starts software on your machine by itself. See the [roadmap](#roadmap).
 
 ## What Kim is (and is not)
 

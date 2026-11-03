@@ -59,3 +59,10 @@ user without elevation (`KIM-SEC-004`), and a failed update must leave the old v
 ## Requirements
 
 `KIM-FR-002…008`, `KIM-FR-034`, `KIM-SEC-001…005`, `KIM-NFR-001`, `KIM-NFR-004`.
+
+## Notes
+
+- 2026-11-04 (Step 05): catalog format, signature scheme (ed25519, domain-separated, key ids),
+  source selection, staleness and rollback rules are specified in
+  [CATALOG_FORMAT.md](../CATALOG_FORMAT.md). The first trusted key is a development key for
+  preview catalogs; release-grade key custody follows in Step 06/40.

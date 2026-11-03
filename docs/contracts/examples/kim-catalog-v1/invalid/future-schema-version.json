@@ -1,0 +1,253 @@
+{
+  "schema": "kim.catalog",
+  "schema_version": 2,
+  "catalog_version": 42,
+  "generated_at": "2026-11-01T00:00:00Z",
+  "expires_at": "2099-01-01T00:00:00Z",
+  "publisher": "mouv (test fixture)",
+  "tools": [
+    {
+      "id": "subak",
+      "name": "Subak",
+      "summary": "Persistent Windows-first terminal (fixture releases)",
+      "description": "Real tool, hypothetical releases for tests.",
+      "homepage": "https://github.com/7bvcxz/kim",
+      "license": "MIT OR Apache-2.0",
+      "support": "preview",
+      "releases": [
+        {
+          "version": "0.1.0",
+          "channel": "preview",
+          "published_at": "2026-10-01T00:00:00Z",
+          "release_notes": "Fixture release 0.1.0.",
+          "assets": [
+            {
+              "os": "windows",
+              "arch": "x86_64",
+              "url": "https://example.invalid/subak/0.1.0/subak-0.1.0-windows-x86_64.zip",
+              "size": 1048576,
+              "sha256": "000000000000000000000000000000000000000000000000020db4b0e6d68a9d",
+              "kind": "zip",
+              "entrypoint": "subak.exe",
+              "min_os_build": 17763
+            }
+          ]
+        },
+        {
+          "version": "0.2.0",
+          "channel": "preview",
+          "published_at": "2026-10-01T00:00:00Z",
+          "release_notes": "Fixture release 0.2.0.",
+          "assets": [
+            {
+              "os": "windows",
+              "arch": "x86_64",
+              "url": "https://example.invalid/subak/0.2.0/subak-0.2.0-windows-x86_64.zip",
+              "size": 1048576,
+              "sha256": "00000000000000000000000000000000000000000000000071a9f5498f73f5c9",
+              "kind": "zip",
+              "entrypoint": "subak.exe",
+              "min_os_build": 17763
+            }
+          ],
+          "min_kim_version": "0.0.1"
+        }
+      ]
+    },
+    {
+      "id": "example-linux-only",
+      "name": "Example Linux Only",
+      "summary": "Hypothetical tool with only a Linux package",
+      "description": "d",
+      "license": "MIT",
+      "support": "stable",
+      "releases": [
+        {
+          "version": "1.0.0",
+          "channel": "stable",
+          "published_at": "2026-10-01T00:00:00Z",
+          "release_notes": "Fixture release 1.0.0.",
+          "assets": [
+            {
+              "os": "linux",
+              "arch": "x86_64",
+              "url": "https://example.invalid/example-linux-only/1.0.0/example-linux-only-1.0.0-linux-x86_64.zip",
+              "size": 1048576,
+              "sha256": "0000000000000000000000000000000000000000000000002962e90a1e175145",
+              "kind": "zip",
+              "entrypoint": "example-linux-only"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "example-arm-only",
+      "name": "Example ARM Only",
+      "summary": "Hypothetical tool with only an ARM64 package",
+      "description": "d",
+      "license": "MIT",
+      "support": "stable",
+      "releases": [
+        {
+          "version": "1.0.0",
+          "channel": "stable",
+          "published_at": "2026-10-01T00:00:00Z",
+          "release_notes": "Fixture release 1.0.0.",
+          "assets": [
+            {
+              "os": "windows",
+              "arch": "aarch64",
+              "url": "https://example.invalid/example-arm-only/1.0.0/example-arm-only-1.0.0-windows-aarch64.zip",
+              "size": 1048576,
+              "sha256": "00000000000000000000000000000000000000000000000073c2ad2ec96a5fc9",
+              "kind": "zip",
+              "entrypoint": "example-arm-only.exe"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "example-needs-new-kim",
+      "name": "Example Needs New Kim",
+      "summary": "Hypothetical tool requiring a future Kim",
+      "description": "d",
+      "license": "MIT",
+      "support": "stable",
+      "releases": [
+        {
+          "version": "2.0.0",
+          "channel": "stable",
+          "published_at": "2026-10-01T00:00:00Z",
+          "release_notes": "Fixture release 2.0.0.",
+          "assets": [
+            {
+              "os": "windows",
+              "arch": "x86_64",
+              "url": "https://example.invalid/example-needs-new-kim/2.0.0/example-needs-new-kim-2.0.0-windows-x86_64.zip",
+              "size": 1048576,
+              "sha256": "0000000000000000000000000000000000000000000000003d37a5243064af1a",
+              "kind": "zip",
+              "entrypoint": "example-needs-new-kim.exe"
+            }
+          ],
+          "min_kim_version": "9.0.0"
+        }
+      ]
+    },
+    {
+      "id": "example-stable",
+      "name": "Example Stable",
+      "summary": "Hypothetical tool with stable and preview releases",
+      "description": "d",
+      "license": "Apache-2.0",
+      "support": "stable",
+      "releases": [
+        {
+          "version": "1.0.0",
+          "channel": "stable",
+          "published_at": "2026-10-01T00:00:00Z",
+          "release_notes": "Fixture release 1.0.0.",
+          "assets": [
+            {
+              "os": "windows",
+              "arch": "x86_64",
+              "url": "https://example.invalid/example-stable/1.0.0/example-stable-1.0.0-windows-x86_64.zip",
+              "size": 1048576,
+              "sha256": "000000000000000000000000000000000000000000000000624e7333e22bf566",
+              "kind": "zip",
+              "entrypoint": "example-stable.exe"
+            }
+          ]
+        },
+        {
+          "version": "1.2.0",
+          "channel": "stable",
+          "published_at": "2026-10-01T00:00:00Z",
+          "release_notes": "Fixture release 1.2.0.",
+          "assets": [
+            {
+              "os": "windows",
+              "arch": "x86_64",
+              "url": "https://example.invalid/example-stable/1.2.0/example-stable-1.2.0-windows-x86_64.zip",
+              "size": 1048576,
+              "sha256": "0000000000000000000000000000000000000000000000006ce40d5a3f065b83",
+              "kind": "zip",
+              "entrypoint": "example-stable.exe"
+            },
+            {
+              "os": "linux",
+              "arch": "x86_64",
+              "url": "https://example.invalid/example-stable/1.2.0/example-stable-1.2.0-linux-x86_64.zip",
+              "size": 1048576,
+              "sha256": "0000000000000000000000000000000000000000000000004afe14a7c6df6676",
+              "kind": "zip",
+              "entrypoint": "example-stable"
+            }
+          ],
+          "dependencies": [
+            {
+              "tool": "subak",
+              "version_req": ">=0.1.0"
+            }
+          ]
+        },
+        {
+          "version": "1.3.0-beta.1",
+          "channel": "preview",
+          "published_at": "2026-10-01T00:00:00Z",
+          "release_notes": "Fixture release 1.3.0-beta.1.",
+          "assets": [
+            {
+              "os": "windows",
+              "arch": "x86_64",
+              "url": "https://example.invalid/example-stable/1.3.0-beta.1/example-stable-1.3.0-beta.1-windows-x86_64.zip",
+              "size": 1048576,
+              "sha256": "000000000000000000000000000000000000000000000000227d6f44cf0b17e8",
+              "kind": "zip",
+              "entrypoint": "example-stable.exe",
+              "min_os_build": 22621
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "example-deprecated",
+      "name": "Example Deprecated",
+      "summary": "Hypothetical deprecated tool",
+      "description": "d",
+      "license": "MIT",
+      "support": "deprecated",
+      "releases": [
+        {
+          "version": "1.0.0",
+          "channel": "stable",
+          "published_at": "2026-10-01T00:00:00Z",
+          "release_notes": "Fixture release 1.0.0.",
+          "assets": [
+            {
+              "os": "windows",
+              "arch": "x86_64",
+              "url": "https://example.invalid/example-deprecated/1.0.0/example-deprecated-1.0.0-windows-x86_64.zip",
+              "size": 1048576,
+              "sha256": "00000000000000000000000000000000000000000000000037b847b4668ad9c1",
+              "kind": "zip",
+              "entrypoint": "example-deprecated.exe"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "example-unreleased",
+      "name": "Example Unreleased",
+      "summary": "Hypothetical tool without releases",
+      "description": "d",
+      "license": "MIT",
+      "support": "in-development",
+      "releases": []
+    }
+  ]
+}

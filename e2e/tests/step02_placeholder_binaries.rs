@@ -1,4 +1,4 @@
-//! E2E — Step 02: independent placeholder binaries.
+//! E2E — Step 02: independent binaries (originally placeholders; kept valid as they grow).
 //!
 //! Scenario: a user runs the freshly built release `kim` and `subak` binaries. Each answers
 //! `--version`/`--help`, rejects unknown commands with exit code 2 on stderr, and writes nothing
@@ -16,7 +16,10 @@ fn check_tool(name: &str) {
 
     let help = run_sandboxed(&exe, &["--help"], &sandbox);
     assert!(help.status.success());
-    assert!(String::from_utf8_lossy(&help.stdout).contains("pre-alpha placeholder"));
+    let help = String::from_utf8_lossy(&help.stdout).to_lowercase();
+    assert!(help.contains(name), "help names the tool");
+    // Both tools promise not to act on their own (KIM-SEC-001, KIM-FR-012).
+    assert!(help.contains("never") || help.contains("no "), "{help}");
 
     let bad = run_sandboxed(&exe, &["definitely-not-a-command"], &sandbox);
     assert_eq!(bad.status.code(), Some(2));

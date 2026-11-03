@@ -49,7 +49,8 @@ milestone M4 (`KIM-NFR-011`); macOS is out of scope.
 
 | Path | Package | What it is |
 | --- | --- | --- |
-| `crates/kim` | `kim` | Kim manager CLI (binary `kim`) |
+| `crates/kim` | `kim` | Kim manager library + CLI (binary `kim`): catalog, signatures, status |
+| `catalog/` | — | The signed catalog bundled into `kim` and published for `kim catalog refresh` ([format](docs/CATALOG_FORMAT.md)) |
 | `crates/subak` | `subak` | Subak CLI (binary `subak`); Host and GUI arrive in later steps |
 | `xtask` | `xtask` | Repository automation (docs/schema checks, CI gate, gated e2e runner); never shipped |
 | `e2e` | `kim-e2e` | End-to-end suite; excluded from `default-members` and CI |

@@ -26,7 +26,12 @@ allow = [
     "BSL-1.0",
     "CC0-1.0",
 ]
-exceptions = []
+# Reviewed exceptions (crate-scoped, never global):
+# - webpki-root-certs: Mozilla CA root data under the permissive CDLA-Permissive-2.0 data
+#   license; required by ureq's native-tls connector (kim catalog refresh, Step 05).
+exceptions = [
+    { crate = "webpki-root-certs", allow = ["CDLA-Permissive-2.0"] },
+]
 
 [licenses.private]
 # Workspace crates are `publish = false`; they are licensed MIT OR Apache-2.0 in-tree.

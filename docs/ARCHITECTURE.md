@@ -44,6 +44,7 @@ flowchart LR
 | --- | --- | --- | --- |
 | Kim CLI | `kim.exe` / `crates/kim` | Catalog queries, explicit install/update/uninstall, update check, status, tool and capability discovery ([CLI_CONTRACT](CLI_CONTRACT.md), [KIM_CLI](KIM_CLI.md)) | KIM-FR-003…011, KIM-FR-020, KIM-SEC-001…005 |
 | Kim Manager GUI | `kim-manager.exe` (Step 06) | Same operations with a GUI; never runs headless paths through the GUI | KIM-FR-009, KIM-FR-013 |
+| Hotkey library | `crates/kim-hotkeys` (Step 46; a library compiled into each tool, never a process) | Key syntax, `hotkeys.json`, conflict checks, `RegisterHotKey` backend ([HOTKEY_CONTRACT](HOTKEY_CONTRACT.md)) | KIM-FR-040…046, KIM-NFR-020…022, KIM-SEC-020…023 |
 | Subak CLI | `subak.exe` / `crates/subak` | Terminal CRUD, attach/detach, capture, host control, Claude hook reporter | SUBAK-FR-011…015, SUBAK-FR-053 |
 | Subak Host | `subak.exe host serve` | Owns Terminals/Windows/Panes, ConPTYs, jobs, VT state, history, state store, IPC server, metrics | SUBAK-FR-001…004, SUBAK-FR-016, SUBAK-FR-040 |
 | Subak GUI | `subak-gui.exe` (Steps 16–18) | Tabbed terminal window, floating icon/tray, session manager; pure client | SUBAK-FR-030…035 |
@@ -227,7 +228,7 @@ they return `unsupported_platform` until milestone M4.
 | Kim installer (transactional, explicit) + Kim Manager GUI | implemented | 06 |
 | Kim CLI contract v1, JSON schemas, headless management (`status`, `version`, `tools list\|describe`), capability discovery | implemented | 07 |
 | Hotkey contract v1 for every GUI tool (specification, schemas, conflict scenarios; [HOTKEY_CONTRACT](HOTKEY_CONTRACT.md)) | current (design) | 45 |
-| Shared hotkey library, `hotkeys` CLI, conflict detection | planned | 46 |
+| Shared hotkey library (`crates/kim-hotkeys`), `kim hotkeys` CLI, cross-tool conflict detection, Kim Manager shortcuts (`focus` backend), Windows `RegisterHotKey` backend ([HOTKEY_CONTRACT §17](HOTKEY_CONTRACT.md)) | implemented (binding editor of §11.2: planned) | 46 |
 | ConPTY + detached Host proof: `subak host start\|status\|attach\|stop` prototype (one shell per Host, prototype pipe; [CONPTY_PROOF](CONPTY_PROOF.md), ADR 0016) | implemented (prototype) | 08 |
 | IPC v1, supervisor | planned | 09 |
 | Session lifecycle, PTY management, CLI, replay | planned | 10–14 |

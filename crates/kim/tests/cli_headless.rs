@@ -136,6 +136,13 @@ fn headless_commands_start_no_process_and_never_a_gui() {
         &["uninstall", "example-tool", "--dry-run"],
         &["install", "nope", "--json"],
         &["frobnicate"],
+        // KIM-FR-045: the hotkeys commands never open a window, register a hotkey, install a
+        // hook or start a tool (including the cross-tool check and real writes).
+        &["hotkeys", "list"],
+        &["hotkeys", "check", "--all-tools", "--json"],
+        &["hotkeys", "set", "catalog.refresh", "Ctrl+R"],
+        &["hotkeys", "disable", "--all", "--json"],
+        &["hotkeys", "reset", "--all", "--yes"],
     ];
     for args in read_only {
         let (n, out) = processes_in_job(&sb, args);

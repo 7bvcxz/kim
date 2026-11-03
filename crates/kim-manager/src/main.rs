@@ -20,7 +20,12 @@ fn main() -> eframe::Result {
         options,
         Box::new(|cc| {
             let backend = Backend::real().map_err(|e| e.to_string())?;
-            Ok(Box::new(KimManagerApp::new(backend, Some(&cc.egui_ctx))))
+            let mut app = KimManagerApp::new(backend, Some(&cc.egui_ctx));
+            // Emergency start without any shortcut (HOTKEY_CONTRACT §8.3, KIM-SEC-023).
+            if std::env::args().any(|a| a == "--no-hotkeys") {
+                app.disable_hotkeys();
+            }
+            Ok(Box::new(app))
         }),
     )
 }

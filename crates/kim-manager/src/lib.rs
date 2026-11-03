@@ -2,7 +2,10 @@
 //! every install / update / uninstall starts only from a button the user pressed, runs on a
 //! worker thread with visible progress and a Cancel button, and never touches a running program.
 //! The window can be closed at any time; nothing keeps running in the background afterwards.
+//! Keyboard shortcuts (F5 refresh, F1 shortcut list, and any the user binds with
+//! `kim hotkeys set`) are read from the window's own key events only ([`shortcuts`]).
 
+pub mod shortcuts;
 pub mod theme;
 
 use eframe::egui;
@@ -100,6 +103,8 @@ pub struct KimManagerApp {
     refreshing: bool,
     confirm: Option<ConfirmUninstall>,
     banner: Option<Banner>,
+    shortcuts: shortcuts::Shortcuts,
+    show_shortcuts: bool,
     tx: Sender<Msg>,
     rx: Receiver<Msg>,
     ctx: Option<egui::Context>,
@@ -122,7 +127,10 @@ impl KimManagerApp {
             .as_deref()
             .map(|p| Settings::load_from(p).0)
             .unwrap_or_default();
+        let shortcuts = shortcuts::Shortcuts::load(&backend.paths, kim_hotkeys::no_hotkeys_env());
         let mut app = Self {
+            shortcuts,
+            show_shortcuts: false,
             backend,
             loaded: None,
             views: Vec::new(),
@@ -152,6 +160,85 @@ impl KimManagerApp {
 
     pub fn banner(&self) -> Option<&Banner> {
         self.banner.as_ref()
+    }
+
+    /// What the banner's Dismiss button does.
+    pub fn dismiss_banner(&mut self) {
+        self.banner = None;
+    }
+
+    /// Starts with every shortcut off (`--no-hotkeys`), without touching `hotkeys.json`.
+    pub fn disable_hotkeys(&mut self) {
+        self.shortcuts = shortcuts::Shortcuts::load(&self.backend.paths, true);
+    }
+
+    /// Whether the keyboard shortcut list is open (F1 by default).
+    pub fn shortcuts_visible(&self) -> bool {
+        self.show_shortcuts
+    }
+
+    /// Whether an uninstall confirmation is open.
+    pub fn confirming(&self) -> Option<&str> {
+        self.confirm.as_ref().map(|c| c.tool.as_str())
+    }
+
+    /// Runs one shortcut action exactly like its button or menu entry: the same checks and the
+    /// same confirmation (a shortcut never skips consent, KIM-SEC-001).
+    fn run_action(&mut self, action: &str) {
+        let busy = self.is_busy();
+        let view = self
+            .selected
+            .as_ref()
+            .and_then(|id| self.views.iter().find(|v| &v.id == id))
+            .filter(|v| v.id != "kim")
+            .cloned();
+        match action {
+            "help.show" => self.show_shortcuts = !self.show_shortcuts,
+            _ if self.show_shortcuts || busy => {}
+            "catalog.refresh" => self.refresh_catalog(),
+            "tool.install" | "tool.update" => {
+                let want = if action == "tool.install" {
+                    ToolStatus::Available
+                } else {
+                    ToolStatus::UpdateAvailable
+                };
+                if let Some(v) = view.filter(|v| v.status == want) {
+                    self.start_install(&v.id);
+                }
+            }
+            "tool.uninstall" => {
+                if let Some(v) = view.filter(|v| {
+                    matches!(
+                        v.status,
+                        ToolStatus::Installed | ToolStatus::UpdateAvailable | ToolStatus::Damaged
+                    )
+                }) {
+                    self.confirm = Some(ConfirmUninstall {
+                        tool: v.id,
+                        ..Default::default()
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn handle_shortcuts(&mut self, ctx: &egui::Context) {
+        let events = ctx.input(|i| i.events.clone());
+        if events
+            .iter()
+            .any(|e| matches!(e, egui::Event::WindowFocused(true)))
+        {
+            // `kim hotkeys set` may have changed the file while the window was in the background.
+            self.shortcuts.reload();
+        }
+        let actions = self.shortcuts.handle(&events);
+        if self.confirm.is_some() || ctx.egui_wants_keyboard_input() {
+            return;
+        }
+        for a in actions {
+            self.run_action(&a);
+        }
     }
 
     pub fn is_busy(&self) -> bool {
@@ -415,6 +502,7 @@ impl KimManagerApp {
 
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         self.poll();
+        self.handle_shortcuts(&ui.ctx().clone());
         let c = theme::Colors::get();
         egui::Panel::top("header")
             .frame(
@@ -437,6 +525,65 @@ impl KimManagerApp {
             .show(ui, |ui| self.details(ui));
         if self.confirm.is_some() {
             self.confirm_dialog(ui.ctx());
+        }
+        if self.show_shortcuts {
+            self.shortcuts_dialog(ui.ctx());
+        }
+    }
+
+    /// The shortcut list (§11.1): every action with its keys and state, fixed keys included.
+    /// Changing shortcuts is done with `kim hotkeys …`; the in-window binding editor is a later
+    /// step (docs/HOTKEY_CONTRACT.md §11.2).
+    fn shortcuts_dialog(&mut self, ctx: &egui::Context) {
+        let c = theme::Colors::get();
+        let rows = self.shortcuts.rows();
+        let mut close = false;
+        let r = egui::Modal::new(egui::Id::unique("keyboard-shortcuts")).show(ctx, |ui| {
+            ui.set_max_width(560.0);
+            ui.label(
+                egui::RichText::new("Keyboard shortcuts")
+                    .size(15.0)
+                    .strong(),
+            );
+            if self.shortcuts.is_off() {
+                ui.colored_label(
+                    c.warning,
+                    "All shortcuts are off for this window (--no-hotkeys or KIM_NO_HOTKEYS).",
+                );
+            }
+            if let Some(p) = &self.shortcuts.problem {
+                ui.colored_label(c.warning, p);
+            }
+            egui::Grid::new("shortcut-rows")
+                .num_columns(3)
+                .spacing([24.0, 6.0])
+                .show(ui, |ui| {
+                    for h in ["Action", "Keys", "State"] {
+                        ui.label(egui::RichText::new(h).size(11.0).color(c.text_muted));
+                    }
+                    ui.end_row();
+                    for r in &rows {
+                        ui.label(egui::RichText::new(&r.title).color(c.text_primary));
+                        ui.label(egui::RichText::new(&r.keys).monospace());
+                        ui.label(egui::RichText::new(&r.state).color(c.text_secondary));
+                        ui.end_row();
+                    }
+                });
+            ui.add_space(8.0);
+            ui.label(
+                egui::RichText::new(
+                    "Change a shortcut with `kim hotkeys set <action> <keys>`, turn one off with \
+                     `kim hotkeys disable <action>`, restore it with `kim hotkeys reset <action>`.",
+                )
+                .size(11.0)
+                .color(c.text_muted),
+            );
+            if ui.button("Close").clicked() {
+                close = true;
+            }
+        });
+        if close || r.should_close() {
+            self.show_shortcuts = false;
         }
     }
 

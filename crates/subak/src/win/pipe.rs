@@ -350,7 +350,9 @@ mod tests {
         ConvertSecurityDescriptorToStringSecurityDescriptorW, GetSecurityInfo, SDDL_REVISION_1,
         SE_KERNEL_OBJECT,
     };
-    use windows_sys::Win32::Security::DACL_SECURITY_INFORMATION;
+    use windows_sys::Win32::Security::{
+        DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
+    };
 
     fn endpoint(tag: &str) -> String {
         format!(
@@ -447,29 +449,36 @@ mod tests {
             )
         };
         assert_eq!(rc, 0);
-        let mut text: *mut u16 = std::ptr::null_mut();
-        // SAFETY: `sd` is valid; `text` receives a LocalAlloc'ed string (leaked in a test).
-        let ok = unsafe {
-            ConvertSecurityDescriptorToStringSecurityDescriptorW(
-                sd,
-                SDDL_REVISION_1,
-                DACL_SECURITY_INFORMATION,
-                &raw mut text,
-                std::ptr::null_mut(),
-            )
+        let to_sddl = |sd: PSECURITY_DESCRIPTOR, info| {
+            let mut text: *mut u16 = std::ptr::null_mut();
+            // SAFETY: `sd` is valid; `text` receives a LocalAlloc'ed string (leaked in a test).
+            let ok = unsafe {
+                ConvertSecurityDescriptorToStringSecurityDescriptorW(
+                    sd,
+                    SDDL_REVISION_1,
+                    info,
+                    &raw mut text,
+                    std::ptr::null_mut(),
+                )
+            };
+            assert_ne!(ok, 0);
+            // SAFETY: NUL-terminated string from the call above.
+            unsafe { super::super::from_wide_ptr(text) }
         };
-        assert_ne!(ok, 0);
-        // SAFETY: NUL-terminated string from the call above.
-        let sddl = unsafe { super::super::from_wide_ptr(text) };
-        let sid = user_sid().unwrap();
+        let sddl = to_sddl(sd, DACL_SECURITY_INFORMATION);
+        // SDDL prints well-known SIDs as aliases (the built-in Administrator, e.g. on CI runners,
+        // is `LA`), so the expected trustee goes through the same conversion.
+        let owner = SecurityDescriptor::from_sddl(&format!("O:{}", user_sid().unwrap())).unwrap();
+        let me = to_sddl(owner.as_ptr(), OWNER_SECURITY_INFORMATION);
+        let me = me.strip_prefix("O:").unwrap();
         assert!(sddl.starts_with("D:P"), "{sddl}");
         assert!(
             sddl.contains(";;;NU)") && sddl.contains("(D;"),
             "denies NETWORK: {sddl}"
         );
         assert!(
-            sddl.contains(&format!(";;;{sid})")),
-            "allows the user: {sddl}"
+            sddl.contains(&format!(";;;{me})")),
+            "allows the user ({me}): {sddl}"
         );
         assert_eq!(
             sddl.matches("(A;").count(),

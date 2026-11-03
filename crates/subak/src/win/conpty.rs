@@ -418,12 +418,28 @@ mod tests {
             }
         }
 
-        fn end(self) {
+        /// The Host's teardown order: close the pseudo console, give the shell a grace period,
+        /// then end the job. Returns whether closing the console alone ended the shell: true on
+        /// Windows 10 19045; Windows Server 2025's inbox ConPTY (CI) needed the job (ADR 0016).
+        fn end(self) -> bool {
             self.pty.close_console();
+            let graceful = self.pty.wait_exit(Some(Duration::from_secs(3))).is_some();
+            if !graceful {
+                self.pty.terminate_job(1);
+            }
             let code = self.pty.wait_exit(Some(Duration::from_secs(10)));
-            assert!(code.is_some(), "shell ends with its pseudo console");
+            assert!(code.is_some(), "the shell ended (graceful: {graceful})");
+            let until = Instant::now() + Duration::from_secs(10);
+            while self.pty.job_processes() > 0 && Instant::now() < until {
+                std::thread::sleep(Duration::from_millis(20));
+            }
             assert_eq!(self.pty.job_processes(), 0, "job is empty");
+            while !self.reader.is_finished() && Instant::now() < until {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            assert!(self.reader.is_finished(), "the output pipe reached EOF");
             self.reader.join().unwrap();
+            graceful
         }
     }
 
@@ -445,7 +461,8 @@ mod tests {
         s.expect("132");
         assert!(text.contains("Lines:"), "{text}");
         assert!(s.pty.job_processes() >= 1, "the shell is in the pane job");
-        s.end();
+        let graceful = s.end();
+        eprintln!("ConPTY teardown: ClosePseudoConsole alone ended the shell: {graceful}");
     }
 
     #[test]
@@ -457,7 +474,9 @@ mod tests {
             n
         };
         // Warm up lazily created runtime handles before measuring.
-        Session::start(80, 25).end();
+        let mut s = Session::start(80, 25);
+        s.expect(">"); // the shell is up (prompt)
+        s.end();
         let before = count();
         for i in 0..8 {
             let mut s = Session::start(80, 25);

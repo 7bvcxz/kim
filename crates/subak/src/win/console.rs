@@ -124,6 +124,7 @@ pub fn read_input(
     size: &mut (u16, u16),
     pending_high: &mut Option<u16>,
     poll: Duration,
+    verbose: bool,
 ) -> io::Result<Vec<Input>> {
     let hin = std_handle(STD_INPUT_HANDLE);
     let mut out = Vec::new();
@@ -142,7 +143,14 @@ pub fn read_input(
                 // SAFETY: EventType says the union holds a KEY_EVENT_RECORD.
                 let key = unsafe { rec.Event.KeyEvent };
                 // SAFETY: both union members are plain u16/char data.
-                let ch = unsafe { key.uChar.UnicodeChar };
+                let raw_ch = unsafe { key.uChar.UnicodeChar };
+                let ch = key_char(raw_ch, key.wVirtualKeyCode, key.dwControlKeyState);
+                if verbose && (ch < 0x20 || raw_ch != ch) {
+                    eprint!(
+                        "subak: key down={} vk=0x{:02X} char=0x{raw_ch:04X} state=0x{:X} -> 0x{ch:04X}\r\n",
+                        key.bKeyDown, key.wVirtualKeyCode, key.dwControlKeyState
+                    );
+                }
                 if key.bKeyDown != 0 && ch != 0 {
                     for _ in 0..key.wRepeatCount.max(1) {
                         units.push(ch);
@@ -169,4 +177,56 @@ pub fn read_input(
         out.push(Input::Resize(now.0, now.1));
     }
     Ok(out)
+}
+
+const LEFT_ALT: u32 = 0x0002;
+const RIGHT_ALT: u32 = 0x0001;
+const LEFT_CTRL: u32 = 0x0008;
+const RIGHT_CTRL: u32 = 0x0004;
+
+/// The character a key event stands for. Ctrl+letter is the C0 control (`Ctrl+B` = `0x02`,
+/// needed for the `Ctrl+B d` detach key) even when the console reports the plain letter or no
+/// character at all, as some pseudo console versions do. AltGr (Ctrl+Alt) is left untouched.
+pub fn key_char(ch: u16, vk: u16, state: u32) -> u16 {
+    let ctrl = state & (LEFT_CTRL | RIGHT_CTRL) != 0;
+    let alt = state & (LEFT_ALT | RIGHT_ALT) != 0;
+    let letter = (0x41..=0x5A).contains(&vk); // VK_A..VK_Z
+    let plain = ch == 0
+        || char::from_u32(u32::from(ch))
+            .is_some_and(|c| c.eq_ignore_ascii_case(&char::from(vk as u8)));
+    if ctrl && !alt && letter && plain {
+        vk - 0x40
+    } else {
+        ch
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ctrl_letters_become_c0_controls() {
+        const B: u16 = 0x42;
+        assert_eq!(key_char(0x02, B, LEFT_CTRL), 0x02, "already a control char");
+        assert_eq!(key_char(0, B, LEFT_CTRL), 0x02, "no char reported");
+        assert_eq!(
+            key_char(u16::from(b'b'), B, RIGHT_CTRL),
+            0x02,
+            "plain letter reported"
+        );
+        assert_eq!(key_char(u16::from(b'B'), B, LEFT_CTRL), 0x02);
+        assert_eq!(key_char(u16::from(b'b'), B, 0), u16::from(b'b'), "no Ctrl");
+        // AltGr = Ctrl+Alt produces real characters (e.g. `@` on German layouts): untouched.
+        assert_eq!(
+            key_char(u16::from(b'@'), 0x51, LEFT_CTRL | RIGHT_ALT),
+            u16::from(b'@')
+        );
+        assert_eq!(key_char(0, 0x51, LEFT_CTRL | RIGHT_ALT), 0);
+        assert_eq!(
+            key_char(u16::from(b'1'), 0x31, LEFT_CTRL),
+            u16::from(b'1'),
+            "not a letter"
+        );
+    }
 }

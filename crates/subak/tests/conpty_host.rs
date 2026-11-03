@@ -508,9 +508,17 @@ impl Drop for Child {
 
 /// The console window hosted for any of `pids` (console windows belong to conhost).
 fn console_window(pids: &[u32]) -> Option<HWND> {
+    windows_of(pids)
+        .into_iter()
+        .find(|(_, class, _)| class == "ConsoleWindowClass")
+        .map(|(hwnd, _, _)| hwnd)
+}
+
+/// Every top-level window owned by one of `pids`: (handle, class, visible).
+fn windows_of(pids: &[u32]) -> Vec<(HWND, String, bool)> {
     struct Find<'a> {
         pids: &'a [u32],
-        found: Option<HWND>,
+        found: Vec<(HWND, String, bool)>,
     }
     unsafe extern "system" fn each(hwnd: HWND, lp: LPARAM) -> i32 {
         // SAFETY: `lp` is the &mut Find passed to EnumWindows below, alive for the call.
@@ -518,18 +526,23 @@ fn console_window(pids: &[u32]) -> Option<HWND> {
         let mut pid = 0u32;
         let mut class = [0u16; 64];
         // SAFETY: valid window from the enumeration; writable buffers.
-        let n = unsafe {
+        let (n, visible) = unsafe {
             GetWindowThreadProcessId(hwnd, &raw mut pid);
-            GetClassNameW(hwnd, class.as_mut_ptr(), 64)
+            (
+                GetClassNameW(hwnd, class.as_mut_ptr(), 64),
+                IsWindowVisible(hwnd) != 0,
+            )
         };
-        let class = String::from_utf16_lossy(&class[..usize::try_from(n).unwrap_or(0)]);
-        if class == "ConsoleWindowClass" && f.pids.contains(&pid) {
-            f.found = Some(hwnd);
-            return 0;
+        if f.pids.contains(&pid) {
+            let class = String::from_utf16_lossy(&class[..usize::try_from(n).unwrap_or(0)]);
+            f.found.push((hwnd, class, visible));
         }
         1
     }
-    let mut f = Find { pids, found: None };
+    let mut f = Find {
+        pids,
+        found: Vec::new(),
+    };
     // SAFETY: the callback only dereferences `f`, which outlives the call.
     unsafe { EnumWindows(Some(each), (&raw mut f) as LPARAM) };
     f.found
@@ -1250,12 +1263,23 @@ impl Drop for OuterConsole {
 #[test]
 fn console_attach_sends_raw_keys_and_follows_window_resizes() {
     let h = HostGuard::start("console");
+    // `-v` logs every control key record the client reads, so a failure shows what the
+    // console delivered.
     let mut con = OuterConsole::spawn(
-        &format!("\"{}\" host attach --endpoint {}", subak(), h.ep),
+        &format!("\"{}\" -v host attach --endpoint {}", subak(), h.ep),
         100,
         30,
     );
     con.expect("Ctrl+B d detaches");
+    // A pseudo console has no visible window: nothing appears on the user's desktop.
+    let mut owners = vec![con.proc.pid];
+    owners.extend(children(std::process::id(), "conhost.exe"));
+    let shown: Vec<_> = windows_of(&owners)
+        .into_iter()
+        .filter(|(_, _, visible)| *visible)
+        .map(|(_, class, _)| class)
+        .collect();
+    assert!(shown.is_empty(), "visible windows: {shown:?}");
     // Typed keys arrive raw (no line editing by the client's console) and reach the shell.
     con.keys(b"echo mark^er-555\r");
     con.expect("marker-555");
@@ -1276,14 +1300,38 @@ fn console_attach_sends_raw_keys_and_follows_window_resizes() {
     con.keys(b"mode con & echo mark^er-w2\r");
     let text = con.expect("marker-w2");
     assert_eq!(columns(&text), Some(90), "{text}");
-    // Ctrl+C is a key for the shell, not a signal for the client.
+    // Ctrl+C is a key for the shell (it interrupts ping), not a signal for the client.
+    con.keys(b"ping -n 60 127.0.0.1\r");
+    con.expect("Pinging 127.0.0.1");
+    let started = Instant::now();
     con.keys(&[0x03]);
     con.keys(b"echo mark^er-after-ctrl-c\r");
     con.expect("marker-after-ctrl-c");
+    assert!(
+        started.elapsed() < Duration::from_secs(15),
+        "Ctrl+C typed in the console did not interrupt ping"
+    );
+    assert!(con.proc.alive(), "Ctrl+C did not end the client");
     // Ctrl+B d detaches; the client restores its console and exits 0.
     con.keys(&[0x02, b'd']);
-    assert!(con.proc.wait(LONG), "client exits after Ctrl+B d");
+    if !con.proc.wait(LONG) {
+        let tail = visible(&con.out.lock().unwrap());
+        let tail = &tail[tail.len().saturating_sub(1500)..];
+        panic!(
+            "client did not exit after Ctrl+B d; attached clients per Host: {}; console:\n{tail}",
+            status(&h.ep)["clients"]["attached"]
+        );
+    }
     assert_eq!(con.proc.exit_code(), Some(0));
+    con.mark = 0;
+    let all = con.expect("detached; the shell keeps running");
+    assert!(all.contains("subak: detach acknowledged"), "{all}");
+    let keys: Vec<&str> = all
+        .split("subak: key ")
+        .filter_map(|r| r.split(['\r', '\n']).next())
+        .filter(|r| r.contains("-> 0x0002") || r.contains("-> 0x0003"))
+        .collect();
+    eprintln!("EVIDENCE console-keys: control key records seen by the client: {keys:?}");
     h.assert_alive("after a console client detached");
     assert_eq!(status(&h.ep)["clients"]["attached"], 0);
     eprintln!(

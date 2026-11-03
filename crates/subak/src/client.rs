@@ -348,7 +348,8 @@ pub fn attach(a: &Args, endpoint: &str) -> Result<Value, CliError> {
         let pipe = Arc::clone(&s.pipe);
         let ids = Arc::clone(&s.next_id);
         let detach_id = Arc::clone(&detach_id);
-        move || input(&pipe, console_in, size, &ids, &detach_id)
+        let verbose = a.verbose;
+        move || input(&pipe, console_in, size, &ids, &detach_id, verbose)
     });
     let mut stdout = io::stdout().lock();
     let mut exit_code = Value::Null;
@@ -373,6 +374,9 @@ pub fn attach(a: &Args, endpoint: &str) -> Result<Value, CliError> {
                     stopping = m["data"]["reason"].clone();
                 }
                 Some("response") if m["id"] == detach_id.load(Ordering::SeqCst) => {
+                    if a.verbose {
+                        eprint!("subak: detach acknowledged by the Host\r\n");
+                    }
                     break End::Detached;
                 }
                 _ => {}
@@ -406,6 +410,7 @@ fn input(
     size: Option<(u16, u16)>,
     ids: &AtomicU64,
     detach_id: &AtomicU64,
+    verbose: bool,
 ) {
     let mut keys = DetachKeys::default();
     let request = |method: &str, params: Value| -> bool {
@@ -433,7 +438,8 @@ fn input(
         let mut size = size.unwrap_or((0, 0));
         let mut high = None;
         loop {
-            let Ok(events) = console::read_input(&mut size, &mut high, Duration::from_millis(250))
+            let Ok(events) =
+                console::read_input(&mut size, &mut high, Duration::from_millis(250), verbose)
             else {
                 request("pane.detach", json!({}));
                 return;
@@ -443,6 +449,9 @@ fn input(
                     console::Input::Bytes(b) => match forward(&b) {
                         Some(false) => {}
                         Some(true) => {
+                            if verbose {
+                                eprint!("subak: Ctrl+B d: detaching\r\n");
+                            }
                             request("pane.detach", json!({}));
                             return;
                         }

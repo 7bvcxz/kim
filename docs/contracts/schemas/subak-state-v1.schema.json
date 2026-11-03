@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/7bvcxz/kim/docs/contracts/schemas/subak-state-v1.schema.json",
+  "$id": "https://github.com/hellomouv/kim/docs/contracts/schemas/subak-state-v1.schema.json",
   "title": "Subak persisted state, schema version 1 (draft)",
   "description": "Contents of %LOCALAPPDATA%\\mouv\\subak\\state\\state.json. See docs/contracts/STATE_SCHEMA.md.",
   "type": "object",

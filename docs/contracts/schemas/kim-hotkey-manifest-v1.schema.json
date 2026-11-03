@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/7bvcxz/kim/blob/main/docs/contracts/schemas/kim-hotkey-manifest-v1.schema.json",
+  "$id": "https://github.com/hellomouv/kim/blob/main/docs/contracts/schemas/kim-hotkey-manifest-v1.schema.json",
   "title": "Kim hotkey manifest, schema_version 1",
   "description": "The actions, contexts, leaders and default bindings a tool declares (docs/HOTKEY_CONTRACT.md §3.4). Compiled into the tool (its actions, scopes and defaults appear in `<tool> hotkeys list --json`) and shipped as hotkeys.manifest.json so Kim can show and check shortcuts without starting the tool. Objects are open: unknown fields are ignored.",
   "type": "object",

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/7bvcxz/kim/blob/main/docs/contracts/schemas/hotkeys-cli-v1.schema.json",
+  "$id": "https://github.com/hellomouv/kim/blob/main/docs/contracts/schemas/hotkeys-cli-v1.schema.json",
   "title": "`<tool> hotkeys … --json` documents, schema_version 1",
   "description": "The cli-envelope-v1 envelope of every `hotkeys` command of every tool (docs/HOTKEY_CONTRACT.md §10), the data of each command, and the hotkey error codes with their exit codes (CLI_CONTRACT §6). Closed objects, like kim-cli-v1; consumers must still ignore unknown fields and treat unknown conflict codes by severity.",
   "oneOf": [

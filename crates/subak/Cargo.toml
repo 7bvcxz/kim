@@ -16,7 +16,39 @@ path = "src/main.rs"
 [lints]
 workspace = true
 
+[dependencies]
+# The --json envelope (docs/CLI_CONTRACT.md §7) and the prototype IPC control messages.
+serde_json = "1.0.154"
+
+[target."cfg(windows)".dependencies]
+# Step 08 ConPTY Host prototype: pseudo console, job objects, named pipes, detached spawn.
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_IO",
+    "Win32_System_JobObjects",
+    "Win32_System_Pipes",
+    "Win32_System_RemoteDesktop",
+    "Win32_System_Threading",
+] }
+
 [dev-dependencies]
 # tests/cli.rs validates `subak --json` output with xtask/src/jsonschema.rs (test-only).
 regex = "1.13.1"
-serde_json = "1.0.154"
+
+[target."cfg(windows)".dev-dependencies]
+# tests/conpty_host.rs drives the real Host: hidden consoles, job objects, window-close messages.
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_JobObjects",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+] }

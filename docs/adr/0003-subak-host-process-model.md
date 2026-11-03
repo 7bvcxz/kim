@@ -63,3 +63,15 @@ while it is useful (`SUBAK-FR-002`).
 
 `SUBAK-FR-001`, `SUBAK-FR-002`, `SUBAK-FR-003`, `SUBAK-FR-015`, `KIM-FR-034`,
 `KIM-NFR-001`, `SUBAK-SEC-010`.
+
+## Notes
+
+- 2026-11-04 (Step 08): validated on Windows 10 19045 by the Step 08 prototype; see
+  [ADR 0016](0016-conpty-host-validation.md) and [CONPTY_PROOF](../CONPTY_PROOF.md). The detached
+  spawn of §2 holds, with three refinements. (a) `CREATE_NEW_PROCESS_GROUP` makes the Host and
+  everything it starts ignore Ctrl+C, so the Host clears that flag before spawning panes.
+  (b) "No inherited handles" means `NUL` stdio plus `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`.
+  (c) `host status` reports `in_job` next to `job_breakaway`, because breakaway is decided per job
+  level. Risk R-03 is confirmed: inside a launcher job that forbids breakaway, the Host dies when
+  that job is closed. The prototype Host lives as long as its single shell; the idle grace of §4
+  arrives with the session model.

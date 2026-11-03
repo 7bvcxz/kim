@@ -2,7 +2,7 @@
   "command": "catalog.show",
   "data": {
     "catalog": {
-      "catalog_version": 1,
+      "catalog_version": 2,
       "expires_at": "2027-05-04T00:00:00Z",
       "generated_at": "2026-11-04T00:00:00Z",
       "publisher": "mouv",
@@ -14,7 +14,7 @@
       "stale": false
     },
     "description": "Sessions live in a per-user background Host and survive closing every window. Headless CLI, optional native GUI, Claude Code status. Not released yet.",
-    "homepage": "https://github.com/7bvcxz/kim",
+    "homepage": "https://github.com/hellomouv/kim",
     "license": "MIT OR Apache-2.0",
     "platform": {
       "arch": "x86_64",

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/7bvcxz/kim/blob/main/docs/contracts/schemas/kim-cli-v1.schema.json",
+  "$id": "https://github.com/hellomouv/kim/blob/main/docs/contracts/schemas/kim-cli-v1.schema.json",
   "title": "kim --json output, schema_version 1",
   "description": "Every document `kim ... --json` prints: the cli-envelope-v1 envelope, the `data` of each command (selected by `command`), and the error-code registry with its exit codes (docs/CLI_CONTRACT.md §6, docs/KIM_CLI.md). Objects are closed so regression tests notice any change; consumers must still ignore unknown fields and tolerate new enum values (§8). The `data` of the `hotkeys.*` commands is specified by hotkeys-cli-v1 (docs/HOTKEY_CONTRACT.md §10); this schema only checks their envelope.",
   "oneOf": [

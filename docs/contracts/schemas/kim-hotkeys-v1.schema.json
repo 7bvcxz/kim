@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/7bvcxz/kim/blob/main/docs/contracts/schemas/kim-hotkeys-v1.schema.json",
+  "$id": "https://github.com/hellomouv/kim/blob/main/docs/contracts/schemas/kim-hotkeys-v1.schema.json",
   "title": "Kim hotkey user layer (hotkeys.json), schema_version 1",
   "description": "The user's shortcut overrides for one tool, stored at %APPDATA%\\mouv\\<tool>\\hotkeys.json (docs/HOTKEY_CONTRACT.md §8). Only changes are stored; actions without an override use the tool's defaults. Objects are open: unknown fields are ignored and preserved. Tools additionally reject overrides for the same action twice, leader IDs that are not declared, and scope-dependent reserved chords (§7, §9.3).",
   "type": "object",

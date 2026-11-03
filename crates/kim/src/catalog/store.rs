@@ -29,7 +29,7 @@ pub const BUNDLED_SIGNATURE: &[u8] = include_bytes!(concat!(
 
 /// Default remote location, used only by an explicit `kim catalog refresh`.
 pub const DEFAULT_SOURCE: &str =
-    "https://raw.githubusercontent.com/7bvcxz/kim/main/catalog/catalog.json";
+    "https://raw.githubusercontent.com/hellomouv/kim/main/catalog/catalog.json";
 
 pub const CACHE_FILE: &str = "catalog.json";
 pub const CACHE_SIG_FILE: &str = "catalog.json.sig";

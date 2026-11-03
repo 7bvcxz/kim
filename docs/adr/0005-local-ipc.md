@@ -86,3 +86,12 @@ The transport is a narrow trait (`connect`, `accept`, `read_frame`, `write_frame
 ## Requirements
 
 `SUBAK-SEC-010`, `SUBAK-SEC-012`, `SUBAK-FR-004`, `KIM-NFR-014`, `KIM-NFR-004`.
+
+## Notes
+
+- 2026-11-04 (Step 08): a prototype of this transport (protocol major 0, same framing) runs in
+  `subak host …`; see [ADR 0016](0016-conpty-host-validation.md). Measured: pipe handles must be
+  overlapped on **both** ends, because synchronous handles serialize I/O per file object and
+  deadlock a duplex stream. The prototype already applies the owner-only DACL,
+  `PIPE_REJECT_REMOTE_CLIENTS`, `FILE_FLAG_FIRST_PIPE_INSTANCE` and `SECURITY_IDENTIFICATION`.
+  The identity checks and the final pipe name remain Step 09's job.

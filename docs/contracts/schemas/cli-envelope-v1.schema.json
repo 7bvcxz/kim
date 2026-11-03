@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/7bvcxz/kim/blob/main/docs/contracts/schemas/cli-envelope-v1.schema.json",
+  "$id": "https://github.com/hellomouv/kim/blob/main/docs/contracts/schemas/cli-envelope-v1.schema.json",
   "title": "Kim CLI --json envelope, schema_version 1 (every Kim tool)",
   "description": "The one JSON document every Kim tool prints on stdout with --json, for success and failure (docs/CLI_CONTRACT.md §7). `data` is command-specific and always an object; tool-specific schemas such as kim-cli-v1 describe it. Exit codes 1-8 are the classes of docs/CLI_CONTRACT.md §5.",
   "oneOf": [

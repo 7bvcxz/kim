@@ -22,7 +22,7 @@ AI contributor. Security problems go through [SECURITY.md](SECURITY.md), never p
 3. **Clone and verify:**
 
    ```sh
-   git clone https://github.com/7bvcxz/kim
+   git clone https://github.com/hellomouv/kim
    cd kim
    cargo xtask ci
    ```
@@ -53,7 +53,7 @@ milestone M4 (`KIM-NFR-011`); macOS is out of scope.
 | `crates/kim` | `kim` | Kim manager library + CLI (binary `kim`): catalog, signatures, installer, status, tool discovery ([CLI contract](docs/CLI_CONTRACT.md)) |
 | `catalog/` | — | The signed catalog bundled into `kim` and published for `kim catalog refresh` ([format](docs/CATALOG_FORMAT.md)) |
 | `crates/kim-manager` | `kim-manager` | Kim Manager GUI (egui + glow, ADR 0014); the only package allowed to depend on GUI crates so far |
-| `crates/subak` | `subak` | Subak CLI (binary `subak`); Host and GUI arrive in later steps |
+| `crates/subak` | `subak` | Subak CLI (binary `subak`): `capabilities` and the Step 08 ConPTY Host prototype (`subak host …`, [CONPTY_PROOF](docs/CONPTY_PROOF.md)); sessions and GUI arrive in later steps |
 | `xtask` | `xtask` | Repository automation (docs/schema checks, CI gate, gated e2e runner); never shipped |
 | `e2e` | `kim-e2e` | End-to-end suite; excluded from `default-members` and CI |
 
@@ -87,7 +87,7 @@ background service.
 
 Kim ships binaries, not libraries, so the MSRV **equals the pinned toolchain** in
 `rust-toolchain.toml` (mirrored as `rust-version` in the workspace `Cargo.toml`). Bump both
-together in a dedicated PR, at most once per Rust release cycle, after `cargo xtask ci` passes.
+together in a dedicated change, at most once per Rust release cycle, after `cargo xtask ci` passes.
 
 ## Build profiles
 
@@ -95,11 +95,15 @@ together in a dedicated PR, at most once per Rust release cycle, after `cargo xt
 - `release`: thin LTO, one codegen unit, stripped symbols, panics unwind (so the Subak Host can
   isolate a failing request without losing every session).
 
-## Pull requests
+## Branches and merging
+
+This repository does not use pull requests (see [AGENTS.md](AGENTS.md) §6).
 
 - Branch per issue; reference the issue (`Refs #N`) and requirement IDs in commits.
-- CI must pass: Windows fmt/clippy/tests/docs, the Linux compile check, and the dependency
-  policy.
+- Push the branch: CI runs on every branch push. It must pass: Windows fmt/clippy/tests/docs,
+  the Linux compile check, and the dependency policy.
+- Merge into `main` locally with `git merge --no-ff` after the branch's CI is green and
+  `cargo xtask ci` passes on the merged result, then push `main`.
 - Keep changes focused; update the docs your change affects.
 
 ## License

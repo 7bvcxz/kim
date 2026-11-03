@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/7bvcxz/kim/docs/contracts/schemas/kim-catalog-v1.schema.json",
+  "$id": "https://github.com/hellomouv/kim/docs/contracts/schemas/kim-catalog-v1.schema.json",
   "title": "Kim tool catalog, schema version 1",
   "description": "Shape of catalog.json (docs/CATALOG_FORMAT.md). Kim additionally enforces semantic rules (unique ids/versions/targets, SemVer, dependency targets, safe entrypoints, expiry after generation) and verifies the detached ed25519 signature.",
   "type": "object",

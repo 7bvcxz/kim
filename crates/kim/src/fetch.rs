@@ -303,7 +303,7 @@ mod tests {
     #[test]
     fn source_url_policy() {
         for ok in [
-            "https://raw.githubusercontent.com/7bvcxz/kim/main/catalog/catalog.json",
+            "https://raw.githubusercontent.com/hellomouv/kim/main/catalog/catalog.json",
             "http://127.0.0.1:8080/c.json",
             "http://localhost/c.json",
             "http://[::1]:9/c.json",

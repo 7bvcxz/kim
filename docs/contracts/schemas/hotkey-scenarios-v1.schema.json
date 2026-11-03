@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/7bvcxz/kim/blob/main/docs/contracts/schemas/hotkey-scenarios-v1.schema.json",
+  "$id": "https://github.com/hellomouv/kim/blob/main/docs/contracts/schemas/hotkey-scenarios-v1.schema.json",
   "title": "Hotkey conflict and override scenario (fixture), schema_version 1",
   "description": "A specification fixture (docs/HOTKEY_CONTRACT.md §15): installed tools (a manifest, by example name or inline, and an optional user layer), chords other programs already registered, an optional request, and the exact expected check report or request outcome. `cargo xtask schema-check` validates the embedded documents against kim-hotkey-manifest-v1, kim-hotkeys-v1 and hotkeys-cli-v1, then recomputes the expectation with the reference checker (xtask/src/hotkeys.rs). Conflict `message`s are not part of the expectation.",
   "type": "object",

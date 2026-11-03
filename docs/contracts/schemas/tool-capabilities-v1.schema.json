@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/7bvcxz/kim/blob/main/docs/contracts/schemas/tool-capabilities-v1.schema.json",
+  "$id": "https://github.com/hellomouv/kim/blob/main/docs/contracts/schemas/tool-capabilities-v1.schema.json",
   "title": "Kim tool capabilities document, schema_version 1",
   "description": "The `data` of `<tool> capabilities --json`, and the optional `capabilities.json` manifest at the root of an installed version (docs/CLI_CONTRACT.md §9). Every command that is not `read` supports --dry-run; every `destructive` command needs --yes when the tool cannot ask. The same definitions are embedded in kim-cli-v1 (a test keeps them identical).",
   "type": "object",

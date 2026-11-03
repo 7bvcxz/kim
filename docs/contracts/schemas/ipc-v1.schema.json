@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/7bvcxz/kim/docs/contracts/schemas/ipc-v1.schema.json",
+  "$id": "https://github.com/hellomouv/kim/docs/contracts/schemas/ipc-v1.schema.json",
   "title": "Subak IPC v1 control message (draft)",
   "description": "One JSON control frame (kind 0x01). See docs/contracts/IPC_PROTOCOL.md.",
   "oneOf": [

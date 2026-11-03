@@ -12,7 +12,7 @@
       "name": "Subak",
       "summary": "Persistent Windows-first terminal (fixture releases)",
       "description": "Real tool, hypothetical releases for tests.",
-      "homepage": "https://github.com/7bvcxz/kim",
+      "homepage": "https://github.com/hellomouv/kim",
       "license": "MIT OR Apache-2.0",
       "support": "preview",
       "releases": [

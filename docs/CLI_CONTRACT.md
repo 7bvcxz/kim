@@ -135,6 +135,20 @@ different meaning or exit code. `crates/kim/tests/cli_contract.rs` checks that t
 | `already_installed` | 7 | The requested version is already installed; nothing to do (use `--reinstall` to repair). |
 | `cancelled` | 8 | The user cancelled; nothing was changed. |
 
+Codes registered for the `hotkeys` command group of every GUI tool
+([HOTKEY_CONTRACT §10](HOTKEY_CONTRACT.md)). They are registered so that no tool gives them
+another meaning; no tool implements them yet (Step 46):
+
+| Code | Exit | Meaning |
+| --- | --- | --- |
+| `hotkey_invalid` | 2 | The keys do not parse, or use a key, modifier, scope or leader the action does not have. |
+| `hotkey_reserved` | 2 | The chord is reserved by the OS, by Kim's GUI rules or by the IME, or the action is not bindable. |
+| `action_not_found` | 3 | The tool has no action with this ID. |
+| `hotkeys_invalid` | 4 | The stored `hotkeys.json` is malformed or invalid; the tool runs in safe mode. |
+| `hotkey_unsupported` | 5 | The binding needs an input capability the tool does not have. |
+| `hotkeys_from_newer_version` | 5 | `hotkeys.json` was written by a newer version and is read-only. |
+| `hotkey_conflict` | 7 | The change conflicts with another binding; nothing was changed. |
+
 Subak's IPC error codes ([IPC_PROTOCOL](contracts/IPC_PROTOCOL.md)) are a separate namespace;
 when Subak's CLI (Step 12) surfaces them, it adds its CLI codes to this table.
 

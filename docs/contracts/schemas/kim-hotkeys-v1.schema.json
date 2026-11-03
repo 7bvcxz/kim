@@ -1,0 +1,161 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/7bvcxz/kim/blob/main/docs/contracts/schemas/kim-hotkeys-v1.schema.json",
+  "title": "Kim hotkey user layer (hotkeys.json), schema_version 1",
+  "description": "The user's shortcut overrides for one tool, stored at %APPDATA%\\mouv\\<tool>\\hotkeys.json (docs/HOTKEY_CONTRACT.md §8). Only changes are stored; actions without an override use the tool's defaults. Objects are open: unknown fields are ignored and preserved. Tools additionally reject overrides for the same action twice, leader IDs that are not declared, and scope-dependent reserved chords (§7, §9.3).",
+  "type": "object",
+  "required": ["schema", "schema_version", "tool"],
+  "properties": {
+    "schema": {"const": "kim.hotkeys"},
+    "schema_version": {"const": 1},
+    "tool": {"$ref": "#/$defs/tool_id"},
+    "enabled": {"description": "false turns every shortcut of the tool off (§12.4).", "type": "boolean"},
+    "disabled_scopes": {"type": "array", "maxItems": 3, "items": {"enum": ["global", "app", "context"]}},
+    "leaders": {
+      "description": "Leader ID -> chord.",
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/chord"}
+    },
+    "overrides": {"type": "array", "items": {"$ref": "#/$defs/override"}},
+    "profiles": {
+      "description": "Named overlays applied over the user layer while the tool says that profile is active (§8.2).",
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["overrides"],
+        "properties": {"overrides": {"type": "array", "items": {"$ref": "#/$defs/override"}}}
+      }
+    }
+  },
+  "$defs": {
+    "tool_id": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,31}$"},
+    "action_id": {
+      "description": "Stable action ID without the tool name: two to four lowercase dotted segments (HOTKEY_CONTRACT §3.1).",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*){1,3}$"
+    },
+    "name_id": {
+      "description": "Leader, context or profile-free identifier (HOTKEY_CONTRACT §3.2, §3.3).",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{0,31}$"
+    },
+    "binding_syntax": {
+      "description": "Canonical binding text: one to four steps separated by one space; a step is a chord (modifiers in the order Ctrl, Alt or AltGr, Shift, Win, then a named or code: key), a char: key or an @leader (HOTKEY_CONTRACT §5.1).",
+      "type": "string",
+      "pattern": "^((((L|R)?Ctrl\\+)?((L|R)?Alt\\+)?|AltGr\\+)((L|R)?Shift\\+)?((L|R)?Win\\+)?([A-Z0-9]|F([1-9]|1[0-9]|2[0-4])|Escape|Tab|Enter|Space|Backspace|Insert|Delete|Home|End|PageUp|PageDown|Up|Down|Left|Right|Plus|Minus|Comma|Period|Numpad[0-9]|NumpadAdd|NumpadSubtract|NumpadMultiply|NumpadDivide|NumpadDecimal|NumpadEnter|PrintScreen|Pause|ScrollLock|ContextMenu|MediaPlayPause|MediaStop|MediaNext|MediaPrevious|VolumeUp|VolumeDown|VolumeMute|HangulMode|Hanja|KanaMode|Convert|NonConvert|code:(Key[A-Z]|Digit[0-9]|Minus|Equal|BracketLeft|BracketRight|Backslash|Semicolon|Quote|Backquote|Comma|Period|Slash|IntlBackslash|IntlRo|IntlYen|Lang[1-5]))|char:\\S|@[a-z][a-z0-9-]{0,31})( ((((L|R)?Ctrl\\+)?((L|R)?Alt\\+)?|AltGr\\+)((L|R)?Shift\\+)?((L|R)?Win\\+)?([A-Z0-9]|F([1-9]|1[0-9]|2[0-4])|Escape|Tab|Enter|Space|Backspace|Insert|Delete|Home|End|PageUp|PageDown|Up|Down|Left|Right|Plus|Minus|Comma|Period|Numpad[0-9]|NumpadAdd|NumpadSubtract|NumpadMultiply|NumpadDivide|NumpadDecimal|NumpadEnter|PrintScreen|Pause|ScrollLock|ContextMenu|MediaPlayPause|MediaStop|MediaNext|MediaPrevious|VolumeUp|VolumeDown|VolumeMute|HangulMode|Hanja|KanaMode|Convert|NonConvert|code:(Key[A-Z]|Digit[0-9]|Minus|Equal|BracketLeft|BracketRight|Backslash|Semicolon|Quote|Backquote|Comma|Period|Slash|IntlBackslash|IntlRo|IntlYen|Lang[1-5]))|char:\\S|@[a-z][a-z0-9-]{0,31})){0,3}$"
+    },
+    "chord_syntax": {
+      "description": "One canonical chord without char: keys or leaders (used for leaders).",
+      "type": "string",
+      "pattern": "^(((L|R)?Ctrl\\+)?((L|R)?Alt\\+)?|AltGr\\+)((L|R)?Shift\\+)?((L|R)?Win\\+)?([A-Z0-9]|F([1-9]|1[0-9]|2[0-4])|Escape|Tab|Enter|Space|Backspace|Insert|Delete|Home|End|PageUp|PageDown|Up|Down|Left|Right|Plus|Minus|Comma|Period|Numpad[0-9]|NumpadAdd|NumpadSubtract|NumpadMultiply|NumpadDivide|NumpadDecimal|NumpadEnter|PrintScreen|Pause|ScrollLock|ContextMenu|MediaPlayPause|MediaStop|MediaNext|MediaPrevious|VolumeUp|VolumeDown|VolumeMute|HangulMode|Hanja|KanaMode|Convert|NonConvert|code:(Key[A-Z]|Digit[0-9]|Minus|Equal|BracketLeft|BracketRight|Backslash|Semicolon|Quote|Backquote|Comma|Period|Slash|IntlBackslash|IntlRo|IntlYen|Lang[1-5]))$"
+    },
+    "reserved_free": {
+      "description": "Rejects the scope-independent reserved chords of HOTKEY_CONTRACT §7 in any step.",
+      "allOf": [
+        {
+          "description": "Ctrl+Alt+Delete is the Secure Attention Sequence (reserved by the OS, HOTKEY_CONTRACT §7.1)",
+          "not": {
+            "type": "string",
+            "pattern": "(^| )((L|R)?Ctrl\\+(L|R)?Alt\\+((L|R)?Shift\\+)?(Delete|NumpadDecimal))( |$)"
+          }
+        },
+        {
+          "description": "chords with the Windows key are reserved by the OS (HOTKEY_CONTRACT §7.1)",
+          "not": {"type": "string", "pattern": "(^| )(([A-Za-z]+\\+)*(L|R)?Win\\+\\S+)( |$)"}
+        },
+        {
+          "description": "Ctrl+Shift+Escape opens Task Manager (reserved by the OS, HOTKEY_CONTRACT §7.1)",
+          "not": {"type": "string", "pattern": "(^| )((L|R)?Ctrl\\+(L|R)?Shift\\+Escape)( |$)"}
+        },
+        {
+          "description": "Ctrl+Escape opens Start (reserved by the OS, HOTKEY_CONTRACT §7.1)",
+          "not": {"type": "string", "pattern": "(^| )((L|R)?Ctrl\\+Escape)( |$)"}
+        },
+        {
+          "description": "Alt+Tab task switching is reserved by the OS (HOTKEY_CONTRACT §7.1)",
+          "not": {"type": "string", "pattern": "(^| )(((L|R)?Ctrl\\+)?(L|R)?Alt\\+((L|R)?Shift\\+)?Tab)( |$)"}
+        },
+        {
+          "description": "Alt+Escape window cycling is reserved by the OS (HOTKEY_CONTRACT §7.1)",
+          "not": {"type": "string", "pattern": "(^| )((L|R)?Alt\\+((L|R)?Shift\\+)?Escape)( |$)"}
+        },
+        {
+          "description": "Alt+Shift+PrintScreen toggles High Contrast (reserved by the OS, HOTKEY_CONTRACT §7.1)",
+          "not": {"type": "string", "pattern": "(^| )((L|R)?Alt\\+(L|R)?Shift\\+PrintScreen)( |$)"}
+        },
+        {
+          "description": "Alt+F4 closes the window (reserved by Kim, HOTKEY_CONTRACT §7.2)",
+          "not": {"type": "string", "pattern": "(^| )((L|R)?Alt\\+F4)( |$)"}
+        },
+        {
+          "description": "Ctrl+Alt+Shift+Escape is the emergency chord (reserved by Kim, HOTKEY_CONTRACT §7.4)",
+          "not": {"type": "string", "pattern": "(^| )((L|R)?Ctrl\\+(L|R)?Alt\\+(L|R)?Shift\\+Escape)( |$)"}
+        },
+        {
+          "description": "input method mode keys are reserved (HOTKEY_CONTRACT §7.3)",
+          "not": {
+            "type": "string",
+            "pattern": "(^| )(([A-Za-z]+\\+)*(HangulMode|Hanja|KanaMode|Convert|NonConvert|code:Lang[1-5]))( |$)"
+          }
+        }
+      ]
+    },
+    "binding": {
+      "description": "A binding a user or a default may use: valid syntax and no reserved chord.",
+      "type": "string",
+      "allOf": [{"$ref": "#/$defs/binding_syntax"}, {"$ref": "#/$defs/reserved_free"}]
+    },
+    "chord": {"type": "string", "allOf": [{"$ref": "#/$defs/chord_syntax"}, {"$ref": "#/$defs/reserved_free"}]},
+    "trigger": {"enum": ["press", "release", "hold"]},
+    "binding_object": {
+      "description": "Object form of a binding (HOTKEY_CONTRACT §8.2). `keys` is checked for reserved chords by the referencing definition.",
+      "type": "object",
+      "required": ["keys"],
+      "properties": {
+        "keys": {"$ref": "#/$defs/binding_syntax"},
+        "scope": {"enum": ["global", "app"]},
+        "trigger": {"$ref": "#/$defs/trigger"},
+        "hold_ms": {"type": "integer", "minimum": 200, "maximum": 5000},
+        "repeat": {"type": "boolean"}
+      },
+      "allOf": [
+        {
+          "description": "hold_ms is only allowed with trigger hold.",
+          "anyOf": [
+            {"not": {"required": ["hold_ms"]}},
+            {"required": ["trigger"], "properties": {"trigger": {"const": "hold"}}}
+          ]
+        },
+        {
+          "description": "repeat: true is only allowed with trigger press.",
+          "anyOf": [
+            {"not": {"required": ["repeat"]}},
+            {"properties": {"repeat": {"const": false}}},
+            {"not": {"required": ["trigger"]}},
+            {"properties": {"trigger": {"const": "press"}}}
+          ]
+        }
+      ]
+    },
+    "binding_spec": {
+      "description": "A binding as text, or as an object with options; never a reserved chord.",
+      "oneOf": [
+        {"$ref": "#/$defs/binding"},
+        {
+          "allOf": [{"$ref": "#/$defs/binding_object"}, {"properties": {"keys": {"$ref": "#/$defs/reserved_free"}}}]
+        }
+      ]
+    },
+    "override": {
+      "description": "One action's override: `bindings` replaces the default list, or `disabled: true` leaves the action unbound. Exactly one of the two.",
+      "type": "object",
+      "required": ["action"],
+      "properties": {
+        "action": {"$ref": "#/$defs/action_id"},
+        "bindings": {"type": "array", "minItems": 1, "maxItems": 8, "items": {"$ref": "#/$defs/binding_spec"}},
+        "disabled": {"const": true}
+      },
+      "oneOf": [{"required": ["bindings"]}, {"required": ["disabled"]}]
+    }
+  }
+}

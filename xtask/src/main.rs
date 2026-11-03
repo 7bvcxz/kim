@@ -7,6 +7,7 @@ mod catalog_tools;
 mod deps;
 mod design;
 mod docs;
+mod hotkeys;
 mod jsonschema;
 mod ledger;
 mod schema;
@@ -21,7 +22,8 @@ COMMANDS:
     docs-check        Check requirement IDs, relative links and the docs index
     schema-check [--verbose]
                       Validate contract examples against docs/contracts/schemas (valid must
-                      pass, examples/<name>/invalid/ must fail)
+                      pass, examples/<name>/invalid/ must fail) and recompute the hotkey
+                      conflict scenarios with the reference checker
     deps-check        Fail if a headless package (kim, subak) depends on GUI crates (ADR 0014)
     design-check [--verbose]
                       Check design/tokens.json: colors and declared WCAG contrast pairs
@@ -168,8 +170,8 @@ fn run_schema_check(root: &Path, verbose: bool) -> Result<(), String> {
         }
     }
     println!(
-        "schema-check: {} schemas, {} valid and {} invalid examples",
-        report.schemas, report.valid_examples, report.invalid_examples
+        "schema-check: {} schemas, {} valid and {} invalid examples, {} hotkey scenarios recomputed",
+        report.schemas, report.valid_examples, report.invalid_examples, report.hotkey_scenarios
     );
     if report.problems.is_empty() {
         println!("schema-check: PASS");

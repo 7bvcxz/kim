@@ -1,0 +1,15 @@
+{
+  "schema": "kim.hotkey-manifest",
+  "schema_version": 1,
+  "hotkey_contract": 1,
+  "tool": "kim",
+  "version": "0.1.0",
+  "backend": "focus",
+  "actions": [
+    { "id": "catalog.refresh", "title": "Refresh the catalog", "scopes": ["app"], "defaults": ["F5"] },
+    { "id": "help.show", "title": "Show keyboard shortcuts", "scopes": ["app"], "defaults": ["F1"] },
+    { "id": "tool.install", "title": "Install the selected tool", "scopes": ["app"], "defaults": [] },
+    { "id": "tool.update", "title": "Update the selected tool", "scopes": ["app"], "defaults": [] },
+    { "id": "tool.uninstall", "title": "Uninstall the selected tool (confirms)", "scopes": ["app"], "defaults": [], "destructive": true }
+  ]
+}

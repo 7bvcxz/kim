@@ -9,9 +9,9 @@ is retired or re-assessed with evidence.
 
 | ID | Risk | L | I | Mitigation | Owner step |
 | --- | --- | --- | --- | --- | --- |
-| R-01 | Inbox ConPTY differs across Windows 10 1809 → 11 builds (resize reflow artifacts, missing passthrough, mouse input, cursor inheritance) | H | M | Detect OS build; conformance tests per build; consider shipping `conpty.dll`/`OpenConsole.exe` (MIT) if inbox gaps hurt | 08, 11, 15 |
+| R-01 | Inbox ConPTY differs across Windows 10 1809 → 11 builds (resize reflow artifacts, missing passthrough, mouse input, cursor inheritance) | H | M | Detect OS build; conformance tests per build; consider shipping `conpty.dll`/`OpenConsole.exe` (MIT) if inbox gaps hurt. **Step 08:** I/O, resize, Ctrl+C and teardown verified on 19045; CI on Server 2025 (26100) showed `ClosePseudoConsole` not ending the shell (job kill required) and a win32-input-mode request that clients must not pass to their console ([CONPTY_PROOF](CONPTY_PROOF.md) §6); builds in between untested | 08, 11, 15 |
 | R-02 | ConPTY output is a re-rendered stream, not the program's raw bytes (e.g. it may repaint, reorder or drop some sequences) | M | M | Treat ConPTY as the terminal source of truth; replay via VT snapshot (ADR 0008) rather than raw byte fidelity | 13, 15 |
-| R-03 | Host started from a terminal that lives in a Job without breakaway permission dies with that terminal | M | H | `CREATE_BREAKAWAY_FROM_JOB` attempt; report `job_breakaway=false`; test from Windows Terminal, conhost, VS Code terminal, SSH | 08 |
+| R-03 | Host started from a terminal that lives in a Job without breakaway permission dies with that terminal | M | H | `CREATE_BREAKAWAY_FROM_JOB` attempt; report `job_breakaway=false` and `in_job`; warn on `host start`. **Step 08 measured:** confirmed (closing such a kill-on-close job ends Host, shell and conhost); breakaway is per job level; conhost window close is safe. Windows Terminal, VS Code terminal and SSH not yet tested (ADR 0016) | 08, 09 |
 
 ## Process trees and Job Objects
 

@@ -17,7 +17,8 @@ did.
 | Document | Status | Purpose |
 | --- | --- | --- |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | current | Components, Host internals, object model, lifecycles, close/kill semantics, restart behavior, telemetry |
-| [adr/README.md](adr/README.md) | current | Architecture decision records (ADR 0001–0015, 0017) |
+| [adr/README.md](adr/README.md) | current | Architecture decision records (ADR 0001–0017) |
+| [CONPTY_PROOF.md](CONPTY_PROOF.md) | current (Step 08 prototype) | Windows ConPTY + detached Host proof: what "detached" means, evidence with process ids, OS limitations and power states, manual procedures (Windows Terminal, sleep, logoff pending) |
 | [CLI_CONTRACT.md](CLI_CONTRACT.md) | current (contract v1) | Cross-tool CLI contract: names, help, streams, `--json` envelope, exit codes, error-code registry, dry-run/confirmation, versioning, capabilities and tool-to-tool invocation, secret redaction |
 | [KIM_CLI.md](KIM_CLI.md) | current | `kim` command reference, files and environment, sample agent workflows |
 | [HOTKEY_CONTRACT.md](HOTKEY_CONTRACT.md) | current (contract v1, specification) | Customizable shortcuts for every Kim GUI tool: action IDs, scopes, key syntax, layouts and IME, reserved keys, `hotkeys.json`, conflicts and precedence, `hotkeys` CLI, accessibility and safety, Subak/Kim Manager/Noeul/Ddalgak mapping |
@@ -46,7 +47,6 @@ expected conflict report with a reference checker ([HOTKEY_CONTRACT §15](HOTKEY
 
 | Document | Status | Planned by | Purpose |
 | --- | --- | --- | --- |
-| `CONPTY_PROOF.md` | planned | Step 08 | ConPTY + detached Host proof on real Windows |
 | `SESSION_MODEL.md` | planned | Step 10 | Session state machine and naming rules as implemented |
 | `SUBAK_CLI.md` | planned | Step 12 | Subak CLI reference |
 | `MILESTONE_A_VALIDATION.md` | planned | Step 14 | Persistent sessions validation evidence |

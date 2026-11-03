@@ -1,0 +1,12 @@
+{
+  "ok": false,
+  "command": "host.status",
+  "schema_version": 1,
+  "error": {
+    "code": "host_not_running",
+    "exit_code": 3,
+    "message": "no Subak Host is serving `\\\\.\\pipe\\subak-example-nobody`",
+    "hint": "start one with `subak host start` (Step 08 prototype)",
+    "details": []
+  }
+}

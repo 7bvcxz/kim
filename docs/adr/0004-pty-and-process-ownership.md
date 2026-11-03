@@ -56,3 +56,15 @@ tree (`SUBAK-FR-016`), but must never touch another Pane's tree.
 ## Requirements
 
 `SUBAK-FR-001`, `SUBAK-FR-014`, `SUBAK-FR-016`, `KIM-NFR-010`, `SUBAK-SEC-001`.
+
+## Notes
+
+- 2026-11-04 (Step 08): validated on Windows 10 19045 by the Step 08 prototype; see
+  [ADR 0016](0016-conpty-host-validation.md) and [CONPTY_PROOF](../CONPTY_PROOF.md). Suspended
+  creation, job assignment, resume, continuous draining, `ResizePseudoConsole` and kill-on-close
+  teardown work as decided: a Host crash ends the shell, its grandchildren and the pseudo console
+  host. Refinements: the Host closes its copies of the pseudo console's pipe ends after
+  `CreatePseudoConsole` (otherwise there is no EOF). `ClosePseudoConsole` blocks on Windows 10 and
+  runs on a helper thread while output is drained. The pseudo console's `conhost.exe` is not in
+  the pane job. Ctrl+C (§6) works only after the Host clears the "ignore Ctrl+C" flag inherited
+  through `CREATE_NEW_PROCESS_GROUP`.

@@ -18,7 +18,7 @@ use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use kim::capabilities::JSON_SCHEMA_VERSION;
 use kim::catalog::status::{self, ToolStatus, ToolView};
 use kim::catalog::store::{self, Loaded};
-use kim::catalog::{Channel, signature};
+use kim::catalog::{Channel, details, signature};
 use kim::error::{ErrorCode, KimError};
 use kim::fetch::DefaultFetcher;
 use kim::paths::Paths;
@@ -531,11 +531,139 @@ pub(crate) fn status_text(v: &ToolView) -> String {
             v.installed_version.as_deref().unwrap_or("?"),
             v.latest_compatible.as_deref().unwrap_or("?")
         ),
-        ToolStatus::Available => "available".into(),
-        ToolStatus::Incompatible => "incompatible".into(),
-        ToolStatus::Unreleased => "not released".into(),
         ToolStatus::Damaged => "damaged install".into(),
+        // available / available (preview) / incompatible / planned / preview only
+        ToolStatus::Available | ToolStatus::Incompatible | ToolStatus::Unreleased => {
+            v.availability_label().unwrap_or("not released").into()
+        }
     }
+}
+
+/// The release stage in words (CATALOG_FORMAT §6).
+pub(crate) fn availability_text(a: status::Availability) -> &'static str {
+    match a {
+        status::Availability::Planned => "planned (no release has been published yet)",
+        status::Availability::Preview => "preview (only preview releases; use --channel preview)",
+        status::Availability::Available => "available (stable releases are published)",
+    }
+}
+
+/// Human rendering of the catalog's tool metadata and what Kim decides itself (§2.1).
+fn details_text(d: &details::Details) -> String {
+    let mut s = String::new();
+    if let Some(r) = &d.runs {
+        s.push_str(&format!(
+            "Runs:     {}{}\n",
+            r.id,
+            r.label.map(|l| format!(" — {l}")).unwrap_or_default()
+        ));
+    }
+    if let Some(i) = &d.install {
+        s.push_str(&format!(
+            "Install:  {} (per user, never as administrator)\n",
+            i.program_dir.display()
+        ));
+        let data: Vec<String> = i
+            .user_data_dirs
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect();
+        s.push_str(&format!(
+            "Data:     {} (kept on uninstall unless you also choose --purge-data)\n",
+            data.join(", ")
+        ));
+    }
+    if let Some(m) = &d.manage {
+        s.push_str(&format!(
+            "Updates:  manual only, never automatic: `{}`, `{}`, `{}`; `{}` only shows updates\n",
+            m.install, m.update, m.uninstall, m.check
+        ));
+    }
+    if !d.features.is_empty() {
+        s.push_str("\nFeatures:\n");
+        for f in &d.features {
+            s.push_str(&format!("  - {f}\n"));
+        }
+    }
+    if let Some(sc) = &d.shortcuts {
+        let source = match sc.source {
+            "installed" => "installed manifest and your hotkeys.json",
+            _ => "catalog defaults",
+        };
+        s.push_str(&format!(
+            "\nShortcuts ({source}; {} backend; every one can be changed or turned off):\n",
+            sc.backend
+        ));
+        let mut rows = vec![vec![
+            "  KEYS".to_string(),
+            "ACTION".into(),
+            "SCOPE".into(),
+            "STATE".into(),
+        ]];
+        for a in &sc.actions {
+            rows.push(vec![
+                format!(
+                    "  {}",
+                    if a.keys.is_empty() {
+                        "-".to_string()
+                    } else {
+                        a.keys.join(", ")
+                    }
+                ),
+                format!("{} ({})", a.title, a.action),
+                a.scope.clone(),
+                if a.bindable {
+                    a.state.clone()
+                } else {
+                    format!("{}, fixed", a.state)
+                },
+            ]);
+        }
+        s.push_str(&table(&rows));
+        if let Some(n) = &sc.note {
+            s.push_str(&format!("  note: {n}\n"));
+        }
+    }
+    if !d.permissions.is_empty() {
+        s.push_str("\nPermissions (shown before every install):\n");
+        for p in &d.permissions {
+            s.push_str(&format!(
+                "  - {}{}: {}\n",
+                p.label.unwrap_or(&p.id),
+                if p.opt_in {
+                    " (only after you turn it on)"
+                } else {
+                    ""
+                },
+                p.detail
+            ));
+        }
+    }
+    if !d.entry_points.is_empty() {
+        s.push_str("\nEntry points:\n");
+        let rows: Vec<Vec<String>> = d
+            .entry_points
+            .iter()
+            .map(|e| {
+                vec![
+                    format!("  {}", e.kind),
+                    e.command.clone(),
+                    match e.status {
+                        kim::catalog::EntryStatus::Available => String::new(),
+                        kim::catalog::EntryStatus::Planned => "[planned]".into(),
+                    },
+                ]
+            })
+            .collect();
+        s.push_str(&table(&rows));
+    }
+    if !d.links.is_empty() {
+        s.push_str("\nLinks:\n");
+        for l in &d.links {
+            s.push_str(&format!("  {}: {} <{}>\n", l.kind, l.title, l.url));
+        }
+    }
+    s
 }
 
 fn catalog_list(channel: Channel, installed_only: bool) -> Result<Outcome, KimError> {
@@ -599,6 +727,7 @@ fn catalog_show(id: &str, channel: Channel) -> Result<Outcome, KimError> {
     let kim = semver::Version::parse(kim::KIM_VERSION).expect("SemVer");
     let installed = status::installed(&paths, id);
     let view = status::evaluate_tool(tool, &platform, &kim, &installed, channel);
+    let info = details::details(&paths, tool);
     let releases: Vec<Value> = tool
         .releases
         .iter()
@@ -622,6 +751,10 @@ fn catalog_show(id: &str, channel: Channel) -> Result<Outcome, KimError> {
     );
     human.push_str(&format!("Status:   {}\n", status_text(&view)));
     human.push_str(&format!(
+        "Release:  {}\n",
+        availability_text(view.availability)
+    ));
+    human.push_str(&format!(
         "Support:  {}\n",
         serde_json::to_value(tool.support)
             .unwrap_or_default()
@@ -638,6 +771,7 @@ fn catalog_show(id: &str, channel: Channel) -> Result<Outcome, KimError> {
     if let Some(n) = &view.note {
         human.push_str(&format!("Note:     {n}\n"));
     }
+    human.push_str(&details_text(&info));
     if tool.releases.is_empty() {
         human.push_str("\nNo releases yet.\n");
     } else {
@@ -659,16 +793,21 @@ fn catalog_show(id: &str, channel: Channel) -> Result<Outcome, KimError> {
             ));
         }
     }
+    let mut data = json!({
+        "catalog": catalog_info(&loaded),
+        "platform": platform,
+        "tool": view,
+        "description": tool.description,
+        "license": tool.license,
+        "homepage": tool.homepage,
+        "releases": releases,
+    });
+    // features, runs, entry_points, links, permissions, shortcuts, install, manage (§7)
+    if let (Value::Object(d), Ok(Value::Object(extra))) = (&mut data, serde_json::to_value(&info)) {
+        d.extend(extra);
+    }
     Ok(Outcome {
-        data: json!({
-            "catalog": catalog_info(&loaded),
-            "platform": platform,
-            "tool": view,
-            "description": tool.description,
-            "license": tool.license,
-            "homepage": tool.homepage,
-            "releases": releases,
-        }),
+        data,
         human,
         warnings: loaded.warnings,
     })

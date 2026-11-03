@@ -83,57 +83,64 @@ pub fn installed(paths: &Paths) -> (Vec<Discovered>, Vec<String>) {
         if t.id == TOOL {
             continue;
         }
-        let (Some(version), Some(dir)) = (t.version.as_deref(), t.version_dir.as_ref()) else {
-            warnings.push(format!(
-                "{}: damaged install; its shortcuts were not checked ({})",
-                t.id,
-                t.damaged.as_deref().unwrap_or("no install record")
-            ));
-            continue;
-        };
-        let path = dir.join(MANIFEST_FILE);
-        let bytes = match std::fs::read(&path) {
-            Ok(b) => b,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                warnings.push(format!(
-                    "{} {version} ships no hotkey manifest; its shortcuts were not checked",
-                    t.id
-                ));
-                continue;
+        match discover(paths, &t) {
+            Ok((d, warning)) => {
+                warnings.extend(warning);
+                found.push(d);
             }
-            Err(e) => {
-                warnings.push(format!("{}: cannot read {}: {e}", t.id, path.display()));
-                continue;
-            }
-        };
-        let m = match Manifest::parse(&bytes) {
-            Ok(m) => m,
-            Err(e) => {
-                warnings.push(format!(
-                    "{}: {} is not a usable hotkey manifest ({e}); its shortcuts were not checked",
-                    t.id,
-                    path.display()
-                ));
-                continue;
-            }
-        };
-        if m.tool != t.id || m.version != version {
-            warnings.push(format!(
-                "{}: {} describes {} {} instead of {} {version}; it is not trusted",
-                t.id,
-                path.display(),
-                m.tool,
-                m.version,
+            Err(w) => warnings.push(w),
+        }
+    }
+    (found, warnings)
+}
+
+/// The shortcuts of one installed tool, from its installed `hotkeys.manifest.json` (which must
+/// describe exactly this tool and version) and its `hotkeys.json`. `Err` says why they cannot be
+/// read; the `Ok` warning names a user layer in safe mode. Reads files only.
+pub fn discover(
+    paths: &Paths,
+    t: &inventory::InstalledTool,
+) -> Result<(Discovered, Option<String>), String> {
+    let (Some(version), Some(dir)) = (t.version.as_deref(), t.version_dir.as_ref()) else {
+        return Err(format!(
+            "{}: damaged install; its shortcuts were not checked ({})",
+            t.id,
+            t.damaged.as_deref().unwrap_or("no install record")
+        ));
+    };
+    let path = dir.join(MANIFEST_FILE);
+    let bytes = match std::fs::read(&path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(format!(
+                "{} {version} ships no hotkey manifest; its shortcuts were not checked",
                 t.id
             ));
-            continue;
         }
-        let loaded = store::load(&layer_path(paths, &t.id), &m);
-        if let Some(w) = safe_mode_warning(&t.id, &loaded) {
-            warnings.push(w);
-        }
-        let state = state(m, &loaded);
-        found.push(Discovered {
+        Err(e) => return Err(format!("{}: cannot read {}: {e}", t.id, path.display())),
+    };
+    let m = Manifest::parse(&bytes).map_err(|e| {
+        format!(
+            "{}: {} is not a usable hotkey manifest ({e}); its shortcuts were not checked",
+            t.id,
+            path.display()
+        )
+    })?;
+    if m.tool != t.id || m.version != version {
+        return Err(format!(
+            "{}: {} describes {} {} instead of {} {version}; it is not trusted",
+            t.id,
+            path.display(),
+            m.tool,
+            m.version,
+            t.id
+        ));
+    }
+    let loaded = store::load(&layer_path(paths, &t.id), &m);
+    let warning = safe_mode_warning(&t.id, &loaded);
+    let state = state(m, &loaded);
+    Ok((
+        Discovered {
             entry: ToolEntry {
                 tool: t.id.clone(),
                 version: Some(version.to_string()),
@@ -141,9 +148,9 @@ pub fn installed(paths: &Paths) -> (Vec<Discovered>, Vec<String>) {
                 enabled: state.enabled(),
             },
             state,
-        });
-    }
-    (found, warnings)
+        },
+        warning,
+    ))
 }
 
 #[cfg(test)]

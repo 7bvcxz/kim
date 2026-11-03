@@ -143,10 +143,14 @@ fn list_works_offline_from_the_bundled_catalog_and_writes_nothing() {
         String::from_utf8_lossy(&out.stderr)
     );
     let text = String::from_utf8_lossy(&out.stdout);
-    assert!(
-        text.contains("subak") && text.contains("not released"),
-        "{text}"
-    );
+    // Step 47: unreleased tools show their release stage (KIM-FR-051).
+    for id in ["subak", "noeul", "ddalgak"] {
+        assert!(
+            text.lines()
+                .any(|l| l.starts_with(id) && l.contains("planned")),
+            "{id}: {text}"
+        );
+    }
     assert!(text.contains("Nothing was changed"));
 
     let (code, v) = s.json(&["catalog", "list", "--json"]);
@@ -158,7 +162,10 @@ fn list_works_offline_from_the_bundled_catalog_and_writes_nothing() {
         v["data"]["catalog"]["signed_by"]["key_id"],
         "4466fe26eca99520"
     );
-    assert_eq!(tool(&v, "subak")["status"], "unreleased");
+    for id in ["subak", "noeul", "ddalgak"] {
+        assert_eq!(tool(&v, id)["status"], "unreleased");
+        assert_eq!(tool(&v, id)["availability"], "planned");
+    }
     assert_eq!(tool(&v, "kim")["status"], "installed");
     assert_eq!(
         s.entries(),
@@ -179,7 +186,9 @@ fn show_known_and_unknown_tools() {
     assert_eq!(v["error"]["code"], "tool_not_found");
     let out = s.run(&["catalog", "show", "nope"]);
     assert_eq!(out.status.code(), Some(3));
-    assert!(String::from_utf8_lossy(&out.stderr).contains("known tools: kim, subak"));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("known tools: kim, subak, noeul, ddalgak")
+    );
 }
 
 #[test]

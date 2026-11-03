@@ -134,7 +134,11 @@ fn normalize(v: &mut Value, sb: &Sandbox, port: Option<u16>) {
                     walk(child, f);
                 }
             }
-            Value::Array(items) => items.iter_mut().for_each(|c| walk(c, f)),
+            // Array items have no key; paths in string lists are normalized too.
+            Value::Array(items) => items.iter_mut().for_each(|c| {
+                f("", c);
+                walk(c, f);
+            }),
             _ => {}
         }
     }

@@ -211,6 +211,25 @@ fn plan_text(plan: &Plan) -> String {
         &plan.asset.sha256[..12],
         plan.tool_dir.display()
     );
+    // Disclosed before anything is downloaded (KIM-SEC-006).
+    for p in &plan.permissions {
+        s.push_str(&format!(
+            "  permits  {}{}: {}\n",
+            p.label.unwrap_or(&p.id),
+            if p.opt_in {
+                " (only after you turn it on)"
+            } else {
+                ""
+            },
+            p.detail
+        ));
+    }
+    for d in &plan.dependencies {
+        s.push_str(&format!(
+            "  needs    {} {} (installed; Kim never installs a dependency for you)\n",
+            d.tool, d.version_req
+        ));
+    }
     for n in &plan.notes {
         s.push_str(&format!("  note     {n}\n"));
     }
@@ -399,7 +418,12 @@ pub(crate) fn confirm(ctx: Ctx, question: &str, expected: &str) -> Option<bool> 
 
 pub fn uninstall(a: &UninstallArgs, ctx: Ctx) -> Result<Outcome, KimError> {
     let paths = Paths::from_env()?;
-    let plan = install::plan_uninstall(&paths, &a.tool, a.purge_data)?;
+    let mut plan = install::plan_uninstall(&paths, &a.tool, a.purge_data)?;
+    // How the tool runs only improves the hint for a running tool; uninstall never needs a
+    // catalog, so a catalog that cannot be loaded is not an error here.
+    if let Ok(loaded) = store::load(&paths, &trusted_keys(), kim::time::now_utc()) {
+        plan = plan.with_catalog(&loaded.catalog);
+    }
     let mut text = format!(
         "Plan: uninstall {} {}\n  remove   {}\n",
         plan.tool,
@@ -420,8 +444,9 @@ pub fn uninstall(a: &UninstallArgs, ctx: Ctx) -> Result<Outcome, KimError> {
     if !plan.running.is_empty() {
         let pids: Vec<String> = plan.running.iter().map(|p| p.pid.to_string()).collect();
         text.push_str(&format!(
-            "  running  PID {} — uninstall will be refused; Kim never stops programs\n",
-            pids.join(", ")
+            "  running  PID {} — uninstall will be refused; Kim never stops programs ({})\n",
+            pids.join(", "),
+            kim::catalog::details::stop_hint(&plan.tool, plan.runs.as_deref())
         ));
     }
     if a.dry_run {

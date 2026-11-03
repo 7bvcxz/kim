@@ -2,7 +2,7 @@
   "command": "catalog.list",
   "data": {
     "catalog": {
-      "catalog_version": 2,
+      "catalog_version": 3,
       "expires_at": "2027-05-04T00:00:00Z",
       "generated_at": "2026-11-04T00:00:00Z",
       "publisher": "mouv",
@@ -22,6 +22,7 @@
     },
     "tools": [
       {
+        "availability": "planned",
         "id": "kim",
         "incompatible_reason": null,
         "installed_version": "0.0.1",
@@ -34,6 +35,7 @@
         "support": "in-development"
       },
       {
+        "availability": "planned",
         "id": "subak",
         "incompatible_reason": null,
         "installed_version": null,
@@ -43,6 +45,32 @@
         "note": null,
         "status": "unreleased",
         "summary": "Persistent Windows-first terminal with a separate Host and Clients",
+        "support": "in-development"
+      },
+      {
+        "availability": "planned",
+        "id": "noeul",
+        "incompatible_reason": null,
+        "installed_version": null,
+        "latest": null,
+        "latest_compatible": null,
+        "name": "Noeul",
+        "note": null,
+        "status": "unreleased",
+        "summary": "Screenshot and pin tool: F1 captures a region, double-click pins it on the desktop",
+        "support": "in-development"
+      },
+      {
+        "availability": "planned",
+        "id": "ddalgak",
+        "incompatible_reason": null,
+        "installed_version": null,
+        "latest": null,
+        "latest_compatible": null,
+        "name": "Ddalgak",
+        "note": null,
+        "status": "unreleased",
+        "summary": "Automation engine: one key press runs the remaps, text, launches and macros you define",
         "support": "in-development"
       }
     ]

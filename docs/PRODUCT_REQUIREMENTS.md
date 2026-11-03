@@ -61,6 +61,9 @@ includes only the explicitly listed basic subset (`SUBAK-FR-033`, `SUBAK-FR-035`
 | KIM-FR-020 | Installed tools are discoverable with their capabilities, and tools can invoke one another through documented CLI/JSON contracts — without a permanently running central orchestrator. | P1 | M1 | T, D |
 | KIM-FR-021 | A tool may additionally expose a local, opt-in MCP server; MCP is never the only interface. | P2 | M3 | T, D |
 | KIM-FR-034 | Updating or uninstalling a tool that is running (e.g. a Subak Host with live Terminals) never terminates it silently: Kim reports it and the user chooses to defer or to stop it. | P0 | M1 | T |
+| KIM-FR-050 | The catalog can describe each tool beyond its releases, additively and signed with it: feature summary, how the program runs (e.g. a tray utility), GUI / headless CLI / MCP entry points, documentation and MCP links, a summary of its default shortcuts (from its hotkey manifest) and the permissions it needs. Kim shows them in `kim catalog show` and Kim Manager, and adds what a catalog cannot decide: the per-user install and data locations and the manual-only install, update and uninstall commands. | P1 | M1 | T, D |
+| KIM-FR-051 | **Release availability is derived, never declared.** Kim shows each tool as *planned* (no release), *preview* (preview releases only) or *available* (a stable release exists), from the signed releases alone. A tool is never offered for download without a signed, hashed release for this OS and architecture; installing a planned tool fails with `no_release` and says that it is planned. | P0 | M1 | T |
+| KIM-FR-052 | For an installed tool, the shortcuts Kim shows come from the tool's installed hotkey manifest and the user's `hotkeys.json` (read-only, the discovery rules of the hotkey contract), not from the catalog; without a usable installed manifest Kim shows the catalog's defaults and says why. | P1 | M1 | T |
 
 ### 3.2 Non-functional
 
@@ -89,6 +92,7 @@ changed by an ADR with measurements.
 | KIM-SEC-003 | Every downloaded artifact is verified (SHA-256 and signature against a trusted key) before staging; any failure aborts with no change to installed state. | P0 | M1 | T |
 | KIM-SEC-004 | Per-user installs by default; never elevate silently; elevation only on explicit request with an explanation. | P0 | M1 | T, I |
 | KIM-SEC-005 | Uninstall preserves user data and configuration unless the user separately and explicitly confirms deleting it. | P0 | M1 | T |
+| KIM-SEC-006 | Before an install or update, Kim discloses what the tool declares it does that matters for security (e.g. registers global hotkeys, captures the screen, installs a keyboard hook, injects input, starts programs; opt-in ones marked) and its declared dependencies, in the CLI plan and in Kim Manager. Disclosure never replaces consent: the install still starts only from the user's explicit action, and no dependency is installed implicitly. | P0 | M1 | T, I |
 | KIM-SEC-010 | No account, sign-in or cloud service is required for any functionality. | P0 | M1 | I |
 | KIM-SEC-011 | No ads and no tracking. | P0 | M1 | I |
 | KIM-SEC-012 | Telemetry is off by default. Diagnostics stay local, never contain terminal content, command lines, file paths, environment values or user names, and leave the machine only through an explicit user export. | P0 | M1 | I, T |

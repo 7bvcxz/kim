@@ -2,6 +2,7 @@
 //! without disturbing the desktop: the window is off-screen, not activated, not in the taskbar.
 //!
 //!     cargo run --release -p kim-manager --example preview -- --screenshot shot.bmp --idle 30
+//!     cargo run --release -p kim-manager --example preview -- --select noeul --screenshot n.bmp
 //!
 //! Sample data lives in a temp directory (a test-signed catalog and one fake install record); the
 //! real per-user locations are never touched. Not shipped.
@@ -49,6 +50,16 @@ fn sample_backend() -> Backend {
              "license": "MIT", "support": "stable", "releases": [rel("2.0.0", vec![asset("2.0.0", "windows", "aarch64", None)])]}
         ]
     });
+    // The real Noeul and Ddalgak entries (planned, with their metadata), as the bundled catalog
+    // lists them (Step 47).
+    let mut doc = doc;
+    let bundled: serde_json::Value =
+        serde_json::from_slice(kim::catalog::store::BUNDLED_CATALOG).expect("bundled catalog");
+    for t in bundled["tools"].as_array().expect("tools") {
+        if t["id"] == "noeul" || t["id"] == "ddalgak" {
+            doc["tools"].as_array_mut().expect("tools").push(t.clone());
+        }
+    }
     let bytes = serde_json::to_vec_pretty(&doc).expect("json");
     let sig = serde_json::to_vec(&signature::sign(&bytes, &SEED)).expect("json");
     std::fs::create_dir_all(paths.catalog_cache_dir()).expect("dir");
@@ -117,6 +128,8 @@ fn main() -> eframe::Result {
     };
     let shot = flag("--screenshot").map(std::path::PathBuf::from);
     let idle = Duration::from_secs(flag("--idle").and_then(|s| s.parse().ok()).unwrap_or(5));
+    // `--select noeul` shows that tool's details instead of the first one.
+    let select = flag("--select");
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Kim (preview)")
@@ -137,8 +150,12 @@ fn main() -> eframe::Result {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 ctx.request_repaint();
             });
+            let mut app = KimManagerApp::new(sample_backend(), Some(&cc.egui_ctx));
+            if let Some(id) = &select {
+                app.select(id);
+            }
             Ok(Box::new(Preview {
-                app: KimManagerApp::new(sample_backend(), Some(&cc.egui_ctx)),
+                app,
                 start: Instant::now(),
                 shot,
                 idle,

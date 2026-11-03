@@ -9,16 +9,18 @@ pub mod shortcuts;
 pub mod theme;
 
 use eframe::egui;
-use kim::catalog::Channel;
+use kim::catalog::details::{self, Details};
 use kim::catalog::signature::TrustedKey;
-use kim::catalog::status::{self, ToolStatus, ToolView};
+use kim::catalog::status::{self, Availability, ToolStatus, ToolView};
 use kim::catalog::store::{self, Loaded};
+use kim::catalog::{Channel, EntryStatus};
 use kim::error::KimError;
 use kim::fetch::{DefaultFetcher, Downloader};
 use kim::install::{self, Event, Phase, PlanOptions};
 use kim::paths::Paths;
 use kim::platform::Platform;
 use kim::settings::Settings;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -95,6 +97,8 @@ pub struct KimManagerApp {
     backend: Backend,
     loaded: Option<Loaded>,
     views: Vec<ToolView>,
+    /// Metadata and Kim's own facts per tool, computed on (re)load, never per frame.
+    details: HashMap<String, Details>,
     load_error: Option<String>,
     selected: Option<String>,
     channel: Channel,
@@ -134,6 +138,7 @@ impl KimManagerApp {
             backend,
             loaded: None,
             views: Vec::new(),
+            details: HashMap::new(),
             load_error: None,
             selected: None,
             channel: Channel::Stable,
@@ -229,8 +234,13 @@ impl KimManagerApp {
             .iter()
             .any(|e| matches!(e, egui::Event::WindowFocused(true)))
         {
-            // `kim hotkeys set` may have changed the file while the window was in the background.
+            // `kim hotkeys set` may have changed the file while the window was in the background,
+            // and a terminal may have installed a tool or changed its shortcuts (an event, no
+            // polling; reading is cheap and changes nothing).
             self.shortcuts.reload();
+            if !self.is_busy() {
+                self.reload();
+            }
         }
         let actions = self.shortcuts.handle(&events);
         if self.confirm.is_some() || ctx.egui_wants_keyboard_input() {
@@ -249,6 +259,17 @@ impl KimManagerApp {
         &self.views
     }
 
+    /// Selects a tool in the list, as clicking its row does.
+    pub fn select(&mut self, id: &str) {
+        self.selected = Some(id.to_string());
+        self.banner = None;
+    }
+
+    /// What the details panel shows about `id` besides its status.
+    pub fn tool_details(&self, id: &str) -> Option<&Details> {
+        self.details.get(id)
+    }
+
     fn reload(&mut self) {
         match store::load(
             &self.backend.paths,
@@ -262,6 +283,12 @@ impl KimManagerApp {
                     &self.backend.platform,
                     self.channel,
                 );
+                self.details = l
+                    .catalog
+                    .tools
+                    .iter()
+                    .map(|t| (t.id.clone(), details::details(&self.backend.paths, t)))
+                    .collect();
                 if self.selected.is_none() {
                     self.selected = self
                         .views
@@ -396,7 +423,12 @@ impl KimManagerApp {
 
     fn start_uninstall(&mut self, tool: &str, purge: bool) {
         let plan = match install::plan_uninstall(&self.backend.paths, tool, purge) {
-            Ok(p) => p,
+            // How the tool runs (e.g. a tray utility) gives the refusal for a running tool a
+            // precise hint; Kim never stops it.
+            Ok(p) => match &self.loaded {
+                Some(l) => p.with_catalog(&l.catalog),
+                None => p,
+            },
             Err(e) => {
                 self.banner = Some(Banner::Error {
                     message: e.message,
@@ -453,7 +485,10 @@ impl KimManagerApp {
                     self.banner = Some(match result {
                         Ok(m) => Banner::Success(m),
                         Err(e) => Banner::Error {
-                            message: e.message,
+                            message: match &e.hint {
+                                Some(h) => format!("{}. {h}.", e.message),
+                                None => e.message,
+                            },
                             code: e.code.as_str().into(),
                         },
                     });
@@ -783,77 +818,104 @@ impl KimManagerApp {
             .as_ref()
             .and_then(|l| l.catalog.tool(&id))
             .cloned();
-        ui.label(
-            egui::RichText::new(&view.name)
-                .size(15.0)
-                .strong()
-                .color(c.text_primary),
-        );
-        if let Some(t) = &tool {
-            ui.label(egui::RichText::new(&t.description).color(c.text_secondary));
-            ui.add_space(8.0);
-            egui::Grid::new("meta")
-                .num_columns(2)
-                .spacing([24.0, 6.0])
-                .show(ui, |ui| {
-                    let row = |ui: &mut egui::Ui, k: &str, v: String| {
-                        ui.label(egui::RichText::new(k).size(11.0).color(c.text_muted));
-                        ui.label(egui::RichText::new(v).color(c.text_primary));
-                        ui.end_row();
-                    };
-                    row(ui, "Status", status_label(&view));
-                    row(
-                        ui,
-                        "Installed",
-                        view.installed_version.clone().unwrap_or_else(|| "—".into()),
-                    );
-                    row(
-                        ui,
-                        "Newest",
-                        view.latest_compatible
-                            .clone()
-                            .or(view.latest.clone())
-                            .unwrap_or_else(|| "—".into()),
-                    );
-                    row(ui, "License", t.license.clone());
-                });
-            if let Some(reason) = &view.incompatible_reason {
-                ui.colored_label(c.warning, format!("Not installable here: {reason}"));
-            }
-            if let Some(note) = &view.note {
-                ui.colored_label(c.text_muted, note);
-            }
-        }
-        ui.add_space(16.0);
+        let info = self.details.get(&id).cloned();
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.label(
+                    egui::RichText::new(&view.name)
+                        .size(15.0)
+                        .strong()
+                        .color(c.text_primary),
+                );
+                if let Some(t) = &tool {
+                    ui.label(egui::RichText::new(&t.description).color(c.text_secondary));
+                    ui.add_space(8.0);
+                    egui::Grid::new("meta")
+                        .num_columns(2)
+                        .spacing([24.0, 6.0])
+                        .show(ui, |ui| {
+                            let row = |ui: &mut egui::Ui, k: &str, v: String| {
+                                ui.label(egui::RichText::new(k).size(11.0).color(c.text_muted));
+                                ui.label(egui::RichText::new(v).color(c.text_primary));
+                                ui.end_row();
+                            };
+                            row(ui, "Status", status_label(&view));
+                            row(ui, "Release", release_label(view.availability).into());
+                            row(ui, "Support", support_label(t.support).into());
+                            row(
+                                ui,
+                                "Installed",
+                                view.installed_version.clone().unwrap_or_else(|| "—".into()),
+                            );
+                            row(
+                                ui,
+                                "Newest",
+                                view.latest_compatible
+                                    .clone()
+                                    .or(view.latest.clone())
+                                    .unwrap_or_else(|| "—".into()),
+                            );
+                            row(ui, "License", t.license.clone());
+                            if let Some(r) = info.as_ref().and_then(|d| d.runs.as_ref()) {
+                                row(
+                                    ui,
+                                    "Runs",
+                                    r.label.map_or_else(|| r.id.clone(), str::to_string),
+                                );
+                            }
+                        });
+                    if let Some(reason) = &view.incompatible_reason {
+                        ui.colored_label(c.warning, format!("Not installable here: {reason}"));
+                    }
+                    if let Some(note) = &view.note {
+                        ui.colored_label(c.text_muted, note);
+                    }
+                }
+                ui.add_space(16.0);
 
-        if let Some(r) = &self.running {
-            ui.label(
-                egui::RichText::new(format!("{} {} — {:?}", r.verb, r.tool, r.phase))
-                    .color(c.text_secondary),
-            );
-            #[allow(clippy::cast_precision_loss)]
-            let frac = if r.total == 0 {
-                0.0
-            } else {
-                r.done as f32 / r.total as f32
-            };
-            ui.add(
-                egui::ProgressBar::new(frac)
-                    .desired_height(4.0)
-                    .fill(c.accent),
-            );
-            if ui.button("Cancel").clicked() {
-                self.cancel();
-            }
-            return;
-        }
-        if view.id == "kim" {
-            ui.label(
-                egui::RichText::new("This is Kim itself. It does not install or update itself.")
-                    .color(c.text_muted),
-            );
-            return;
-        }
+                if let Some(r) = &self.running {
+                    ui.label(
+                        egui::RichText::new(format!("{} {} — {:?}", r.verb, r.tool, r.phase))
+                            .color(c.text_secondary),
+                    );
+                    #[allow(clippy::cast_precision_loss)]
+                    let frac = if r.total == 0 {
+                        0.0
+                    } else {
+                        r.done as f32 / r.total as f32
+                    };
+                    ui.add(
+                        egui::ProgressBar::new(frac)
+                            .desired_height(4.0)
+                            .fill(c.accent),
+                    );
+                    if ui.button("Cancel").clicked() {
+                        self.cancel();
+                    }
+                    return;
+                }
+                if view.id == "kim" {
+                    ui.label(
+                        egui::RichText::new(
+                            "This is Kim itself. It does not install or update itself.",
+                        )
+                        .color(c.text_muted),
+                    );
+                    return;
+                }
+                self.actions(ui, &view);
+                if let Some(d) = &info {
+                    ui.add_space(8.0);
+                    tool_sections(ui, &view.name, d);
+                }
+            });
+    }
+
+    /// The explicit Install / Update / Repair / Uninstall buttons, or why there is nothing to
+    /// install. Every one of them only starts what the user pressed (`KIM-SEC-001`).
+    fn actions(&mut self, ui: &mut egui::Ui, view: &ToolView) {
+        let c = theme::Colors::get();
         ui.horizontal(|ui| {
             let primary = match view.status {
                 ToolStatus::Available => view
@@ -891,6 +953,19 @@ impl KimManagerApp {
                 });
             }
         });
+        if view.status == ToolStatus::Unreleased {
+            let why = match view.availability {
+                Availability::Planned => format!(
+                    "Nothing to install yet: no signed release of {} has been published.",
+                    view.name
+                ),
+                Availability::Preview => {
+                    "Only preview releases exist. Choose the Preview channel to see them.".into()
+                }
+                Availability::Available => "No release on this channel.".into(),
+            };
+            ui.label(egui::RichText::new(why).color(c.text_muted));
+        }
     }
 
     fn confirm_dialog(&mut self, ctx: &egui::Context) {
@@ -947,10 +1022,169 @@ fn status_label(v: &ToolView) -> String {
         ToolStatus::UpdateAvailable => {
             format!("update {}", v.latest_compatible.as_deref().unwrap_or(""))
         }
-        ToolStatus::Available => "available".into(),
-        ToolStatus::Incompatible => "incompatible".into(),
-        ToolStatus::Unreleased => "not released".into(),
         ToolStatus::Damaged => "damaged".into(),
+        // available / available (preview) / incompatible / planned / preview only
+        ToolStatus::Available | ToolStatus::Incompatible | ToolStatus::Unreleased => {
+            v.availability_label().unwrap_or("not released").into()
+        }
+    }
+}
+
+/// The release stage (CATALOG_FORMAT §6, `KIM-FR-051`), derived from the signed releases.
+fn release_label(a: Availability) -> &'static str {
+    match a {
+        Availability::Planned => "Planned · no release has been published yet",
+        Availability::Preview => "Preview · only preview releases are published",
+        Availability::Available => "Available · stable releases are published",
+    }
+}
+
+fn support_label(s: kim::catalog::Support) -> &'static str {
+    match s {
+        kim::catalog::Support::Stable => "Stable",
+        kim::catalog::Support::Preview => "Preview",
+        kim::catalog::Support::InDevelopment => "In development",
+        kim::catalog::Support::Deprecated => "Deprecated",
+    }
+}
+
+/// What the catalog declares about a tool and what Kim decides itself (CATALOG_FORMAT §2.1).
+/// Shown before any button is pressed, so what a tool may do is disclosed ahead of an install
+/// (`KIM-SEC-006`). Links are plain, selectable text: Kim Manager starts no browser.
+fn tool_sections(ui: &mut egui::Ui, name: &str, d: &Details) {
+    let c = theme::Colors::get();
+    let heading = |ui: &mut egui::Ui, t: &str| {
+        ui.add_space(10.0);
+        ui.label(
+            egui::RichText::new(t)
+                .size(13.0)
+                .strong()
+                .color(c.text_primary),
+        );
+    };
+    let muted = |ui: &mut egui::Ui, t: String| {
+        ui.label(egui::RichText::new(t).size(11.0).color(c.text_muted));
+    };
+    if !d.features.is_empty() {
+        heading(ui, "Features");
+        for f in &d.features {
+            ui.label(egui::RichText::new(f).color(c.text_secondary));
+        }
+    }
+    if let Some(s) = &d.shortcuts {
+        heading(ui, "Keyboard shortcuts");
+        egui::Grid::new("tool-shortcuts")
+            .num_columns(3)
+            .spacing([24.0, 4.0])
+            .show(ui, |ui| {
+                for a in &s.actions {
+                    let keys = if a.keys.is_empty() {
+                        "not set".to_string()
+                    } else {
+                        a.keys.join(", ")
+                    };
+                    ui.label(egui::RichText::new(keys).monospace());
+                    ui.label(egui::RichText::new(&a.title).color(c.text_primary));
+                    let scope = match a.scope.as_str() {
+                        "global" => "system-wide while it runs".to_string(),
+                        "app" => format!("inside {name}"),
+                        other => other.to_string(),
+                    };
+                    let fixed = if a.bindable { "" } else { " · fixed" };
+                    ui.label(
+                        egui::RichText::new(format!("{scope}{fixed}"))
+                            .size(11.0)
+                            .color(c.text_muted),
+                    );
+                    ui.end_row();
+                }
+            });
+        let id = d
+            .manage
+            .as_ref()
+            .and_then(|m| m.install.strip_prefix("kim install "))
+            .unwrap_or("kim")
+            .to_string();
+        muted(
+            ui,
+            match s.source {
+                "installed" => format!(
+                    "From the installed {name} and your changes. Change one with `{id} hotkeys set <action> <keys>`, turn all off with `{id} hotkeys disable --all`."
+                ),
+                _ => format!(
+                    "{name}'s defaults ({} input). Every shortcut can be changed, turned off or reset once it is installed.",
+                    s.backend
+                ),
+            },
+        );
+        if let Some(n) = &s.note {
+            ui.colored_label(c.warning, n);
+        }
+    }
+    if !d.permissions.is_empty() {
+        heading(ui, "What it may do on your computer");
+        for p in &d.permissions {
+            let label = p.label.map_or_else(|| p.id.clone(), str::to_string);
+            let opt_in = if p.opt_in {
+                " (only after you turn it on)"
+            } else {
+                ""
+            };
+            ui.label(
+                egui::RichText::new(format!("{label}{opt_in}"))
+                    .strong()
+                    .color(c.text_primary),
+            );
+            ui.label(egui::RichText::new(&p.detail).color(c.text_secondary));
+        }
+    }
+    if !d.entry_points.is_empty() {
+        heading(ui, "Command line and agents");
+        for e in &d.entry_points {
+            let planned = match e.status {
+                EntryStatus::Planned => " · planned",
+                EntryStatus::Available => "",
+            };
+            ui.label(egui::RichText::new(&e.command).monospace());
+            muted(ui, format!("{} · {}{planned}", e.kind, e.summary));
+        }
+    }
+    if !d.links.is_empty() {
+        heading(ui, "Documentation");
+        for l in &d.links {
+            ui.label(egui::RichText::new(&l.title).color(c.text_secondary));
+            muted(ui, l.url.clone());
+        }
+    }
+    if let Some(i) = &d.install {
+        heading(ui, "Install location");
+        ui.label(
+            egui::RichText::new(format!("Program files: {}", i.program_dir.display()))
+                .color(c.text_secondary),
+        );
+        for dir in &i.user_data_dirs {
+            ui.label(
+                egui::RichText::new(format!("Your data (kept on uninstall): {}", dir.display()))
+                    .color(c.text_secondary),
+            );
+        }
+        muted(ui, "For your user only · never as administrator".into());
+    }
+    if let Some(m) = &d.manage {
+        heading(ui, "Updates");
+        ui.label(
+            egui::RichText::new(format!(
+                "Manual only: Kim never installs, updates or removes {name} by itself."
+            ))
+            .color(c.text_secondary),
+        );
+        muted(
+            ui,
+            format!(
+                "Same as the buttons: `{}` · `{}` · `{}`",
+                m.install, m.update, m.uninstall
+            ),
+        );
     }
 }
 

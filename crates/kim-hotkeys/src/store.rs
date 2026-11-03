@@ -153,6 +153,19 @@ pub fn load_with(path: &Path, manifest: &Manifest, chain: &[Migration]) -> Loade
     out
 }
 
+/// Reloads a running tool's file after a change notification (§8.3 5). A valid (or removed)
+/// file replaces `current`. An invalid or newer file is reported and the previous effective
+/// bindings stay: the result is `current` again, with the new problems returned separately.
+pub fn reload(current: &Loaded, manifest: &Manifest) -> (Loaded, Vec<String>) {
+    let next = load(&current.path, manifest);
+    if next.state.safe_mode() && !current.state.safe_mode() {
+        let problems = next.problems;
+        (current.clone(), problems)
+    } else {
+        (next, Vec::new())
+    }
+}
+
 /// Writes `layer` to `path` atomically. With `backup`, an existing file is first copied to
 /// `hotkeys.json.bak` (replacing an older backup). Returns the backup path when one was made.
 pub fn save(path: &Path, layer: &UserLayer, backup: bool) -> std::io::Result<Option<PathBuf>> {

@@ -1584,6 +1584,7 @@ dependencies = [
  "clap",
  "ctrlc",
  "ed25519-dalek",
+ "kim-hotkeys",
  "regex",
  "semver",
  "serde",

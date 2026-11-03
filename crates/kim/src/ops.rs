@@ -386,7 +386,7 @@ fn update_check(
 }
 
 /// Asks a yes/no question on the terminal; `None` when Kim may not ask (see [`Ctx::can_prompt`]).
-fn confirm(ctx: Ctx, question: &str, expected: &str) -> Option<bool> {
+pub(crate) fn confirm(ctx: Ctx, question: &str, expected: &str) -> Option<bool> {
     if !ctx.can_prompt() {
         return None;
     }

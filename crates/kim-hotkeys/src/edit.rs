@@ -531,9 +531,12 @@ pub fn apply_switch(tools: &[ToolState], taken: &[Step], idx: usize, switch: &Sw
         }
         Switch::DisableScope(_) => {}
         Switch::ResetAll => {
+            let mut fresh = UserLayer::new(&tool_id);
             if let Some(old) = &tools[idx].layer {
-                let mut fresh = UserLayer::new(&tool_id);
                 fresh.extra = old.extra.clone();
+                next[idx].layer = Some(fresh);
+            } else if tools[idx].safe_mode {
+                // Replaces a broken file (the caller keeps it as the backup).
                 next[idx].layer = Some(fresh);
             }
             next[idx].safe_mode = false;
@@ -549,7 +552,8 @@ pub fn apply_switch(tools: &[ToolState], taken: &[Step], idx: usize, switch: &Sw
         .chain(before.manifest.actions.iter().map(|a| a.id.clone()));
     for a in names {
         let (b, n) = (effective_state(before, &a), effective_state(after, &a));
-        if b != n {
+        // An action without bindings before and after is no change worth listing.
+        if b != n && !(b.bindings.is_empty() && n.bindings.is_empty()) {
             changes.push(Change {
                 action: a,
                 before: b,

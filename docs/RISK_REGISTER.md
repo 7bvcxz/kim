@@ -11,30 +11,30 @@ is retired or re-assessed with evidence.
 | --- | --- | --- | --- | --- | --- |
 | R-01 | Inbox ConPTY differs across Windows 10 1809 → 11 builds (resize reflow artifacts, missing passthrough, mouse input, cursor inheritance) | H | M | Detect OS build; conformance tests per build; consider shipping `conpty.dll`/`OpenConsole.exe` (MIT) if inbox gaps hurt. **Step 08:** I/O, resize, Ctrl+C and teardown verified on 19045; CI on Server 2025 (26100) showed `ClosePseudoConsole` not ending the shell (job kill required) and a win32-input-mode request that clients must not pass to their console ([CONPTY_PROOF](CONPTY_PROOF.md) §6); builds in between untested | 08, 11, 15 |
 | R-02 | ConPTY output is a re-rendered stream, not the program's raw bytes (e.g. it may repaint, reorder or drop some sequences) | M | M | Treat ConPTY as the terminal source of truth; replay via VT snapshot (ADR 0008) rather than raw byte fidelity | 13, 15 |
-| R-03 | Host started from a terminal that lives in a Job without breakaway permission dies with that terminal | M | H | `CREATE_BREAKAWAY_FROM_JOB` attempt; report `job_breakaway=false` and `in_job`; warn on `host start`. **Step 08 measured:** confirmed (closing such a kill-on-close job ends Host, shell and conhost); breakaway is per job level; conhost window close is safe. Windows Terminal, VS Code terminal and SSH not yet tested (ADR 0016) | 08, 09 |
+| R-03 | Host started from a terminal that lives in a Job without breakaway permission dies with that terminal | M | H | `CREATE_BREAKAWAY_FROM_JOB` attempt; report `job_breakaway=false` and `in_job`; warn on `host start`. **Step 08 measured:** confirmed (closing such a kill-on-close job ends Host, shell and conhost); breakaway is per job level; conhost window close is safe. **Step 09 measured** (ADR 0019 §10): a launcher job with silent breakaway frees the Host; in nested jobs the Host leaves only the levels that allow breakaway and dies with an outer kill-on-close job; status reports the Host's immediate job limits and `host start` the launcher's. Read-only on this machine: Windows Terminal 1.24 and its OpenConsole are in a job, but its tab shells are not, so a Host started from a tab is in no job. Closing a WT window, VS Code terminal and SSH: still not verified (manual) | 08, 09 |
 
 ## Process trees and Job Objects
 
 | ID | Risk | L | I | Mitigation | Owner step |
 | --- | --- | --- | --- | --- | --- |
 | R-04 | Programs that create their own jobs or break away escape kill-pane | M | M | Disallow breakaway in pane jobs by default; document; enumerate escaped processes in diagnostics | 11 |
-| R-05 | Kill-on-close means a Host crash ends every session | M | H | Panic containment per request/pane; crash tests; restore path; never run untrusted plugins in the Host | 09, 30, 39 |
+| R-05 | Kill-on-close means a Host crash ends every session | M | H | Panic containment per request/pane; crash tests; restore path; never run untrusted plugins in the Host. **Step 09:** `catch_unwind` per request and connection (counted in `host.stats`); 300 fuzzed connections gave 0 panics; a killed Host is replaced without stale state | 09, 30, 39 |
 | R-06 | Graceful stop: some programs ignore `CTRL_CLOSE_EVENT`, others need longer than 5 s to flush | M | L | Configurable grace period; forced termination clearly reported | 10 |
 
 ## IPC and security boundary
 
 | ID | Risk | L | I | Mitigation | Owner step |
 | --- | --- | --- | --- | --- | --- |
-| R-07 | Pipe-name squatting by another user to impersonate the Host | L | H | Client verifies server PID token SID + image path; `FIRST_PIPE_INSTANCE` | 09 |
-| R-08 | Malformed/oversized/flooding messages from a buggy same-user client | M | M | Frame limits, handshake timeout, per-connection isolation, fuzz tests | 09, 39 |
-| R-09 | Same-user malware can drive Subak (inject input, read output) | M | H | Inherent to per-user trust; documented; MCP adds explicit capability grants; no network exposure | 09, 37 |
+| R-07 | Pipe-name squatting by another user to impersonate the Host | L | H | Client verifies server PID token SID + image path; `FIRST_PIPE_INSTANCE`. **Step 09 implemented and measured** with a same-user squatter: every client refuses it (`host_identity_mismatch`) with 0 bytes sent, and `host serve` reports it. Another user's squatter: covered by the same SID check, not verified (needs a second account; IPC_PROTOCOL §8) | 09 |
+| R-08 | Malformed/oversized/flooding messages from a buggy same-user client | M | M | Frame limits, handshake timeout, per-connection isolation, fuzz tests. **Step 09:** limits checked before allocation, 5 s handshake and 10 s frame timeouts, 64-connection cap, byte-bounded queues; malformed, truncated, oversized and fuzzed input closes only that connection (tests/host_ipc.rs) | 09, 39 |
+| R-09 | Same-user malware can drive Subak (inject input, read output) | M | H | Inherent to per-user trust; documented; MCP adds explicit capability grants; no network exposure. **Step 09:** `hook`/`mcp` kinds cannot attach, type or stop; a low-integrity (sandboxed) process of the same user cannot open the pipe (measured); medium-integrity same-user code stays trusted | 09, 37 |
 
 ## Updates and versions
 
 | ID | Risk | L | I | Mitigation | Owner step |
 | --- | --- | --- | --- | --- | --- |
 | R-10 | Updating Subak requires restarting the Host, which ends sessions | H | M | Kim detects live Host, offers defer/stop-with-snapshot; live handoff of ConPTY handles evaluated later | 06, 40 |
-| R-11 | Client/Host protocol skew after partial updates | M | M | Version negotiation; `host_too_old` hint; tests with N-1 Host | 09, 40 |
+| R-11 | Client/Host protocol skew after partial updates | M | M | Version negotiation; `host_too_old` hint; tests with N-1 Host. **Step 09:** negotiation implemented (highest common major); `host_too_old`/`host_too_new` never restart the Host; the Step 08 prototype (major 0) is refused cleanly. A real N-1 Host test needs a second release (Step 40) | 09, 40 |
 
 ## GUI rendering
 

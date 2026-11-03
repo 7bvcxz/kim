@@ -17,7 +17,7 @@ did.
 | Document | Status | Purpose |
 | --- | --- | --- |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | current | Components, Host internals, object model, lifecycles, close/kill semantics, restart behavior, telemetry |
-| [adr/README.md](adr/README.md) | current | Architecture decision records (ADR 0001–0017) |
+| [adr/README.md](adr/README.md) | current | Architecture decision records (ADR 0001–0019) |
 | [CONPTY_PROOF.md](CONPTY_PROOF.md) | current (Step 08 prototype) | Windows ConPTY + detached Host proof: what "detached" means, evidence with process ids, OS limitations and power states, manual procedures (Windows Terminal, sleep, logoff pending) |
 | [CLI_CONTRACT.md](CLI_CONTRACT.md) | current (contract v1) | Cross-tool CLI contract: names, help, streams, `--json` envelope, exit codes, error-code registry, dry-run/confirmation, versioning, capabilities and tool-to-tool invocation, secret redaction |
 | [KIM_CLI.md](KIM_CLI.md) | current | `kim` command reference, files and environment, sample agent workflows |
@@ -26,7 +26,7 @@ did.
 | [RELEASE_POLICY.md](RELEASE_POLICY.md) | current | Consent rules, install transaction, channels, signing keys, publishing checklist |
 | [DESIGN_SYSTEM.md](DESIGN_SYSTEM.md) | current | Kim visual language: tokens, components, keyboard, high-DPI, contrast, Korean/Unicode, reduced motion |
 | [RISK_REGISTER.md](RISK_REGISTER.md) | current | ConPTY, job objects, IPC, GUI, SSH, tmux, recovery and Claude risks with owner steps |
-| [contracts/IPC_PROTOCOL.md](contracts/IPC_PROTOCOL.md) | draft contract | Subak IPC v1: framing, handshake, methods, events, error codes |
+| [contracts/IPC_PROTOCOL.md](contracts/IPC_PROTOCOL.md) | current (implemented v1, Step 09) | Subak IPC v1: framing and limits, handshake with mutual identity checks, version negotiation, methods and authorization by client kind, events, error codes, Host lifetime and start on demand, manual cross-user checks |
 | [contracts/STATE_SCHEMA.md](contracts/STATE_SCHEMA.md) | draft contract | `state.json` v1 and `config.toml` v1 |
 | [TMUX_COMPATIBILITY.md](TMUX_COMPATIBILITY.md) | current (inventory) | tmux command/key/option parity matrix with status and evidence |
 | [TABBY_FEATURE_MATRIX.md](TABBY_FEATURE_MATRIX.md) | current (inventory) | Tabby feature parity matrix with status and evidence |

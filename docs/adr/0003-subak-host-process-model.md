@@ -1,6 +1,7 @@
 # ADR 0003 — Subak Host process model
 
 Status: **Accepted** · Date: 2026-11-03 · Step 03 · Validated by Step 08, implemented in Step 09
+(see [ADR 0019](0019-secure-host-supervisor-and-ipc-v1.md))
 
 ## Context
 
@@ -75,3 +76,10 @@ while it is useful (`SUBAK-FR-002`).
   level. Risk R-03 is confirmed: inside a launcher job that forbids breakaway, the Host dies when
   that job is closed. The prototype Host lives as long as its single shell; the idle grace of §4
   arrives with the session model.
+- 2026-11-04 (Step 09): implemented; see [ADR 0019](0019-secure-host-supervisor-and-ipc-v1.md).
+  The lifetime of §4 is real: a pane or a connection keeps the Host, then it waits the idle
+  grace (`--idle-exit`, default 10 s). Start on demand uses the start lock
+  `Local\mouv-subak-start-<endpoint>` and waits **10 s**, not 5 s, for the new Host's pipe. §6 is
+  implemented with `CreateEnvironmentBlock` for the Host and its panes. In §7 the IPC enforces
+  `kill_terminals`, while the CLI keeps `--yes` as the consent until Terminals exist (Steps 10–12).
+  Risk R-03 was measured per job level (silent breakaway, nested jobs); still no broker.

@@ -1,0 +1,1 @@
+{"type": "response", "id": 3, "ok": false, "error": {"code": "unauthorized", "message": "a `hook` client may not call `pane.attach`", "details": {}}}

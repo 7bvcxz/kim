@@ -1,0 +1,1 @@
+{"type": "response", "id": 1, "ok": true, "result": {"healthy": true, "pid": 4242, "version": "0.0.1", "protocol": 1, "uptime_s": 12, "stopping": false, "terminals": 1, "clients": 2}}

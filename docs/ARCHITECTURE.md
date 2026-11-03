@@ -230,7 +230,7 @@ they return `unsupported_platform` until milestone M4.
 | Hotkey contract v1 for every GUI tool (specification, schemas, conflict scenarios; [HOTKEY_CONTRACT](HOTKEY_CONTRACT.md)) | current (design) | 45 |
 | Shared hotkey library (`crates/kim-hotkeys`), `kim hotkeys` CLI, cross-tool conflict detection, Kim Manager shortcuts (`focus` backend), Windows `RegisterHotKey` backend ([HOTKEY_CONTRACT §17](HOTKEY_CONTRACT.md)) | implemented (binding editor of §11.2: planned) | 46 |
 | ConPTY + detached Host proof: `subak host start\|status\|attach\|stop` prototype (one shell per Host, prototype pipe; [CONPTY_PROOF](CONPTY_PROOF.md), ADR 0016) | implemented (prototype) | 08 |
-| IPC v1, supervisor | planned | 09 |
+| Host supervisor and IPC v1: identity-checked per-user pipe, version negotiation, authorization by client kind, start on demand under a start lock, idle exit, health, user logon environment ([IPC_PROTOCOL](contracts/IPC_PROTOCOL.md), ADR 0019); still one prototype pane per Host | implemented | 09 |
 | Session lifecycle, PTY management, CLI, replay | planned | 10–14 |
 | GUI, tabs, floating icon | planned | 15–20 |
 | Windows/panes, layout, tmux engine | planned | 21–26 |

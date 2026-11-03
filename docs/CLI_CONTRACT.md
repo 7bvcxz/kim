@@ -172,9 +172,10 @@ Subak's IPC error codes ([IPC_PROTOCOL](contracts/IPC_PROTOCOL.md)) are a separa
 the CLI maps them onto the codes above (for example IPC `invalid_params` → `usage`). Step 12
 extends this table for Subak's real CLI. `host attach` is the one command whose stdout is not a
 document: it streams the terminal, so `--json` is accepted only with `--dry-run`. The `data` of
-the prototype's `host` commands is described in [CONPTY_PROOF.md](CONPTY_PROOF.md) and is not yet a
-published schema (prototype; Step 12 publishes Subak's CLI schema); its envelopes are validated
-against `cli-envelope-v1`.
+`host status` is the IPC `host.status` result ([IPC_PROTOCOL §4.1](contracts/IPC_PROTOCOL.md));
+`host health`, `host start` and `host stop` add the fields listed there and in
+[CONPTY_PROOF.md](CONPTY_PROOF.md). It is not yet a published schema (Step 12 publishes Subak's
+CLI schema); the envelopes are validated against `cli-envelope-v1`.
 
 ## 7. Output streams and the `--json` envelope
 

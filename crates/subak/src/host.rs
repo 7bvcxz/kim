@@ -1045,6 +1045,14 @@ impl Host {
         let Some(ps) = st.pane.as_mut() else {
             return Reply::Queued;
         };
+        // Re-checked under the lock that ends attachments, so no client stays attached to a
+        // pane that ended between the check above and here.
+        if ps.ended.is_some() {
+            return Reply::Now(Err(IpcError::new(
+                ErrorCode::InvalidState,
+                "the pane's process has exited",
+            )));
+        }
         if let Some(s) = size {
             ps.size = s;
         }

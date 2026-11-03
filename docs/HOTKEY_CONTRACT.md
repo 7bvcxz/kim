@@ -97,8 +97,8 @@ stands for the leader's current chord. Rules:
 
 Every conforming tool declares its actions in a **hotkey manifest**
 ([kim-hotkey-manifest-v1](contracts/schemas/kim-hotkey-manifest-v1.schema.json)). The manifest is
-compiled into the tool, printed by `<tool> hotkeys list --defaults --json` as part of the list
-data, and SHOULD be shipped as `hotkeys.manifest.json` next to `capabilities.json` in the
+compiled into the tool; its actions, scopes and defaults appear in `<tool> hotkeys list --json`.
+It SHOULD also be shipped as `hotkeys.manifest.json` next to `capabilities.json` in the
 package. Kim can then show a tool's shortcuts and check cross-tool defaults **without starting
 the tool**, as with capabilities (CLI_CONTRACT §9.2).
 
@@ -603,7 +603,7 @@ registers a hotkey, installs a hook or starts the GUI** (`KIM-FR-012`, `KIM-FR-0
 
 | Command | Effect | Dry run | Needs `--yes` | What it does |
 | --- | --- | --- | --- | --- |
-| `<tool> hotkeys list [--scope <s>] [--defaults] [--all-states]` | read | — | — | Every action with its effective bindings, defaults, source and state; leaders; the reserved navigation actions |
+| `<tool> hotkeys list [--scope <s>]` | read | — | — | Every action with its effective bindings, defaults, source and state; leaders; the reserved navigation actions |
 | `<tool> hotkeys show <action>` | read | — | — | One action with its bindings and every conflict that involves it |
 | `<tool> hotkeys set <action> <keys>… [--scope <s>] [--trigger <t>] [--hold-ms <n>] [--repeat] [--profile <p>] [--replace] [--allow-conflict]` | write | yes | — | Replace the action's bindings (§9.6). `<action>` may be `@<leader>` to change a leader. |
 | `<tool> hotkeys disable <action>` / `--all` / `--scope <s>` | write | yes | — | Disable one action, the whole tool (`enabled: false`) or a scope |

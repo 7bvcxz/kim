@@ -35,6 +35,7 @@ Run with `cargo xtask e2e`, which refuses unless the counter below has reached 1
 | 22 | #58 Step 53 – Noeul native floating pin window engine (merged; issue open for the maintainer's on-desktop check, `NOEUL_UX_SPEC.md` §4.6) | `step53_noeul_pins.rs` (2 tests): the pin engine is discoverable headlessly; scripts drive independent off-screen pins (create/hide/show/close via the real CLI) and a restart restores nothing | 7 |
 | 23 | #13 Step 13 – Scrollback and terminal replay | `step13_scrollback_replay.rs` (2 tests): reattach replays the screen and history exactly once and the CLI reads and clears it (`capture`/`history`/`clear-history`); captures hide secrets and stopped Terminals can still be captured | 8 |
 | 24 | #73 Step 68 – Ddalgak key and mouse button remapping actions (merged; issue open for the maintainer's physical keyboard/IME/mouse checks, `DDALGAK_ENGINE.md` §11) | `step68_ddalgak_remap.rs` (2 tests): an agent builds remaps headlessly and is refused unsafe ones; the running app holds remaps and the mouse hook only while needed | 9 |
+| 25 | #56 Step 51 – Noeul double-click to floating pin workflow (merged; issue open for the maintainer's real-desktop check, `NOEUL_UX_SPEC.md` §4.7) | `step51_noeul_double_click_pin.rs` (2 tests): the flow and its settings are discoverable headlessly (`noeul config`, gesture setting, Snipaste preset); the double-click → pin path runs against the real binary on the debug off-screen desktop | 10 |
 
 ## E2E runs
 

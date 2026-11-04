@@ -1863,7 +1863,13 @@ fn copy_formats_keyboard_selection_select_all_and_the_pane_menu() {
     gui.state("attached");
     gui.until("the prompt", |d| screen_text(d).contains('>'));
     gui.type_text("echo alpha beta 한글\r");
-    let d = gui.until("the output", |d| has_line(d, "alpha beta 한글"));
+    // The output *and* the prompt after it: on a loaded machine a dump can come between the
+    // two, and the last `>` is then the command's own line above the output (Step 21's merge
+    // gate saw the selection land on the new prompt that way).
+    let d = gui.until("the output and the next prompt", |d| {
+        has_line(d, "alpha beta 한글")
+            && last_on_screen(d, ">").0 > last_on_screen(d, "alpha beta 한글").0
+    });
     let (out_row, _) = last_on_screen(&d, "alpha beta 한글");
     let (prompt_row, _) = last_on_screen(&d, ">");
     // Mark mode (Ctrl+Shift+M) starts at the cursor; the arrows move, Shift+End selects to the

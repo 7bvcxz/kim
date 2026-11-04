@@ -191,7 +191,17 @@ fn capabilities_are_honest_and_follow_the_contract() {
             "config.export",
             "config.import",
             "profile.list",
-            "profile.show"
+            "profile.show",
+            // Step 21: internal windows and panes.
+            "window.new",
+            "window.ls",
+            "window.select",
+            "window.rename",
+            "window.kill",
+            "pane.new",
+            "pane.ls",
+            "pane.select",
+            "pane.kill"
         ],
         "only commands that really exist"
     );
@@ -205,6 +215,8 @@ fn capabilities_are_honest_and_follow_the_contract() {
                 | "host.stop"
                 | "hotkeys.reset"
                 | "config.reset"
+                | "window.kill"
+                | "pane.kill"
         );
         assert_eq!(c["effect"] == "destructive", destructive, "{c}");
         assert_eq!(c["requires_yes"] == true, destructive, "{c}");

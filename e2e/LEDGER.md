@@ -24,6 +24,8 @@ Run with `cargo xtask e2e`, which refuses unless the counter below has reached 1
 | 11 | #9 Step 09 – Secure Host supervisor and IPC v1 | `step09_host_ipc.rs` (3 tests): an agent starts one healthy Host on demand that exits when idle, two terminals share one pane and a killed one changes nothing, a program holding the pipe name is refused and sent nothing | 11 |
 | 12 | #52 Step 47 – Noeul and Ddalgak in the Kim tool catalog | `step47_catalog_tools.rs`: (2 tests) a fresh machine lists Noeul and Ddalgak as planned and installs nothing; a test-signed Noeul release is disclosed, installed alone and never stopped while it runs | 12 |
 | 13 | #53 Step 48 – Noeul philosophy, requirements and Snipaste parity matrix (specification) | none (no executable feature; the F1 → double-click-to-pin e2e scenario is planned for Step 51 in `docs/NOEUL_UX_SPEC.md`) | 13 |
+| 14 | #70 Step 65 – Ddalgak philosophy, AHK v2 matrix, rule model and safety (specification) | none (no executable feature; `ddalgak-rules-v1` and `ddalgak-simulation-v1` examples are checked by `cargo xtask schema-check`; the engine e2e scenario comes with Step 66) | 14 |
+| 15 | #10 Step 10 – Terminal session lifecycle | `step10_session_lifecycle.rs`: (2 tests) an agent manages named Terminals with the real `subak terminal` commands without losing running work (detach changes nothing, destructive actions need consent, `host stop` needs `--kill-terminals`); six agents creating one name at once get exactly one Terminal. Step 08/09 scenarios updated to the new `host stop` rule | 15 |
 
 ## E2E runs
 

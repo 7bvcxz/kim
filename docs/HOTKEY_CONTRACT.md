@@ -828,6 +828,16 @@ delete question owns every key while it is open. `gui.show` stays unshipped (no 
 registration yet); the floating UI is reached by a click, the tray (`Win+B`), or
 `subak-gui --manager`.
 
+**Step 19 (implemented).** The window's search, selection and clipboard actions join the
+`terminal` context, in the final and the shipped manifest: `clipboard.copy-html` and
+`clipboard.paste-one-line` (no default; the pane menu), `selection.all` `Ctrl+Shift+A`,
+`selection.mark` `Ctrl+Shift+M` (mark mode), `search.open` `Ctrl+Shift+F` and `output.save` (no
+default; it always asks first). The search bar's field, mark mode and the paste, link and export
+questions take their own keys first, like the rename field (reserved navigation: `Enter`,
+`Shift+Enter`, `F3`, `Shift+F3`, the arrows, `Home`/`End`, `PageUp`/`PageDown`, `Esc`, `Tab`, and
+`Alt+C`/`Alt+R`/`Alt+W` in the search field); shortcut chords still fire there
+([SUBAK_GUI §12](SUBAK_GUI.md), [ADR 0048](adr/0048-subak-search-clipboard-and-links.md)).
+
 **Hand-off (Step 46 → Steps 17 and 23).** Step 46 did not change `crates/subak`. Subak's GUI
 Steps use the shared `kim-hotkeys` crate exactly as Kim does: ship the manifest
 (`docs/contracts/examples/kim-hotkey-manifest-v1/subak.json` is the starting point) as

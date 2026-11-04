@@ -1,24 +1,28 @@
 # The Subak window (`subak-gui`)
 
-Status: **current** (implemented, Steps 16–18; the visible-window checks of §9 and the
-visible-icon and real-tray checks of §11.9 are pending the maintainer) · Decisions:
+Status: **current** (implemented, Steps 16–19; the visible-window checks of §9, the
+visible-icon and real-tray checks of §11.9 and the real-clipboard, browser and dialog checks of
+§12.9 are pending the maintainer) · Decisions:
 [ADR 0039](adr/0039-subak-window-plain-win32-client.md),
 [ADR 0042](adr/0042-subak-window-tabs-and-safe-close.md) (tabs),
 [ADR 0045](adr/0045-subak-floating-icon-and-terminal-manager.md) (floating icon and Terminal
-manager) · Builds on
+manager), [ADR 0048](adr/0048-subak-search-clipboard-and-links.md) (search, clipboard, links) ·
+Builds on
 [TERMINAL_EMULATOR](TERMINAL_EMULATOR.md) (Step 15), [IPC_PROTOCOL](contracts/IPC_PROTOCOL.md),
 [SESSION_MODEL](SESSION_MODEL.md), [HOTKEY_CONTRACT](HOTKEY_CONTRACT.md),
 [DESIGN_SYSTEM](DESIGN_SYSTEM.md) · Requirements: `SUBAK-FR-003`, `SUBAK-FR-011`,
 `SUBAK-FR-013`, `SUBAK-FR-014`, `SUBAK-FR-015`, `SUBAK-FR-031`, `SUBAK-FR-033`, `SUBAK-FR-034`,
 `SUBAK-FR-037`, `SUBAK-FR-038`, `SUBAK-FR-046`, `SUBAK-NFR-001`, `SUBAK-NFR-002`; Step 18:
-`SUBAK-FR-030`, `SUBAK-FR-032`, `SUBAK-FR-039`, `KIM-FR-012`
+`SUBAK-FR-030`, `SUBAK-FR-032`, `SUBAK-FR-039`, `KIM-FR-012`; Step 19: `SUBAK-FR-047`,
+`SUBAK-SEC-013`, `SUBAK-SEC-014`
 
 `subak-gui.exe` is a small native window that shows the Host's **Terminals as tabs** and the
 shown tab's pane live. It is a client of the per-user Host, like `subak attach`: the Terminals
 and their programs live in the Host, so closing the window, hiding a tab — or the window
 crashing — never ends them. The Host and the `subak` CLI work without it. The optional floating
-icon, tray icon and Terminal manager (`subak-gui --float`, Step 18) are §11; search and clipboard
-UX (Step 19) and visual polish and settings (Step 20) come next.
+icon, tray icon and Terminal manager (`subak-gui --float`, Step 18) are §11; search,
+selection, the clipboard, links and saving output (Step 19) are §12; visual polish and settings
+(Step 20) come next.
 
 ## 1. Starting it
 
@@ -72,7 +76,7 @@ its last screen with a banner (Enter closes the tab).
 | **Close Terminal** (end a live Terminal) | `Ctrl+W`, the tab menu | `terminal.kill` of the shown Terminal by its id. An idle shell ends at once. When the Host reports it **busy** (it runs more than an idle shell, e.g. a Claude session), the window asks: "End `x`? It runs … (n processes in its job); they will be ended. [ Cancel (Esc) ] End Terminal" — **Cancel is the default**: `Esc`, Enter on Cancel or a click on it ends nothing; `Tab`/arrows move to "End Terminal", Enter or a click ends exactly that Terminal. The question goes away if the Terminal ends or another tab is shown. Keys typed meanwhile reach no program. |
 | **Remove a stored Terminal** | `Ctrl+W` on a stopped or failed tab, "Remove Terminal" in the tab menu | `terminal.remove` without force: deletes the Host's record; nothing runs in it, so it does not ask. Restarting a stopped Terminal is Step 30. |
 | **Move a tab** | The tab menu, `tab.move-left`/`tab.move-right` (no default keys) | Nothing: the order is this window's |
-| **Tab menu** | A right click on a tab or the bar, the context-menu key (`Menu`) | A native menu with the actions above and "Show hidden: …" |
+| **Tab menu** | A right click on a tab or the bar, the context-menu key (`Menu`; over the pane its menu starts with the pane's items, §12.6) | A native menu with the actions above and "Show hidden: …" |
 
 The window's close button stays a detach of everything (below). A setting that makes `Ctrl+W`
 only hide the tab (ADR 0009) is `subak hotkeys set tab.hide Ctrl+W --replace`.
@@ -125,7 +129,11 @@ Keys go to the program, in the order of ADR 0009:
    | Action id | Keys | What |
    | --- | --- | --- |
    | `clipboard.copy` | `Ctrl+Shift+C`, `Ctrl+Insert` | Copy the selection (plain text, CR LF line ends) |
-   | `clipboard.paste` | `Ctrl+Shift+V`, `Shift+Insert` | Paste: line breaks become Enter, control characters are removed, bracketed when the program asked (`SUBAK-SEC-013`) |
+   | `clipboard.paste` | `Ctrl+Shift+V`, `Shift+Insert` | Paste plain text: line breaks become Enter, control characters are removed, bracketed when the program asked (`SUBAK-SEC-013`); asks first when lines would run, control characters hide in it, or it is large (§12.2) |
+   | `clipboard.copy-html`, `clipboard.paste-one-line` | none (the pane menu) | Copy with colours (plain text and HTML Format); paste as one line (§12.2–12.3) |
+   | `selection.all` / `selection.mark` | `Ctrl+Shift+A` / `Ctrl+Shift+M` | Select all; select with the keyboard (mark mode, §12.3) |
+   | `search.open` | `Ctrl+Shift+F` | Find in the output (§12.1) |
+   | `output.save` | none (the pane menu) | Save the output to a file, asking first (§12.5) |
    | `view.zoom-in` / `view.zoom-out` / `view.zoom-reset` | `Ctrl+Plus` / `Ctrl+Minus` / `Ctrl+0` (and the numpad `+`, `-`, `0`) | Text size 8–36 px (default 13), saved |
    | `scroll.page-up` / `scroll.page-down` | `Ctrl+Shift+PageUp` / `PageDown` | Scroll the history a page |
    | `scroll.line-up` / `scroll.line-down` | `Ctrl+Shift+Up` / `Down` | Scroll a line |
@@ -140,7 +148,8 @@ Keys go to the program, in the order of ADR 0009:
    a menu bar. Typing returns a scrolled-back view to the live screen.
 
 The **mouse**: drag selects (double click: word, triple click: line, Alt+drag: block); a single
-click clears the selection; right click copies a selection, or pastes when there is none; the
+click clears the selection; right click copies a selection, or pastes when there is none;
+`Ctrl+click` opens a link and `Ctrl+right click` opens the pane menu (§12.4, §12.6); the
 wheel scrolls the history 3 lines per notch (or goes to the program when it tracks the mouse, or
 sends cursor keys on the alternate screen when the program asked for alternate scroll); Shift
 always selects, as in xterm. On the tab bar: a click shows a tab, a double click renames it, a
@@ -221,6 +230,7 @@ secrets). Schema: [subak-gui-v1](contracts/schemas/subak-gui-v1.schema.json), ex
 | Window | `gui/window.rs` | Win32: paint (tab bar strip, pane, banner, IME), keyboard dispatch, the confirmation and the rename field, the native tab menu, mouse, clipboard, DPI, High Contrast, test hooks |
 | Binary | `crates/subak/src/bin/subak-gui.rs` | GUI subsystem (no console window) |
 | Floating UI | `gui/float/*.rs` | `--float` (§11): placement, the icon's picture, the manager's model, `float.json`, the tray trait (portable, unit-tested) and the Win32 icon, tray and manager (`float/win.rs`) |
+| Search, questions, clipboard, export | `gui/find.rs`, `gui/ask.rs`, `gui/clip.rs`, `gui/export.rs` | Step 19 (§12.6): the search bar, the paste/link/export questions, the clipboard, opener and save picker as traits with recording fakes, "Save output…" |
 
 Data path: the reader queues frames and posts one message per batch; the window feeds them to the
 pane's `TermView` (the same model as the Host), renders only changed rows, and invalidates only
@@ -232,8 +242,9 @@ most 150 ms.
 Safety: the window is an IPC client of kind `gui` with the CLI's identity checks (same user,
 `subak.exe`, before anything is sent); it ends a Terminal only on `Ctrl+W` or the menu, by id and
 with `force` only after the user's answer, never starts a shell by opening, never touches another
-user's Host, never opens links (OSC 8 hit-testing only; opening is Step 19), never honours OSC 52,
-and never writes the system clipboard except for an explicit copy.
+user's Host, opens a link only on the user's `Ctrl+click` after validation (`http`/`https`, through
+the OS "open" verb, §12.4), never honours OSC 52, never writes the system clipboard except for an
+explicit copy, and writes output to a file only on "Save output…" after a question (§12.5).
 
 ## 7. Measurements
 
@@ -257,7 +268,8 @@ the system's input-method threads.
 - No `Ctrl+B` prefix or pass-through (Step 23): a program gets `Ctrl+T`/`Ctrl+W` only once the
   action is disabled or rebound. `AltGr` and `Win` chords are not matched by the window.
 - A background tab is not attached: its activity and Claude state are not shown (Steps 26–28).
-- No multi-line paste warning, search, link opening, copy-as-HTML (Step 19).
+- Search, the paste question, link opening and copy-as-HTML arrived in Step 19 (§12, with its
+  own limits in §12.11).
 - win32-input-mode is not granted: Ctrl+Break and key releases do not reach programs.
 - UI text uses the terminal font; the tab bar is in the client area (the integrated title-bar tab
   bar of DESIGN_SYSTEM §3.5 needs custom non-client drawing), icons, settings UI and themes are
@@ -353,6 +365,7 @@ maintainer's. Build first: `cargo build --release -p subak` (both binaries land 
 | `e2e/tests/step16_subak_window.rs` (ignored; `cargo xtask e2e` only) | the release window against a release Host: attach without a new shell, input, close and crash keep the pane, reconnect |
 | `e2e/tests/step17_subak_tabs.rs` (ignored; `cargo xtask e2e` only) | tabs following CLI new/rename/kill, `Ctrl+Tab` switching with input to the shown tab only; `Ctrl+T`, `Ctrl+W` asking before ending a busy Terminal (Esc keeps it, consent ends only it), the window X only detaching |
 | Step 18 | the floating icon and Terminal manager: §11.10 |
+| Step 19 | search, selection, the clipboard, links and saving output: §12.10 |
 
 ## 11. The floating icon, tray icon and Terminal manager (Step 18)
 
@@ -581,3 +594,269 @@ private endpoint: `set E=--endpoint subak-manual-18`.
 - Opening a Terminal picks the frontmost window of the Host; choosing a particular window is
   Step 21's.
 - The manager uses Segoe UI through GDI; the list box's scroll bar is the classic one.
+
+## 12. Search, selection, the clipboard, links and saving output (Step 19)
+
+Decision: [ADR 0048](adr/0048-subak-search-clipboard-and-links.md) · Requirements:
+`SUBAK-FR-047`, `SUBAK-SEC-013`, `SUBAK-SEC-014`, `SUBAK-FR-034`, `KIM-SEC-013`
+
+Everything here works on what the window's view of the pane holds — the same bounded model the
+Host keeps ([SCROLLBACK §1](SCROLLBACK.md)): the screen and the retained history (2 000 rows /
+4 MiB by default, `subak new --history-limit` up to 100 000 rows), including output printed while
+no window was attached, which the attach snapshot brings back. Nothing is loaded into GPU memory
+(the renderer draws on the CPU), nothing is copied beside the model except the matches, and no
+output is ever sent anywhere. Only `cli` and `gui` clients receive history at all
+([IPC_PROTOCOL §4](contracts/IPC_PROTOCOL.md)).
+
+### 12.1 Search
+
+`Ctrl+Shift+F` (`search.open`, or "Find…" in the pane menu) opens the search bar in the row over
+the top of the pane (where banners appear; a match is never revealed under it):
+
+`  Find  marker-2▏             3 of 111   Aa case (Alt+C)  .* regex (Alt+R)  ab word (Alt+W)   Enter older · Shift+Enter newer · Esc close`
+
+| Keys | What |
+| --- | --- |
+| Characters, `Ctrl+V`, the paste keys | Type or paste into the field (one line). Every change searches again at once (incremental). A one-line selection is the query when the bar opens. |
+| `Enter`, `F3`, `Up` | The next **older** match (wrapping to the newest) |
+| `Shift+Enter`, `Shift+F3`, `Down` | The next **newer** match (wrapping to the oldest) |
+| `Alt+C` / `Alt+R` / `Alt+W` (or a click on the option) | Case-sensitive / regular expression / whole word; an option that is on shows `✓` (not colour alone) |
+| `Backspace`, `Delete`, `Ctrl+Backspace` (word), `Left`, `Right`, `Home`, `End` | Edit the field |
+| `Esc` | Close the bar: the highlights go, the current match stays selected (copy it with `Ctrl+Shift+C`) |
+| Shortcut chords (`Ctrl+Tab`, `Ctrl+Shift+C`, scrolling …) | Still work; other keys reach nothing while the bar is open (nothing is typed into the program) |
+
+- **Where it starts.** Matches are counted oldest first; the search starts at the newest match at
+  or above the last visible row, so it finds what you just saw first. The current match is
+  selected and drawn dark on `terminal.search-current`; the others are tinted
+  `terminal.search-match` (DESIGN_SYSTEM §2.2); High Contrast uses the system highlight and
+  reverse video. The bar says "3 of 111" in words.
+- **What is searched.** Plain text, logical line by logical line: rows joined across soft wraps,
+  so a wrapped address or path is found whole; Korean, CJK and emoji count as their cells; a
+  combining mark stays with its character. Literal text by default (case folded the Unicode
+  way); with `.*` a regular expression of the `regex` crate (Unicode `\w`, `\b`, `\d`; no
+  look-around or back-references). On the alternate screen (`vim`, `less`), what the program
+  shows is searched; the history again once it leaves.
+- **Bounded.** A pattern is at most 1 000 characters; one that compiles to more than 512 KiB or
+  nests deeper than 64 is refused ("too complex") and never run; a broken one says why in the bar.
+  Matching is linear in the text (no catastrophic patterns). A search stops after 10 000 matches,
+  keeping the newest ("… of 10 000 (the newest; more exist)"), or after 250 ms ("newest lines;
+  stopped after 250 ms"); the history itself is bounded.
+- **Live.** New output while the bar is open refreshes the matches without moving the view: the
+  history lines already searched are kept, only the new lines and the screen are searched again.
+
+### 12.2 Paste
+
+The paste keys (`Ctrl+Shift+V`, `Shift+Insert`, a right click without a selection) paste the
+clipboard's **plain text** — only its Unicode text format is read; HTML, RTF, files and images
+are never interpreted, and a clipboard without text says "The clipboard holds no text to paste".
+Line breaks become Enter, control characters are removed, and the text is bracketed when the
+program asked for it (`SUBAK-SEC-013`). The window **asks first** (`SUBAK-SEC-014`) when the paste
+
+- has line breaks and the program did not ask for bracketed paste — they would run as commands
+  at once ("Paste 2 lines that run at once? First line: `rm -rf build`");
+- carries control characters, which are removed whatever you answer and often hide an escape
+  sequence that disguises a command ("Paste 1 hidden control character (an escape sequence;
+  removed)? …"); asked even under bracketed paste;
+- is larger than 5 KiB.
+
+`[ Cancel (Esc) ]  As one line   Paste` — **Cancel is focused**: `Esc`, `Enter` on Cancel or a
+click on it pastes nothing; `Tab`/`Shift+Tab`/arrows move; `Enter`/`Space` answer. "As one line"
+(also the action `clipboard.paste-one-line`, "Paste as one line" in the pane menu) trims the
+surrounding blanks and turns every line break into one space, so nothing runs before you press
+Enter. Keys typed while it asks reach nothing.
+
+### 12.3 Selection and copy
+
+- **Mouse**: drag (double click: word, triple click: line, `Alt`: block; `Shift` always selects,
+  as in xterm), a right click copies a selection — as before (§3).
+- **Keyboard (mark mode)**: `Ctrl+Shift+M` (`selection.mark`) puts a one-cell caret at the cursor
+  (or keeps the current selection). Arrows move it; `Shift`+arrows grow the selection; `Ctrl` moves
+  by words (a growing selection ends with the word); `Home`/`End` the line, `PageUp`/`PageDown` a
+  page, `Ctrl+Home`/`Ctrl+End` the oldest line / the end; the view scrolls along. `Enter` copies
+  and leaves, `Esc` leaves, a typed character leaves and goes to the program. Outside mark mode
+  `Shift`+arrows stay the program's (PSReadLine selects with them).
+- `Ctrl+Shift+A` (`selection.all`) selects the history and the screen.
+- **Copy** (`Ctrl+Shift+C`, `Ctrl+Insert`): plain text, a wide character once, trailing blanks
+  removed, soft-wrapped rows joined, CR LF line ends. **Copy with colours** (`clipboard.copy-html`,
+  no default key; "Copy with colours (HTML)" in the pane menu) also puts `HTML Format` on the
+  clipboard: a `<pre>` in the terminal font with the theme's colours, bold, italic and
+  decorations, for editors and mail. A copy clears the selection.
+
+### 12.4 Links
+
+| What | How it opens |
+| --- | --- |
+| A web address in the text (`http://`, `https://`; the sentence's trailing `.`/`,` and an unbalanced `)` are not part of it; found across soft wraps) | `Ctrl+click` opens it at once: its text is its target |
+| An OSC 8 hyperlink (dotted underline; its text may differ from its target) | `Ctrl+click` shows the target first: "Open https://… with your default browser? `[ Cancel (Esc) ]  Copy link  Open`" |
+| A refused target | "Not opened: `file:` links are not opened (only http and https). Link: …" with "Copy link" |
+
+- **Validation** (`subak_term::links`): `http` and `https` only; no user name or password
+  (`https://bank.example@evil.example` is refused), no blanks, control characters or `\` in the
+  host part, a host, at most 2 048 characters. The scheme and host are lower-cased and non-ASCII
+  characters of the path are percent-encoded; that exact text is shown and opened.
+- **Opening** hands the target to Windows' "open" handler for it (`ShellExecuteW` with the verb
+  `open` — your default browser), never through a shell command line. Terminal output never opens
+  anything by itself.
+- In a program that tracks the mouse, `Ctrl+click` is the program's; `Ctrl+Shift+click` is the
+  window's (as `Shift` always is).
+- `Ctrl+right click` opens the pane menu with "Open link …" and "Copy link" for the link under
+  the pointer.
+
+### 12.5 Saving output
+
+"Save output…" (`output.save`, no default key; the pane menu) saves what the view holds — the
+history and the screen as logical lines, UTF-8 with CR LF — only after a question that says what
+Subak's secret detector (the rules of `subak capture`, [SCROLLBACK §6](SCROLLBACK.md)) found:
+
+`Save 2 341 lines (118 KB) of `work` to a file? 3 secret-looking values found: hide them as *** or save exactly.  [ Cancel (Esc) ]  Save with them hidden…  Save exactly…`
+
+With nothing found it still warns that the check is heuristic ("it may still hold private data")
+and offers `Save…`. Cancel is focused. After the choice the Windows save dialog asks where
+(suggesting `<terminal>-output-<YYYYMMDD-HHMMSS>.txt`, UTC); the file is written through a
+temporary file and a rename, and only there. Cancelling the dialog saves nothing.
+
+### 12.6 The pane menu and how it works
+
+The **Menu key** (`ContextMenu`) over the pane, and `Ctrl+right click`, open the pane menu: the
+link under the pointer (for `Ctrl+right click`), Copy, Copy with colours, Paste, Paste as one line,
+Select all, Select with the keyboard, Find…, Save output…, then the shown tab's items (§2), with
+the keys as bound.
+
+| Part | Where | Role |
+| --- | --- | --- |
+| Search engine | `crates/subak-term/src/search.rs` | Query, bounded regex, newest-first scan with a match cap and a time budget, incremental refresh (headless) |
+| Links | `crates/subak-term/src/links.rs` | Address detection in logical lines, target validation (headless) |
+| View | `crates/subak-term/src/view.rs` | Logical lines, highlights, reveal, span and select-all selection, mark mode, the selected cells for HTML |
+| Paste check | `crates/subak-term/src/input.rs` (`PasteCheck`, `one_line`) | What a paste would do (headless) |
+| HTML | `crates/subak-term/src/render/html.rs` | The coloured fragment and the CF_HTML document |
+| Search bar | `crates/subak/src/gui/find.rs` | The field, options, the current match, the bar's row |
+| Questions | `gui/ask.rs` | Paste, link and export questions, Cancel first |
+| Outside world | `gui/clip.rs` | `Clipboard`, `Opener` and the save picker as traits, with recording fakes |
+| Export | `gui/export.rs` | The output, the secret detector, the file name, the atomic write |
+| Window | `gui/window.rs` | Keys and mouse, the banner row, the pane menu, the Win32 clipboard (`CF_UNICODETEXT`, `HTML Format`), `ShellExecuteW`, `GetSaveFileNameW` |
+
+The Host and the CLI never call any of it (`crates/subak/tests/search_boundary.rs`); the Host's
+model gained only two read accessors. The off-screen test window uses the recording fakes: the
+system clipboard, a browser and the dialog are never touched by a test.
+
+### 12.7 Measurements
+
+This machine: Windows 10 Pro 22H2 19045, Intel Core i5-13600KF, 2026-11-04.
+
+| What | Result |
+| --- | --- |
+| Debug window, off-screen, real Host: 15 000 rows printed by cmd.exe (`gui_window.rs::a_large_history_stays_responsive_while_it_is_searched`) | printed in 2.0 s; typing a 9-character query (9 incremental searches) 207 ms; the last search 15 006 lines in **19.7 ms**; a regex with 1 500 matches 36 ms; a dump round trip afterwards 0.6 ms |
+| Headless, the largest history by bytes: 60 000 coloured lines fed, 37 108 rows / 4 MiB kept (`subak-term/tests/search.rs::huge_history_search_numbers`) | debug: literal (37 matches) 87 ms, regex (8 571 matches) 132 ms, the default budget stopping at 10 000 matches 25 ms |
+| Same, release build (`cargo test --release -p subak-term --test search huge -- --nocapture`) | literal (37 matches) over 37 138 rows in **3.9 ms**; regex (8 571 matches) **9.6 ms**; the default budget stopping at 10 000 matches 2.1 ms; the backtracking traps 0.07–0.2 ms each |
+| Backtracking traps (`(a*)*b`, `(a\|aa)+$`, `(a\|a?)+b`, `^(a+)+c$`) over 200 lines of 199 `a` | 0.8–1.5 ms each (debug), no match lost |
+| Binary sizes (release, shipped features) | `subak-gui.exe` 1.75 MB (Step 18) → **2.97 MB** (2 974 720 bytes: mostly the `regex` engine and its Unicode tables; a leaner feature set without the one-pass and backtracking engines saved only 86 KB and was slower, so Ddalgak's set is kept); `subak.exe` **unchanged**, 2 100 224 bytes |
+| `subak.exe` carries none of it | `grep -c -a` on the release binaries: `ShellExecuteW`, `GetSaveFileNameW`, `RegisterClipboardFormatW`, `regex parse error` (the regex engine's message) and `StartFragment` (the CF_HTML builder) — 0 in `subak.exe`, ≥ 1 in `subak-gui.exe` |
+| Idle | unchanged: no timer or thread was added; the bar, highlights and questions cost nothing while nothing happens |
+
+### 12.8 Keyboard help (every key of the window)
+
+| Keys | Action (id) | Context |
+| --- | --- | --- |
+| `Ctrl+T` / `Ctrl+W` | New Terminal (`terminal.new`) / Close Terminal, asks when busy (`terminal.close`) | app |
+| `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous tab (`tab.next`, `tab.previous`) | app |
+| `Ctrl+Shift+R` | Rename the Terminal (`terminal.rename`) | app |
+| — | Hide tab, move tab left/right (`tab.hide`, `tab.move-left`, `tab.move-right`) | app |
+| `Ctrl+Shift+C`, `Ctrl+Insert` | Copy (`clipboard.copy`) | terminal |
+| — | Copy with colours (`clipboard.copy-html`) | terminal |
+| `Ctrl+Shift+V`, `Shift+Insert` | Paste, asks first when needed (`clipboard.paste`) | terminal |
+| — | Paste as one line (`clipboard.paste-one-line`) | terminal |
+| `Ctrl+Shift+A` | Select all (`selection.all`) | terminal |
+| `Ctrl+Shift+M` | Select with the keyboard (`selection.mark`) | terminal |
+| `Ctrl+Shift+F` | Find (`search.open`) | terminal |
+| — | Save output (`output.save`) | terminal |
+| `Ctrl+Plus` / `Ctrl+Minus` / `Ctrl+0` | Text size (`view.zoom-*`) | terminal |
+| `Ctrl+Shift+PageUp`/`PageDown`/`Up`/`Down`/`Home`/`End` | Scroll (`scroll.*`) | terminal |
+| `Menu`, `Ctrl+right click` | The pane menu (§12.6) | reserved navigation |
+| In the search bar | `Enter`/`F3`/`Up` older · `Shift+Enter`/`Shift+F3`/`Down` newer · `Alt+C`/`Alt+R`/`Alt+W` options · `Esc` close | the field |
+| In mark mode | arrows, `Shift`, `Ctrl`, `Home`/`End`, `PageUp`/`PageDown`, `Ctrl+Home`/`End` · `Enter` copy · `Esc` leave | mark mode |
+| In a question | `Tab`/arrows move · `Enter`/`Space` answer · `Esc` cancel (the default) | the question |
+| `Ctrl+click` | Open a link (§12.4) | mouse |
+
+Every shortcut (not the field, mark-mode and question keys, which are reserved navigation like
+the rename field's) can be changed or turned off with `subak hotkeys` (`hotkeys.json`); `subak
+hotkeys list` prints the current keys. `Ctrl+Shift+A/F/M` are free in
+cmd.exe and PowerShell; disable an action to give its key to a program that needs it.
+
+### 12.9 Manual verification (maintainer)
+
+Agents on this machine never show windows, use the real clipboard or open a browser, so these
+checks are the maintainer's. Build: `cargo build --release -p subak`; use a private endpoint:
+`set E=--endpoint subak-manual-19`.
+
+1. `target\release\subak.exe %E% new work`, then in a console
+   `target\release\subak.exe %E% attach work` and run
+   `for /l %i in (1,1,3000) do @echo line %i 한글 marker-%i`; detach (`Ctrl+B d`).
+2. `target\release\subak-gui.exe %E% work`: the window opens with the output. Press
+   `Ctrl+Shift+F`, type `marker-29`: "11 of 11" at once, the newest match selected and the others
+   tinted; `Enter` walks older, `Shift+Enter` newer, wrapping; the bar's row never hides the
+   current match.
+3. Type the Korean `한글` with the IME (the composition is drawn in the field): matches appear;
+   `Alt+R`, then `marker-1\d\d$`: 100 matches; type `(`: the bar says the pattern is not valid.
+   `Esc`: the bar closes, the match stays selected; `Ctrl+Shift+C`, paste into Notepad: the text.
+4. `Esc`, then in the window run
+   `for /l %i in (1,1,5) do @(echo late %i & ping -n 2 127.0.0.1 >nul)`, press `Ctrl+Shift+F` at
+   once and type `late`: the count grows while the program prints, the view stays put.
+5. Copy two lines from Notepad (`echo one` / `echo two`), `Ctrl+Shift+V` in the window: the
+   question names 2 lines, Cancel is focused; `Enter` pastes nothing; again, `Shift+Tab`,
+   `Enter`: both run. Again, `Tab` ("As one line"), `Enter`: one line waits at the prompt.
+6. In a browser, copy text that contains hidden formatting (or use
+   `powershell -c "Set-Clipboard ('echo hi' + [char]27 + '[2J')"`), `Ctrl+Shift+V`: the question
+   names a hidden control character; pasting shows `echo hi[2J` without the escape.
+7. `Ctrl+Shift+M`, arrows, `Shift+Right`, `Ctrl+Shift+Right`, `Shift+End`, `Enter`: the selection
+   follows the keys over Korean text by whole characters; Notepad receives it. `Ctrl+Shift+A`,
+   `Ctrl+Shift+C`: the whole history.
+8. Select colored output (`dir` in PowerShell 7, or `git log --color` if installed), the Menu key →
+   "Copy with colours (HTML)", paste into Word or Outlook: colours and the terminal font.
+9. `echo see https://example.com/path, then`: `Ctrl+click` the address: the default browser opens
+   `https://example.com/path` (no comma). `echo https://u:p@example.com/`: `Ctrl+click` refuses
+   it with the reason; "Copy link" copies it. `Ctrl+right click` on an address: the menu offers it.
+10. Print a fake token (`echo GITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123`), the Menu key →
+    "Save output…": the question counts the secret-looking values; `Tab`, `Enter`: the save dialog
+    suggests `work-output-….txt`; save; open the file: `GITHUB_TOKEN=***`. Repeat with
+    "Save exactly…": the token is in the file. Cancel the dialog: nothing is saved.
+11. Turn on a Contrast theme: matches use the system highlight, the current one reverse video.
+12. Clean up: `subak.exe %E% host stop --kill-terminals --yes`.
+
+| Manual check | Result |
+| --- | --- |
+| Search in the visible window, the IME in the field, live refresh (steps 1–4) | automated off-screen (§12.10; IME not); visible run **pending — maintainer** |
+| Paste questions with the real clipboard and real browser/Notepad content (steps 5–6) | automated with the fake clipboard; real clipboard **pending — maintainer** |
+| Mark mode and select all with the real keyboard, copy into Notepad (step 7) | automated off-screen with window messages; real keyboard and clipboard **pending — maintainer** |
+| HTML Format in Word/Outlook (step 8) | the CF_HTML document is checked byte by byte (offsets) in unit tests; a real paste **pending — maintainer** |
+| A real browser opened by `Ctrl+click` (step 9) | the fake opener records verb `open` and the exact target; real browser **pending — maintainer** |
+| The real save dialog and file (step 10) | the fake picker and the real file write are automated; the dialog **pending — maintainer** |
+| High Contrast (step 11) | **pending — maintainer** |
+
+### 12.10 Tests
+
+| Test | What it checks |
+| --- | --- |
+| `crates/subak-term/tests/search.rs` | Korean, wide characters and combining marks mapped to cells; case, whole word and regex options; Unicode classes and case folding; regex limits (empty, too long, invalid, compiled size, nesting) and linear time on backtracking traps; matches across soft wraps; history retention, eviction, `ESC[3J` and an incremental refresh equal to a full search; the alternate screen alone; the match cap keeping the newest and the time budget; starting points; highlights per row and reveal below the first row; mark mode (cells, wide characters, words, lines, pages, scrolling, typing leaves); select all; hyperlinks and detected addresses; paste checks and `one_line`; huge-history numbers |
+| `crates/subak-term/tests/render.rs::search_highlights_and_the_current_match` | the match tint, the current match over the selection, only the rows involved redrawn |
+| `crates/subak-term/src/links.rs`, `render/html.rs` unit tests | address detection and validation (schemes, credentials, backslashes, blanks, escapes, length); HTML runs, escaping, Korean, CF_HTML byte offsets |
+| `crates/subak/src/gui/{find,ask,clip,export}.rs` unit tests | the bar (incremental, older/newer with wrap-around, editing, options, errors, live refresh keeping the current match, the row and the caret); the questions (words, answers, Cancel first, focus moves, spans); the fake clipboard's formats and plain-text-only reads, the fake opener's verb; the export (logical lines, the detector, a private key block, names, the atomic write) |
+| `crates/subak/tests/gui_window.rs` Step 19 tests (off-screen window, real Hosts, recording fakes) | `search_finds_output_printed_while_no_window_was_attached_and_follows_new_output`; `paste_asks_before_lines_that_run_or_hidden_control_sequences_and_reads_only_text` (exact bytes received by a stand-in program); `copy_formats_keyboard_selection_select_all_and_the_pane_menu`; `ctrl_click_opens_only_validated_web_addresses_with_the_open_verb`; `save_output_asks_naming_the_secrets_found_and_writes_only_the_chosen_file`; `a_large_history_stays_responsive_while_it_is_searched`; and Step 16's paste test answering the question |
+| `crates/subak/tests/search_boundary.rs` | the Host, the CLI and the terminal model never reach the window's search, clipboard, link or export code |
+| `e2e/tests/step19_search_clipboard.rs` (ignored; `cargo xtask e2e` only) | a later window searches output the Host kept; paste asks first, copy with colours, `Ctrl+click` through the open verb, a refused credential link, an export with secrets hidden |
+
+### 12.11 Known limits (Step 19)
+
+- Search is the window's; `subak capture --history` piped to `findstr` remains the CLI's way, and
+  tmux's copy-mode search is Step 24's.
+- Composed and decomposed forms are different text (`é` vs `e` + U+0301); `\p{Hangul}` and other
+  script classes are not compiled in.
+- A wide character pushed to the next row by a soft wrap leaves a blank at the row's end that
+  a search across that wrap sees as a space.
+- No copy-on-select, no choice of right/middle click actions, no configurable word separators,
+  no setting to turn the paste question off, no file-path links, no files dropped from Explorer,
+  no "search the web for the selection" (it would send output to a web service; not planned):
+  settings are Step 20's.
+- Opening a link needs the mouse (`Ctrl+click`, `Ctrl+right click`); there is no keyboard link
+  picker yet (a keyboard user can select an address in mark mode and copy it).
+- The search bar and questions use the terminal font and the banner row; the integrated look of
+  DESIGN_SYSTEM's search field is Step 20's.

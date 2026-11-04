@@ -60,7 +60,7 @@ mod window;
 use std::process::ExitCode;
 
 const HELP: &str = "\
-subak-gui — the Subak window (pre-alpha, Steps 16-18)
+subak-gui — the Subak window (pre-alpha, Steps 16-19)
 
 USAGE:
     subak-gui [<terminal>] [--endpoint <name>] [--no-hotkeys]
@@ -92,6 +92,21 @@ Down/Home/End scroll. Every shortcut can be changed or turned off with `subak ho
 reach the program only once you disable or rebind them (the Ctrl+B pass-through is Step 23).
 The mouse selects (double-click: word, triple-click: line, Alt: block); right-click copies a
 selection or pastes. Preferences: %APPDATA%\\mouv\\subak\\gui.json (docs/SUBAK_GUI.md).
+
+SEARCH, SELECTION, CLIPBOARD AND LINKS (docs/SUBAK_GUI.md §12):
+    Ctrl+Shift+F    Find in the output (the history the Host keeps and the screen): type to
+                    search; Enter/F3 older, Shift+Enter/Shift+F3 newer; Alt+C case, Alt+R
+                    regular expression, Alt+W whole word; Esc closes (the match stays selected).
+    Ctrl+Shift+M    Select with the keyboard: arrows, Shift grows, Ctrl by words, Home/End,
+                    PageUp/PageDown; Enter copies, Esc leaves.
+    Ctrl+Shift+A    Select all.
+    Paste           Plain text only. Asks first when lines would run at once, the text hides
+                    control characters (removed) or is large; Cancel is the default; "As one
+                    line" joins the lines.
+    Ctrl+click      Open a link: http/https only, through Windows' open handler; a hyperlink
+                    shows its target first.
+    Menu key, Ctrl+right-click   The pane menu: copy with colours (HTML), paste as one line,
+                    find, select, save output (asks first, hides secret-looking values).
 
 FLOATING ICON AND TERMINAL MANAGER (optional, off unless you start it; docs/SUBAK_GUI.md §11):
     --float         Run the small always-on-top floating icon (and/or a tray icon). Click it for

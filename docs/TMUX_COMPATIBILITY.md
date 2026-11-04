@@ -9,7 +9,9 @@ mouv · Tracks [SUBAK-FR-060](PRODUCT_REQUIREMENTS.md)
 > `--history-limit`; Step 15: mouse reports, wheel, word and line selection and focus events in
 > the client view). 10 rows are `implemented` and 32 are `partial`, all with
 > automated evidence; every other row is `planned`, `deferred` or `unsupported`. This document
-> is an inventory and a plan, not a compatibility claim.
+> is an inventory and a plan, not a compatibility claim. Step 19 added the Subak window's own
+> search, keyboard selection and clipboard (SUBAK_GUI §12): they are not tmux's copy mode (Step
+> 24), which will drive the same headless search engine and view selection with tmux's keys.
 
 ## 0. How to read this matrix
 
@@ -336,7 +338,7 @@ when `mouse` is on.
 | Alt-drag moves a floating pane | `M-MouseDrag1Pane`, `M-MouseDrag1Border` → `move-pane -M` | *Rationale:* floating panes deferred | deferred | post-26 | — |
 | Wheel up scrolls history | `WheelUpPane` → `copy-mode -e` (or `send -M`) | Wheel scrolls scrollback; forwarded in the alternate screen or when the program uses the mouse. *Partial:* the client view scrolls its viewport over the Host's history, forwards the wheel to programs that track the mouse and sends cursor keys on the alternate screen when the program enables alternate scroll (1007); the window that delivers the wheel is Step 16 | partial | 13, 15 | `crates/subak-term/tests/view.rs::the_view_routes_the_mouse_to_the_program_or_to_selection_and_scrolling` (2026-11-04) |
 | Middle-click pastes | `MouseDown2Pane` → `paste -p` | Middle-click pastes the latest buffer | planned | 24 | — |
-| Double-click copies a word | `DoubleClick1Pane` → `select-word; copy-pipe-and-cancel` | Same gesture. *Partial:* word selection and its copy text in the client view (Windows Terminal's word delimiters, wide characters once); the gesture and the clipboard are the GUI's (Steps 16, 19) | partial | 15, 24 | `crates/subak-term/tests/view.rs::word_and_block_selection` (2026-11-04) |
+| Double-click copies a word | `DoubleClick1Pane` → `select-word; copy-pipe-and-cancel` | Same gesture. *Partial:* word selection and its copy text in the client view (Windows Terminal's word delimiters, wide characters once); the gesture and the clipboard are the GUI's (Step 16; plain text and, on request, HTML Format since Step 19), which copies on an explicit copy rather than on the click (copy-on-select is off, Step 20 adds the option) | partial | 15, 24 | `crates/subak-term/tests/view.rs::word_and_block_selection` (2026-11-04) |
 | Triple-click copies a line | `TripleClick1Pane` → `select-line; copy-pipe-and-cancel` | Same gesture. *Partial:* line selection (soft-wrapped rows as one line) and its copy text in the client view; the gesture and the clipboard are the GUI's (Steps 16, 19) | partial | 15, 24 | `crates/subak-term/tests/view.rs::copy_joins_soft_wrapped_rows_but_not_hard_line_breaks` (2026-11-04) |
 | Click a border selects the pane | `MouseDown1Border` → `select-pane -t=` | Same gesture | planned | 22 | — |
 | Drag a border resizes | `MouseDrag1Border` → `resize-pane -M` | Drag the split divider | planned | 22 | — |
@@ -384,9 +386,9 @@ command (`send-keys -X <command>`) documented in tmux 3.8 is named in this table
 | History top and bottom | vi `g` `G`; emacs `M-<` `M->` → `history-top`, `history-bottom` | Same keys | planned | 24 | — |
 | Paragraphs and brackets | vi `{` `}` `%`; emacs `M-{` `M-}` `C-M-f` `C-M-b` → `previous-paragraph`, `next-paragraph`, `next-matching-bracket`, `previous-matching-bracket` | Same keys | planned | 24 | — |
 | Jump to a character | vi and emacs `f` `F` `t` `T` `;` `,` → `jump-forward`, `jump-backward`, `jump-to-forward`, `jump-to-backward`, `jump-again`, `jump-reverse` | Same keys | planned | 24 | — |
-| Search | vi `/` `?` `n` `N`, `*` `#` (word under cursor); emacs `C-s` `C-r` `n` `N` → `search-forward`, `search-backward`, `search-forward-text`, `search-backward-text`, `search-forward-incremental`, `search-backward-incremental`, `search-again`, `search-reverse` | Same keys; regex and plain text; `wrap-search` | planned | 24 | — |
+| Search | vi `/` `?` `n` `N`, `*` `#` (word under cursor); emacs `C-s` `C-r` `n` `N` → `search-forward`, `search-backward`, `search-forward-text`, `search-backward-text`, `search-forward-incremental`, `search-backward-incremental`, `search-again`, `search-reverse` | Same keys; regex and plain text; `wrap-search`. *Groundwork (Step 19):* the bounded, incremental search engine over the retained history (`subak_term::search`, ADR 0048), used today by the window's search bar (`Ctrl+Shift+F`, older/newer with wrap-around) | planned | 24 | — |
 | Go to a line | vi `:`; emacs `g` → `goto-line` | Same keys | planned | 24 | — |
-| Selection | vi `Space` `V` `o` `Escape`; emacs `C-Space` `C-g` → `begin-selection`, `select-line`, `select-word`, `other-end`, `clear-selection`, `stop-selection`, `selection-mode` | Same keys | planned | 24 | — |
+| Selection | vi `Space` `V` `o` `Escape`; emacs `C-Space` `C-g` → `begin-selection`, `select-line`, `select-word`, `other-end`, `clear-selection`, `stop-selection`, `selection-mode` | Same keys. *Groundwork (Step 19):* the view's keyboard selection (mark mode: caret, grow by cells, words, lines, pages) behind the window's `Ctrl+Shift+M` | planned | 24 | — |
 | Rectangle selection | vi `v` `C-v`; emacs `R` → `rectangle-toggle`, `rectangle-on`, `rectangle-off` | Same keys | planned | 24 | — |
 | Copy and append | vi `Enter` `C-j` `D` `A`; emacs `M-w` `C-w` `C-k` → `copy-selection`, `copy-selection-and-cancel`, `copy-selection-no-clear`, `copy-line`, `copy-line-and-cancel`, `copy-end-of-line`, `copy-end-of-line-and-cancel`, `append-selection`, `append-selection-and-cancel` | Same keys; copies to a paste buffer and the Windows clipboard (§16) | planned | 24 | — |
 | Copy through an external command | `copy-pipe`, `copy-pipe-and-cancel`, `copy-pipe-no-clear`, `copy-pipe-line`, `copy-pipe-line-and-cancel`, `copy-pipe-end-of-line`, `copy-pipe-end-of-line-and-cancel`, `pipe`, `pipe-and-cancel`, `pipe-no-clear`; `copy-command` option | Same commands; the command runs in the profile shell | planned | 24 | — |

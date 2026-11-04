@@ -476,18 +476,31 @@ mod tests {
 
     #[test]
     fn repeated_sessions_do_not_leak_handles() {
+        // The handle count is process-wide, and other tests in this binary open and close
+        // handles at the same time. Take the minimum of several samples, which filters out
+        // their short-lived handles, and run enough cycles that a real leak (about 8 handles
+        // per session: 2 pipes, job, process, thread, attribute data) far exceeds the slack.
+        const CYCLES: usize = 24;
         let count = || {
-            let mut n = 0u32;
-            // SAFETY: pseudo handle of this process; `n` is writable.
-            unsafe { GetProcessHandleCount(GetCurrentProcess(), &raw mut n) };
-            n
+            (0..5)
+                .map(|i| {
+                    if i > 0 {
+                        std::thread::sleep(Duration::from_millis(100));
+                    }
+                    let mut n = 0u32;
+                    // SAFETY: pseudo handle of this process; `n` is writable.
+                    unsafe { GetProcessHandleCount(GetCurrentProcess(), &raw mut n) };
+                    n
+                })
+                .min()
+                .unwrap_or(0)
         };
         // Warm up lazily created runtime handles before measuring.
         let mut s = Session::start(80, 25);
         s.expect(">"); // the shell is up (prompt)
         s.end();
         let before = count();
-        for i in 0..8 {
+        for i in 0..CYCLES {
             let mut s = Session::start(80, 25);
             s.pty
                 .write_input(format!("echo cyc^le-{i}\r").as_bytes())
@@ -496,11 +509,10 @@ mod tests {
             s.end();
         }
         let after = count();
-        // Each session opens ~8 handles (2 pipes, job, process, thread, attribute data); a leak
-        // would grow by ~64. Other tests in this binary run concurrently, hence the slack.
+        // A leak of one session's handles per cycle would add about 190 here.
         assert!(
-            after <= before + 16,
-            "handles grew from {before} to {after}"
+            after <= before + 48,
+            "handles grew from {before} to {after} over {CYCLES} sessions"
         );
     }
 }

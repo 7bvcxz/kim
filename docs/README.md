@@ -11,13 +11,23 @@ did.
 | [KIM_PHILOSOPHY.md](KIM_PHILOSOPHY.md) | current | Why Kim exists and the principles every tool follows |
 | [SUBAK_PHILOSOPHY.md](SUBAK_PHILOSOPHY.md) | current | Subak's Host/Client model, object model, crucial distinctions, Claude indicator |
 | [PRODUCT_REQUIREMENTS.md](PRODUCT_REQUIREMENTS.md) | current | Numbered, testable requirements, milestones, platforms, privacy/safety policies |
+| [NOEUL_PHILOSOPHY.md](NOEUL_PHILOSOPHY.md) | current (Step 48; Noeul not implemented yet) | Noeul, the screenshot and floating-pin tool: the double-click-to-pin deviation from Snipaste, pins, frugality, privacy, keyboard, CLI, license and IP boundary |
+| [NOEUL_REQUIREMENTS.md](NOEUL_REQUIREMENTS.md) | current (Step 48) | `NOEUL-*` requirements, milestones N1–N7 (Steps 49–64), platform permissions, performance budgets, deferrals, planned error codes |
+| [NOEUL_SNIPASTE_MATRIX.md](NOEUL_SNIPASTE_MATRIX.md) | current (inventory, Snipaste 2.11.3) | Snipaste feature parity matrix with status, requirement, milestone and verification per row |
+| [NOEUL_UX_SPEC.md](NOEUL_UX_SPEC.md) | current (specification) | Noeul journeys and click paths, wireframes, the exact double-click-to-pin rules and their test cases, default shortcuts, session limits, privacy |
+| [DDALGAK_PHILOSOPHY.md](DDALGAK_PHILOSOPHY.md) | current (Step 65; Ddalgak not implemented yet) | Ddalgak, the automation engine: one action, useful automation; novice-friendly GUI and headless CLI; safe by construction; honest about AutoHotkey |
+| [DDALGAK_REQUIREMENTS.md](DDALGAK_REQUIREMENTS.md) | current (Step 65) | `DDALGAK-*` requirements and milestones D1–D7 (Steps 65–83) |
+| [DDALGAK_RULE_MODEL.md](DDALGAK_RULE_MODEL.md) | current (rules document v1; not implemented) | Triggers, the seven core action types with inputs/outputs/errors/safety, modes, conditions, profiles, consent, precedence, validation, playground, outcomes and activity, versioning, CLI preview |
+| [DDALGAK_GUI_JOURNEYS.md](DDALGAK_GUI_JOURNEYS.md) | current (design) | End-to-end GUI journeys and wireframes: create, capture, effects, playground, profiles, modes, rollback, search/edit/delete/duplicate/export, emergency |
+| [DDALGAK_SAFETY.md](DDALGAK_SAFETY.md) | current (nothing run on Windows yet) | Risks and scope: reserved shortcuts, elevated windows, engine lifecycle, layouts and IME, anti-cheat, hook security and emergency off, password fields and privacy, Linux, recursion and stuck keys, verification plan |
+| [DDALGAK_AHK_MATRIX.md](DDALGAK_AHK_MATRIX.md) | current (inventory, matrix v1, AutoHotkey v2.0.31) | AutoHotkey v2 comparison with sources: supported, partial, planned, not intended |
 
 ## Architecture and compatibility
 
 | Document | Status | Purpose |
 | --- | --- | --- |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | current | Components, Host internals, object model, lifecycles, close/kill semantics, restart behavior, telemetry |
-| [adr/README.md](adr/README.md) | current | Architecture decision records (ADR 0001–0019) |
+| [adr/README.md](adr/README.md) | current | Architecture decision records (ADR 0001–0019, 0021 and 0022) |
 | [CONPTY_PROOF.md](CONPTY_PROOF.md) | current (Step 08 prototype) | Windows ConPTY + detached Host proof: what "detached" means, evidence with process ids, OS limitations and power states, manual procedures (Windows Terminal, sleep, logoff pending) |
 | [CLI_CONTRACT.md](CLI_CONTRACT.md) | current (contract v1) | Cross-tool CLI contract: names, help, streams, `--json` envelope, exit codes, error-code registry, dry-run/confirmation, versioning, capabilities and tool-to-tool invocation, secret redaction |
 | [KIM_CLI.md](KIM_CLI.md) | current | `kim` command reference, files and environment, sample agent workflows |
@@ -45,20 +55,9 @@ real output against them; for the scenarios, `schema-check` also recomputes ever
 conflict report with a reference checker, and the library recomputes them again
 ([HOTKEY_CONTRACT §15](HOTKEY_CONTRACT.md)).
 
-## Ddalgak (automation engine)
-
-| Document | Status | Purpose |
-| --- | --- | --- |
-| [DDALGAK_PHILOSOPHY.md](DDALGAK_PHILOSOPHY.md) | current (Step 65) | Why Ddalgak exists: one action, useful automation; novice-friendly GUI and headless CLI; safe by construction; honest about AutoHotkey |
-| [DDALGAK_REQUIREMENTS.md](DDALGAK_REQUIREMENTS.md) | current (Step 65) | Numbered requirements `DDALGAK-FR/NFR/SEC-ddd` and milestones D1–D7 |
-| [DDALGAK_RULE_MODEL.md](DDALGAK_RULE_MODEL.md) | current (rules document v1, Step 65; not implemented) | Triggers, the seven core action types with inputs/outputs/errors/safety, modes, conditions, profiles, consent, precedence, validation, playground, outcomes and activity, versioning, CLI preview |
-| [DDALGAK_GUI_JOURNEYS.md](DDALGAK_GUI_JOURNEYS.md) | current (design, Step 65) | End-to-end GUI journeys and wireframes: create, capture, effects, playground, profiles, modes, rollback, search/edit/delete/duplicate/export, emergency |
-| [DDALGAK_SAFETY.md](DDALGAK_SAFETY.md) | current (Step 65; nothing run on Windows yet) | Risks and scope: reserved shortcuts, elevated windows, engine lifecycle, layouts and IME, anti-cheat, hook security and emergency off, password fields and privacy, Linux, recursion and stuck keys, verification plan |
-| [DDALGAK_AHK_MATRIX.md](DDALGAK_AHK_MATRIX.md) | current (matrix v1, AutoHotkey v2.0.31) | Versioned AutoHotkey v2 comparison: supported, partial, planned, not intended, with sources |
-
-The Ddalgak schemas `ddalgak-rules-v1` and `ddalgak-simulation-v1` are specifications (nothing
-implements them yet); `schema-check` validates their examples and runs the cross-reference
-checks of [DDALGAK_RULE_MODEL §8](DDALGAK_RULE_MODEL.md) on them.
+The Ddalgak schemas (`ddalgak-rules-v1`, `ddalgak-simulation-v1`) are specifications that
+nothing implements yet (Step 65); `schema-check` validates their examples and runs the
+cross-reference checks of [DDALGAK_RULE_MODEL §8](DDALGAK_RULE_MODEL.md) on them.
 
 ## Planned
 

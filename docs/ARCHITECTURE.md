@@ -230,6 +230,8 @@ they return `unsupported_platform` until milestone M4.
 | Hotkey contract v1 for every GUI tool (specification, schemas, conflict scenarios; [HOTKEY_CONTRACT](HOTKEY_CONTRACT.md)) | current (design) | 45 |
 | Shared hotkey library (`crates/kim-hotkeys`), `kim hotkeys` CLI, cross-tool conflict detection, Kim Manager shortcuts (`focus` backend), Windows `RegisterHotKey` backend ([HOTKEY_CONTRACT §17](HOTKEY_CONTRACT.md)) | implemented (binding editor of §11.2: planned) | 46 |
 | Catalog tool metadata (features, entry points, links, shortcut summaries, permissions), derived availability, permission disclosure in install plans; Noeul and Ddalgak listed as planned ([CATALOG_FORMAT §2.1](CATALOG_FORMAT.md)) | implemented (Noeul and Ddalgak themselves: planned, Steps 48–64 and 65–83) | 47 |
+| Noeul product definition: philosophy, `NOEUL-*` requirements and milestones N1–N7, Snipaste parity matrix, UX spec with the double-click-to-pin rules and tests, final hotkey manifest ([NOEUL_PHILOSOPHY](NOEUL_PHILOSOPHY.md), ADR 0021) | current (design); the `noeul` binary: planned, Steps 49–64 | 48 |
+| Ddalgak specification: philosophy, requirements, rule model and schemas (`ddalgak-rules-v1`, `ddalgak-simulation-v1`), GUI journeys, safety scope, AutoHotkey matrix, final hotkey manifest ([DDALGAK_RULE_MODEL](DDALGAK_RULE_MODEL.md), ADR 0022) | current (design; Ddalgak itself planned, Steps 66–83) | 65 |
 | ConPTY + detached Host proof: `subak host start\|status\|attach\|stop` prototype (one shell per Host, prototype pipe; [CONPTY_PROOF](CONPTY_PROOF.md), ADR 0016) | implemented (prototype) | 08 |
 | Host supervisor and IPC v1: identity-checked per-user pipe, version negotiation, authorization by client kind, start on demand under a start lock, idle exit, health, user logon environment ([IPC_PROTOCOL](contracts/IPC_PROTOCOL.md), ADR 0019); still one prototype pane per Host | implemented | 09 |
 | Session lifecycle, PTY management, CLI, replay | planned | 10–14 |
@@ -239,4 +241,3 @@ they return `unsupported_platform` until milestone M4.
 | Profiles, SSH, extended features | planned | 32–36 |
 | MCP, interoperability, hardening, release | planned | 37–40 |
 | Linux | planned | 41–42 |
-| Ddalgak specification: philosophy, requirements, rule model and schemas (`ddalgak-rules-v1`, `ddalgak-simulation-v1`), GUI journeys, safety scope, AutoHotkey matrix, final hotkey manifest ([DDALGAK_RULE_MODEL](DDALGAK_RULE_MODEL.md), ADR 0022) | current (design; Ddalgak itself planned, Steps 66–83) | 65 |

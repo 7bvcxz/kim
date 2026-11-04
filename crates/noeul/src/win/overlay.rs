@@ -1252,7 +1252,7 @@ mod tests {
             let p = Synthetic::pixel(picture.x + x, picture.y + y);
             [p[0], p[1], p[2]]
         };
-        assert_eq!(at(650, 150), pix(650, 150), "inside");
+        assert_eq!(at(600, 150), pix(600, 150), "inside");
         let d = dim_pixel(Synthetic::pixel(picture.x + 1000, picture.y + 380));
         assert_eq!(
             at(1000, 380),
@@ -1265,9 +1265,9 @@ mod tests {
             [a[0], a[1], a[2]],
             "the border above the selection"
         );
-        // The toolbar (Step 51; Step 56's tools wrap it into two rows): no room below or above
-        // on the 150 % monitor, so inside the selection's bottom edge; the Pin button is
-        // accent-filled and GDI drew its label.
+        // The toolbar (Step 51; Step 56's tools wrap it into two rows, Step 57's privacy tools into
+        // three): no room below or above on the 150 % monitor, so inside the selection's bottom
+        // edge; the Pin button is accent-filled and GDI drew its label.
         let bar = scene
             .toolbar
             .clone()
@@ -1280,8 +1280,8 @@ mod tests {
                 bar.rect.width,
                 bar.rect.height
             ),
-            (640, 151, 471, 90),
-            "two rows of buttons on the narrow 150 % monitor, inside the selection's bottom edge"
+            (640, 109, 459, 132),
+            "three rows of buttons on the narrow 150 % monitor, inside the selection's bottom edge"
         );
         let pin = bar.buttons[0].rect;
         let (mut fill, mut ink) = (0, 0);

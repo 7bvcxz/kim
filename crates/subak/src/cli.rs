@@ -11,8 +11,12 @@
 //!
 //! Step 13 (ADR 0030, docs/SCROLLBACK.md) adds `capture`, `history` and `clear-history`
 //! (tmux `capture-pane`, the `history-limit` counters, `clear-history`) and `new --history-limit`.
+//!
+//! Step 17 adds the `hotkeys` command group of the hotkey contract (docs/HOTKEY_CONTRACT.md §10,
+//! `SUBAK-FR-034`): `subak hotkeys list|show|set|disable|enable|reset|check|export|import`.
 
-use crate::output::CliError;
+use crate::output::{CliError, Code};
+use std::io::{self, IsTerminal};
 
 /// What to run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,6 +43,15 @@ pub enum Cmd {
     Capture,
     History,
     ClearHistory,
+    HotkeysList,
+    HotkeysShow,
+    HotkeysSet,
+    HotkeysDisable,
+    HotkeysEnable,
+    HotkeysReset,
+    HotkeysCheck,
+    HotkeysExport,
+    HotkeysImport,
 }
 
 impl Cmd {
@@ -66,12 +79,37 @@ impl Cmd {
             Self::Capture => "capture",
             Self::History => "history",
             Self::ClearHistory => "clear-history",
+            Self::HotkeysList => "hotkeys.list",
+            Self::HotkeysShow => "hotkeys.show",
+            Self::HotkeysSet => "hotkeys.set",
+            Self::HotkeysDisable => "hotkeys.disable",
+            Self::HotkeysEnable => "hotkeys.enable",
+            Self::HotkeysReset => "hotkeys.reset",
+            Self::HotkeysCheck => "hotkeys.check",
+            Self::HotkeysExport => "hotkeys.export",
+            Self::HotkeysImport => "hotkeys.import",
         }
     }
 
     /// The command words in the canonical spelling (`host status`, `new`).
     pub fn words(&self) -> String {
         self.name().replace('.', " ")
+    }
+
+    /// Whether the command is one of the `hotkeys` group (portable, never contacts a Host).
+    pub fn is_hotkeys(&self) -> bool {
+        matches!(
+            self,
+            Self::HotkeysList
+                | Self::HotkeysShow
+                | Self::HotkeysSet
+                | Self::HotkeysDisable
+                | Self::HotkeysEnable
+                | Self::HotkeysReset
+                | Self::HotkeysCheck
+                | Self::HotkeysExport
+                | Self::HotkeysImport
+        )
     }
 
     /// Whether the command streams a terminal instead of printing one document.
@@ -92,8 +130,17 @@ impl Cmd {
             }
             Self::Info | Self::Stop | Self::Kill | Self::Rm => (&["target"], 1),
             Self::Rename => (&["target", "new name"], 2),
+            Self::HotkeysShow => (&["action"], 1),
+            Self::HotkeysSet => (&["action", "keys"], 2),
+            Self::HotkeysDisable | Self::HotkeysReset => (&["action"], 0),
+            Self::HotkeysImport => (&["file"], 1),
             _ => (&[], 0),
         }
+    }
+
+    /// Whether the last positional argument repeats (`hotkeys set <action> <keys>...`).
+    fn variadic(&self) -> bool {
+        *self == Self::HotkeysSet
     }
 
     /// Options (beyond the global ones) this command accepts.
@@ -152,6 +199,24 @@ impl Cmd {
             Self::Rename => &["--endpoint", "--dry-run"],
             Self::Stop | Self::Kill => &["--endpoint", "--dry-run", "--yes"],
             Self::Rm => &["--endpoint", "--dry-run", "--yes", "--force"],
+            Self::HotkeysList => &["--scope", "--profile"],
+            Self::HotkeysShow => &["--profile"],
+            Self::HotkeysSet => &[
+                "--scope",
+                "--trigger",
+                "--hold-ms",
+                "--repeat",
+                "--profile",
+                "--replace",
+                "--allow-conflict",
+                "--dry-run",
+            ],
+            Self::HotkeysDisable => &["--all", "--scope", "--profile", "--dry-run"],
+            Self::HotkeysEnable => &["--all", "--scope", "--dry-run"],
+            Self::HotkeysReset => &["--all", "--yes", "--profile", "--dry-run"],
+            Self::HotkeysCheck => &["--all-tools", "--min-severity", "--profile"],
+            Self::HotkeysExport => &[],
+            Self::HotkeysImport => &["--dry-run"],
         };
         allowed.contains(&opt)
     }
@@ -209,6 +274,26 @@ pub struct Args {
     pub no_redact: bool,
     /// The deprecated spelling that was used (`terminal new`), if any (ADR 0027).
     pub alias: Option<String>,
+    /// `hotkeys list|set|disable|enable --scope <scope>`.
+    pub scope: Option<String>,
+    /// `hotkeys … --profile <name>`: a `profiles` overlay of the user layer.
+    pub profile: Option<String>,
+    /// `hotkeys set --trigger press|release|hold`.
+    pub trigger: Option<String>,
+    /// `hotkeys set --hold-ms <ms>` (with `--trigger hold`).
+    pub hold_ms: Option<u64>,
+    /// `hotkeys set --repeat`: auto-repeat fires the action again.
+    pub repeat: bool,
+    /// `hotkeys set --replace`: take the keys away from another action of Subak.
+    pub replace: bool,
+    /// `hotkeys set --allow-conflict`: accept a cross-tool global conflict.
+    pub allow_conflict: bool,
+    /// `hotkeys disable|enable|reset --all`.
+    pub all: bool,
+    /// `hotkeys check --all-tools`: also every installed Kim tool's files.
+    pub all_tools: bool,
+    /// `hotkeys check --min-severity error|warning|info`.
+    pub min_severity: Option<String>,
     /// Positional arguments after the command words (a target, a name).
     pub positional: Vec<String>,
     /// `new -- <program> [args…]`.
@@ -254,6 +339,38 @@ impl EnvArg {
     }
 }
 
+/// Whether this command may ask the user (CLI_CONTRACT §4.4).
+pub fn can_prompt(a: &Args) -> bool {
+    let env_no_input = std::env::var("KIM_NO_INPUT")
+        .is_ok_and(|v| !(v.is_empty() || v == "0" || v.eq_ignore_ascii_case("false")));
+    !a.json
+        && !a.no_input
+        && !env_no_input
+        && io::stdin().is_terminal()
+        && io::stderr().is_terminal()
+}
+
+/// Asks a yes/no question on stderr when allowed (CLI_CONTRACT §4), or fails with
+/// `confirmation_required` naming what `--yes` would confirm. `--yes` skips the question.
+pub fn confirm(a: &Args, question: &str, what: &str, hint: &str) -> Result<(), CliError> {
+    if a.yes {
+        return Ok(());
+    }
+    if !can_prompt(a) {
+        return Err(
+            CliError::new(Code::ConfirmationRequired, what.to_string()).hint(hint.to_string())
+        );
+    }
+    eprint!("{question} [y/N] ");
+    let mut line = String::new();
+    let _ = io::stdin().read_line(&mut line);
+    if matches!(line.trim(), "y" | "Y" | "yes") {
+        Ok(())
+    } else {
+        Err(CliError::new(Code::Cancelled, "nothing changed"))
+    }
+}
+
 /// Longest idle grace period accepted by `--idle-exit` (one day).
 pub const MAX_IDLE_EXIT_S: u64 = 86_400;
 
@@ -291,6 +408,89 @@ fn terminal_verb(word: &str) -> Option<Cmd> {
         "clear-history" => Cmd::ClearHistory,
         _ => return None,
     })
+}
+
+/// The `subak hotkeys <verb>` commands (docs/HOTKEY_CONTRACT.md §10.1).
+fn hotkeys_verb(word: &str) -> Option<Cmd> {
+    Some(match word {
+        "list" | "ls" => Cmd::HotkeysList,
+        "show" => Cmd::HotkeysShow,
+        "set" => Cmd::HotkeysSet,
+        "disable" => Cmd::HotkeysDisable,
+        "enable" => Cmd::HotkeysEnable,
+        "reset" => Cmd::HotkeysReset,
+        "check" => Cmd::HotkeysCheck,
+        "export" => Cmd::HotkeysExport,
+        "import" => Cmd::HotkeysImport,
+        _ => return None,
+    })
+}
+
+/// The option combinations of the `hotkeys` commands (what Kim's clap definitions enforce).
+fn check_hotkeys(cmd: Cmd, a: &Args) -> Result<(), CliError> {
+    let action = !a.positional.is_empty();
+    let scope = a.scope.as_deref();
+    let family = |s: &str| matches!(s, "global" | "app" | "context");
+    match cmd {
+        Cmd::HotkeysList => {
+            if let Some(s) = scope
+                && !(family(s) || kim_hotkeys::Scope::parse(s).is_some())
+            {
+                return Err(CliError::usage(format!(
+                    "`{s}` is not a scope (global, app, context or context:<id>)"
+                )));
+            }
+        }
+        Cmd::HotkeysSet => {
+            if let Some(s) = scope
+                && !matches!(s, "global" | "app")
+            {
+                return Err(CliError::usage(format!(
+                    "`{s}` is not a binding scope (global or app)"
+                ))
+                .hint("context actions take no --scope"));
+            }
+            if a.hold_ms.is_some() && a.trigger.is_none() {
+                return Err(CliError::usage("--hold-ms needs --trigger hold"));
+            }
+        }
+        Cmd::HotkeysDisable => {
+            if usize::from(action) + usize::from(a.all) + usize::from(scope.is_some()) != 1 {
+                return Err(CliError::usage(
+                    "give exactly one of <action>, --all or --scope <global|app|context>",
+                ));
+            }
+            if a.profile.is_some() && !action {
+                return Err(CliError::usage("--profile needs an <action>"));
+            }
+        }
+        Cmd::HotkeysEnable => {
+            if a.all == scope.is_some() {
+                return Err(CliError::usage(
+                    "give exactly one of --all or --scope <global|app|context>",
+                )
+                .hint("to restore one action's default use `subak hotkeys reset <action>`"));
+            }
+        }
+        Cmd::HotkeysReset => {
+            if action == a.all {
+                return Err(CliError::usage("give exactly one of <action> or --all"));
+            }
+            if a.profile.is_some() && !action {
+                return Err(CliError::usage("--profile needs an <action>"));
+            }
+        }
+        _ => {}
+    }
+    if matches!(cmd, Cmd::HotkeysDisable | Cmd::HotkeysEnable)
+        && let Some(s) = scope
+        && !family(s)
+    {
+        return Err(CliError::usage(format!(
+            "`{s}` is not a scope family (global, app or context)"
+        )));
+    }
+    Ok(())
 }
 
 /// The verbs `subak terminal …` had in Steps 10–11; only these are deprecated aliases.
@@ -426,6 +626,75 @@ pub fn parse(raw: &[String]) -> Result<(Cmd, Args), (String, CliError)> {
             "--history" => {
                 a.history = true;
                 opts.push("--history");
+            }
+            "--scope" => {
+                opts.push("--scope");
+                a.scope = value("--scope");
+            }
+            "--profile" => {
+                opts.push("--profile");
+                if let Some(v) = value("--profile") {
+                    if v.trim().is_empty() {
+                        bad.get_or_insert(CliError::usage("--profile needs a name"));
+                    }
+                    a.profile = Some(v);
+                }
+            }
+            "--trigger" => {
+                opts.push("--trigger");
+                if let Some(v) = value("--trigger") {
+                    if !matches!(v.as_str(), "press" | "release" | "hold") {
+                        bad.get_or_insert(
+                            CliError::usage(format!("invalid --trigger `{v}`"))
+                                .hint("press, release or hold"),
+                        );
+                    }
+                    a.trigger = Some(v);
+                }
+            }
+            "--hold-ms" => {
+                opts.push("--hold-ms");
+                if let Some(v) = value("--hold-ms") {
+                    a.hold_ms = v.parse::<u64>().ok();
+                    if a.hold_ms.is_none() {
+                        bad.get_or_insert(
+                            CliError::usage(format!("invalid --hold-ms `{v}`"))
+                                .hint("milliseconds from 200 to 5000"),
+                        );
+                    }
+                }
+            }
+            "--min-severity" => {
+                opts.push("--min-severity");
+                if let Some(v) = value("--min-severity") {
+                    if !matches!(v.as_str(), "error" | "warning" | "info") {
+                        bad.get_or_insert(
+                            CliError::usage(format!("invalid --min-severity `{v}`"))
+                                .hint("error, warning or info"),
+                        );
+                    }
+                    a.min_severity = Some(v);
+                }
+            }
+            "--repeat" => {
+                a.repeat = true;
+                opts.push("--repeat");
+            }
+            "--replace" => {
+                a.replace = true;
+                opts.push("--replace");
+            }
+            "--allow-conflict" => {
+                a.allow_conflict = true;
+                opts.push("--allow-conflict");
+            }
+            "--all" => {
+                a.all = true;
+                opts.push("--all");
+            }
+            "--all-tools" => {
+                a.all_tools = true;
+                opts.push("--all-tools");
             }
             "--vt" => {
                 a.vt = true;
@@ -575,6 +844,22 @@ pub fn parse(raw: &[String]) -> Result<(Cmd, Args), (String, CliError)> {
         ["host", "health", ..] => (Cmd::HostHealth, 2),
         ["host", "attach", ..] => (Cmd::HostAttach, 2),
         ["host", "stop", ..] => (Cmd::HostStop, 2),
+        ["hotkeys", sub, ..] if hotkeys_verb(sub).is_some() => {
+            (hotkeys_verb(sub).expect("checked above"), 2)
+        }
+        ["hotkeys", ..] => {
+            return Err((
+                "hotkeys".into(),
+                CliError::usage(if words.len() == 1 {
+                    "`subak hotkeys` needs a command".to_string()
+                } else {
+                    format!("unknown command `{}`", words.join(" "))
+                })
+                .hint(
+                    "hotkeys commands: list, show, set, disable, enable, reset, check, export, import (see `subak --help`)",
+                ),
+            ));
+        }
         ["terminal", verb, ..] if STEP10_VERBS.contains(verb) => {
             let cmd = terminal_verb(verb).expect("every Step 10 verb is a Terminal verb");
             a.alias = Some(format!("terminal {verb}"));
@@ -603,7 +888,7 @@ pub fn parse(raw: &[String]) -> Result<(Cmd, Args), (String, CliError)> {
             return Err((
                 "subak".into(),
                 CliError::usage(format!("unknown command `{}`", words.join(" "))).hint(
-                    "commands: new, ls, info, status, attach, detach, rename, stop, kill, rm, capture, history, clear-history, host, capabilities (see `subak --help`)",
+                    "commands: new, ls, info, status, attach, detach, rename, stop, kill, rm, capture, history, clear-history, host, hotkeys, capabilities (see `subak --help`)",
                 ),
             ));
         }
@@ -611,7 +896,7 @@ pub fn parse(raw: &[String]) -> Result<(Cmd, Args), (String, CliError)> {
     let typed = words[..n].join(" ");
     let (names, min) = cmd.positionals();
     let rest = &words[n..];
-    if rest.len() > names.len() || rest.len() < min {
+    if (rest.len() > names.len() && !cmd.variadic()) || rest.len() < min {
         let want = if names.is_empty() {
             "no arguments".to_string()
         } else {
@@ -619,7 +904,9 @@ pub fn parse(raw: &[String]) -> Result<(Cmd, Args), (String, CliError)> {
                 .iter()
                 .enumerate()
                 .map(|(i, w)| {
-                    if i < min {
+                    if i < min && cmd.variadic() && i + 1 == names.len() {
+                        format!("<{w}>...")
+                    } else if i < min {
                         format!("<{w}>")
                     } else {
                         format!("[<{w}>]")
@@ -669,6 +956,9 @@ pub fn parse(raw: &[String]) -> Result<(Cmd, Args), (String, CliError)> {
             CliError::usage("--history and --start conflict")
                 .hint("--history is the same as --start -"),
         );
+    }
+    if cmd.is_hotkeys() {
+        check_hotkeys(cmd, &a).map_err(|e| (cmd.name().to_string(), e))?;
     }
     if cmd.streams(&a) && a.json {
         return fail(CliError::usage(format!(
@@ -819,7 +1109,7 @@ mod tests {
         assert!(cmd.streams(&a));
         let usage = |args: &[&str]| {
             let (name, e) = p(args).unwrap_err();
-            assert_eq!(e.code, crate::output::Code::Usage, "{args:?}");
+            assert_eq!(e.code, Code::Usage, "{args:?}");
             name
         };
         assert_eq!(
@@ -888,7 +1178,7 @@ mod tests {
         assert_eq!(usage(&["stop", "a", "--force"]).0, "stop");
         assert_eq!(usage(&["kill", "a", "--kill-terminals"]).0, "kill");
         for (_, e) in [usage(&["frobnicate"]), usage(&["host", "frob"])] {
-            assert_eq!(e.code, crate::output::Code::Usage);
+            assert_eq!(e.code, Code::Usage);
         }
     }
 
@@ -948,9 +1238,120 @@ mod tests {
             vec!["terminal", "list", "--env", "TOKEN=s3cr3t-never-echoed"],
         ] {
             let (_, e) = p(&bad).unwrap_err();
-            assert_eq!(e.code, crate::output::Code::Usage, "{bad:?}");
+            assert_eq!(e.code, Code::Usage, "{bad:?}");
             assert!(!e.message.contains(secret), "{}", e.message);
         }
+    }
+
+    #[test]
+    fn hotkeys_commands_parse_with_their_options_only() {
+        let (cmd, a) = p(&[
+            "hotkeys",
+            "set",
+            "tab.next",
+            "Ctrl+PageDown",
+            "Ctrl+K Ctrl+N",
+            "--replace",
+            "--dry-run",
+            "--json",
+        ])
+        .unwrap();
+        assert_eq!(cmd, Cmd::HotkeysSet);
+        assert_eq!(cmd.name(), "hotkeys.set");
+        assert!(cmd.is_hotkeys() && a.replace && a.dry_run && a.json);
+        assert_eq!(a.positional, ["tab.next", "Ctrl+PageDown", "Ctrl+K Ctrl+N"]);
+        let (cmd, a) = p(&["hotkeys", "list", "--scope", "context:terminal"]).unwrap();
+        assert_eq!(cmd, Cmd::HotkeysList);
+        assert_eq!(a.scope.as_deref(), Some("context:terminal"));
+        let (cmd, a) = p(&[
+            "hotkeys",
+            "check",
+            "--all-tools",
+            "--min-severity",
+            "warning",
+        ])
+        .unwrap();
+        assert_eq!(cmd, Cmd::HotkeysCheck);
+        assert!(a.all_tools);
+        assert_eq!(a.min_severity.as_deref(), Some("warning"));
+        let (cmd, a) = p(&["hotkeys", "reset", "--all", "-y"]).unwrap();
+        assert_eq!(cmd, Cmd::HotkeysReset);
+        assert!(a.all && a.yes);
+        assert_eq!(
+            p(&["hotkeys", "disable", "--scope", "app"]).unwrap().0,
+            Cmd::HotkeysDisable
+        );
+        assert_eq!(
+            p(&["hotkeys", "enable", "--all"]).unwrap().0,
+            Cmd::HotkeysEnable
+        );
+        assert_eq!(p(&["hotkeys", "export"]).unwrap().0, Cmd::HotkeysExport);
+        assert_eq!(
+            p(&["hotkeys", "import", "x.json"]).unwrap().0,
+            Cmd::HotkeysImport
+        );
+        assert_eq!(
+            p(&["hotkeys", "show", "terminal.new"]).unwrap().0,
+            Cmd::HotkeysShow
+        );
+        let usage = |args: &[&str]| {
+            let (name, e) = p(args).unwrap_err();
+            assert_eq!(e.code, Code::Usage, "{args:?}");
+            name
+        };
+        assert_eq!(usage(&["hotkeys"]), "hotkeys");
+        assert_eq!(usage(&["hotkeys", "frob"]), "hotkeys");
+        assert_eq!(usage(&["hotkeys", "set", "tab.next"]), "hotkeys.set");
+        assert_eq!(usage(&["hotkeys", "show"]), "hotkeys.show");
+        assert_eq!(usage(&["hotkeys", "show", "a", "b"]), "hotkeys.show");
+        assert_eq!(
+            usage(&["hotkeys", "set", "a", "F5", "--scope", "context"]),
+            "hotkeys.set"
+        );
+        assert_eq!(
+            usage(&["hotkeys", "set", "a", "F5", "--hold-ms", "500"]),
+            "hotkeys.set"
+        );
+        assert_eq!(
+            usage(&["hotkeys", "set", "a", "F5", "--trigger", "tap"]),
+            "hotkeys.set"
+        );
+        assert_eq!(
+            usage(&["hotkeys", "set", "a", "F5", "--yes"]),
+            "hotkeys.set"
+        );
+        assert_eq!(usage(&["hotkeys", "disable"]), "hotkeys.disable");
+        assert_eq!(
+            usage(&["hotkeys", "disable", "a", "--all"]),
+            "hotkeys.disable"
+        );
+        assert_eq!(
+            usage(&["hotkeys", "disable", "--scope", "window"]),
+            "hotkeys.disable"
+        );
+        assert_eq!(
+            usage(&["hotkeys", "disable", "--all", "--profile", "x"]),
+            "hotkeys.disable"
+        );
+        assert_eq!(usage(&["hotkeys", "enable"]), "hotkeys.enable");
+        assert_eq!(
+            usage(&["hotkeys", "enable", "--all", "--scope", "app"]),
+            "hotkeys.enable"
+        );
+        assert_eq!(usage(&["hotkeys", "reset"]), "hotkeys.reset");
+        assert_eq!(usage(&["hotkeys", "reset", "a", "--all"]), "hotkeys.reset");
+        assert_eq!(
+            usage(&["hotkeys", "list", "--scope", "window"]),
+            "hotkeys.list"
+        );
+        assert_eq!(
+            usage(&["hotkeys", "check", "--min-severity", "fatal"]),
+            "hotkeys.check"
+        );
+        assert_eq!(
+            usage(&["hotkeys", "export", "--endpoint", "x"]),
+            "hotkeys.export"
+        );
     }
 
     #[test]

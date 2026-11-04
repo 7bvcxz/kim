@@ -2,13 +2,16 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/hellomouv/kim/blob/main/docs/contracts/schemas/subak-cli-v1.schema.json",
   "title": "subak --json output, schema_version 1",
-  "description": "Every document `subak ... --json` prints (Step 12; capture, history and clear-history since Step 13; docs/SUBAK_CLI.md, docs/CLI_CONTRACT.md): the cli-envelope-v1 envelope, the `data` of each command (selected by `command`; the deprecated `subak terminal <verb>` spelling reports the canonical name), and Subak's error-code registry with its exit codes. Terminal objects are the ipc-v1 definitions, copied verbatim (a test keeps them identical); the capabilities document is tool-capabilities-v1. Objects are closed so regression tests notice any change; consumers must still ignore unknown fields and tolerate new enum values (CLI_CONTRACT §8).",
+  "description": "Every document `subak ... --json` prints (Step 12; capture, history and clear-history since Step 13; the `hotkeys` group since Step 17, whose data hotkeys-cli-v1 specifies; docs/SUBAK_CLI.md, docs/CLI_CONTRACT.md): the cli-envelope-v1 envelope, the `data` of each command (selected by `command`; the deprecated `subak terminal <verb>` spelling reports the canonical name), and Subak's error-code registry with its exit codes. Terminal objects are the ipc-v1 definitions, copied verbatim (a test keeps them identical); the capabilities document is tool-capabilities-v1. Objects are closed so regression tests notice any change; consumers must still ignore unknown fields and tolerate new enum values (CLI_CONTRACT §8).",
   "oneOf": [
     {
       "$ref": "#/$defs/failure"
     },
     {
       "$ref": "#/$defs/ok_capabilities"
+    },
+    {
+      "$ref": "#/$defs/ok_hotkeys"
     },
     {
       "$ref": "#/$defs/ok_new"
@@ -334,6 +337,31 @@
             },
             "data": {
               "$ref": "#/$defs/data_host_stop"
+            }
+          }
+        }
+      ]
+    },
+    "ok_hotkeys": {
+      "description": "`subak hotkeys ...` (Step 17): the data is specified by hotkeys-cli-v1 (list_data, show_data, change_data, check_data, export_data), as for `kim hotkeys` and `noeul hotkeys`.",
+      "allOf": [
+        {
+          "$ref": "#/$defs/success"
+        },
+        {
+          "properties": {
+            "command": {
+              "enum": [
+                "hotkeys.list",
+                "hotkeys.show",
+                "hotkeys.set",
+                "hotkeys.disable",
+                "hotkeys.enable",
+                "hotkeys.reset",
+                "hotkeys.check",
+                "hotkeys.export",
+                "hotkeys.import"
+              ]
             }
           }
         }
@@ -1636,7 +1664,7 @@
       }
     },
     "error_code": {
-      "description": "Every error code subak reports (docs/CLI_CONTRACT.md §6; crates/subak/src/output.rs).",
+      "description": "Every error code subak reports (docs/CLI_CONTRACT.md §6; crates/subak/src/output.rs). The `hotkey*` and `action_not_found` codes come from the `subak hotkeys` group (Step 17), whose documents follow hotkeys-cli-v1.",
       "enum": [
         "io",
         "internal",
@@ -1660,7 +1688,14 @@
         "invalid_state",
         "terminals_running",
         "confirmation_required",
-        "cancelled"
+        "cancelled",
+        "hotkey_invalid",
+        "hotkey_reserved",
+        "action_not_found",
+        "hotkeys_invalid",
+        "hotkey_unsupported",
+        "hotkeys_from_newer_version",
+        "hotkey_conflict"
       ]
     },
     "error": {
@@ -1724,7 +1759,9 @@
               "enum": [
                 "usage",
                 "invalid_name",
-                "ambiguous_target"
+                "ambiguous_target",
+                "hotkey_invalid",
+                "hotkey_reserved"
               ]
             }
           }
@@ -1737,7 +1774,8 @@
             "code": {
               "enum": [
                 "host_not_running",
-                "target_not_found"
+                "target_not_found",
+                "action_not_found"
               ]
             }
           }
@@ -1750,7 +1788,8 @@
             "code": {
               "enum": [
                 "protocol_error",
-                "host_identity_mismatch"
+                "host_identity_mismatch",
+                "hotkeys_invalid"
               ]
             }
           }
@@ -1764,7 +1803,9 @@
               "enum": [
                 "unsupported_platform",
                 "host_too_old",
-                "host_too_new"
+                "host_too_new",
+                "hotkey_unsupported",
+                "hotkeys_from_newer_version"
               ]
             }
           }
@@ -1794,7 +1835,8 @@
                 "name_conflict",
                 "invalid_state",
                 "terminals_running",
-                "confirmation_required"
+                "confirmation_required",
+                "hotkey_conflict"
               ]
             }
           }

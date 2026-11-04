@@ -92,3 +92,10 @@ Bindings are configurable per profile.
   ([ADR 0039](0039-subak-window-plain-win32-client.md)). Close, Alt+F4 and a crash are detaches
   (tested with pids). Its dispatch implements stages 1, 3 and 4 before `TranslateMessage`; the
   prefix (stage 2) and the tab shortcuts arrive in Steps 17 and 23.
+- 2026-11-04 (Step 17): stage 3 holds Subak's hotkey-contract actions (`Ctrl+T`, `Ctrl+W`,
+  `Ctrl+Tab`, `Ctrl+Shift+Tab`, `Ctrl+Shift+R` and the Step 16 keys), read from the shipped
+  manifest and `hotkeys.json`; before it, the window's own modal parts (the busy confirmation,
+  the rename field) take the keyboard ([ADR 0042](0042-subak-window-tabs-and-safe-close.md)).
+  "Terminal-first mode" is available as disabled overrides (`subak hotkeys disable …`); the
+  `Ctrl+W` "hide tab" setting as `subak hotkeys set tab.hide Ctrl+W --replace`. The prefix and
+  its pass-through remain Step 23.

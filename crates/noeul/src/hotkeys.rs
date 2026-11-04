@@ -34,7 +34,9 @@
 //! `annotate.width-down`/`-up` (`char:[`/`char:]`, matched from the typed character), the seven
 //! tools and `annotate.clear-all` (bindable, no default), and the object keys `annotate.delete`
 //! (`Delete`), `annotate.select-next`/`-previous` (`N`/`Shift+N`) and the order keys (`PageUp`,
-//! `PageDown`, `Shift+PageUp`, `Shift+PageDown`) — and `pin.annotate` (`Space`).
+//! `PageDown`, `Shift+PageUp`, `Shift+PageDown`) — and `pin.annotate` (`Space`). Step 57 added
+//! the privacy tools `annotate.mosaic`, `annotate.blur`, `annotate.eraser` and `annotate.redact`
+//! (bindable, no default).
 
 use crate::paths::Paths;
 use kim_hotkeys::check::{Conflict, Severity, ToolState, analyze};
@@ -96,6 +98,10 @@ pub const IMPLEMENTED: &[&str] = &[
     "annotate.pen",
     "annotate.marker",
     "annotate.text",
+    "annotate.mosaic",
+    "annotate.blur",
+    "annotate.eraser",
+    "annotate.redact",
     "annotate.clear-all",
     "annotate.delete",
     "annotate.select-next",

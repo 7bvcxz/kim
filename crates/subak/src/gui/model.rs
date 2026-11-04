@@ -1,15 +1,28 @@
 //! The window's side of the Host conversation (IPC v1, docs/contracts/IPC_PROTOCOL.md), as a
 //! state machine without I/O: it is told what arrived (a connection, a response, an event, a
-//! data frame, a disconnect, a key in a chooser) and answers with requests to send and what the
+//! data frame, a disconnect, a user action) and answers with requests to send and what the
 //! window must do. The window module does the pipe and the drawing; this module decides, and is
 //! unit-tested on its own.
 //!
-//! Rules it keeps (ADR 0009, ADR 0020, `SUBAK-FR-003`, `SUBAK-FR-015`):
+//! **Tabs (Step 17).** The window shows the Host's Terminals as tabs, in the Host's order
+//! (creation order, SESSION_MODEL §1) unless the user moved one, minus the ones the user hid in
+//! this window. One tab is active: its pane is attached interactively (the others are not
+//! attached, so they cost nothing); switching detaches the old pane and attaches the new one,
+//! whose screen and history come back from the Host's snapshot (Step 13). The tabs follow every
+//! client's changes through the `terminals` events: created, renamed, state changes, removed.
 //!
-//! - it never asks the Host to create, stop, kill or remove anything: it lists, subscribes,
-//!   attaches (interactively, at the window's grid size), resizes and detaches;
-//! - it attaches to an existing Terminal only — the one named on the command line, else the one
-//!   shown last if it still runs, else the only running one, else the user chooses;
+//! Rules it keeps (ADR 0009, ADR 0020, docs/SESSION_MODEL.md §4, `SUBAK-FR-003`,
+//! `SUBAK-FR-014`, `SUBAK-FR-015`):
+//!
+//! - **three distinct ends.** *Hiding a tab* (its `×`, "Hide tab") is a detach of this window:
+//!   the Terminal keeps running and nothing is sent but `pane.detach`. *Closing a Terminal*
+//!   (`Ctrl+W`, "Close Terminal") is `terminal.kill` of exactly that Terminal **by id**, first
+//!   without `force`: the Host refuses a busy Terminal (`busy`), the window then asks, and only
+//!   the user's explicit confirmation sends `force` — again by id, so a rename or another
+//!   Terminal can never be hit. *Removing a stored Terminal* (stopped or failed; `Ctrl+W` on it)
+//!   is `terminal.remove` without `force`, which the Host refuses for anything running;
+//! - closing the window is a detach (`pane.detach`), never anything else;
+//! - it only creates a Terminal on an explicit `terminal.new` (`Ctrl+T`, `+`), never by opening;
 //! - when the Host goes away it keeps the last screen, retries with a growing delay without
 //!   starting a Host, and reattaches to the same Terminal (by id) when a Host serves it again.
 
@@ -17,11 +30,14 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::time::Duration;
 
-/// A Terminal as the chooser and the title show it (`terminal.list` with `detail: "full"`).
+/// A Terminal as the tabs and the title show it (`terminal.list` with `detail: "full"`, or the
+/// `terminal` of `terminal.created` and `terminal.create`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TermInfo {
     pub id: String,
     pub name: String,
+    /// The Host's state; locally also `exited` (its program ended, shown last) and `removed`
+    /// (no longer in the Host, shown last).
     pub state: String,
     pub pid: Option<u32>,
     pub program: String,
@@ -32,6 +48,16 @@ pub struct TermInfo {
 impl TermInfo {
     pub fn running(&self) -> bool {
         self.state == "running"
+    }
+
+    /// Kept by the Host without a process.
+    pub fn stored(&self) -> bool {
+        matches!(self.state.as_str(), "stopped" | "failed")
+    }
+
+    /// No longer in the Host (only the shown tab keeps it, with its last screen).
+    pub fn gone(&self) -> bool {
+        matches!(self.state.as_str(), "removed" | "exited")
     }
 
     fn from_full(t: &Value) -> Option<Self> {
@@ -66,7 +92,7 @@ pub enum EndReason {
     Exited(Option<i64>),
     /// Another client detached this window (`subak detach`); the Terminal still runs.
     DetachedBy(Option<String>),
-    /// It was removed (killed or removed by a client).
+    /// It was removed (killed or removed by another client).
     Removed,
     /// It was stopped and is kept as `stopped`.
     Stopped,
@@ -77,25 +103,22 @@ pub enum EndReason {
 pub enum Phase {
     /// Connecting (and starting a Host on demand on the first connection).
     Connecting,
-    /// Connected; no Terminal runs. A Terminal created later opens by itself.
+    /// Connected; no tab. A Terminal created later opens by itself.
     Empty { notice: Option<String> },
-    /// Several Terminals run and none was named: the user chooses.
-    Choosing {
-        list: Vec<TermInfo>,
-        selected: usize,
-        notice: Option<String>,
-    },
-    /// `pane.attach` is on its way.
+    /// The active tab's `pane.attach` is on its way (or waits until it runs).
     Attaching(TermInfo),
-    /// The pane is shown live.
+    /// The active tab's pane is shown live.
     Attached {
         term: TermInfo,
         stream: u32,
         pane_pid: u32,
         pane_id: String,
     },
-    /// The pane was live and is not any more; its last screen stays.
+    /// The active tab's pane was live and is not any more; its last screen stays.
     Ended { term: TermInfo, why: EndReason },
+    /// The active tab's Terminal is kept by the Host without a process (stopped or failed):
+    /// nothing to attach; `Ctrl+W` removes it.
+    Stored(TermInfo),
     /// The connection to the Host is gone; reconnecting (the last screen stays).
     Disconnected {
         last: Option<TermInfo>,
@@ -116,10 +139,10 @@ impl Phase {
         match self {
             Self::Connecting => "connecting",
             Self::Empty { .. } => "empty",
-            Self::Choosing { .. } => "choosing",
             Self::Attaching(_) => "attaching",
             Self::Attached { .. } => "attached",
             Self::Ended { .. } => "ended",
+            Self::Stored(_) => "stored",
             Self::Disconnected { .. } => "disconnected",
             Self::Failed { .. } => "failed",
         }
@@ -134,6 +157,17 @@ impl Phase {
     }
 }
 
+/// A Terminal the user asked to close while it is busy: the window asks before `force`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Confirm {
+    pub id: String,
+    pub name: String,
+    /// The pane's program (redacted by the Host).
+    pub program: String,
+    /// Processes in its job.
+    pub processes: u64,
+}
+
 /// What the window must do after the model handled something.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Effect {
@@ -141,6 +175,8 @@ pub enum Effect {
     Send(Value),
     /// The phase changed: redraw, retitle, report it (tests).
     Phase,
+    /// The tabs changed (list, order, names, states, the active one): redraw the tab bar.
+    Tabs,
     /// Start a fresh view of `cols × rows` keeping `history` lines: a snapshot begins.
     ResetView {
         cols: u16,
@@ -153,6 +189,12 @@ pub enum Effect {
     Reconnect(Duration),
     /// Connect again now, starting a Host on demand (the user retried a failed start).
     Connect,
+    /// Tell the user something (a refused or failed action) in a banner.
+    Notice(String),
+    /// Ask the user before ending this busy Terminal.
+    Confirm(Confirm),
+    /// The rename the user asked for finished (`Err`: why it was refused).
+    Renamed(Result<(), String>),
 }
 
 /// What a data frame is for.
@@ -173,7 +215,7 @@ pub enum Frame {
 /// What the user asked for on the command line or what is remembered.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Want {
-    /// Nothing: the last one, the only one, or a choice.
+    /// Nothing: the last one, else the first running tab.
     Any,
     /// `subak-gui <target>`: a name or an id.
     Target(String),
@@ -188,6 +230,10 @@ enum Pending {
     Attach(Option<TermInfo>),
     Resize,
     Detach,
+    Create,
+    Kill { id: String, name: String },
+    Remove { id: String, name: String },
+    Rename,
 }
 
 /// Retry delays after a disconnect: 0.5, 1, 2, 4, 8 s, then every 10 s.
@@ -200,6 +246,14 @@ pub fn reconnect_delay(attempt: u32) -> Duration {
 #[derive(Debug)]
 pub struct Model {
     pub phase: Phase,
+    /// The tabs, in display order.
+    tabs: Vec<TermInfo>,
+    /// Terminals hidden in this window (they keep running and are listed by `subak ls`).
+    hidden: Vec<TermInfo>,
+    /// Terminals this window is closing (`Ctrl+W`): their removal closes the tab quietly.
+    closing: Vec<String>,
+    /// A starting Terminal the active tab waits for (attached once it runs).
+    awaiting: Option<String>,
     next_id: u64,
     pending: HashMap<u64, Pending>,
     want: Want,
@@ -223,6 +277,10 @@ impl Model {
     pub fn new(want: Want, grid: (u16, u16)) -> Self {
         Self {
             phase: Phase::Connecting,
+            tabs: Vec::new(),
+            hidden: Vec::new(),
+            closing: Vec::new(),
+            awaiting: None,
             next_id: 1,
             pending: HashMap::new(),
             want,
@@ -244,15 +302,32 @@ impl Model {
         self.in_snapshot || self.snapshot_size.is_some()
     }
 
-    /// The shown Terminal, live or not.
+    /// The shown Terminal (the active tab), live or not.
     pub fn terminal(&self) -> Option<&TermInfo> {
         match &self.phase {
-            Phase::Attached { term, .. } | Phase::Ended { term, .. } | Phase::Attaching(term) => {
-                Some(term)
-            }
+            Phase::Attached { term, .. }
+            | Phase::Ended { term, .. }
+            | Phase::Attaching(term)
+            | Phase::Stored(term) => Some(term),
             Phase::Disconnected { last, .. } => last.as_ref(),
             _ => None,
         }
+    }
+
+    /// The tabs, in display order.
+    pub fn tabs(&self) -> &[TermInfo] {
+        &self.tabs
+    }
+
+    /// The Terminals hidden in this window.
+    pub fn hidden(&self) -> &[TermInfo] {
+        &self.hidden
+    }
+
+    /// The active tab's index.
+    pub fn active(&self) -> Option<usize> {
+        let id = &self.terminal()?.id;
+        self.tabs.iter().position(|t| &t.id == id)
     }
 
     /// The stream to send input to, while the pane is live.
@@ -276,6 +351,7 @@ impl Model {
         if self.phase != phase {
             self.phase = phase;
             out.push(Effect::Phase);
+            out.push(Effect::Tabs);
         }
     }
 
@@ -283,6 +359,8 @@ impl Model {
     pub fn on_connected(&mut self) -> Vec<Effect> {
         self.connected = true;
         self.pending.clear();
+        self.closing.clear();
+        self.awaiting = None;
         self.host_stopping = None;
         self.in_snapshot = false;
         let mut out = vec![
@@ -296,6 +374,7 @@ impl Model {
         if !self.phase.shows_pane() {
             self.set(Phase::Connecting, &mut out);
         }
+        out.push(Effect::Tabs);
         out
     }
 
@@ -338,13 +417,10 @@ impl Model {
     pub fn on_disconnected(&mut self) -> Vec<Effect> {
         self.connected = false;
         self.pending.clear();
+        self.closing.clear();
+        self.awaiting = None;
         self.in_snapshot = false;
-        let last = match &self.phase {
-            Phase::Attached { term, .. } | Phase::Attaching(term) => Some(term.clone()),
-            Phase::Ended { term, .. } => Some(term.clone()),
-            Phase::Disconnected { last, .. } => last.clone(),
-            _ => None,
-        };
+        let last = self.terminal().cloned();
         if let Some(t) = &last {
             self.want = Want::Last {
                 id: t.id.clone(),
@@ -372,12 +448,6 @@ impl Model {
     pub fn activate(&mut self) -> Vec<Effect> {
         let mut out = Vec::new();
         match self.phase.clone() {
-            Phase::Choosing { list, selected, .. } => {
-                if let Some(t) = list.get(selected) {
-                    out.push(self.attach(Some(t.clone()), &t.id));
-                    self.set(Phase::Attaching(t.clone()), &mut out);
-                }
-            }
             Phase::Failed { .. } => {
                 out.push(Effect::Connect);
                 self.set(Phase::Connecting, &mut out);
@@ -390,36 +460,14 @@ impl Model {
                 out.push(self.attach(Some(term.clone()), &term.id));
                 self.set(Phase::Attaching(term), &mut out);
             }
-            Phase::Ended { .. } | Phase::Empty { .. } if self.connected => {
+            Phase::Ended { term, .. } if term.gone() && self.connected => {
+                self.close_tab(&term.id, &mut out);
+            }
+            Phase::Empty { .. } if self.connected => {
                 self.want = Want::Any;
                 out.push(self.request("terminal.list", json!({"detail": "full"}), Pending::List));
             }
             _ => {}
-        }
-        out
-    }
-
-    /// Moves the chooser's selection by `delta` rows (or to `to`, a row index).
-    pub fn choose(&mut self, delta: isize, to: Option<usize>) -> Vec<Effect> {
-        let mut out = Vec::new();
-        if let Phase::Choosing {
-            list,
-            selected,
-            notice,
-        } = &self.phase
-            && !list.is_empty()
-        {
-            let n = list.len();
-            let next = to.unwrap_or_else(|| {
-                (selected.cast_signed() + delta).clamp(0, n.cast_signed() - 1) as usize
-            });
-            let next = next.min(n - 1);
-            let phase = Phase::Choosing {
-                list: list.clone(),
-                selected: next,
-                notice: notice.clone(),
-            };
-            self.set(phase, &mut out);
         }
         out
     }
@@ -433,6 +481,229 @@ impl Model {
             json!({"target": target, "interactive": true, "size": {"cols": cols, "rows": rows}}),
             Pending::Attach(term),
         )
+    }
+
+    /// Leaves the active tab (detaching its pane) and shows `t`.
+    fn show(&mut self, t: TermInfo, out: &mut Vec<Effect>) {
+        if let Phase::Attached { stream, .. } = self.phase {
+            out.push(self.request("pane.detach", json!({"stream_id": stream}), Pending::Detach));
+        }
+        // A tab whose Terminal is gone disappears once it is left.
+        if let Some(cur) = self.terminal().cloned()
+            && cur.gone()
+            && cur.id != t.id
+        {
+            self.tabs.retain(|x| x.id != cur.id);
+        }
+        self.awaiting = None;
+        if t.running() {
+            out.push(self.attach(Some(t.clone()), &t.id));
+            self.set(Phase::Attaching(t), out);
+        } else if t.stored() || t.gone() {
+            self.set(Phase::Stored(t), out);
+        } else {
+            // Starting (or stopping): attach once it runs.
+            self.awaiting = Some(t.id.clone());
+            self.set(Phase::Attaching(t), out);
+        }
+        out.push(Effect::Tabs);
+    }
+
+    /// Shows tab `i`.
+    pub fn select(&mut self, i: usize) -> Vec<Effect> {
+        let mut out = Vec::new();
+        if !self.connected {
+            return out;
+        }
+        if let Some(t) = self.tabs.get(i).cloned()
+            && self.active() != Some(i)
+        {
+            self.show(t, &mut out);
+        }
+        out
+    }
+
+    /// Shows the next (`delta` 1) or previous (`-1`) tab, wrapping around.
+    pub fn cycle(&mut self, delta: isize) -> Vec<Effect> {
+        let n = self.tabs.len();
+        if n == 0 || !self.connected {
+            return Vec::new();
+        }
+        let cur = self.active().unwrap_or(0).cast_signed();
+        let next = (cur + delta).rem_euclid(n.cast_signed()) as usize;
+        self.select(next)
+    }
+
+    /// Moves tab `i` by `delta` places (the order is this window's; the Host keeps its own).
+    pub fn move_tab(&mut self, i: usize, delta: isize) -> Vec<Effect> {
+        let n = self.tabs.len();
+        let to = i.cast_signed() + delta;
+        if i >= n || to < 0 || to >= n.cast_signed() {
+            return Vec::new();
+        }
+        let t = self.tabs.remove(i);
+        self.tabs.insert(to as usize, t);
+        vec![Effect::Tabs]
+    }
+
+    /// `terminal.new` (`Ctrl+T`, `+`): a Terminal with the Host's defaults (its default shell
+    /// in the user's profile folder), at this window's size; shown once it runs.
+    pub fn create(&mut self) -> Vec<Effect> {
+        if !self.connected {
+            return vec![Effect::Notice(
+                "Not connected to the Subak Host; no Terminal was created".into(),
+            )];
+        }
+        let (cols, rows) = self.grid;
+        vec![self.request(
+            "terminal.create",
+            json!({"size": {"cols": cols, "rows": rows}}),
+            Pending::Create,
+        )]
+    }
+
+    /// Hides tab `i`: a detach of this window only. The Terminal keeps running (ADR 0020 §7).
+    pub fn hide(&mut self, i: usize) -> Vec<Effect> {
+        let mut out = Vec::new();
+        let Some(t) = self.tabs.get(i).cloned() else {
+            return out;
+        };
+        let was_active = self.active() == Some(i);
+        self.tabs.remove(i);
+        if !t.gone() {
+            self.hidden.push(t);
+        }
+        if was_active {
+            if let Phase::Attached { stream, .. } = self.phase {
+                out.push(self.request(
+                    "pane.detach",
+                    json!({"stream_id": stream}),
+                    Pending::Detach,
+                ));
+            }
+            self.after_close(i, &mut out);
+        }
+        out.push(Effect::Tabs);
+        out
+    }
+
+    /// Shows a hidden Terminal again as the last tab, and opens it.
+    pub fn unhide(&mut self, id: &str) -> Vec<Effect> {
+        let mut out = Vec::new();
+        if let Some(k) = self.hidden.iter().position(|t| t.id == id) {
+            let t = self.hidden.remove(k);
+            self.tabs.push(t.clone());
+            if self.connected {
+                self.show(t, &mut out);
+            }
+            out.push(Effect::Tabs);
+        }
+        out
+    }
+
+    /// After the active tab at `i` was taken away: show the tab now at `i` (the right
+    /// neighbour), else the one before it, else nothing.
+    fn after_close(&mut self, i: usize, out: &mut Vec<Effect>) {
+        self.awaiting = None;
+        let next = self
+            .tabs
+            .get(i)
+            .or_else(|| i.checked_sub(1).and_then(|j| self.tabs.get(j)))
+            .cloned();
+        match next {
+            Some(t) if self.connected => {
+                // The old phase's pane is no longer ours: no detach for it.
+                self.phase = Phase::Empty { notice: None };
+                self.show(t, out);
+            }
+            _ => self.set(Phase::Empty { notice: None }, out),
+        }
+    }
+
+    /// Takes the tab of `id` away (closed or removed by this window).
+    fn close_tab(&mut self, id: &str, out: &mut Vec<Effect>) {
+        self.closing.retain(|c| c != id);
+        let Some(i) = self.tabs.iter().position(|t| t.id == id) else {
+            return;
+        };
+        let was_active = self.active() == Some(i);
+        self.tabs.remove(i);
+        if was_active {
+            self.after_close(i, out);
+        }
+        out.push(Effect::Tabs);
+    }
+
+    /// `terminal.close` (`Ctrl+W`, "Close Terminal") on the active tab: kill a live Terminal
+    /// (confirmed when busy), remove a stored one, close the tab of one that is gone.
+    pub fn close_active(&mut self) -> Vec<Effect> {
+        if !self.connected {
+            return vec![Effect::Notice(
+                "Not connected to the Subak Host; nothing was closed".into(),
+            )];
+        }
+        let Some(t) = self.terminal().cloned() else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        if t.gone() {
+            self.close_tab(&t.id, &mut out);
+        } else if t.stored() {
+            self.closing.push(t.id.clone());
+            out.push(self.request(
+                "terminal.remove",
+                json!({"target": t.id}),
+                Pending::Remove {
+                    id: t.id.clone(),
+                    name: t.name.clone(),
+                },
+            ));
+        } else {
+            out.push(self.kill(&t, false));
+        }
+        out
+    }
+
+    fn kill(&mut self, t: &TermInfo, force: bool) -> Effect {
+        self.closing.push(t.id.clone());
+        self.request(
+            "terminal.kill",
+            json!({"target": t.id, "force": force}),
+            Pending::Kill {
+                id: t.id.clone(),
+                name: t.name.clone(),
+            },
+        )
+    }
+
+    /// The user confirmed ending the busy Terminal `id`: `terminal.kill` with `force`, by id.
+    pub fn confirm_close(&mut self, id: &str) -> Vec<Effect> {
+        let Some(t) = self.tabs.iter().find(|t| t.id == id).cloned() else {
+            return vec![Effect::Notice(
+                "That Terminal is no longer open; nothing was ended".into(),
+            )];
+        };
+        if !self.connected || t.gone() || t.stored() {
+            return vec![Effect::Notice(format!(
+                "`{}` no longer runs; nothing was ended",
+                t.name
+            ))];
+        }
+        vec![self.kill(&t, true)]
+    }
+
+    /// `terminal.rename` of `id` (by id, so a concurrent rename cannot redirect it).
+    pub fn rename(&mut self, id: &str, name: &str) -> Vec<Effect> {
+        if !self.connected {
+            return vec![Effect::Renamed(Err(
+                "not connected to the Subak Host".into()
+            ))];
+        }
+        vec![self.request(
+            "terminal.rename",
+            json!({"target": id, "name": name}),
+            Pending::Rename,
+        )]
     }
 
     /// The window's grid changed (a resize, a DPI or font change). A live pane is resized to it;
@@ -452,7 +723,7 @@ impl Model {
         }
     }
 
-    /// Closing the window: detach (the Terminal keeps running).
+    /// Closing the window: detach (every Terminal keeps running).
     pub fn on_close(&mut self) -> Vec<Effect> {
         match self.phase {
             Phase::Attached { .. } | Phase::Attaching(_) if self.connected => {
@@ -512,7 +783,9 @@ impl Model {
                     .flatten()
                     .filter_map(TermInfo::from_full)
                     .collect();
-                self.decide(&list, &mut out);
+                self.merge(&list);
+                self.decide(&mut out);
+                out.push(Effect::Tabs);
             }
             Pending::Attach(known) => {
                 let (Some(stream), Some(tid)) = (
@@ -521,20 +794,43 @@ impl Model {
                 ) else {
                     return out;
                 };
-                let mut term = known.unwrap_or_else(|| TermInfo {
-                    id: tid.to_string(),
-                    name: tid.to_string(),
-                    state: "running".into(),
-                    pid: None,
-                    program: String::new(),
-                    history_limit: 2000,
-                });
+                // The user moved on while this attach was on its way: let it go.
+                let wanted = match &self.phase {
+                    Phase::Attaching(t) => t.id == tid || known.is_none(),
+                    _ => false,
+                };
+                if !wanted {
+                    out.push(self.request(
+                        "pane.detach",
+                        json!({"stream_id": stream}),
+                        Pending::Detach,
+                    ));
+                    return out;
+                }
+                let mut term = known
+                    .or_else(|| self.tabs.iter().find(|t| t.id == tid).cloned())
+                    .unwrap_or_else(|| TermInfo {
+                        id: tid.to_string(),
+                        name: tid.to_string(),
+                        state: "running".into(),
+                        pid: None,
+                        program: String::new(),
+                        history_limit: 2000,
+                    });
                 term.id = tid.to_string();
+                if let Some(t) = self.tabs.iter().find(|t| t.id == tid) {
+                    term.name.clone_from(&t.name);
+                }
+                term.state = "running".into();
                 let pane_pid = r["pane"]["pid"]
                     .as_u64()
                     .and_then(|p| u32::try_from(p).ok())
                     .unwrap_or(0);
                 term.pid = Some(pane_pid);
+                if !self.tabs.iter().any(|t| t.id == tid) {
+                    self.hidden.retain(|h| h.id != tid);
+                    self.tabs.push(term.clone());
+                }
                 let size = &r["snapshot"]["size"];
                 self.snapshot_size = match (size["cols"].as_u64(), size["rows"].as_u64()) {
                     // A snapshot of no frames would never begin: nothing to wait for.
@@ -578,6 +874,19 @@ impl Model {
                     out.extend(self.on_grid(g.0, g.1));
                 }
             }
+            Pending::Create => {
+                if let Some(t) = TermInfo::from_full(&r["terminal"]) {
+                    match self.tabs.iter_mut().find(|x| x.id == t.id) {
+                        Some(x) => *x = t.clone(),
+                        None => self.tabs.push(t.clone()),
+                    }
+                    self.show(t, &mut out);
+                }
+            }
+            Pending::Kill { id, .. } | Pending::Remove { id, .. } => {
+                self.close_tab(&id, &mut out);
+            }
+            Pending::Rename => out.push(Effect::Renamed(Ok(()))),
             Pending::Subscribe | Pending::Resize | Pending::Detach => {}
         }
         out
@@ -589,8 +898,8 @@ impl Model {
         let message = e["message"].as_str().unwrap_or("request failed");
         match p {
             Pending::Attach(term) => {
-                // The Terminal is gone or not running any more: choose again.
-                let what = term.map_or_else(
+                // The Terminal is gone or not running any more.
+                let what = term.as_ref().map_or_else(
                     || match &self.want {
                         Want::Target(t) => format!("`{t}`"),
                         _ => "the Terminal".into(),
@@ -619,29 +928,105 @@ impl Model {
                 },
                 &mut out,
             ),
+            Pending::Create => out.push(Effect::Notice(format!(
+                "No Terminal was created: {message} ({code})"
+            ))),
+            Pending::Kill { id, name } => {
+                self.closing.retain(|c| *c != id);
+                match code {
+                    // The Host's guard (ADR 0020 §3): ask the user before `force`.
+                    "busy" => out.push(Effect::Confirm(Confirm {
+                        id,
+                        name,
+                        program: e["details"]["program"].as_str().unwrap_or("").to_string(),
+                        processes: e["details"]["processes"].as_u64().unwrap_or(0),
+                    })),
+                    // Already gone: its tab goes.
+                    "target_not_found" => self.close_tab(&id, &mut out),
+                    _ => out.push(Effect::Notice(format!(
+                        "`{name}` was not closed: {message} ({code})"
+                    ))),
+                }
+            }
+            Pending::Remove { id, name } => {
+                self.closing.retain(|c| *c != id);
+                match code {
+                    "target_not_found" => self.close_tab(&id, &mut out),
+                    _ => out.push(Effect::Notice(format!(
+                        "`{name}` was not removed: {message} ({code})"
+                    ))),
+                }
+            }
+            Pending::Rename => out.push(Effect::Renamed(Err(format!("{message} ({code})")))),
             Pending::Subscribe | Pending::Resize | Pending::Detach => {}
         }
         out
     }
 
-    /// Picks what to show from a Terminal list.
-    fn decide(&mut self, list: &[TermInfo], out: &mut Vec<Effect>) {
+    /// Takes a Terminal list as the truth for the tabs: known tabs keep their place, new ones
+    /// are appended in the Host's order, missing ones go (but the shown one stays with its last
+    /// screen, marked removed). Hidden ones stay hidden.
+    fn merge(&mut self, list: &[TermInfo]) {
+        let shown = self.terminal().map(|t| t.id.clone());
+        self.hidden.retain(|h| list.iter().any(|t| t.id == h.id));
+        for h in &mut self.hidden {
+            if let Some(t) = list.iter().find(|t| t.id == h.id) {
+                *h = t.clone();
+            }
+        }
+        let mut tabs: Vec<TermInfo> = Vec::new();
+        for old in &self.tabs {
+            match list.iter().find(|t| t.id == old.id) {
+                Some(t) => tabs.push(t.clone()),
+                None if Some(&old.id) == shown.as_ref() && self.phase.shows_pane() => {
+                    let mut gone = old.clone();
+                    gone.state = "removed".into();
+                    tabs.push(gone);
+                }
+                None => {}
+            }
+        }
+        for t in list {
+            if !tabs.iter().any(|x| x.id == t.id) && !self.hidden.iter().any(|h| h.id == t.id) {
+                tabs.push(t.clone());
+            }
+        }
+        self.tabs = tabs;
+    }
+
+    /// Picks the tab to show after a list, when none is shown.
+    fn decide(&mut self, out: &mut Vec<Effect>) {
         let notice = match &self.phase {
-            Phase::Empty { notice } | Phase::Choosing { notice, .. } => notice.clone(),
+            Phase::Empty { notice } => notice.clone(),
             _ => None,
         };
-        // A live or last-shown pane stays as it is; only a reattach changes it.
-        if matches!(self.phase, Phase::Attached { .. } | Phase::Attaching(_)) {
+        // A live, opening or stored tab stays as it is.
+        if matches!(
+            self.phase,
+            Phase::Attached { .. } | Phase::Attaching(_) | Phase::Stored(_)
+        ) {
             return;
         }
-        let running: Vec<&TermInfo> = list.iter().filter(|t| t.running()).collect();
+        if let Phase::Ended { term, .. } = &self.phase
+            && self.tabs.iter().any(|t| t.id == term.id)
+        {
+            return;
+        }
         match self.want.clone() {
             Want::Target(t) => {
                 self.want = Want::Any;
-                let known = list
+                let known = self
+                    .tabs
                     .iter()
+                    .chain(self.hidden.iter())
                     .find(|x| x.id == t || x.name.to_lowercase() == t.to_lowercase())
                     .cloned();
+                if let Some(k) = &known {
+                    self.hidden.retain(|h| h.id != k.id);
+                    if !self.tabs.iter().any(|x| x.id == k.id) {
+                        self.tabs.push(k.clone());
+                    }
+                }
                 let shown = known.unwrap_or_else(|| TermInfo {
                     id: t.clone(),
                     name: t.clone(),
@@ -650,66 +1035,89 @@ impl Model {
                     program: String::new(),
                     history_limit: 2000,
                 });
+                if shown.stored() {
+                    self.set(Phase::Stored(shown), out);
+                    return;
+                }
+                // The Host resolves the name (NFC, case) and says if it does not run.
                 out.push(self.attach(Some(shown.clone()), &t));
                 self.set(Phase::Attaching(shown), out);
                 return;
             }
             Want::Last { id, name } => {
-                let hit = running
+                let hit = self
+                    .tabs
                     .iter()
+                    .filter(|x| x.running())
                     .find(|x| x.id == id)
-                    .or_else(|| running.iter().find(|x| x.name == name));
+                    .or_else(|| {
+                        self.tabs
+                            .iter()
+                            .filter(|x| x.running())
+                            .find(|x| x.name == name)
+                    })
+                    .cloned();
+                self.want = Want::Any;
                 if let Some(t) = hit {
-                    let t = (*t).clone();
-                    out.push(self.attach(Some(t.clone()), &t.id));
-                    self.set(Phase::Attaching(t), out);
+                    self.show(t, out);
                     return;
                 }
-                self.want = Want::Any;
                 if matches!(self.phase, Phase::Disconnected { .. } | Phase::Connecting)
                     && self.terminal().is_some()
                 {
                     // It ended while the Host was away (or with it).
-                    let gone = Some(format!("`{name}` is no longer running"));
-                    self.choose_from(&running, gone, out);
+                    self.pick(Some(format!("`{name}` is no longer running")), out);
                     return;
                 }
             }
             Want::Any => {}
         }
-        if running.len() == 1 && notice.is_none() {
-            let t = running[0].clone();
-            out.push(self.attach(Some(t.clone()), &t.id));
-            self.set(Phase::Attaching(t), out);
-            return;
-        }
-        self.choose_from(&running, notice, out);
+        self.pick(notice, out);
     }
 
-    fn choose_from(
-        &mut self,
-        running: &[&TermInfo],
-        notice: Option<String>,
-        out: &mut Vec<Effect>,
-    ) {
-        if running.is_empty() {
-            self.set(Phase::Empty { notice }, out);
-        } else {
-            let selected = match &self.phase {
-                Phase::Choosing { list, selected, .. } => list
-                    .get(*selected)
-                    .and_then(|s| running.iter().position(|t| t.id == s.id))
-                    .unwrap_or(0),
-                _ => 0,
-            };
-            self.set(
-                Phase::Choosing {
-                    list: running.iter().map(|t| (*t).clone()).collect(),
-                    selected,
-                    notice,
-                },
-                out,
-            );
+    /// Shows the first running tab, else the first tab, else the empty screen (`notice` goes
+    /// with it).
+    fn pick(&mut self, notice: Option<String>, out: &mut Vec<Effect>) {
+        // The last screen of a Terminal that is gone is not kept across a reconnect.
+        self.tabs.retain(|t| !t.gone());
+        let first = self
+            .tabs
+            .iter()
+            .find(|t| t.running())
+            .or_else(|| self.tabs.first())
+            .cloned();
+        match first {
+            Some(t) => {
+                self.phase = Phase::Empty { notice: None };
+                self.show(t, out);
+                if let Some(n) = notice {
+                    out.push(Effect::Notice(n));
+                }
+            }
+            None => self.set(Phase::Empty { notice }, out),
+        }
+    }
+
+    /// Applies a field change to the Terminal `id` wherever this model keeps it.
+    fn update(&mut self, id: &str, f: impl Fn(&mut TermInfo)) {
+        for t in self.tabs.iter_mut().chain(self.hidden.iter_mut()) {
+            if t.id == id {
+                f(t);
+            }
+        }
+        match &mut self.phase {
+            Phase::Attached { term, .. }
+            | Phase::Ended { term, .. }
+            | Phase::Attaching(term)
+            | Phase::Stored(term) => {
+                if term.id == id {
+                    f(term);
+                }
+            }
+            Phase::Disconnected {
+                last: Some(term), ..
+            } if term.id == id => f(term),
+            _ => {}
         }
     }
 
@@ -719,12 +1127,19 @@ impl Model {
             Phase::Attached { pane_id, .. } => d["pane_id"].as_str() == Some(pane_id.as_str()),
             _ => false,
         };
-        let ours_term = |m: &Model| {
-            m.terminal()
-                .is_some_and(|t| d["terminal_id"].as_str() == Some(t.id.as_str()))
-        };
+        let tid = d["terminal_id"]
+            .as_str()
+            .or_else(|| d["terminal"]["id"].as_str())
+            .unwrap_or("")
+            .to_string();
+        let shown = self.terminal().is_some_and(|t| t.id == tid);
         match name {
+            "pane.exited" if ours_pane(self) && self.closing.contains(&tid) => {
+                // This window is closing it (`Ctrl+W`): no "ended" banner; its removal follows.
+                self.update(&tid, |t| t.state = "exited".into());
+            }
             "pane.exited" if ours_pane(self) => {
+                self.update(&tid, |t| t.state = "exited".into());
                 let term = self.terminal().cloned().expect("attached");
                 self.set(
                     Phase::Ended {
@@ -757,57 +1172,17 @@ impl Model {
                 self.in_snapshot = false;
                 self.snapshot_size = Some(self.grid);
             }
-            "terminal.renamed" if ours_term(self) => {
-                if let Some(n) = text(&d["name"]) {
-                    let mut phase = self.phase.clone();
-                    match &mut phase {
-                        Phase::Attached { term, .. }
-                        | Phase::Ended { term, .. }
-                        | Phase::Attaching(term) => term.name = n,
-                        _ => {}
-                    }
-                    if let Some(t) = match &phase {
-                        Phase::Attached { term, .. } => Some(term.clone()),
-                        _ => None,
-                    } {
-                        out.push(Effect::Remember(t));
-                    }
-                    self.set(phase, &mut out);
-                }
-            }
-            "terminal.removed" if ours_term(self) => {
-                if let Phase::Attached { term, .. } = &self.phase {
-                    let term = term.clone();
-                    self.set(
-                        Phase::Ended {
-                            term,
-                            why: EndReason::Removed,
-                        },
-                        &mut out,
-                    );
-                }
-            }
-            "terminal.state_changed" if ours_term(self) => {
-                if d["state"] == "stopped"
-                    && let Phase::Attached { term, .. } = &self.phase
+            "terminal.created" => {
+                if let Some(t) = TermInfo::from_full(&d["terminal"])
+                    && !self.tabs.iter().any(|x| x.id == t.id)
+                    && !self.hidden.iter().any(|x| x.id == t.id)
                 {
-                    let term = term.clone();
-                    self.set(
-                        Phase::Ended {
-                            term,
-                            why: EndReason::Stopped,
-                        },
-                        &mut out,
-                    );
+                    // Another client's (or our own) new Terminal gets a tab; the shown tab
+                    // stays (keys never go to a Terminal the user did not choose).
+                    self.tabs.push(t);
+                    out.push(Effect::Tabs);
                 }
-            }
-            "host.stopping" => self.host_stopping = text(&d["reason"]),
-            "terminal.created"
-            | "terminal.removed"
-            | "terminal.state_changed"
-            | "terminal.renamed" => {
-                // The chooser and the empty screen follow other clients' changes.
-                if matches!(self.phase, Phase::Empty { .. } | Phase::Choosing { .. }) {
+                if matches!(self.phase, Phase::Empty { .. }) {
                     out.push(self.request(
                         "terminal.list",
                         json!({"detail": "full"}),
@@ -815,6 +1190,99 @@ impl Model {
                     ));
                 }
             }
+            "terminal.renamed" => {
+                if let Some(n) = text(&d["name"]) {
+                    self.update(&tid, |t| t.name.clone_from(&n));
+                    if shown && let Phase::Attached { term, .. } = &self.phase {
+                        out.push(Effect::Remember(term.clone()));
+                    }
+                    out.push(Effect::Phase);
+                    out.push(Effect::Tabs);
+                }
+            }
+            "terminal.state_changed" => {
+                let state = d["state"].as_str().unwrap_or("unknown").to_string();
+                let keep_exit = |t: &TermInfo| t.state == "exited" && state == "stopping";
+                self.update(&tid, |t| {
+                    if !keep_exit(t) {
+                        t.state.clone_from(&state);
+                    }
+                });
+                if shown {
+                    match (&self.phase, state.as_str()) {
+                        (Phase::Attached { term, .. }, "stopped") => {
+                            let term = term.clone();
+                            self.set(
+                                Phase::Ended {
+                                    term,
+                                    why: EndReason::Stopped,
+                                },
+                                &mut out,
+                            );
+                        }
+                        (Phase::Attaching(t), "running")
+                            if self.awaiting.as_deref() == Some(tid.as_str()) =>
+                        {
+                            let t = t.clone();
+                            self.awaiting = None;
+                            out.push(self.attach(Some(t.clone()), &t.id));
+                        }
+                        (Phase::Attaching(t), "stopped" | "failed")
+                            if self.awaiting.as_deref() == Some(tid.as_str()) =>
+                        {
+                            let t = t.clone();
+                            self.awaiting = None;
+                            self.set(Phase::Stored(t), &mut out);
+                        }
+                        _ => out.push(Effect::Phase),
+                    }
+                }
+                out.push(Effect::Tabs);
+                if matches!(self.phase, Phase::Empty { .. }) {
+                    out.push(self.request(
+                        "terminal.list",
+                        json!({"detail": "full"}),
+                        Pending::List,
+                    ));
+                }
+            }
+            "terminal.removed" => {
+                self.hidden.retain(|h| h.id != tid);
+                if self.closing.contains(&tid) {
+                    // Closed by this window (`Ctrl+W`): the tab goes, no banner.
+                    self.close_tab(&tid, &mut out);
+                } else if shown {
+                    match self.phase.clone() {
+                        Phase::Attached { term, .. } => {
+                            self.update(&tid, |t| t.state = "removed".into());
+                            let mut term = term;
+                            term.state = "removed".into();
+                            self.set(
+                                Phase::Ended {
+                                    term,
+                                    why: EndReason::Removed,
+                                },
+                                &mut out,
+                            );
+                        }
+                        Phase::Ended { .. } => {
+                            self.update(&tid, |t| t.state = "removed".into());
+                            out.push(Effect::Phase);
+                        }
+                        _ => {
+                            let name = self.terminal().map(|t| t.name.clone()).unwrap_or_default();
+                            self.close_tab(&tid, &mut out);
+                            out.push(Effect::Notice(format!(
+                                "`{name}` was removed by another client"
+                            )));
+                        }
+                    }
+                } else {
+                    self.tabs.retain(|t| t.id != tid);
+                }
+                out.push(Effect::Tabs);
+            }
+            "host.stopping" => self.host_stopping = text(&d["reason"]),
             _ => {}
         }
         out
@@ -850,24 +1318,39 @@ mod tests {
             .collect()
     }
 
+    fn methods(effects: &[Effect]) -> Vec<String> {
+        sent(effects).into_iter().map(|s| s.1).collect()
+    }
+
     fn respond(m: &mut Model, id: u64, result: Value) -> Vec<Effect> {
         let mut msg = json!({"type": "response", "id": id, "ok": true});
         msg["result"] = result;
         m.on_control(&msg)
     }
 
-    fn list_id(effects: &[Effect]) -> u64 {
+    #[allow(clippy::needless_pass_by_value)]
+    fn fail(m: &mut Model, id: u64, code: &str, details: Value) -> Vec<Effect> {
+        m.on_control(&json!({"type": "response", "id": id, "ok": false,
+            "error": {"code": code, "message": format!("{code} happened"), "details": details}}))
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    fn event(m: &mut Model, name: &str, data: Value) -> Vec<Effect> {
+        m.on_control(&json!({"type": "event", "seq": 1, "event": name, "data": data}))
+    }
+
+    fn id_of(effects: &[Effect], method: &str) -> u64 {
         sent(effects)
             .into_iter()
-            .find(|(_, method, _)| method == "terminal.list")
-            .expect("a list request")
+            .find(|(_, m, _)| m == method)
+            .unwrap_or_else(|| panic!("no {method} in {effects:?}"))
             .0
     }
 
     fn attach_result(stream: u32, tid: &str, pid: u32) -> Value {
         json!({
-            "stream_id": stream, "terminal_id": tid, "pane_id": "p-000000000001",
-            "pane": {"id": "p-000000000001", "pid": pid, "size": {"cols": 100, "rows": 30}},
+            "stream_id": stream, "terminal_id": tid, "pane_id": format!("p-{tid}"),
+            "pane": {"id": format!("p-{tid}"), "pid": pid, "size": {"cols": 100, "rows": 30}},
             "snapshot": {"size": {"cols": 100, "rows": 30}, "bytes": 10, "frames": 1}
         })
     }
@@ -875,31 +1358,60 @@ mod tests {
     /// Connects and answers the list; returns the effects of the list response.
     fn connect_with(m: &mut Model, terminals: Value) -> Vec<Effect> {
         let fx = m.on_connected();
-        let methods: Vec<String> = sent(&fx).into_iter().map(|s| s.1).collect();
-        assert_eq!(methods, ["events.subscribe", "terminal.list"]);
+        assert_eq!(methods(&fx), ["events.subscribe", "terminal.list"]);
         let mut result = json!({});
         result["terminals"] = terminals;
-        respond(m, list_id(&fx), result)
+        respond(m, id_of(&fx, "terminal.list"), result)
+    }
+
+    fn names(m: &Model) -> Vec<String> {
+        m.tabs().iter().map(|t| t.name.clone()).collect()
+    }
+
+    /// Answers the pending attach in `fx` (stream = the Terminal's pid).
+    fn attach_from(m: &mut Model, fx: &[Effect]) -> Vec<Effect> {
+        let (id, _, p) = sent(fx)
+            .into_iter()
+            .find(|(_, method, _)| method == "pane.attach")
+            .expect("an attach");
+        let tid = p["target"].as_str().unwrap().to_string();
+        let pid = m
+            .tabs()
+            .iter()
+            .find(|t| t.id == tid)
+            .and_then(|t| t.pid)
+            .unwrap_or(1);
+        respond(m, id, attach_result(pid, &tid, pid))
     }
 
     #[test]
-    fn the_only_running_terminal_opens_by_itself_interactively_at_the_window_size() {
-        let mut m = Model::new(Want::Any, (100, 30));
-        let fx = connect_with(
+    fn no_sessions_one_session_and_many_sessions_become_tabs() {
+        // None: the empty screen; a Terminal created by any client opens by itself.
+        let mut m = Model::new(Want::Any, (80, 24));
+        connect_with(&mut m, json!([]));
+        assert_eq!(m.phase, Phase::Empty { notice: None });
+        assert!(m.tabs().is_empty());
+        let fx = event(
             &mut m,
-            json!([
-                term("t-a", "build", "running", 11),
-                term("t-b", "old", "stopped", 0)
-            ]),
+            "terminal.created",
+            json!({"terminal": term("t-n", "new", "starting", 0)}),
         );
+        assert_eq!(names(&m), ["new"]);
+        let fx = respond(
+            &mut m,
+            id_of(&fx, "terminal.list"),
+            json!({"terminals": [term("t-n", "new", "running", 9)]}),
+        );
+        assert_eq!(sent(&fx)[0].1, "pane.attach");
+        // One: it opens interactively at the window's size.
+        let mut m = Model::new(Want::Any, (100, 30));
+        let fx = connect_with(&mut m, json!([term("t-a", "build", "running", 11)]));
         let s = sent(&fx);
         assert_eq!(s.len(), 1);
-        assert_eq!(s[0].1, "pane.attach");
         assert_eq!(
             s[0].2,
             json!({"target": "t-a", "interactive": true, "size": {"cols": 100, "rows": 30}})
         );
-        assert_eq!(m.phase.name(), "attaching");
         let fx = respond(&mut m, s[0].0, attach_result(7, "t-a", 11));
         assert!(fx.contains(&Effect::ResetView {
             cols: 100,
@@ -907,22 +1419,264 @@ mod tests {
             history: 5000
         }));
         assert!(matches!(&fx[0], Effect::Remember(t) if t.name == "build"));
-        let Phase::Attached {
-            stream, pane_pid, ..
-        } = m.phase
-        else {
-            panic!("{:?}", m.phase)
-        };
-        assert_eq!((stream, pane_pid), (7, 11));
         assert_eq!(m.input_stream(), Some(7));
-        // The model never asked to create, stop, kill or remove anything.
-        for (_, method, _) in s {
-            assert!(!method.starts_with("terminal.create") && !method.contains("kill"));
+        assert_eq!(m.active(), Some(0));
+        // Many: every Terminal is a tab in the Host's order (stored ones too); the first running
+        // one opens; nothing is created, stopped, killed or removed by opening.
+        let mut m = Model::new(Want::Any, (80, 24));
+        let fx = connect_with(
+            &mut m,
+            json!([
+                term("t-s", "old", "stopped", 0),
+                term("t-a", "one", "running", 1),
+                term("t-b", "two", "running", 2)
+            ]),
+        );
+        assert_eq!(names(&m), ["old", "one", "two"]);
+        assert_eq!(sent(&fx)[0].2["target"], "t-a");
+        for method in methods(&fx) {
+            assert!(!method.starts_with("terminal."), "{method}");
         }
     }
 
     #[test]
-    fn several_terminals_are_chosen_with_the_keyboard() {
+    fn ctrl_tab_cycles_tabs_detaching_one_pane_and_attaching_the_next() {
+        let mut m = Model::new(Want::Any, (80, 24));
+        let fx = connect_with(
+            &mut m,
+            json!([
+                term("t-a", "one", "running", 1),
+                term("t-s", "kept", "stopped", 0),
+                term("t-b", "two", "running", 2)
+            ]),
+        );
+        attach_from(&mut m, &fx);
+        assert_eq!(m.active(), Some(0));
+        // Next: the stored tab shows its state screen; only a detach is sent.
+        let fx = m.cycle(1);
+        assert_eq!(methods(&fx), ["pane.detach"]);
+        assert_eq!(sent(&fx)[0].2, json!({"stream_id": 1}));
+        assert_eq!(m.phase.name(), "stored");
+        assert_eq!(m.input_stream(), None, "no input to a stored Terminal");
+        // Next again: attach `two`.
+        let fx = m.cycle(1);
+        assert_eq!(methods(&fx), ["pane.attach"]);
+        attach_from(&mut m, &fx);
+        assert_eq!(m.input_stream(), Some(2));
+        // Next wraps around to `one`; previous goes back.
+        let fx = m.cycle(1);
+        assert_eq!(methods(&fx), ["pane.detach", "pane.attach"]);
+        attach_from(&mut m, &fx);
+        assert_eq!(m.active(), Some(0));
+        m.cycle(-1);
+        assert_eq!(m.terminal().unwrap().id, "t-b");
+        // A late attach answer for a tab the user already left is detached at once.
+        let mut m2 = Model::new(Want::Any, (80, 24));
+        let fx = connect_with(
+            &mut m2,
+            json!([
+                term("t-a", "one", "running", 1),
+                term("t-b", "two", "running", 2)
+            ]),
+        );
+        let first = id_of(&fx, "pane.attach");
+        let fx2 = m2.cycle(1);
+        let fx = respond(&mut m2, first, attach_result(1, "t-a", 1));
+        assert_eq!(methods(&fx), ["pane.detach"]);
+        assert_eq!(m2.terminal().unwrap().id, "t-b");
+        attach_from(&mut m2, &fx2);
+        assert_eq!(m2.input_stream(), Some(2));
+        // One tab: cycling stays; no tabs: nothing.
+        let mut one = Model::new(Want::Any, (80, 24));
+        let fx = connect_with(&mut one, json!([term("t-a", "one", "running", 1)]));
+        attach_from(&mut one, &fx);
+        assert!(one.cycle(1).is_empty());
+        let mut none = Model::new(Want::Any, (80, 24));
+        connect_with(&mut none, json!([]));
+        assert!(none.cycle(1).is_empty());
+    }
+
+    #[test]
+    fn ctrl_t_creates_at_the_window_size_and_shows_the_new_terminal() {
+        let mut m = Model::new(Want::Any, (90, 25));
+        let fx = connect_with(&mut m, json!([term("t-a", "one", "running", 1)]));
+        attach_from(&mut m, &fx);
+        let fx = m.create();
+        let (cid, method, params) = sent(&fx)[0].clone();
+        assert_eq!(method, "terminal.create");
+        assert_eq!(params, json!({"size": {"cols": 90, "rows": 25}}));
+        // The created event arrives first: a tab, but the shown tab stays.
+        event(
+            &mut m,
+            "terminal.created",
+            json!({"terminal": term("t-n", "2", "starting", 0)}),
+        );
+        assert_eq!(names(&m), ["one", "2"]);
+        assert_eq!(m.terminal().unwrap().id, "t-a");
+        event(
+            &mut m,
+            "terminal.state_changed",
+            json!({"terminal_id": "t-n", "state": "running", "previous_state": "starting"}),
+        );
+        // Then the answer: show it (detach `one`, attach `2`).
+        let fx = respond(
+            &mut m,
+            cid,
+            json!({"terminal_id": "t-n", "window_id": "w-1", "pane_id": "p-1", "name": "2",
+                "terminal": term("t-n", "2", "running", 5)}),
+        );
+        assert_eq!(methods(&fx), ["pane.detach", "pane.attach"]);
+        attach_from(&mut m, &fx);
+        assert_eq!(m.active(), Some(1));
+        // Repeated create and close leave exactly the tabs that exist.
+        for k in 0..5u32 {
+            let fx = m.create();
+            let id = format!("t-r{k}");
+            let fx = respond(
+                &mut m,
+                id_of(&fx, "terminal.create"),
+                json!({"terminal": term(&id, &format!("r{k}"), "running", 100 + k)}),
+            );
+            attach_from(&mut m, &fx);
+            let fx = m.close_active();
+            let kill = id_of(&fx, "terminal.kill");
+            let fx = event(
+                &mut m,
+                "terminal.removed",
+                json!({"terminal_id": id, "reason": "killed"}),
+            );
+            // The neighbour (`2`) opens again.
+            attach_from(&mut m, &fx);
+            assert!(respond(&mut m, kill, json!({"removed": true})).is_empty());
+            assert_eq!(m.terminal().unwrap().name, "2");
+        }
+        assert_eq!(names(&m), ["one", "2"]);
+        assert_eq!(m.input_stream(), Some(5));
+        // Not connected: nothing is created, the user is told.
+        let mut off = Model::new(Want::Any, (80, 24));
+        assert!(matches!(&off.create()[0], Effect::Notice(_)));
+    }
+
+    #[test]
+    fn ctrl_w_kills_by_id_and_asks_before_ending_a_busy_terminal() {
+        let mut m = Model::new(Want::Any, (80, 24));
+        let fx = connect_with(
+            &mut m,
+            json!([
+                term("t-a", "claude", "running", 1),
+                term("t-b", "other", "running", 2)
+            ]),
+        );
+        attach_from(&mut m, &fx);
+        // Ctrl+W: kill by id, without force first.
+        let fx = m.close_active();
+        let (kill, method, params) = sent(&fx)[0].clone();
+        assert_eq!(method, "terminal.kill");
+        assert_eq!(params, json!({"target": "t-a", "force": false}));
+        // The Host refuses: busy. The window asks; nothing else happens.
+        let fx = fail(
+            &mut m,
+            kill,
+            "busy",
+            json!({"terminal_id": "t-a", "program": "claude.exe", "processes": 3, "busy": true}),
+        );
+        assert_eq!(
+            fx,
+            [Effect::Confirm(Confirm {
+                id: "t-a".into(),
+                name: "claude".into(),
+                program: "claude.exe".into(),
+                processes: 3
+            })]
+        );
+        assert_eq!(names(&m), ["claude", "other"]);
+        // Meanwhile another client renames it: the confirmed kill still targets the same id.
+        event(
+            &mut m,
+            "terminal.renamed",
+            json!({"terminal_id": "t-a", "name": "renamed", "previous_name": "claude"}),
+        );
+        let fx = m.confirm_close("t-a");
+        assert_eq!(sent(&fx)[0].2, json!({"target": "t-a", "force": true}));
+        let kill = sent(&fx)[0].0;
+        // The removal closes the tab quietly and shows the neighbour; `other` is untouched.
+        let fx = event(
+            &mut m,
+            "terminal.removed",
+            json!({"terminal_id": "t-a", "reason": "killed"}),
+        );
+        assert!(!fx.iter().any(|e| matches!(e, Effect::Notice(_))));
+        assert_eq!(names(&m), ["other"]);
+        assert_eq!(
+            methods(&fx),
+            ["pane.attach"],
+            "the old pane is gone: no detach"
+        );
+        assert_eq!(sent(&fx)[0].2["target"], "t-b");
+        respond(&mut m, kill, json!({"removed": true}));
+        assert_eq!(names(&m), ["other"]);
+        // An idle shell is killed without a question (the Host decides busy, ADR 0020 §3).
+        attach_from(&mut m, &fx);
+        let fx = m.close_active();
+        let kill = id_of(&fx, "terminal.kill");
+        let fx = respond(&mut m, kill, json!({"removed": true, "terminal_id": "t-b"}));
+        assert!(fx.iter().all(|e| !matches!(e, Effect::Confirm(_))));
+        assert!(m.tabs().is_empty());
+        assert_eq!(m.phase, Phase::Empty { notice: None });
+        // Confirming a Terminal that is gone meanwhile ends nothing.
+        assert!(matches!(&m.confirm_close("t-a")[0], Effect::Notice(_)));
+    }
+
+    #[test]
+    fn hiding_a_tab_is_a_detach_and_removing_a_stored_terminal_is_separate() {
+        let mut m = Model::new(Want::Any, (80, 24));
+        let fx = connect_with(
+            &mut m,
+            json!([
+                term("t-a", "one", "running", 1),
+                term("t-b", "two", "running", 2),
+                term("t-s", "kept", "stopped", 0)
+            ]),
+        );
+        attach_from(&mut m, &fx);
+        // × / "Hide tab": only a detach; the Terminal stays in the Host and in `hidden`.
+        let fx = m.hide(0);
+        assert_eq!(methods(&fx), ["pane.detach", "pane.attach"]);
+        assert_eq!(names(&m), ["two", "kept"]);
+        assert_eq!(m.hidden()[0].id, "t-a");
+        for method in methods(&fx) {
+            assert!(!method.starts_with("terminal."));
+        }
+        // A list (another client's change) keeps it hidden.
+        let fx = event(
+            &mut m,
+            "terminal.created",
+            json!({"terminal": term("t-c", "three", "running", 3)}),
+        );
+        assert!(sent(&fx).is_empty());
+        assert_eq!(names(&m), ["two", "kept", "three"]);
+        // Unhide: back as the last tab, opened.
+        let fx = m.unhide("t-a");
+        assert!(methods(&fx).contains(&"pane.attach".to_string()));
+        assert_eq!(names(&m), ["two", "kept", "three", "one"]);
+        // Ctrl+W on the stored Terminal removes its record (never with force).
+        let fx = m.select(1);
+        assert_eq!(m.phase.name(), "stored");
+        let _ = fx;
+        let fx = m.close_active();
+        let (rm, method, params) = sent(&fx)[0].clone();
+        assert_eq!(method, "terminal.remove");
+        assert_eq!(params, json!({"target": "t-s"}));
+        respond(&mut m, rm, json!({"removed": true}));
+        assert_eq!(names(&m), ["two", "three", "one"]);
+        // Moving tabs is this window's order only.
+        assert_eq!(m.move_tab(0, 1), [Effect::Tabs]);
+        assert_eq!(names(&m), ["three", "two", "one"]);
+        assert!(m.move_tab(0, -1).is_empty());
+    }
+
+    #[test]
+    fn tabs_follow_other_clients_create_rename_stop_and_kill() {
         let mut m = Model::new(Want::Any, (80, 24));
         let fx = connect_with(
             &mut m,
@@ -931,18 +1685,71 @@ mod tests {
                 term("t-b", "two", "running", 2)
             ]),
         );
-        assert!(sent(&fx).is_empty());
-        assert_eq!(m.phase.name(), "choosing");
-        m.choose(1, None);
-        m.choose(5, None); // clamped to the last row
-        let Phase::Choosing { selected, .. } = &m.phase else {
-            panic!()
-        };
-        assert_eq!(*selected, 1);
+        attach_from(&mut m, &fx);
+        // `subak new three`.
+        event(
+            &mut m,
+            "terminal.created",
+            json!({"terminal": term("t-c", "three", "starting", 0)}),
+        );
+        assert_eq!(names(&m), ["one", "two", "three"]);
+        assert_eq!(m.tabs()[2].state, "starting");
+        event(
+            &mut m,
+            "terminal.state_changed",
+            json!({"terminal_id": "t-c", "state": "running", "previous_state": "starting"}),
+        );
+        assert!(m.tabs()[2].running());
+        // `subak rename two deux` and of the shown one (remembered under the new name).
+        event(
+            &mut m,
+            "terminal.renamed",
+            json!({"terminal_id": "t-b", "name": "deux", "previous_name": "two"}),
+        );
+        let fx = event(
+            &mut m,
+            "terminal.renamed",
+            json!({"terminal_id": "t-a", "name": "eins", "previous_name": "one"}),
+        );
+        assert!(
+            fx.iter()
+                .any(|e| matches!(e, Effect::Remember(t) if t.name == "eins"))
+        );
+        assert_eq!(names(&m), ["eins", "deux", "three"]);
+        assert_eq!(m.terminal().unwrap().name, "eins");
+        // `subak stop deux`: its tab shows stopped.
+        event(
+            &mut m,
+            "terminal.state_changed",
+            json!({"terminal_id": "t-b", "state": "stopped", "previous_state": "stopping"}),
+        );
+        assert!(m.tabs()[1].stored());
+        // `subak kill three` (not shown): its tab goes silently.
+        event(
+            &mut m,
+            "terminal.removed",
+            json!({"terminal_id": "t-c", "reason": "killed"}),
+        );
+        assert_eq!(names(&m), ["eins", "deux"]);
+        // `subak kill eins` (shown): its last screen stays with a banner; Enter closes the tab.
+        event(
+            &mut m,
+            "terminal.removed",
+            json!({"terminal_id": "t-a", "reason": "killed"}),
+        );
+        assert!(matches!(
+            &m.phase,
+            Phase::Ended {
+                why: EndReason::Removed,
+                ..
+            }
+        ));
+        assert!(m.phase.shows_pane());
+        assert!(m.tabs()[0].gone());
         let fx = m.activate();
-        let s = sent(&fx);
-        assert_eq!(s[0].1, "pane.attach");
-        assert_eq!(s[0].2["target"], "t-b");
+        assert!(sent(&fx).is_empty(), "a stored tab needs no attach");
+        assert_eq!(names(&m), ["deux"]);
+        assert_eq!(m.phase.name(), "stored");
     }
 
     #[test]
@@ -965,50 +1772,29 @@ mod tests {
         );
         let fx = connect_with(&mut m, both.clone());
         assert_eq!(sent(&fx)[0].2["target"], "t-b");
-        // A name the Host does not know: the attach fails and the chooser explains it.
+        // A name the Host does not know: the attach fails, the first tab opens with a notice.
         let mut m = Model::new(Want::Target("nope".into()), (80, 24));
         let fx = connect_with(&mut m, both.clone());
-        let id = sent(&fx)[0].0;
-        let fx = m.on_control(&json!({"type": "response", "id": id, "ok": false,
-            "error": {"code": "target_not_found", "message": "no such target"}}));
+        let fx = fail(&mut m, sent(&fx)[0].0, "target_not_found", json!({}));
         assert_eq!(m.phase.name(), "empty");
-        let fx = respond(&mut m, list_id(&fx), json!({"terminals": both}));
-        assert!(sent(&fx).is_empty(), "a notice keeps the chooser up");
-        let Phase::Choosing { notice, list, .. } = &m.phase else {
-            panic!("{:?}", m.phase)
-        };
-        assert_eq!(list.len(), 2);
-        assert!(notice.as_deref().unwrap().contains("`nope`"), "{notice:?}");
-    }
-
-    #[test]
-    fn no_terminal_is_empty_and_a_new_one_opens_by_itself() {
-        let mut m = Model::new(Want::Any, (80, 24));
-        connect_with(&mut m, json!([]));
-        assert_eq!(m.phase, Phase::Empty { notice: None });
-        let fx = m.on_control(
-            &json!({"type": "event", "seq": 1, "event": "terminal.created",
-            "data": {"terminal": {"id": "t-n"}}}),
-        );
         let fx = respond(
             &mut m,
-            list_id(&fx),
-            json!({"terminals": [term("t-n", "new", "running", 9)]}),
+            id_of(&fx, "terminal.list"),
+            json!({"terminals": both}),
         );
-        assert_eq!(sent(&fx)[0].1, "pane.attach");
-    }
-
-    fn attached(m: &mut Model) {
-        let fx = connect_with(m, json!([term("t-a", "build", "running", 11)]));
-        let id = sent(&fx)[0].0;
-        respond(m, id, attach_result(7, "t-a", 11));
-        assert_eq!(m.phase.name(), "attached");
+        assert_eq!(sent(&fx)[0].2["target"], "t-a");
+        assert!(
+            fx.iter()
+                .any(|e| matches!(e, Effect::Notice(n) if n.contains("`nope`"))),
+            "{fx:?}"
+        );
     }
 
     #[test]
     fn snapshots_reset_the_view_and_other_streams_are_ignored() {
         let mut m = Model::new(Want::Any, (100, 30));
-        attached(&mut m);
+        let fx = connect_with(&mut m, json!([term("t-a", "build", "running", 7)]));
+        attach_from(&mut m, &fx);
         assert_eq!(
             m.on_data(7, true),
             Frame::Reset {
@@ -1017,17 +1803,15 @@ mod tests {
                 history: 5000
             }
         );
-        assert_eq!(
-            m.on_data(7, true),
-            Frame::Feed,
-            "the same snapshot continues"
-        );
+        assert_eq!(m.on_data(7, true), Frame::Feed);
         assert_eq!(m.on_data(7, false), Frame::Feed);
         assert_eq!(m.on_data(8, false), Frame::Ignore);
-        // A resync: the next snapshot resets again, at the window's grid.
         m.on_grid(90, 20);
-        m.on_control(&json!({"type": "event", "seq": 2, "event": "pane.resync",
-            "data": {"pane_id": "p-000000000001", "terminal_id": "t-a", "stream_id": 7, "seq": 99}}));
+        event(
+            &mut m,
+            "pane.resync",
+            json!({"pane_id": "p-t-a", "terminal_id": "t-a", "stream_id": 7, "seq": 99}),
+        );
         assert_eq!(
             m.on_data(7, true),
             Frame::Reset {
@@ -1039,10 +1823,11 @@ mod tests {
     }
 
     #[test]
-    fn resizes_go_to_a_live_pane_only_and_closing_detaches() {
+    fn resizes_go_to_a_live_pane_only_and_closing_the_window_detaches() {
         let mut m = Model::new(Want::Any, (100, 30));
         assert!(m.on_grid(90, 25).is_empty(), "nothing attached");
-        attached(&mut m);
+        let fx = connect_with(&mut m, json!([term("t-a", "build", "running", 7)]));
+        attach_from(&mut m, &fx);
         let s = sent(&m.on_grid(120, 40));
         assert_eq!(s[0].1, "pane.resize");
         assert_eq!(s[0].2, json!({"cols": 120, "rows": 40, "stream_id": 7}));
@@ -1054,10 +1839,14 @@ mod tests {
     #[test]
     fn the_pane_ending_or_being_detached_keeps_its_screen() {
         let mut m = Model::new(Want::Any, (100, 30));
-        attached(&mut m);
-        m.on_control(&json!({"type": "event", "seq": 3, "event": "pane.detached",
-            "data": {"pane_id": "p-000000000001", "terminal_id": "t-a", "stream_id": 7,
-                     "by": {"client_id": 4, "pid": 4242, "kind": "cli"}}}));
+        let fx = connect_with(&mut m, json!([term("t-a", "build", "running", 7)]));
+        attach_from(&mut m, &fx);
+        event(
+            &mut m,
+            "pane.detached",
+            json!({"pane_id": "p-t-a", "terminal_id": "t-a", "stream_id": 7,
+                "by": {"client_id": 4, "pid": 4242, "kind": "cli"}}),
+        );
         assert!(matches!(
             &m.phase,
             Phase::Ended { why: EndReason::DetachedBy(Some(by)), .. } if by == "cli client (pid 4242)"
@@ -1067,9 +1856,12 @@ mod tests {
         // Enter reattaches the same Terminal.
         let s = sent(&m.activate());
         assert_eq!(s[0].2["target"], "t-a");
-        respond(&mut m, s[0].0, attach_result(8, "t-a", 11));
-        m.on_control(&json!({"type": "event", "seq": 4, "event": "pane.exited",
-            "data": {"pane_id": "p-000000000001", "terminal_id": "t-a", "pid": 11, "exit_code": 0}}));
+        respond(&mut m, s[0].0, attach_result(8, "t-a", 7));
+        event(
+            &mut m,
+            "pane.exited",
+            json!({"pane_id": "p-t-a", "terminal_id": "t-a", "pid": 7, "exit_code": 0}),
+        );
         assert!(matches!(
             m.phase,
             Phase::Ended {
@@ -1077,14 +1869,15 @@ mod tests {
                 ..
             }
         ));
+        assert!(m.tabs()[0].gone());
     }
 
     #[test]
     fn a_lost_host_is_retried_with_backoff_and_the_same_terminal_reattached() {
         let mut m = Model::new(Want::Any, (100, 30));
-        attached(&mut m);
-        m.on_control(&json!({"type": "event", "seq": 5, "event": "host.stopping",
-            "data": {"reason": "stop_requested"}}));
+        let fx = connect_with(&mut m, json!([term("t-a", "build", "running", 11)]));
+        attach_from(&mut m, &fx);
+        event(&mut m, "host.stopping", json!({"reason": "stop_requested"}));
         let fx = m.on_disconnected();
         assert_eq!(fx[0], Effect::Reconnect(Duration::from_millis(500)));
         let Phase::Disconnected { last, reason, .. } = &m.phase else {
@@ -1093,7 +1886,11 @@ mod tests {
         assert_eq!(last.as_ref().unwrap().id, "t-a");
         assert_eq!(reason, "the Host was stopped");
         assert!(m.phase.shows_pane(), "the last screen stays");
-        // Attempts fail (no Host) with growing delays, capped at 10 s.
+        assert!(
+            m.close_active()
+                .iter()
+                .all(|e| matches!(e, Effect::Notice(_)))
+        );
         let mut delays = Vec::new();
         for _ in 0..7 {
             for e in m.on_connect_failed("host_not_running", "no Host", None) {
@@ -1103,21 +1900,23 @@ mod tests {
             }
         }
         assert_eq!(delays, [1000, 2000, 4000, 8000, 10000, 10000, 10000]);
-        // A Host serves the endpoint again and the Terminal still runs: reattached by id.
         let fx = connect_with(&mut m, json!([term("t-a", "build", "running", 11)]));
         let s = sent(&fx);
         assert_eq!(s[0].1, "pane.attach");
         assert_eq!(s[0].2["target"], "t-a");
-        // If it is gone, the chooser says so.
+        // If it is gone, another tab opens and the window says so.
         let mut m = Model::new(Want::Any, (100, 30));
-        attached(&mut m);
+        let fx = connect_with(&mut m, json!([term("t-a", "build", "running", 11)]));
+        attach_from(&mut m, &fx);
         m.on_disconnected();
         let fx = connect_with(&mut m, json!([term("t-x", "other", "running", 3)]));
-        assert!(sent(&fx).is_empty());
-        let Phase::Choosing { notice, .. } = &m.phase else {
-            panic!("{:?}", m.phase)
-        };
-        assert_eq!(notice.as_deref(), Some("`build` is no longer running"));
+        assert_eq!(names(&m), ["other"]);
+        assert_eq!(sent(&fx)[0].2["target"], "t-x");
+        assert!(
+            fx.iter()
+                .any(|e| matches!(e, Effect::Notice(n) if n == "`build` is no longer running")),
+            "{fx:?}"
+        );
     }
 
     #[test]
@@ -1128,8 +1927,26 @@ mod tests {
             "not a Subak Host",
             Some("use --endpoint"),
         );
-        assert_eq!(fx, [Effect::Phase]);
+        assert_eq!(fx, [Effect::Phase, Effect::Tabs]);
         assert_eq!(m.phase.name(), "failed");
-        assert_eq!(m.activate(), [Effect::Connect, Effect::Phase]);
+        assert_eq!(m.activate(), [Effect::Connect, Effect::Phase, Effect::Tabs]);
+    }
+
+    #[test]
+    fn renames_go_by_id_and_report_refusals() {
+        let mut m = Model::new(Want::Any, (80, 24));
+        let fx = connect_with(&mut m, json!([term("t-a", "one", "running", 1)]));
+        attach_from(&mut m, &fx);
+        let fx = m.rename("t-a", "빌드");
+        let (id, method, params) = sent(&fx)[0].clone();
+        assert_eq!(method, "terminal.rename");
+        assert_eq!(params, json!({"target": "t-a", "name": "빌드"}));
+        assert_eq!(
+            respond(&mut m, id, json!({"changed": true})),
+            [Effect::Renamed(Ok(()))]
+        );
+        let fx = m.rename("t-a", "taken");
+        let fx = fail(&mut m, sent(&fx)[0].0, "name_conflict", json!({}));
+        assert!(matches!(&fx[0], Effect::Renamed(Err(e)) if e.contains("name_conflict")));
     }
 }

@@ -73,7 +73,7 @@ fn help_is_honest_about_the_prototype_status() {
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(text.contains("pre-alpha; Host, IPC v1, the Terminal lifecycle and its CLI"));
     assert!(text.contains("No command opens a window"));
-    assert!(text.contains("no tabs, windows/panes splits, persistence or recovery yet"));
+    assert!(text.contains("no windows/panes splits, persistence or recovery yet"));
     assert!(text.contains("The window is a separate program, `subak-gui`"));
     assert!(text.contains("no Windows service exists"));
     assert!(text.contains("There is no ambiguous `close`"));
@@ -98,6 +98,15 @@ fn help_is_honest_about_the_prototype_status() {
         "host attach",
         "host stop",
         "host serve",
+        "hotkeys list",
+        "hotkeys show",
+        "hotkeys set",
+        "hotkeys disable",
+        "hotkeys enable",
+        "hotkeys reset",
+        "hotkeys check",
+        "hotkeys export",
+        "hotkeys import",
     ] {
         assert!(text.contains(&format!("subak {cmd}")), "{cmd}");
     }
@@ -165,14 +174,23 @@ fn capabilities_are_honest_and_follow_the_contract() {
             "host.health",
             "host.attach",
             "host.stop",
-            "host.serve"
+            "host.serve",
+            "hotkeys.list",
+            "hotkeys.show",
+            "hotkeys.set",
+            "hotkeys.disable",
+            "hotkeys.enable",
+            "hotkeys.reset",
+            "hotkeys.check",
+            "hotkeys.export",
+            "hotkeys.import"
         ],
         "only commands that really exist"
     );
     for c in data["commands"].as_array().unwrap() {
         let destructive = matches!(
             c["name"].as_str().unwrap(),
-            "stop" | "kill" | "rm" | "clear-history" | "host.stop"
+            "stop" | "kill" | "rm" | "clear-history" | "host.stop" | "hotkeys.reset"
         );
         assert_eq!(c["effect"] == "destructive", destructive, "{c}");
         assert_eq!(c["requires_yes"] == true, destructive, "{c}");
@@ -247,6 +265,11 @@ fn usage_errors_are_structured_with_json() {
         (&["terminal", "info"], "info"),
         (&["terminal", "list", "extra"], "ls"),
         (&["terminal", "attach", "a"], "attach"),
+        (&["hotkeys"], "hotkeys"),
+        (&["hotkeys", "frobnicate"], "hotkeys"),
+        (&["hotkeys", "set", "tab.next"], "hotkeys.set"),
+        (&["hotkeys", "reset"], "hotkeys.reset"),
+        (&["hotkeys", "list", "--endpoint", "x"], "hotkeys.list"),
     ] {
         let (code, doc) = json(args);
         assert_eq!(code, 2, "{args:?}");

@@ -1,13 +1,14 @@
-//! What the window says when it shows no live pane: the loading, empty, chooser and error
-//! screens, and the one-line banner over a pane that is not live any more (disconnected, ended,
-//! detached) or over a notice (DESIGN_SYSTEM §3.8: one muted sentence plus one action, never a
-//! blank window; state is never colour-only — every screen and banner says it in words).
+//! What the window says when it shows no live pane: the loading, empty, stored-Terminal and
+//! error screens, and the one-line banner over a pane that is not live any more (disconnected,
+//! ended, detached), over a notice, or asking to confirm the end of a busy Terminal
+//! (DESIGN_SYSTEM §3.8: one muted sentence plus one action, never a blank window; state is never
+//! colour-only — every screen and banner says it in words; the safe choice is the default).
 //!
 //! Screens are VT text for a [`subak_term::TermView`] of the window's grid, drawn by the same
 //! renderer as the pane (the terminal font chain, so Korean names render like the pane does).
 //! The colours are the design tokens (design/tokens.json; checked by a test).
 
-use super::model::{EndReason, Phase, TermInfo};
+use super::model::{Confirm, EndReason, Phase};
 use subak_term::render::Rgb;
 
 /// Design tokens the screens use (`kim-dark`, DESIGN_SYSTEM §2.1).
@@ -21,7 +22,7 @@ pub mod tokens {
     pub const TEXT_SECONDARY: Rgb = Rgb(0xA9, 0xA6, 0xB8);
     pub const TEXT_MUTED: Rgb = Rgb(0x95, 0x92, 0xA8);
     pub const ACCENT: Rgb = Rgb(0xB7, 0xA6, 0xF5);
-    pub const ACCENT_SOFT: Rgb = Rgb(0x2B, 0x27, 0x42);
+    pub const SUCCESS: Rgb = Rgb(0x8B, 0xC7, 0x9A);
     pub const WARNING: Rgb = Rgb(0xE8, 0xC2, 0x7A);
     pub const DANGER: Rgb = Rgb(0xF0, 0x86, 0x8F);
     pub const INFO: Rgb = Rgb(0x8A, 0xB4, 0xF8);
@@ -123,25 +124,30 @@ fn top_row(rows: u16, lines: usize) -> u16 {
     u16::try_from(free / 3).unwrap_or(0)
 }
 
-/// The rows the chooser's list starts at, for mapping a click to a Terminal.
-pub fn chooser_first_row(rows: u16, count: usize, notice: bool) -> u16 {
-    top_row(rows, count + 4 + usize::from(notice)) + 2 + u16::from(notice)
+/// The keys the screens and banners name, as currently bound (`None`: unbound; the text then
+/// points at the tab menu instead).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Hints {
+    pub new: Option<String>,
+    pub close: Option<String>,
+    pub next: Option<String>,
 }
 
-fn term_row(t: &TermInfo) -> String {
-    let pid = t.pid.map_or_else(|| "—".to_string(), |p| p.to_string());
-    format!(
-        "{:<20}  {:<8}  pid {:<7}  {}",
-        fit(&t.name, 20) + &" ".repeat(20usize.saturating_sub(width(&fit(&t.name, 20)))),
-        t.state,
-        pid,
-        t.program
-    )
+impl Hints {
+    fn key(k: Option<&String>, what: &str) -> String {
+        k.map_or_else(|| format!("the tab menu's {what}"), |k| k.clone())
+    }
 }
 
 /// The VT text of the state screen for `phase` on a `cols × rows` grid, or `None` when the
 /// window shows a pane.
-pub fn screen(phase: &Phase, endpoint: &str, cols: u16, rows: u16) -> Option<Vec<u8>> {
+pub fn screen(
+    phase: &Phase,
+    endpoint: &str,
+    cols: u16,
+    rows: u16,
+    hints: &Hints,
+) -> Option<Vec<u8>> {
     let title = |t: &str| Line(ACCENT, t.to_string(), true);
     let say = |t: String| Line(TEXT_PRIMARY, t, false);
     let muted = |t: String| Line(TEXT_MUTED, t, false);
@@ -164,19 +170,35 @@ pub fn screen(phase: &Phase, endpoint: &str, cols: u16, rows: u16) -> Option<Vec
                 v.push(Line(WARNING, n.clone(), false));
             }
             v.extend([
-                say("No Terminal is running in the Host.".into()),
-                muted("Start one from any console:  subak new <name>".into()),
-                muted("It opens here as soon as it runs.".into()),
+                say("No Terminal is open in this window.".into()),
+                muted(format!(
+                    "{} (or the + above) starts one; from any console:  subak new <name>",
+                    Hints::key(hints.new.as_ref(), "New Terminal")
+                )),
+                muted("A Terminal that another client starts opens here as a tab.".into()),
             ]);
             v
         }
-        Phase::Choosing {
-            list,
-            selected,
-            notice,
-        } => {
-            // Drawn below with highlighted rows.
-            return Some(chooser(list, *selected, notice.as_deref(), cols, rows));
+        Phase::Stored(t) => {
+            let what = if t.state == "failed" {
+                format!("`{}` could not start", t.name)
+            } else {
+                format!("`{}` is stopped", t.name)
+            };
+            vec![
+                Line(WARNING, what, true),
+                blank(),
+                say(
+                    "Its processes have ended; the Host keeps the Terminal until it is removed."
+                        .into(),
+                ),
+                muted(format!(
+                    "{} removes it (nothing runs in it) · {} shows the next tab",
+                    Hints::key(hints.close.as_ref(), "Close Terminal"),
+                    Hints::key(hints.next.as_ref(), "next tab")
+                )),
+                muted("Restarting a stopped Terminal comes with Step 30.".into()),
+            ]
         }
         Phase::Failed {
             code,
@@ -224,68 +246,12 @@ fn capital(s: &str) -> String {
         .unwrap_or_default()
 }
 
-fn chooser(
-    list: &[TermInfo],
-    selected: usize,
-    notice: Option<&str>,
-    cols: u16,
-    rows: u16,
-) -> Vec<u8> {
-    let n = list.len();
-    let top = top_row(rows, n + 4 + usize::from(notice.is_some()));
-    let left = if cols >= 60 { 4 } else { 1 };
-    let usable = usize::from(cols).saturating_sub(left + 1);
-    let mut s = String::from("\x1b[?25l\x1b[2J");
-    let mut row = usize::from(top);
-    let mut put = |row: usize, text: String| {
-        if row < usize::from(rows) {
-            s.push_str(&format!("\x1b[{};{}H{text}{RESET}", row + 1, left + 1));
-        }
-    };
-    put(row, format!("\x1b[1m{}Choose a Terminal", fg(ACCENT)));
-    row += 1;
-    if let Some(n) = notice {
-        put(row, format!("{}{}", fg(WARNING), fit(n, usable)));
-        row += 1;
-    }
-    row += 1;
-    for (i, t) in list.iter().enumerate() {
-        let text = fit(&term_row(t), usable.saturating_sub(2));
-        let pad = " ".repeat(usable.saturating_sub(2).saturating_sub(width(&text)));
-        if i == selected {
-            // Selected row: accent.soft fill and a lilac marker (DESIGN_SYSTEM §3.2), and a `›`
-            // so the selection is not colour-only.
-            put(
-                row,
-                format!(
-                    "{}{}▌{}›{}{text}{pad}",
-                    bg(ACCENT_SOFT),
-                    fg(ACCENT),
-                    fg(ACCENT),
-                    fg(TEXT_PRIMARY)
-                ),
-            );
-        } else {
-            put(row, format!("{}  {text}", fg(TEXT_SECONDARY)));
-        }
-        row += 1;
-    }
-    row += 1;
-    put(
-        row,
-        format!(
-            "{}↑/↓ select · Enter open · the others keep running in the Host",
-            fg(TEXT_MUTED)
-        ),
-    );
-    s.into_bytes()
-}
-
 /// How a banner looks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tone {
     Info,
     Warning,
+    Danger,
 }
 
 impl Tone {
@@ -294,6 +260,7 @@ impl Tone {
         match self {
             Tone::Info => INFO,
             Tone::Warning => WARNING,
+            Tone::Danger => DANGER,
         }
     }
 
@@ -311,7 +278,8 @@ pub struct Banner {
 }
 
 /// The banner for `phase` over a pane that is not live, if any.
-pub fn banner(phase: &Phase) -> Option<Banner> {
+pub fn banner(phase: &Phase, hints: &Hints) -> Option<Banner> {
+    let close = Hints::key(hints.close.as_ref(), "Close Terminal");
     let (tone, text) = match phase {
         Phase::Disconnected {
             last: Some(t),
@@ -329,9 +297,14 @@ pub fn banner(phase: &Phase) -> Option<Banner> {
             EndReason::Exited(code) => (
                 Tone::Info,
                 format!(
-                    "`{}` ended (exit code {}). Enter: choose a Terminal",
+                    "`{}` ended (exit code {}). {}",
                     term.name,
-                    code.map_or_else(|| "unknown".into(), |c| c.to_string())
+                    code.map_or_else(|| "unknown".into(), |c| c.to_string()),
+                    if term.gone() {
+                        "Enter closes the tab".to_string()
+                    } else {
+                        format!("The Host keeps it as stopped; {close} removes it")
+                    }
                 ),
             ),
             EndReason::DetachedBy(by) => (
@@ -344,16 +317,77 @@ pub fn banner(phase: &Phase) -> Option<Banner> {
             ),
             EndReason::Removed => (
                 Tone::Info,
-                format!("`{}` was removed. Enter: choose a Terminal", term.name),
+                format!(
+                    "`{}` was removed by another client. Enter closes the tab",
+                    term.name
+                ),
             ),
             EndReason::Stopped => (
                 Tone::Info,
-                format!("`{}` was stopped. Enter: choose a Terminal", term.name),
+                format!(
+                    "`{}` was stopped; the Host keeps it. {close} removes it",
+                    term.name
+                ),
             ),
         },
         _ => return None,
     };
     Some(Banner { tone, text })
+}
+
+/// The two answers of a confirmation; the safe one comes first and is the default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Choice {
+    Cancel,
+    End,
+}
+
+/// The confirmation banner for ending a busy Terminal (DESIGN_SYSTEM §3.8: it names what will
+/// end; the default focus is the safe choice), with the columns of its two buttons.
+pub fn confirm_vt(c: &Confirm, focus: Choice, cols: u16) -> (Vec<u8>, Vec<(u16, u16, Choice)>) {
+    let usable = usize::from(cols).saturating_sub(2);
+    let cancel = " Cancel (Esc) ";
+    let end = " End Terminal ";
+    let buttons = width(cancel) + width(end) + 6;
+    let program = if c.program.is_empty() {
+        String::new()
+    } else {
+        format!(" {}", c.program)
+    };
+    let question = format!(
+        "End `{}`? It runs{program} ({} process{} in its job); they will be ended.",
+        c.name,
+        c.processes,
+        if c.processes == 1 { "" } else { "es" }
+    );
+    let question = fit(&question, usable.saturating_sub(buttons).max(10));
+    let mut s = format!(
+        "\x1b[?25l\x1b[2J\x1b[1;2H{}{question}{RESET}  ",
+        fg(TEXT_PRIMARY)
+    );
+    let mut col = 1 + width(&question) + 2;
+    let mut spans = Vec::new();
+    for (label, choice) in [(cancel, Choice::Cancel), (end, Choice::End)] {
+        let focused = choice == focus;
+        let style = match (focused, choice) {
+            // The focused button is filled and bracketed, so focus is not colour-only.
+            (true, Choice::Cancel) => format!("\x1b[1m{}{}", bg(ACCENT), fg(BG_BASE)),
+            (true, Choice::End) => format!("\x1b[1m{}{}", bg(DANGER), fg(BG_BASE)),
+            (false, Choice::Cancel) => fg(TEXT_SECONDARY),
+            (false, Choice::End) => fg(DANGER),
+        };
+        let (l, r) = if focused { ("[", "]") } else { (" ", " ") };
+        let text = format!("{l}{label}{r}");
+        let start = col;
+        s.push_str(&format!("{style}{text}{RESET} "));
+        col += width(&text) + 1;
+        spans.push((
+            u16::try_from(start).unwrap_or(u16::MAX),
+            u16::try_from(col - 1).unwrap_or(u16::MAX),
+            choice,
+        ));
+    }
+    (s.into_bytes(), spans)
 }
 
 /// The VT text of a banner on a one-row view of `cols` cells.
@@ -369,6 +403,7 @@ pub fn banner_vt(b: &Banner, cols: u16) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::model::TermInfo;
     use super::*;
     use subak_term::TermView;
 
@@ -380,14 +415,22 @@ mod tests {
             .collect()
     }
 
-    fn t(name: &str, pid: u32) -> TermInfo {
+    fn t(name: &str, state: &str) -> TermInfo {
         TermInfo {
             id: format!("t-{name}"),
             name: name.into(),
-            state: "running".into(),
-            pid: Some(pid),
+            state: state.into(),
+            pid: Some(1),
             program: "cmd.exe".into(),
             history_limit: 2000,
+        }
+    }
+
+    fn hints() -> Hints {
+        Hints {
+            new: Some("Ctrl+T".into()),
+            close: Some("Ctrl+W".into()),
+            next: Some("Ctrl+Tab".into()),
         }
     }
 
@@ -395,7 +438,12 @@ mod tests {
     fn every_state_has_words_and_an_action() {
         let cases = [
             (Phase::Connecting, "Connecting to the Subak Host"),
-            (Phase::Empty { notice: None }, "No Terminal is running"),
+            (
+                Phase::Empty { notice: None },
+                "Ctrl+T (or the + above) starts one",
+            ),
+            (Phase::Stored(t("kept", "stopped")), "Ctrl+W removes it"),
+            (Phase::Stored(t("bad", "failed")), "`bad` could not start"),
             (
                 Phase::Failed {
                     code: "host_identity_mismatch".into(),
@@ -414,10 +462,33 @@ mod tests {
             ),
         ];
         for (phase, needle) in cases {
-            let lines = text_of(&screen(&phase, "subak-test", 80, 24).unwrap(), 80, 24);
+            let lines = text_of(
+                &screen(&phase, "subak-test", 100, 24, &hints()).unwrap(),
+                100,
+                24,
+            );
             let all = lines.join("\n");
             assert!(all.contains(needle), "{}: {all}", phase.name());
         }
+        // Unbound keys: the text points at the tab menu.
+        let lines = text_of(
+            &screen(
+                &Phase::Stored(t("kept", "stopped")),
+                "e",
+                120,
+                24,
+                &Hints::default(),
+            )
+            .unwrap(),
+            120,
+            24,
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("the tab menu's Close Terminal removes it")),
+            "{lines:?}"
+        );
         let failed = text_of(
             &screen(
                 &Phase::Failed {
@@ -428,6 +499,7 @@ mod tests {
                 "e",
                 80,
                 24,
+                &hints(),
             )
             .unwrap(),
             80,
@@ -438,37 +510,21 @@ mod tests {
                 .iter()
                 .any(|l| l.contains("error: host_identity_mismatch"))
         );
-    }
-
-    #[test]
-    fn the_chooser_marks_the_selection_in_shape_and_maps_rows() {
-        let list = vec![t("빌드", 11), t("claude", 22)];
-        let phase = Phase::Choosing {
-            list,
-            selected: 1,
-            notice: None,
-        };
-        let lines = text_of(&screen(&phase, "e", 80, 24).unwrap(), 80, 24);
-        let first = usize::from(chooser_first_row(24, 2, false));
-        assert!(
-            lines[first].contains("빌드") && lines[first].contains("pid 11"),
-            "{lines:?}"
-        );
-        assert!(lines[first + 1].contains("›") && lines[first + 1].contains("claude"));
-        assert!(!lines[first].contains("›"));
-        assert!(lines.iter().any(|l| l.contains("Enter open")));
         // A narrow window cuts with an ellipsis instead of wrapping.
-        let narrow = text_of(&screen(&phase, "e", 24, 10).unwrap(), 24, 10);
+        let narrow = text_of(
+            &screen(&Phase::Stored(t("kept", "stopped")), "e", 24, 10, &hints()).unwrap(),
+            24,
+            10,
+        );
         assert!(narrow.iter().all(|l| width(l) <= 24), "{narrow:?}");
     }
 
     #[test]
     fn banners_say_what_happened_and_what_enter_does() {
-        let term = t("build", 1);
         let cases = [
             (
                 Phase::Disconnected {
-                    last: Some(term.clone()),
+                    last: Some(t("build", "running")),
                     attempt: 0,
                     reason: "the connection to the Host was lost".into(),
                 },
@@ -477,55 +533,121 @@ mod tests {
             ),
             (
                 Phase::Ended {
-                    term: term.clone(),
+                    term: t("build", "exited"),
                     why: EndReason::Exited(Some(3)),
                 },
                 Tone::Info,
-                "exit code 3",
+                "exit code 3). Enter closes the tab",
             ),
             (
                 Phase::Ended {
-                    term,
+                    term: t("build", "stopped"),
+                    why: EndReason::Exited(Some(0)),
+                },
+                Tone::Info,
+                "keeps it as stopped; Ctrl+W removes it",
+            ),
+            (
+                Phase::Ended {
+                    term: t("build", "running"),
                     why: EndReason::DetachedBy(None),
                 },
                 Tone::Info,
                 "keeps running. Enter: reattach",
             ),
+            (
+                Phase::Ended {
+                    term: t("build", "removed"),
+                    why: EndReason::Removed,
+                },
+                Tone::Info,
+                "removed by another client. Enter closes the tab",
+            ),
         ];
         for (phase, tone, needle) in cases {
-            let b = banner(&phase).unwrap();
+            let b = banner(&phase, &hints()).unwrap();
             assert_eq!(b.tone, tone);
             assert!(b.text.contains(needle), "{}", b.text);
             let row = text_of(&banner_vt(&b, 200), 200, 1);
             assert!(row[0].contains(needle));
         }
-        assert_eq!(banner(&Phase::Connecting), None);
+        assert_eq!(banner(&Phase::Connecting, &hints()), None);
         // The fill is the status colour at 12 % over bg.raised.
         assert_eq!(Tone::Warning.fill(), BG_RAISED.mix(WARNING, 31));
+        assert_eq!(Tone::Danger.color(), DANGER);
+    }
+
+    /// The cells `[a, b)` of a row's text.
+    fn cells(row: &str, a: u16, b: u16) -> String {
+        let mut out = String::new();
+        let mut col = 0u16;
+        for c in row.chars() {
+            if col >= a && col < b {
+                out.push(c);
+            }
+            col += u16::from(subak_term::screen::char_width(c));
+        }
+        out
     }
 
     #[test]
-    fn high_contrast_drops_token_colours_and_keeps_the_selection_visible() {
-        let list = vec![t("one", 1), t("two", 2)];
-        let phase = Phase::Choosing {
-            list,
-            selected: 0,
-            notice: None,
+    fn the_confirmation_names_what_ends_and_defaults_to_the_safe_choice() {
+        let c = Confirm {
+            id: "t-1".into(),
+            name: "claude".into(),
+            program: "claude.exe".into(),
+            processes: 3,
         };
-        let vt = screen(&phase, "e", 80, 24).unwrap();
+        let (vt, spans) = confirm_vt(&c, Choice::Cancel, 160);
+        let row = text_of(&vt, 160, 1).remove(0);
+        assert!(
+            row.contains("End `claude`? It runs claude.exe (3 processes in its job)"),
+            "{row}"
+        );
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[0].2, Choice::Cancel);
+        assert_eq!(spans[1].2, Choice::End);
+        // The focused (safe) button is bracketed: focus is not colour-only.
+        assert!(
+            cells(&row, spans[0].0, spans[0].1).starts_with("[ Cancel"),
+            "{row}"
+        );
+        assert!(!cells(&row, spans[1].0, spans[1].1).starts_with('['));
+        let (vt, spans) = confirm_vt(&c, Choice::End, 160);
+        let row = text_of(&vt, 160, 1).remove(0);
+        assert!(
+            cells(&row, spans[1].0, spans[1].1).starts_with("[ End Terminal"),
+            "{row}"
+        );
+        // A narrow window keeps both buttons.
+        let (vt, spans) = confirm_vt(&c, Choice::Cancel, 50);
+        let row = text_of(&vt, 70, 1).remove(0);
+        assert!(
+            row.contains("Cancel") && row.contains("End Terminal"),
+            "{row}"
+        );
+        assert!(spans[1].1 <= 60, "{spans:?}");
+    }
+
+    #[test]
+    fn high_contrast_drops_token_colours_and_keeps_fills_visible() {
+        let c = Confirm {
+            id: "t-1".into(),
+            name: "x".into(),
+            program: String::new(),
+            processes: 2,
+        };
+        let (vt, _) = confirm_vt(&c, Choice::Cancel, 120);
         let hc = high_contrast(&vt);
         let s = String::from_utf8(hc.clone()).unwrap();
         assert!(!s.contains("38;2;") && !s.contains("48;2;"), "{s}");
-        assert!(s.contains("\x1b[7m"), "the selected row is reverse video");
-        // The words are unchanged.
-        assert_eq!(text_of(&vt, 80, 24), text_of(&hc, 80, 24));
-        // A view of it uses only the default colours, with one inverse row.
-        let mut v = TermView::new(80, 24, 0);
+        assert!(s.contains("\x1b[7m"), "the focused button is reverse video");
+        assert_eq!(text_of(&vt, 120, 1), text_of(&hc, 120, 1));
+        let mut v = TermView::new(120, 1, 0);
         v.feed(&hc);
-        let first = chooser_first_row(24, 2, false);
-        let row = v.row_at(first);
-        assert!((0..80).any(|x| row.cell(x).attrs.inverse()));
-        assert!((0..80).all(|x| row.cell(x).attrs.fg == subak_term::screen::Color::Default));
+        let row = v.row_at(0);
+        assert!((0..120).any(|x| row.cell(x).attrs.inverse()));
+        assert!((0..120).all(|x| row.cell(x).attrs.fg == subak_term::screen::Color::Default));
     }
 
     #[test]
@@ -542,7 +664,7 @@ mod tests {
             ("text.secondary", TEXT_SECONDARY),
             ("text.muted", TEXT_MUTED),
             ("accent", ACCENT),
-            ("accent.soft", ACCENT_SOFT),
+            ("status.success", SUCCESS),
             ("status.warning", WARNING),
             ("status.danger", DANGER),
             ("status.info", INFO),

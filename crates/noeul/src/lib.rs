@@ -1,5 +1,5 @@
-//! Noeul (노을): a small native screenshot and floating-pin tool for Windows (pre-alpha,
-//! Step 49 foundation). See docs/NOEUL_PHILOSOPHY.md, docs/NOEUL_REQUIREMENTS.md and
+//! Noeul (노을): a small native screenshot and floating-pin tool for Windows (pre-alpha:
+//! Step 49 foundation, Step 50 region-selection overlay). See docs/NOEUL_PHILOSOPHY.md, docs/NOEUL_REQUIREMENTS.md and
 //! docs/adr/0023-noeul-app-foundation.md.
 //!
 //! Modules, from the bottom up:
@@ -8,7 +8,8 @@
 //! | --- | --- |
 //! | [`frame`] | Owned capture-image buffers and their accounting |
 //! | [`capture`] | The OS capture boundary: desktop state, monitors, `CaptureBackend` |
-//! | [`selection`] | Capture sessions: one at a time, the frozen picture and its selection |
+//! | [`selection`] | Capture sessions: one at a time, the frozen picture, [`selection::CaptureSelection`] |
+//! | [`overlay`] | The region-selection overlay: state machine, geometry, DPI math, pixels |
 //! | [`pins`] | Pins: stable IDs, close/reopen/destroy lifecycle, the window trait |
 //! | [`annotation`] | **Placeholder**: annotation is Step 56 |
 //! | [`settings`], [`paths`] | `config.toml` and the stable per-user folders |
@@ -26,6 +27,7 @@ pub mod error;
 pub mod frame;
 pub mod hotkeys;
 pub mod ipc;
+pub mod overlay;
 pub mod paths;
 pub mod pins;
 pub mod selection;

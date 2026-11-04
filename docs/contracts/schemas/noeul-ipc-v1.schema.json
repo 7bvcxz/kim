@@ -113,12 +113,12 @@
       "properties": {
         "type": { "const": "request" },
         "id": { "type": "integer", "minimum": 1 },
-        "method": { "enum": ["status", "activate", "capture", "pin.list", "pin.close", "pin.reopen", "hotkeys.reload", "quit"] },
+        "method": { "enum": ["status", "activate", "capture", "capture.region", "capture.cancel", "pin.list", "pin.close", "pin.reopen", "hotkeys.reload", "quit"] },
         "params": { "$ref": "#/$defs/params" }
       }
     },
     "params": {
-      "description": "Parameters of every method (absent flags are false). capture: region and pin (required); pin.close: id or all; quit: force.",
+      "description": "Parameters of every method (absent flags are false). capture: region and pin (required); capture.region and capture.cancel: dry_run only; pin.close: id or all; quit: force.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -143,6 +143,8 @@
             { "$ref": "#/$defs/status_result" },
             { "$ref": "#/$defs/activate_result" },
             { "$ref": "#/$defs/capture_result" },
+            { "$ref": "#/$defs/capture_region_result" },
+            { "$ref": "#/$defs/capture_cancel_result" },
             { "$ref": "#/$defs/pin_list_result" },
             { "$ref": "#/$defs/pin_close_result" },
             { "$ref": "#/$defs/pin_reopen_result" },
@@ -173,9 +175,13 @@
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["rect", "primary"],
+            "required": ["rect", "primary", "dpi"],
             "additionalProperties": false,
-            "properties": { "rect": { "$ref": "#/$defs/rect" }, "primary": { "type": "boolean" } }
+            "properties": {
+              "rect": { "$ref": "#/$defs/rect" },
+              "primary": { "type": "boolean" },
+              "dpi": { "description": "Effective DPI (96 = 100 %); every rectangle is in device pixels (Step 50).", "type": "integer", "minimum": 1 }
+            }
           }
         }
       }
@@ -230,12 +236,13 @@
     },
     "settings_state": {
       "type": "object",
-      "required": ["path", "state", "tray_icon", "problems"],
+      "required": ["path", "state", "tray_icon", "keyboard_help", "problems"],
       "additionalProperties": false,
       "properties": {
         "path": { "type": "string", "minLength": 1 },
         "state": { "enum": ["default", "user", "invalid", "newer_version"] },
         "tray_icon": { "type": "boolean" },
+        "keyboard_help": { "description": "`[capture] keyboard_help`: when the capture overlay shows its keyboard help (Step 50).", "enum": ["first-run", "always", "never"] },
         "problems": { "type": "array", "items": { "type": "string" } }
       }
     },
@@ -260,7 +267,7 @@
           }
         },
         "desktop": { "$ref": "#/$defs/desktop" },
-        "capture_backend": { "enum": ["gdi", "unsupported"] },
+        "capture_backend": { "description": "`synthetic` only in a debug build with the test hook NOEUL_DEV_SYNTHETIC_DESKTOP (ADR 0026).", "enum": ["gdi", "unsupported", "synthetic"] },
         "pins": {
           "type": "object",
           "required": ["open", "reopenable"],
@@ -272,13 +279,16 @@
         },
         "captures": {
           "type": "object",
-          "required": ["started", "pinned", "cancelled", "open"],
+          "required": ["started", "pinned", "cancelled", "open", "ignored", "overlay", "first_frame"],
           "additionalProperties": false,
           "properties": {
             "started": { "$ref": "#/$defs/u64" },
             "pinned": { "$ref": "#/$defs/u64" },
             "cancelled": { "$ref": "#/$defs/u64" },
-            "open": { "type": "boolean" }
+            "open": { "type": "boolean" },
+            "ignored": { "description": "Capture requests that found an overlay open and did nothing (NOEUL-FR-013).", "$ref": "#/$defs/u64" },
+            "overlay": { "oneOf": [{ "$ref": "#/$defs/overlay_state" }, { "type": "null" }] },
+            "first_frame": { "$ref": "#/$defs/first_frame" }
           }
         },
         "memory": {
@@ -355,6 +365,75 @@
         "region": { "$ref": "#/$defs/rect" },
         "pin": { "oneOf": [{ "$ref": "#/$defs/pin_ref" }, { "type": "null" }] },
         "desktop": { "const": "available" }
+      }
+    },
+    "overlay_state": {
+      "description": "The open capture overlay (Step 50, ADR 0026): geometry and state only, never pixels.",
+      "type": "object",
+      "required": ["session", "phase", "selection", "picture", "monitors", "buffer_bytes", "help"],
+      "additionalProperties": false,
+      "properties": {
+        "session": { "$ref": "#/$defs/u64" },
+        "phase": { "enum": ["hover", "pressed", "dragging", "selected", "moving", "resizing"] },
+        "selection": { "oneOf": [{ "$ref": "#/$defs/rect" }, { "type": "null" }] },
+        "picture": { "$ref": "#/$defs/rect" },
+        "monitors": { "$ref": "#/$defs/u64" },
+        "buffer_bytes": { "$ref": "#/$defs/u64" },
+        "help": { "type": "boolean" }
+      }
+    },
+    "first_frame": {
+      "description": "First-frame latency of the overlay (request to overlay painted, NOEUL-NFR-003), a local metric (ADR 0012). Percentiles cover the last 100 captures.",
+      "type": "object",
+      "required": ["count", "last", "p50_us", "p95_us"],
+      "additionalProperties": false,
+      "properties": {
+        "count": { "$ref": "#/$defs/u64" },
+        "last": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "required": ["total_us", "capture_us", "render_us", "width", "height"],
+              "additionalProperties": false,
+              "properties": {
+                "total_us": { "$ref": "#/$defs/u64" },
+                "capture_us": { "$ref": "#/$defs/u64" },
+                "render_us": { "$ref": "#/$defs/u64" },
+                "width": { "type": "integer", "minimum": 1 },
+                "height": { "type": "integer", "minimum": 1 }
+              }
+            }
+          ]
+        },
+        "p50_us": { "oneOf": [{ "$ref": "#/$defs/u64" }, { "type": "null" }] },
+        "p95_us": { "oneOf": [{ "$ref": "#/$defs/u64" }, { "type": "null" }] }
+      }
+    },
+    "capture_region_result": {
+      "description": "`capture.region`: open the selection overlay, as F1 does. `opened` is false for a dry run and while an overlay is already open (`reason: already_open`).",
+      "type": "object",
+      "required": ["dry_run", "opened", "reason", "session", "picture", "monitors", "first_frame_us"],
+      "additionalProperties": false,
+      "properties": {
+        "dry_run": { "type": "boolean" },
+        "opened": { "type": "boolean" },
+        "reason": { "oneOf": [{ "const": "already_open" }, { "type": "null" }] },
+        "session": { "oneOf": [{ "$ref": "#/$defs/u64" }, { "type": "null" }] },
+        "picture": { "oneOf": [{ "$ref": "#/$defs/rect" }, { "type": "null" }] },
+        "monitors": { "$ref": "#/$defs/u64" },
+        "first_frame_us": { "oneOf": [{ "$ref": "#/$defs/u64" }, { "type": "null" }] }
+      }
+    },
+    "capture_cancel_result": {
+      "description": "`capture.cancel`: close an open overlay without pinning, copying or saving anything.",
+      "type": "object",
+      "required": ["dry_run", "cancelled", "session"],
+      "additionalProperties": false,
+      "properties": {
+        "dry_run": { "type": "boolean" },
+        "cancelled": { "type": "boolean" },
+        "session": { "oneOf": [{ "$ref": "#/$defs/u64" }, { "type": "null" }] }
       }
     },
     "pin_list_result": {

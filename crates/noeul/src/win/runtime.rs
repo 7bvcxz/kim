@@ -18,15 +18,23 @@
 //! removed, the listener and watcher stop, and the process exits. A crash leaves nothing behind
 //! either: Windows releases the hotkeys and removes the pipe with the process, so the next start
 //! works (tested).
+//!
+//! **Debug-build test hook** (ADR 0026): with `NOEUL_DEV_SYNTHETIC_DESKTOP=1`, a *debug* build
+//! captures from [`Synthetic::off_screen`] instead of the screen, and its overlay and pins never
+//! take focus or stay on top. Everything it shows lies far off-screen, nothing reads the real
+//! screen, and release builds do not contain the hook. Tests and the e2e suite use it to drive the
+//! real binary's overlay without anything appearing on the user's desktop.
 
-use crate::app::{App, Identity, Shell};
+use crate::app::{App, Identity, OverlayWindow, Shell};
+use crate::capture::{CaptureBackend, Synthetic};
 use crate::error::{Code, NoeulError, Result};
-use crate::frame::{Frame, Ledger};
+use crate::frame::{Frame, Ledger, Rect};
 use crate::hotkeys::{self, Manager};
 use crate::ipc;
 use crate::paths::Paths;
 use crate::pins::PinWindows;
 use crate::settings;
+use crate::win::overlay::{self, Placement, WinOverlay};
 use crate::win::pinwnd::{self, WinPins};
 use crate::win::pipe::{self, Listener, Pipe, Until};
 use crate::win::tray::TrayIcon;
@@ -90,9 +98,11 @@ thread_local! {
     static ENDED_BY: Cell<&'static str> = const { Cell::new("quit") };
 }
 
-/// The Win32 [`Shell`]: pin windows, clipboard, pointer, tray notices.
+/// The Win32 [`Shell`]: pin windows, the overlay, clipboard, pointer, tray notices.
 struct WinShell {
     windows: WinPins,
+    /// `false` only under the debug-build test hook.
+    interactive: bool,
 }
 
 impl Shell for WinShell {
@@ -145,6 +155,42 @@ impl Shell for WinShell {
         };
         r == IDYES
     }
+
+    fn open_overlay(
+        &mut self,
+        picture: Rect,
+    ) -> std::result::Result<Box<dyn OverlayWindow>, String> {
+        let placement = if self.interactive {
+            Placement::INTERACTIVE
+        } else {
+            Placement::OFF_SCREEN_TEST
+        };
+        WinOverlay::create(picture, placement).map(|w| Box::new(w) as Box<dyn OverlayWindow>)
+    }
+
+    fn system_values(&self) -> crate::overlay::SystemValues {
+        overlay::system_values()
+    }
+
+    fn interactive(&self) -> bool {
+        self.interactive
+    }
+}
+
+/// The debug-build test hook: `NOEUL_DEV_SYNTHETIC_DESKTOP=1` (ignored by release builds, and
+/// when the off-screen layout would touch a real monitor).
+fn dev_synthetic_desktop() -> bool {
+    #[cfg(debug_assertions)]
+    {
+        let on = std::env::var_os("NOEUL_DEV_SYNTHETIC_DESKTOP").is_some_and(|v| v == "1");
+        let real = gdi::desktop().virtual_rect;
+        let fake = Synthetic::off_screen().desktop().virtual_rect;
+        on && !matches!((real, fake), (Some(r), Some(f)) if r.intersects(&f))
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        false
+    }
 }
 
 fn post_wake(control: usize) {
@@ -190,6 +236,10 @@ fn pump(app: &mut App<WinShell>) {
             did = true;
             app.pin_event(e);
         }
+        for e in overlay::take_events() {
+            did = true;
+            app.overlay_event(e);
+        }
         if !did {
             break;
         }
@@ -225,10 +275,10 @@ unsafe extern "system" fn control_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPA
         WM_NOEUL_TRAY => {
             if let Some(click) = TrayIcon::click(lp) {
                 match click {
-                    crate::tray::Click::Middle => {
+                    crate::tray::Click::Middle | crate::tray::Click::Left => {
                         with_app(|a| a.tray_click(click));
                     }
-                    crate::tray::Click::Left | crate::tray::Click::Right => {
+                    crate::tray::Click::Right => {
                         // The menu is modal: build it, release the core, then run the choice.
                         if let Some(items) = with_app(|a| a.tray_menu()) {
                             let choice = TRAY.with(|t| {
@@ -506,9 +556,18 @@ pub fn run(opts: &RunOpts) -> Result<Value> {
         TRAY.with(|s| *s.borrow_mut() = Some(t));
     }
     let endpoint_path = pipe::path(&opts.endpoint);
+    let dev = dev_synthetic_desktop();
+    let backend: Box<dyn CaptureBackend> = if dev {
+        Box::new(Synthetic::off_screen())
+    } else {
+        Box::new(gdi::Gdi)
+    };
     let app = App::new(
-        WinShell { windows: WinPins },
-        Box::new(gdi::Gdi),
+        WinShell {
+            windows: WinPins,
+            interactive: !dev,
+        },
+        backend,
         mgr,
         settings,
         paths.clone(),
@@ -529,6 +588,7 @@ pub fn run(opts: &RunOpts) -> Result<Value> {
     });
     APP.with(|a| *a.borrow_mut() = Some(app));
     pinwnd::set_waker(Some(Box::new(wake)));
+    overlay::set_waker(Some(Box::new(wake)));
 
     // IPC acceptor.
     let stopper = listener.stopper();
@@ -619,6 +679,7 @@ pub fn run(opts: &RunOpts) -> Result<Value> {
         })
     });
     pinwnd::set_waker(None);
+    overlay::set_waker(None);
     TRAY.with(|t| t.borrow_mut().take());
     INBOX.with(|i| i.borrow_mut().take());
     stopper.set();

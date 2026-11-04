@@ -35,6 +35,8 @@ pub const METHODS: &[(&str, bool)] = &[
     ("status", false),
     ("activate", false),
     ("capture", true),
+    ("capture.region", true),
+    ("capture.cancel", true),
     ("pin.list", false),
     ("pin.close", true),
     ("pin.reopen", true),

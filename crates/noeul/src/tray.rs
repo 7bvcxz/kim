@@ -6,12 +6,13 @@
 //! the core's reactions, `app::tests`). With the icon off (`[general] tray_icon = false`, or
 //! `noeul start --no-tray`), the CLI and the hotkeys still reach everything.
 //!
-//! Not in this build: Capture (and left click to capture, Step 50), Show or hide all pins, Make
-//! all pins clickable, Bring pins on screen (N2/N4), Settings (N5).
+//! Capture region (and left click to capture) since Step 50. Not in this build: Show or hide all
+//! pins, Make all pins clickable, Bring pins on screen (N2/N4), Settings (N5).
 
 /// One menu entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MenuItem {
+    CaptureRegion,
     PinClipboard,
     ReopenClosedPin,
     /// The full shortcut switch (HOTKEY_CONTRACT §12.4); `on` is the current state.
@@ -24,6 +25,7 @@ pub enum MenuItem {
 impl MenuItem {
     pub fn label(self) -> &'static str {
         match self {
+            MenuItem::CaptureRegion => "Capture region\tF1",
             MenuItem::PinClipboard => "Pin clipboard\tF3",
             MenuItem::ReopenClosedPin => "Reopen closed pin",
             MenuItem::Shortcuts { on: true } => "Keyboard shortcuts: on",
@@ -35,6 +37,7 @@ impl MenuItem {
     /// Stable menu command IDs (Win32 `TrackPopupMenu` returns them).
     pub fn command_id(self) -> u32 {
         match self {
+            MenuItem::CaptureRegion => 4,
             MenuItem::PinClipboard => 1,
             MenuItem::ReopenClosedPin => 2,
             MenuItem::Shortcuts { .. } => 3,
@@ -61,7 +64,7 @@ pub struct MenuState {
 }
 
 pub fn menu(s: &MenuState) -> Vec<MenuItem> {
-    let mut items = vec![MenuItem::PinClipboard];
+    let mut items = vec![MenuItem::CaptureRegion, MenuItem::PinClipboard];
     if s.reopenable {
         items.push(MenuItem::ReopenClosedPin);
     }
@@ -86,6 +89,7 @@ mod tests {
         assert_eq!(
             menu(&base),
             [
+                MenuItem::CaptureRegion,
                 MenuItem::PinClipboard,
                 MenuItem::Shortcuts { on: true },
                 MenuItem::Quit
@@ -96,8 +100,8 @@ mod tests {
             shortcuts_on: false,
             shortcuts_switchable: true,
         });
-        assert_eq!(m[1], MenuItem::ReopenClosedPin);
-        assert_eq!(m[2].label(), "Keyboard shortcuts: off");
+        assert_eq!(m[2], MenuItem::ReopenClosedPin);
+        assert_eq!(m[3].label(), "Keyboard shortcuts: off");
         let ids: std::collections::BTreeSet<u32> = m.iter().map(|i| i.command_id()).collect();
         assert_eq!(ids.len(), m.len(), "command ids are unique");
         assert!(

@@ -351,7 +351,8 @@ mod tests {
         }];
         let (r, _) = manager_rect(&rect(700, 200, 740, 240), &short).unwrap();
         assert!(r.top >= 0 && r.bottom <= 300, "{r:?}");
-        assert_eq!(r.height(), 284.max(240).min(300));
+        // 440 does not fit: the work area less the gaps (300 - 16), above the minimum of 240.
+        assert_eq!(r.height(), 284);
     }
 
     #[test]

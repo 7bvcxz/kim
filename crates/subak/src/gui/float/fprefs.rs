@@ -284,12 +284,14 @@ mod tests {
             "../../../../../docs/contracts/schemas/subak-float-v1.schema.json"
         ))
         .unwrap();
-        let mut p = FloatPrefs::default();
-        p.position = Some(Position {
-            x: -20000,
-            y: -20000,
-            dpi: 96,
-        });
+        let mut p = FloatPrefs {
+            position: Some(Position {
+                x: -20000,
+                y: -20000,
+                dpi: 96,
+            }),
+            ..FloatPrefs::default()
+        };
         p.extra.insert("future".into(), json!(1));
         for doc in [FloatPrefs::default().to_json(), p.to_json()] {
             let errors = crate::jsonschema::Validator::new(&schema)

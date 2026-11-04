@@ -3339,17 +3339,18 @@ pub fn run(o: Options) -> ExitCode {
             crate::hotkeys::off_reason(o.no_hotkeys),
         ),
         opts: o,
-        fopts: fo.clone(),
+        fopts: fo,
         endpoint,
         prefs,
         prefs_dir,
         prefs_read_only: loaded.read_only,
         icon,
         pos: (x, y),
-        // SAFETY: our own window (the test mode uses the synthetic monitor's DPI).
+        // The test mode uses the synthetic monitor's DPI.
         dpi: if test {
             dpi
         } else {
+            // SAFETY: our own window.
             unsafe { GetDpiForWindow(icon) }.max(48)
         },
         drag: None,

@@ -42,6 +42,9 @@ pub const COPYDATA_OPEN: usize = 0x5355_424F;
 /// The longest request body accepted (bytes).
 pub const COPYDATA_MAX: usize = 4096;
 
+/// A synthetic monitor's work area and DPI: `(left, top, right, bottom, dpi)`.
+pub type TestMonitor = (i32, i32, i32, i32, u32);
+
 /// What `--float` was asked for.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FloatOptions {
@@ -53,11 +56,11 @@ pub struct FloatOptions {
     pub manager: bool,
     /// Test hooks: a synthetic monitor layout `(left, top, right, bottom, dpi)` instead of the
     /// real one (it must lie off every real monitor).
-    pub test_monitors: Option<Vec<(i32, i32, i32, i32, u32)>>,
+    pub test_monitors: Option<Vec<TestMonitor>>,
 }
 
 /// Parses `--test-monitors`: `left,top,right,bottom,dpi` work areas separated by `;`.
-pub fn parse_monitors(s: &str) -> Option<Vec<(i32, i32, i32, i32, u32)>> {
+pub fn parse_monitors(s: &str) -> Option<Vec<TestMonitor>> {
     let v: Option<Vec<_>> = s
         .split(';')
         .filter(|p| !p.trim().is_empty())

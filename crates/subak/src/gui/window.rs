@@ -3043,10 +3043,10 @@ fn handle(app: &mut App, hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> Option
             Some(0)
         }
         WM_COPYDATA => {
-            // SAFETY: the lParam of this WM_COPYDATA.
-            if let Some(req) =
-                unsafe { super::float::win::copydata(lp, super::float::COPYDATA_OPEN) }
-            {
+            let req =
+                // SAFETY: the lParam of this WM_COPYDATA.
+                unsafe { super::float::win::copydata(lp, super::float::COPYDATA_OPEN) };
+            if let Some(req) = req {
                 return Some(app.open_request(&req));
             }
             if !app.opts.test {

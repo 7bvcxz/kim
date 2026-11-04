@@ -587,7 +587,7 @@ fn the_manager_searches_opens_renames_and_deletes_by_id_asking_first() {
     let opened = f.wait("opened", |v| v["how"] == "existing");
     assert_eq!(opened["pid"], win_pid);
     assert_eq!(opened["terminal"], beta.as_str());
-    assert_eq!(opened["allow_foreground"].is_boolean(), true);
+    assert!(opened["allow_foreground"].is_boolean());
     wait_for("the window switched to beta", || {
         info(&ep, &beta)["clients"] == 1 && info(&ep, &alpha)["clients"] == 0
     });

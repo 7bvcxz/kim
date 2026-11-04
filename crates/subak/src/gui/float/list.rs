@@ -727,7 +727,7 @@ impl Manager {
                 json!({"target": a.id, "force": busy}),
                 Pending::Kill {
                     id: a.id.clone(),
-                    name: a.name.clone(),
+                    name: a.name,
                     force: busy,
                 },
             ),
@@ -736,7 +736,7 @@ impl Manager {
                 json!({"target": a.id}),
                 Pending::Remove {
                     id: a.id.clone(),
-                    name: a.name.clone(),
+                    name: a.name,
                 },
             ),
         };
@@ -956,6 +956,7 @@ mod tests {
     }
 
     /// A connected manager listing `list`.
+    #[allow(clippy::needless_pass_by_value)]
     fn connected(list: Vec<Value>) -> Manager {
         let mut m = Manager::new();
         let fx = m.on_connected();

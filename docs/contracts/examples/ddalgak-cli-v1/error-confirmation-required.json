@@ -1,0 +1,12 @@
+{
+  "command": "rule.delete",
+  "error": {
+    "code": "confirmation_required",
+    "details": [],
+    "exit_code": 7,
+    "hint": "re-run with --yes (or --dry-run to see what would happen)",
+    "message": "Delete 1 rule? This needs --yes when ddalgak cannot ask."
+  },
+  "ok": false,
+  "schema_version": 1
+}

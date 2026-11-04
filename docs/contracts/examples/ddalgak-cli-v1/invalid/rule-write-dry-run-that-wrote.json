@@ -1,0 +1,26 @@
+{
+  "command": "rule.add",
+  "data": {
+    "app": {
+      "running": false
+    },
+    "backup": null,
+    "changed": true,
+    "created": "off-key",
+    "dry_run": true,
+    "notes": [],
+    "problems": [],
+    "revision": {
+      "from": 1,
+      "to": 2
+    },
+    "rules": [
+      "off-key"
+    ],
+    "snapshot": null,
+    "target": "saved"
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

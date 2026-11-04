@@ -5,7 +5,7 @@
     "details": [],
     "exit_code": 2,
     "hint": "see `ddalgak --help`",
-    "message": "unknown command `engine fly`"
+    "message": "`engine` needs start, pause, resume or stop"
   },
   "ok": false,
   "schema_version": 1

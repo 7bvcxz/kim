@@ -84,6 +84,12 @@ fn bless(name: &str, doc: &Value) {
         &escaped(&bin_dir),
         &escaped(r"C:\Users\you\AppData\Local\Programs\mouv\ddalgak\versions\0.0.1"),
     );
+    let temp = std::env::temp_dir()
+        .display()
+        .to_string()
+        .trim_end_matches(['\\', '/'])
+        .to_string();
+    text = text.replace(&escaped(&temp), &escaped(r"C:\Users\you\AppData\Local\Temp"));
     let unique = regex::Regex::new(r"ddalgak-(cli|test)-([a-z]+)-[0-9]+-[0-9]+").unwrap();
     text = unique.replace_all(&text, "ddalgak-$1-$2").to_string();
     validate(&serde_json::from_str(&text).unwrap());

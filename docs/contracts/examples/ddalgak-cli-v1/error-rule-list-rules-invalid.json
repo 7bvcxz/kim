@@ -1,0 +1,12 @@
+{
+  "command": "rule.list",
+  "error": {
+    "code": "rules_invalid",
+    "details": [],
+    "exit_code": 4,
+    "hint": "it is never rewritten automatically: fix it by hand, or restore the backup with `ddalgak rules restore --backup --yes` (the file is kept as rules.corrupt-<time>.json)",
+    "message": "rules.json is not usable: not valid JSON: expected value at line 1 column 65"
+  },
+  "ok": false,
+  "schema_version": 1
+}

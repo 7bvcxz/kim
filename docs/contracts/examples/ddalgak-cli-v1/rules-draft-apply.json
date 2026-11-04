@@ -1,0 +1,26 @@
+{
+  "command": "rules.draft.apply",
+  "data": {
+    "app": {
+      "running": false
+    },
+    "changed": true,
+    "changes": {
+      "added": [],
+      "changed": [
+        "off-key"
+      ],
+      "removed": []
+    },
+    "dry_run": false,
+    "revision": {
+      "from": 13,
+      "to": 14
+    },
+    "snapshot": "20261104T032118Z-r14.json",
+    "target": "saved"
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

@@ -1,0 +1,29 @@
+{
+  "command": "rule.check",
+  "data": {
+    "file": "invalid",
+    "ok": true,
+    "problems": [
+      {
+        "at": "",
+        "code": "rules_invalid",
+        "message": "not valid JSON: expected value at line 1 column 65",
+        "offers": [],
+        "profile": null,
+        "rule": null,
+        "severity": "error",
+        "with": null
+      }
+    ],
+    "revision": null,
+    "source": "saved",
+    "summary": {
+      "errors": 1,
+      "infos": 0,
+      "warnings": 0
+    }
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

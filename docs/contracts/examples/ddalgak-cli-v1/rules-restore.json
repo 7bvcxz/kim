@@ -1,0 +1,20 @@
+{
+  "command": "rules.restore",
+  "data": {
+    "app": {
+      "running": false
+    },
+    "dry_run": false,
+    "kept": "rules.json.bak",
+    "restored_revision": 13,
+    "revision": {
+      "from": 14,
+      "to": 15
+    },
+    "snapshot": "20261104T032118Z-r15.json",
+    "source": "rules.json.bak"
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

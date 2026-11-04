@@ -1,0 +1,12 @@
+{
+  "command": "rule.show",
+  "error": {
+    "code": "rule_not_found",
+    "details": [],
+    "exit_code": 3,
+    "hint": "see `ddalgak rule list`",
+    "message": "no rule `off-copy`"
+  },
+  "ok": false,
+  "schema_version": 1
+}

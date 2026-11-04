@@ -1,0 +1,16 @@
+{
+  "command": "rule.add",
+  "error": {
+    "code": "consent_required",
+    "details": [
+      "rule: caps",
+      "saved: true",
+      "revision: 3"
+    ],
+    "exit_code": 7,
+    "hint": "approve it explicitly: ddalgak rule enable caps --allow input-injection",
+    "message": "rule `caps` was saved disabled: it needs consent for `input-injection`"
+  },
+  "ok": false,
+  "schema_version": 1
+}

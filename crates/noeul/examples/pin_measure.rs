@@ -150,11 +150,7 @@ mod measure {
     }
 
     fn spec(rect: Rect) -> WindowSpec {
-        WindowSpec {
-            rect,
-            focus: false,
-            guard: None,
-        }
+        WindowSpec::plain(rect)
     }
 
     pub fn main() {
@@ -227,8 +223,11 @@ mod measure {
             idle(Duration::from_millis(300));
             let with = private_bytes();
             let commit1 = system_commit();
-            pin.present(&frame, Rect::new(FAR, FAR, w * 2, h * 2))
-                .expect("a zoomed window");
+            pin.present(
+                &frame,
+                &noeul::transform::View::plain(Rect::new(FAR, FAR, w * 2, h * 2)),
+            )
+            .expect("a zoomed window");
             idle(Duration::from_millis(300));
             let zoomed = private_bytes();
             let commit2 = system_commit();

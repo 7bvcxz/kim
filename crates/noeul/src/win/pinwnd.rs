@@ -1,30 +1,41 @@
 //! Win32 pin windows: borderless, always-on-top, layered tool windows (NOEUL-FR-060,
-//! NOEUL-FR-061, NOEUL-FR-026; ADR 0023 §2, ADR 0029).
+//! NOEUL-FR-061, NOEUL-FR-062, NOEUL-FR-063, NOEUL-FR-026; ADR 0023 §2, ADR 0029, ADR 0044).
 //!
 //! - **Never on the taskbar or in Alt+Tab** (`WS_EX_TOOLWINDOW`, no `WS_EX_APPWINDOW`).
-//! - **Retained picture.** The window's picture is rendered once per change ([`zoom::render`]:
-//!   at 100 % one image pixel per device pixel) into a temporary premultiplied DIB section and
-//!   handed to `UpdateLayeredWindow`, which keeps its own copy; the DIB is freed at once. No
-//!   `WM_PAINT`, no timer, no GPU context: an idle pin costs no CPU (NOEUL-NFR-001), and its
-//!   memory is measured in ADR 0029 (NOEUL-NFR-002).
+//! - **Retained picture.** The window's surface is painted once per change
+//!   ([`transform::paint`]: the picture scaled to its rectangle — at 100 % one image pixel per
+//!   device pixel — inside a one-pixel outline and the soft pin shadow, plus the click-through
+//!   badge) into a temporary premultiplied DIB section and handed to `UpdateLayeredWindow`, which
+//!   keeps its own copy; the DIB is freed at once. Opacity is the constant alpha of the same call
+//!   with no new surface (nothing is painted again). No `WM_PAINT`, no timer, no GPU context: an
+//!   idle or hidden pin costs no CPU (NOEUL-NFR-001, NOEUL-NFR-007), and its memory is measured
+//!   in ADR 0029 (NOEUL-NFR-002).
 //! - **Focus only when the user asks.** Created with `SW_SHOWNOACTIVATE` unless the user made it
 //!   (then it takes focus so `Esc` and the arrows work at once); a click activates it. Hiding or
 //!   closing the focused pin first hands focus back to the window the user was in before the
 //!   pin took it (never to another pin), so the next key reaches that program, not a pin.
-//!   Showing, moving and zooming never activate anything. A window created for the debug-build
-//!   test hook ([`Style::OFF_SCREEN_TEST`]) is never topmost and can never be activated.
+//!   Showing, moving, zooming and transforming never activate anything. A window created for the
+//!   debug-build test hook ([`Style::OFF_SCREEN_TEST`]) is never topmost and can never be
+//!   activated.
 //! - **Z-order.** A new pin, and a pin shown again, go to the top of the topmost band once;
 //!   pins never fight other topmost windows for it (no timer, no re-assertion). The capture
 //!   overlay, created later, lies above them.
 //! - **Input stays Noeul's own**: keys reach the pin only while it has focus; they are matched
 //!   against the `pin` context and never forwarded anywhere (NOEUL-SEC-012). The IME is switched
 //!   off for the window so letter shortcuts work in Hangul mode (NOEUL-NFR-014).
-//! - **Mouse.** Dragging anywhere moves it (the system move loop, `HTCAPTION`); the wheel zooms
-//!   around the pointer; a middle-click returns to 100 %; a right-click (or `Shift+F10`, or the
-//!   menu key) opens its context menu. A double-click does nothing (NOEUL-FR-026). For the guard
-//!   time a new pin was given, every press on it is swallowed (UX spec §4.2 rule 10).
+//! - **Mouse.** Dragging the picture moves it (the system move loop, `HTCAPTION`); dragging its
+//!   outline, shadow or the band just inside its edge resizes it with the aspect ratio kept (the
+//!   window's own capture and mouse messages, no system sizing loop); the wheel zooms around the
+//!   pointer, `Ctrl`+wheel changes the opacity; a middle-click returns to 100 % and opaque; a
+//!   right-click (or `Shift+F10`, or the menu key) opens its context menu; `Shift`+double-click
+//!   toggles thumbnail mode; dropping it with `Ctrl` held onto another pin joins that pin's group.
+//!   A plain double-click does nothing (NOEUL-FR-026). For the guard time a new pin was given,
+//!   every press on it is swallowed (UX spec §4.2 rule 10).
+//! - **Click-through** (NOEUL-FR-063): `WS_EX_TRANSPARENT` on the layered window, so the system
+//!   hit-tests through it to the window below; the pin keeps keyboard focus if it had it (its
+//!   `Ctrl+Shift+T` turns it back) and shows the badge.
 //! - **Displays.** `WM_DPICHANGED` is ignored: a pin keeps its pixel size on every monitor
-//!   (NOEUL-FR-061, NOEUL-FR-091).
+//!   (NOEUL-FR-061, NOEUL-FR-091); the core redraws its outline for the new monitor's DPI.
 //!
 //! The window procedure only queues [`PinEvent`]s and calls the registered waker; the instance
 //! core handles them later, never re-entrantly. The context menu is shown by [`track_menu`],
@@ -34,6 +45,7 @@ use crate::app::{PinEvent, PinMenuItem};
 use crate::frame::{Frame, Rect};
 use crate::hotkeys::chord_of;
 use crate::pins::{PinId, PinWindow, PinWindows, WindowSpec};
+use crate::transform::{self, Edge, View};
 use crate::win::wide;
 use crate::zoom;
 use std::cell::RefCell;
@@ -50,24 +62,41 @@ use windows_sys::Win32::Graphics::Gdi::{
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::SystemServices::MK_CONTROL;
 use windows_sys::Win32::UI::Input::Ime::ImmAssociateContextEx;
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetKeyState, VK_CONTROL, VK_MENU, VK_SHIFT};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+    GetKeyState, ReleaseCapture, SetCapture, VK_CONTROL, VK_MENU, VK_SHIFT,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CS_DBLCLKS, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
-    DestroyWindow, GWLP_USERDATA, GetForegroundWindow, GetWindowLongPtrW, GetWindowRect, HTCAPTION,
-    HWND_TOP, HWND_TOPMOST, IDC_SIZEALL, IsWindow, IsWindowVisible, LoadCursorW, MA_ACTIVATE,
+    DestroyWindow, GWL_EXSTYLE, GWLP_USERDATA, GetForegroundWindow, GetWindowLongPtrW,
+    GetWindowRect, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTLEFT, HTRIGHT, HTTOP,
+    HTTOPLEFT, HTTOPRIGHT, HWND_TOP, HWND_TOPMOST, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS,
+    IDC_SIZENWSE, IDC_SIZEWE, IsWindow, IsWindowVisible, LoadCursorW, MA_ACTIVATE,
     MA_NOACTIVATEANDEAT, MF_GRAYED, MF_SEPARATOR, MF_STRING, PostMessageW, RegisterClassExW,
     SW_HIDE, SW_SHOW, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
-    SWP_SHOWWINDOW, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow, TPM_NONOTIFY,
-    TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, ULW_ALPHA, UpdateLayeredWindow, WA_INACTIVE,
-    WM_ACTIVATE, WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY, WM_DPICHANGED, WM_EXITSIZEMOVE, WM_KEYDOWN,
-    WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_MOUSEACTIVATE, WM_MOUSEWHEEL, WM_NCDESTROY, WM_NCHITTEST,
-    WM_NCLBUTTONDBLCLK, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMBUTTONDBLCLK, WM_NCMBUTTONDOWN,
-    WM_NCMBUTTONUP, WM_NCRBUTTONDBLCLK, WM_NCRBUTTONDOWN, WM_NCRBUTTONUP, WM_NULL, WM_RBUTTONDOWN,
+    SWP_SHOWWINDOW, SetCursor, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+    TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, ULW_ALPHA, UpdateLayeredWindow,
+    WA_INACTIVE, WM_ACTIVATE, WM_CAPTURECHANGED, WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY,
+    WM_DPICHANGED, WM_EXITSIZEMOVE, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
+    WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCDESTROY, WM_NCHITTEST, WM_NCLBUTTONDBLCLK,
+    WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMBUTTONDBLCLK, WM_NCMBUTTONDOWN, WM_NCMBUTTONUP,
+    WM_NCRBUTTONDBLCLK, WM_NCRBUTTONDOWN, WM_NCRBUTTONUP, WM_NULL, WM_RBUTTONDOWN, WM_SETCURSOR,
     WM_SYSKEYDOWN, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
-    WS_POPUP,
+    WS_EX_TRANSPARENT, WS_POPUP,
 };
 
 const CLASS: &str = "NoeulPin";
+
+/// A border drag in progress.
+#[derive(Debug, Clone, Copy)]
+struct Drag {
+    edge: Edge,
+    /// The picture's rectangle when it began.
+    start: Rect,
+    /// The pointer (screen) when it began.
+    from: (i32, i32),
+    /// Whether this window holds the mouse capture for it.
+    captured: bool,
+}
 
 /// What the runtime knows about one live pin window.
 #[derive(Debug, Clone, Copy)]
@@ -79,6 +108,13 @@ struct Slot {
     guard_until: Option<Instant>,
     /// How often the window was activated (tests check that nothing activated it).
     activations: u32,
+    /// What the window shows now: the picture's rectangle, its margin and grab band.
+    view: View,
+    /// A border drag in progress.
+    drag: Option<Drag>,
+    /// Real pins take the mouse capture while their border is dragged; the test hook's
+    /// windows (never activated, off-screen) do not.
+    capture: bool,
 }
 
 thread_local! {
@@ -111,7 +147,7 @@ fn push(e: PinEvent) {
 }
 
 fn slot(hwnd: HWND) -> Option<Slot> {
-    SLOTS.with(|s| s.borrow().get(&(hwnd as isize)).copied())
+    SLOTS.with(|s| s.try_borrow().ok()?.get(&(hwnd as isize)).copied())
 }
 
 fn with_slot(hwnd: HWND, f: impl FnOnce(&mut Slot)) {
@@ -137,6 +173,11 @@ pub fn hwnd_of(id: PinId) -> Option<HWND> {
 /// How often the pin window was activated since it was created.
 pub fn activations(hwnd: HWND) -> Option<u32> {
     slot(hwnd).map(|s| s.activations)
+}
+
+/// What the pin window shows now (its last view), for tests and measurements.
+pub fn view_of(hwnd: HWND) -> Option<View> {
+    slot(hwnd).map(|s| s.view)
 }
 
 fn is_pin(hwnd: HWND) -> bool {
@@ -206,17 +247,95 @@ fn pin_of(hwnd: HWND) -> Option<PinId> {
     u64::try_from(v).ok().filter(|v| *v > 0).map(PinId)
 }
 
-/// Screen coordinates packed in a mouse message's `lParam`.
+/// Screen coordinates packed in a mouse message's `lParam` (or client coordinates, for client
+/// messages).
 fn point_of(lp: LPARAM) -> (i32, i32) {
     let x = i32::from((lp & 0xFFFF) as u16 as i16);
     let y = i32::from(((lp >> 16) & 0xFFFF) as u16 as i16);
     (x, y)
 }
 
+/// The hit-test code of a border.
+fn ht_of(e: Edge) -> u32 {
+    match e {
+        Edge::Left => HTLEFT,
+        Edge::Right => HTRIGHT,
+        Edge::Top => HTTOP,
+        Edge::Bottom => HTBOTTOM,
+        Edge::TopLeft => HTTOPLEFT,
+        Edge::TopRight => HTTOPRIGHT,
+        Edge::BottomLeft => HTBOTTOMLEFT,
+        Edge::BottomRight => HTBOTTOMRIGHT,
+    }
+}
+
+/// The border of a hit-test code.
+fn edge_of(ht: u32) -> Option<Edge> {
+    Some(match ht {
+        HTLEFT => Edge::Left,
+        HTRIGHT => Edge::Right,
+        HTTOP => Edge::Top,
+        HTBOTTOM => Edge::Bottom,
+        HTTOPLEFT => Edge::TopLeft,
+        HTTOPRIGHT => Edge::TopRight,
+        HTBOTTOMLEFT => Edge::BottomLeft,
+        HTBOTTOMRIGHT => Edge::BottomRight,
+        _ => return None,
+    })
+}
+
+/// The window's top-left corner on screen (client coordinates start there: no frame).
+fn origin(hwnd: HWND) -> (i32, i32) {
+    let mut r = RECT::default();
+    // SAFETY: our window; `r` is writable.
+    unsafe { GetWindowRect(hwnd, &raw mut r) };
+    (r.left, r.top)
+}
+
+/// A border drag moved to the screen point `at`: the core resizes from the drag's start.
+fn drag_to(hwnd: HWND, at: (i32, i32)) {
+    if let (Some(id), Some(d)) = (pin_of(hwnd), slot(hwnd).and_then(|s| s.drag)) {
+        let delta = (at.0.saturating_sub(d.from.0), at.1.saturating_sub(d.from.1));
+        push(PinEvent::Resize(id, d.edge, d.start, delta));
+    }
+}
+
+fn end_drag(hwnd: HWND) {
+    let mut release = false;
+    with_slot(hwnd, |s| {
+        release = s.drag.is_some_and(|d| d.captured);
+        s.drag = None;
+    });
+    if release {
+        // SAFETY: gives back the capture this window took for the drag.
+        unsafe { ReleaseCapture() };
+    }
+}
+
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     match msg {
-        // Drag anywhere to move.
-        WM_NCHITTEST => return HTCAPTION as LRESULT,
+        // The border band resizes, the rest moves (drag anywhere).
+        WM_NCHITTEST => {
+            let edge = slot(hwnd).and_then(|s| {
+                let (out, inside) = s.view.band();
+                transform::edge_at(s.view.rect, out, inside, point_of(lp))
+            });
+            return edge.map_or(HTCAPTION, ht_of) as LRESULT;
+        }
+        WM_SETCURSOR => {
+            let cursor = match (lp & 0xFFFF) as u32 {
+                HTLEFT | HTRIGHT => IDC_SIZEWE,
+                HTTOP | HTBOTTOM => IDC_SIZENS,
+                HTTOPLEFT | HTBOTTOMRIGHT => IDC_SIZENWSE,
+                HTTOPRIGHT | HTBOTTOMLEFT => IDC_SIZENESW,
+                _ => std::ptr::null(),
+            };
+            if !cursor.is_null() {
+                // SAFETY: a system cursor, shown while the pointer is over the border.
+                unsafe { SetCursor(LoadCursorW(std::ptr::null_mut(), cursor)) };
+                return 1;
+            }
+        }
         // The rest of the creating gesture is swallowed: no activation, no move, no menu.
         WM_MOUSEACTIVATE => {
             if guarded(hwnd) {
@@ -247,8 +366,52 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         {
             return 0;
         }
-        // A double-click on a pin has no default action (NOEUL-FR-026); never maximize.
-        WM_NCLBUTTONDBLCLK | WM_NCRBUTTONDBLCLK | WM_NCMBUTTONDBLCLK => return 0,
+        // A press on the border starts a resize (this window's own capture and mouse messages).
+        WM_NCLBUTTONDOWN if edge_of(wp as u32).is_some() => {
+            let (Some(edge), Some(s)) = (edge_of(wp as u32), slot(hwnd)) else {
+                return 0;
+            };
+            let captured = s.capture && s.view.resizable;
+            with_slot(hwnd, |slot| {
+                slot.drag = Some(Drag {
+                    edge,
+                    start: slot.view.rect,
+                    from: point_of(lp),
+                    captured,
+                });
+            });
+            if captured {
+                // SAFETY: our window takes the mouse until the button is released.
+                unsafe { SetCapture(hwnd) };
+            }
+            return 0;
+        }
+        WM_MOUSEMOVE | WM_LBUTTONUP if slot(hwnd).is_some_and(|s| s.drag.is_some()) => {
+            let (cx, cy) = point_of(lp);
+            let (ox, oy) = origin(hwnd);
+            drag_to(hwnd, (ox.saturating_add(cx), oy.saturating_add(cy)));
+            if msg == WM_LBUTTONUP {
+                end_drag(hwnd);
+            }
+            return 0;
+        }
+        WM_CAPTURECHANGED if lp as HWND != hwnd => {
+            with_slot(hwnd, |s| s.drag = None);
+        }
+        // `Shift`+double-click toggles thumbnail mode; a plain double-click on a pin has no
+        // default action (NOEUL-FR-026); never maximize.
+        WM_NCLBUTTONDBLCLK => {
+            if down(VK_SHIFT)
+                && !down(VK_CONTROL)
+                && !down(VK_MENU)
+                && !guarded(hwnd)
+                && let Some(id) = pin_of(hwnd)
+            {
+                push(PinEvent::ShiftDoubleClick(id));
+            }
+            return 0;
+        }
+        WM_NCRBUTTONDBLCLK | WM_NCMBUTTONDBLCLK => return 0,
         WM_NCMBUTTONUP => {
             if let Some(id) = pin_of(hwnd)
                 && !guarded(hwnd)
@@ -297,13 +460,16 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             }
         }
         WM_EXITSIZEMOVE => {
-            let mut r = RECT::default();
-            // SAFETY: `hwnd` is this window; `r` is writable.
-            let ok = unsafe { GetWindowRect(hwnd, &raw mut r) } != 0;
-            if let Some(id) = pin_of(hwnd)
-                && ok
-            {
-                push(PinEvent::Moved(id, r.left, r.top));
+            let (x, y) = origin(hwnd);
+            let m = slot(hwnd).map_or(0, |s| s.view.margin());
+            let m = i32::try_from(m).unwrap_or(0);
+            if let Some(id) = pin_of(hwnd) {
+                let (x, y) = (x.saturating_add(m), y.saturating_add(m));
+                push(if down(VK_CONTROL) {
+                    PinEvent::Dropped(id, x, y)
+                } else {
+                    PinEvent::Moved(id, x, y)
+                });
             }
             return 0;
         }
@@ -359,8 +525,8 @@ fn class() -> Result<*const u16, String> {
 }
 
 /// A temporary premultiplied BGRA DIB section of one window size.
-struct Surface {
-    dc: HDC,
+pub(crate) struct Surface {
+    pub(crate) dc: HDC,
     bitmap: HBITMAP,
     old: *mut c_void,
     bits: *mut u8,
@@ -368,7 +534,7 @@ struct Surface {
 }
 
 impl Surface {
-    fn new(w: u32, h: u32) -> Result<Surface, String> {
+    pub(crate) fn new(w: u32, h: u32) -> Result<Surface, String> {
         let info = BITMAPINFO {
             bmiHeader: BITMAPINFOHEADER {
                 biSize: u32::try_from(size_of::<BITMAPINFOHEADER>()).expect("small"),
@@ -414,7 +580,7 @@ impl Surface {
         })
     }
 
-    fn pixels(&mut self) -> &mut [u8] {
+    pub(crate) fn pixels(&mut self) -> &mut [u8] {
         // SAFETY: the DIB holds `len` bytes at `bits` until Drop; `&mut self` makes this the
         // only view.
         unsafe { std::slice::from_raw_parts_mut(self.bits, self.len) }
@@ -432,30 +598,51 @@ impl Drop for Surface {
     }
 }
 
-/// Renders `frame` at `rect`'s size and hands it to the layered window, which moves and resizes
-/// to `rect` (no activation, no z-order change). The temporary surface is freed on return.
-fn upload(hwnd: HWND, frame: &Frame, rect: Rect) -> Result<(), String> {
-    if !zoom::allowed(rect.width, rect.height) {
-        return Err(format!(
-            "a {}×{} pin window is too large",
-            rect.width, rect.height
-        ));
-    }
-    let mut surface = Surface::new(rect.width, rect.height)?;
-    zoom::render(frame, rect.width, rect.height, surface.pixels());
-    let blend = BLENDFUNCTION {
+fn blend(opacity: u32) -> BLENDFUNCTION {
+    BLENDFUNCTION {
         BlendOp: AC_SRC_OVER as u8,
         BlendFlags: 0,
-        SourceConstantAlpha: 255,
+        SourceConstantAlpha: transform::alpha(opacity),
         AlphaFormat: AC_SRC_ALPHA as u8,
-    };
-    let pos = POINT {
-        x: rect.x,
-        y: rect.y,
-    };
+    }
+}
+
+/// Lets the mouse through the window or not (`WS_EX_TRANSPARENT`, NOEUL-FR-063).
+fn set_transparent(hwnd: HWND, on: bool) {
+    // SAFETY: reads and writes our own window's extended style.
+    unsafe {
+        let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
+        let want = if on {
+            ex | WS_EX_TRANSPARENT
+        } else {
+            ex & !WS_EX_TRANSPARENT
+        };
+        if want != ex {
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, want as isize);
+        }
+    }
+}
+
+/// Paints `frame` at `view`'s size with its outline, shadow and badge and hands it to the layered
+/// window, which moves and resizes to the view's window (no activation, no z-order change), with
+/// its opacity and click-through. The temporary surface is freed on return.
+fn upload(hwnd: HWND, frame: &Frame, view: &View) -> Result<(), String> {
+    let win = view.window();
+    if !zoom::allowed(view.rect.width, view.rect.height)
+        || u64::from(win.width) * u64::from(win.height) * 4 > zoom::MAX_BYTES + (64 << 20)
+    {
+        return Err(format!(
+            "a {}×{} pin window is too large",
+            view.rect.width, view.rect.height
+        ));
+    }
+    let mut surface = Surface::new(win.width, win.height)?;
+    transform::paint(frame, view, surface.pixels());
+    let blend = blend(view.opacity);
+    let pos = POINT { x: win.x, y: win.y };
     let size = SIZE {
-        cx: i32::try_from(rect.width).map_err(|_| "too wide")?,
-        cy: i32::try_from(rect.height).map_err(|_| "too high")?,
+        cx: i32::try_from(win.width).map_err(|_| "too wide")?,
+        cy: i32::try_from(win.height).map_err(|_| "too high")?,
     };
     let src = POINT { x: 0, y: 0 };
     // SAFETY: the screen DC is released right after; the surface DC holds the premultiplied
@@ -482,6 +669,13 @@ fn upload(hwnd: HWND, frame: &Frame, rect: Rect) -> Result<(), String> {
             std::io::Error::last_os_error()
         ));
     }
+    set_transparent(hwnd, view.click_through);
+    with_slot(hwnd, |s| {
+        s.view = *view;
+        if !view.resizable {
+            s.drag = None;
+        }
+    });
     Ok(())
 }
 
@@ -501,7 +695,7 @@ impl Style {
         activate: true,
     };
     /// The debug-build test hook (ADR 0026 §8): the windows lie off-screen, never on top, never
-    /// activated.
+    /// activated, and never take the mouse capture.
     pub const OFF_SCREEN_TEST: Style = Style {
         topmost: false,
         activate: false,
@@ -527,6 +721,10 @@ impl WinPin {
         self.hwnd
     }
 
+    fn margin(&self) -> i32 {
+        i32::try_from(slot(self.hwnd).map_or(0, |s| s.view.margin())).unwrap_or(0)
+    }
+
     /// When this pin has focus, gives it back to the window the user was in before (if that
     /// still exists and is visible), so hiding or closing a pin never moves focus to another pin.
     fn hand_back_focus(&self) {
@@ -546,13 +744,18 @@ impl WinPin {
 
 impl PinWindow for WinPin {
     fn set_position(&mut self, x: i32, y: i32) {
+        let m = self.margin();
+        with_slot(self.hwnd, |s| {
+            s.view.rect.x = x;
+            s.view.rect.y = y;
+        });
         // SAFETY: our window; moves it without activating, resizing or changing the z-order.
         unsafe {
             SetWindowPos(
                 self.hwnd,
                 std::ptr::null_mut(),
-                x,
-                y,
+                x.saturating_sub(m),
+                y.saturating_sub(m),
                 0,
                 0,
                 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
@@ -560,8 +763,30 @@ impl PinWindow for WinPin {
         };
     }
 
-    fn present(&mut self, frame: &Frame, rect: Rect) -> Result<(), String> {
-        upload(self.hwnd, frame, rect)
+    fn present(&mut self, frame: &Frame, view: &View) -> Result<(), String> {
+        upload(self.hwnd, frame, view)
+    }
+
+    fn set_opacity(&mut self, opacity: u32) {
+        let blend = blend(opacity);
+        // SAFETY: our layered window keeps its surface, position and size; only the constant
+        // alpha changes (no source DC: nothing is painted again).
+        let ok = unsafe {
+            UpdateLayeredWindow(
+                self.hwnd,
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                0,
+                &raw const blend,
+                ULW_ALPHA,
+            )
+        } != 0;
+        if ok {
+            with_slot(self.hwnd, |s| s.view.opacity = opacity);
+        }
     }
 
     fn set_visible(&mut self, visible: bool) {
@@ -585,6 +810,7 @@ impl PinWindow for WinPin {
             };
         } else {
             self.hand_back_focus();
+            end_drag(self.hwnd);
             // SAFETY: our window; it is no longer the active one, so hiding moves no focus.
             unsafe { ShowWindow(self.hwnd, SW_HIDE) };
         }
@@ -612,13 +838,15 @@ impl PinWindow for WinPin {
         if self.hwnd.is_null() || unsafe { GetWindowRect(self.hwnd, &raw mut r) } == 0 {
             return None;
         }
-        let w = u32::try_from(r.right - r.left).ok()?;
-        let h = u32::try_from(r.bottom - r.top).ok()?;
-        Some(Rect::new(r.left, r.top, w, h))
+        let m = self.margin();
+        let w = u32::try_from(r.right - r.left - 2 * m).ok()?;
+        let h = u32::try_from(r.bottom - r.top - 2 * m).ok()?;
+        Some(Rect::new(r.left + m, r.top + m, w, h))
     }
 
     fn destroy(&mut self) {
         self.hand_back_focus();
+        end_drag(self.hwnd);
         // SAFETY: destroys our own window once; later calls see a dead handle and do nothing.
         unsafe {
             if !self.hwnd.is_null() && IsWindow(self.hwnd) != 0 {
@@ -651,11 +879,12 @@ pub struct WinPins {
 /// which place it off-screen.
 pub fn create(id: PinId, frame: &Frame, spec: &WindowSpec, style: Style) -> Result<WinPin, String> {
     let class = class()?;
-    let r = spec.rect;
-    if !zoom::allowed(r.width, r.height) {
+    let view = spec.view;
+    let r = view.window();
+    if !zoom::allowed(view.rect.width, view.rect.height) {
         return Err(format!(
             "a {}×{} pin window is too large",
-            r.width, r.height
+            view.rect.width, view.rect.height
         ));
     }
     let mut ex = WS_EX_LAYERED | WS_EX_TOOLWINDOW;
@@ -697,6 +926,9 @@ pub fn create(id: PinId, frame: &Frame, spec: &WindowSpec, style: Style) -> Resu
                 prev: 0,
                 guard_until: spec.guard.map(|g| Instant::now() + g),
                 activations: 0,
+                view,
+                drag: None,
+                capture: style.activate,
             },
         );
     });
@@ -707,7 +939,7 @@ pub fn create(id: PinId, frame: &Frame, spec: &WindowSpec, style: Style) -> Resu
         // No input method context: letter keys are shortcuts, also in Hangul mode.
         ImmAssociateContextEx(hwnd, std::ptr::null_mut(), 0);
     }
-    if let Err(e) = upload(hwnd, frame, r) {
+    if let Err(e) = upload(hwnd, frame, &view) {
         pin.destroy();
         return Err(e);
     }
@@ -768,11 +1000,14 @@ pub(crate) fn track_menu_on(
             continue;
         }
         let label = wide(&item.label);
-        let flags = if item.enabled {
+        let mut flags = if item.enabled {
             MF_STRING
         } else {
             MF_STRING | MF_GRAYED
         };
+        if item.checked {
+            flags |= windows_sys::Win32::UI::WindowsAndMessaging::MF_CHECKED;
+        }
         // SAFETY: valid menu; the label is copied.
         unsafe { AppendMenuW(menu, flags, i + 1, label.as_ptr()) };
     }
@@ -805,379 +1040,4 @@ pub(crate) fn track_menu_on(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::frame::Ledger;
-    use std::time::Duration;
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GWL_EXSTYLE, GetWindowLongW, SendMessageW, WS_EX_APPWINDOW,
-    };
-
-    /// Off-screen: far outside any real monitor arrangement (the user sees nothing).
-    const FAR: i32 = -20_000;
-
-    fn spec(rect: Rect) -> WindowSpec {
-        WindowSpec {
-            rect,
-            focus: false,
-            guard: None,
-        }
-    }
-
-    /// Off-screen and never activated, but on top: z-order checks need real topmost windows,
-    /// and these lie where no monitor shows them.
-    const TOPMOST_TEST: Style = Style {
-        topmost: true,
-        activate: false,
-    };
-
-    fn ex_style(hwnd: HWND) -> u32 {
-        // SAFETY: a query on our own window.
-        unsafe { GetWindowLongW(hwnd, GWL_EXSTYLE) as u32 }
-    }
-
-    fn rect_of(hwnd: HWND) -> (i32, i32, i32, i32) {
-        let mut r = RECT::default();
-        // SAFETY: a query on our own window; `r` is writable.
-        unsafe { GetWindowRect(hwnd, &raw mut r) };
-        (r.left, r.top, r.right - r.left, r.bottom - r.top)
-    }
-
-    /// Top-level windows from the top of the z-order down.
-    fn z_order() -> Vec<isize> {
-        unsafe extern "system" fn each(h: HWND, data: LPARAM) -> i32 {
-            // SAFETY: `data` is the `&mut Vec<isize>` passed below, alive during EnumWindows.
-            unsafe { (*(data as *mut Vec<isize>)).push(h as isize) };
-            1
-        }
-        let mut out: Vec<isize> = Vec::new();
-        // SAFETY: the callback only touches `out`, passed by pointer for the duration.
-        unsafe { EnumWindows(Some(each), (&raw mut out) as LPARAM) };
-        out
-    }
-
-    /// A real pin window, created off-screen, never activated: the user sees nothing. Checks
-    /// styles, focus, key handling, double-click, the menu request, DPI changes and destruction.
-    #[test]
-    fn off_screen_pin_window_lifecycle() {
-        let ledger = Ledger::new();
-        let frame = Frame::solid(&ledger, Rect::new(FAR, FAR, 16, 12), [0, 128, 255, 255]).unwrap();
-        let mut pin = create(PinId(77), &frame, &spec(frame.rect()), Style::INTERACTIVE).unwrap();
-        let hwnd = pin.hwnd();
-        assert_eq!(hwnd_of(PinId(77)), Some(hwnd));
-        // SAFETY: queries on our own live window.
-        unsafe {
-            assert_ne!(IsWindow(hwnd), 0);
-            assert_ne!(IsWindowVisible(hwnd), 0);
-            let ex = ex_style(hwnd);
-            assert_ne!(ex & WS_EX_TOOLWINDOW, 0, "no taskbar entry, not in Alt+Tab");
-            assert_ne!(ex & WS_EX_TOPMOST, 0, "always on top");
-            assert_ne!(ex & WS_EX_LAYERED, 0);
-            assert_eq!(ex & WS_EX_APPWINDOW, 0);
-            assert_eq!(
-                ex & WS_EX_NOACTIVATE,
-                0,
-                "a click may give it focus (NOEUL-FR-060)"
-            );
-            assert_ne!(GetForegroundWindow(), hwnd, "a CLI pin never steals focus");
-        }
-        assert_eq!(rect_of(hwnd), (FAR, FAR, 16, 12));
-        assert_eq!(activations(hwnd), Some(0));
-        let _ = take_events();
-        // SAFETY: synchronous messages to our own window on this thread.
-        unsafe {
-            SendMessageW(hwnd, WM_KEYDOWN, 0x1B, 0); // Escape
-            SendMessageW(hwnd, WM_NCLBUTTONDBLCLK, HTCAPTION as usize, 0);
-            SendMessageW(hwnd, WM_KEYDOWN, 0x25, 1 << 30); // Left, auto-repeat
-            SendMessageW(hwnd, WM_KEYDOWN, 0xFF, 0); // no key name
-            SendMessageW(hwnd, WM_CONTEXTMENU, hwnd as usize, -1); // the menu key
-            let at = ((FAR as u16 as isize) & 0xFFFF) | ((FAR + 3) as u16 as isize) << 16;
-            SendMessageW(hwnd, WM_CONTEXTMENU, hwnd as usize, at); // a right-click
-            SendMessageW(hwnd, WM_NCMBUTTONUP, HTCAPTION as usize, 0);
-            SendMessageW(
-                hwnd,
-                WM_MOUSEWHEEL,
-                (120usize << 16) | MK_CONTROL as usize,
-                0,
-            );
-            SendMessageW(hwnd, WM_MOUSEWHEEL, (0xFF88usize) << 16, 0); // -120
-            SendMessageW(hwnd, WM_CLOSE, 0, 0);
-            assert_ne!(
-                IsWindow(hwnd),
-                0,
-                "WM_CLOSE leaves the decision to the core"
-            );
-            assert_eq!(SendMessageW(hwnd, WM_NCHITTEST, 0, 0), HTCAPTION as LRESULT);
-            // A DPI change keeps the pixel size.
-            let suggested = RECT {
-                left: FAR,
-                top: FAR,
-                right: FAR + 24,
-                bottom: FAR + 18,
-            };
-            SendMessageW(
-                hwnd,
-                WM_DPICHANGED,
-                (144 << 16) | 144,
-                (&raw const suggested) as LPARAM,
-            );
-        }
-        assert_eq!(
-            rect_of(hwnd),
-            (FAR, FAR, 16, 12),
-            "WM_DPICHANGED changes nothing"
-        );
-        let ev = take_events();
-        let esc = chord_of("Escape", false, false, false).unwrap();
-        let left = chord_of("Left", false, false, false).unwrap();
-        assert_eq!(
-            ev,
-            [
-                PinEvent::Key(PinId(77), esc, false),
-                PinEvent::Key(PinId(77), left, true),
-                PinEvent::Menu(PinId(77), None),
-                PinEvent::Menu(PinId(77), Some((FAR, FAR + 3))),
-                PinEvent::MiddleClick(PinId(77)),
-                PinEvent::Wheel(PinId(77), 120, (0, 0), true),
-                PinEvent::Wheel(PinId(77), -120, (0, 0), false),
-                PinEvent::Closed(PinId(77)),
-            ],
-            "the double-click produced nothing (NOEUL-FR-026)"
-        );
-        pin.set_position(FAR - 100, FAR - 50);
-        assert_eq!(rect_of(hwnd).0, FAR - 100);
-        assert_eq!(pin.rect(), Some(Rect::new(FAR - 100, FAR - 50, 16, 12)));
-        // Zoom: the window takes the new size and place, still not activated.
-        pin.present(&frame, Rect::new(FAR, FAR, 32, 24)).unwrap();
-        assert_eq!(rect_of(hwnd), (FAR, FAR, 32, 24));
-        assert!(
-            pin.present(&frame, Rect::new(FAR, FAR, 20_000, 1)).is_err(),
-            "too large"
-        );
-        assert_eq!(activations(hwnd), Some(0), "nothing activated it");
-        pin.destroy();
-        // SAFETY: as above.
-        assert_eq!(unsafe { IsWindow(hwnd) }, 0, "destroyed");
-        assert_eq!(hwnd_of(PinId(77)), None);
-        pin.destroy(); // idempotent
-        drop(frame);
-        assert_eq!(ledger.live(), (0, 0));
-    }
-
-    /// The tail of a double-click: for the guard time every press is swallowed and the window
-    /// refuses activation; afterwards a click may activate it again.
-    #[test]
-    fn a_new_pin_swallows_the_rest_of_the_gesture() {
-        let ledger = Ledger::new();
-        let frame = Frame::solid(&ledger, Rect::new(FAR, FAR, 8, 8), [1, 2, 3, 255]).unwrap();
-        let guarded_spec = WindowSpec {
-            guard: Some(Duration::from_millis(300)),
-            ..spec(frame.rect())
-        };
-        let pin = create(PinId(91), &frame, &guarded_spec, Style::INTERACTIVE).unwrap();
-        let hwnd = pin.hwnd();
-        let _ = take_events();
-        // SAFETY: synchronous messages to our own window on this thread.
-        unsafe {
-            assert_eq!(
-                SendMessageW(hwnd, WM_MOUSEACTIVATE, hwnd as usize, 0),
-                MA_NOACTIVATEANDEAT as LRESULT,
-                "the third click of a triple click neither activates nor reaches the pin"
-            );
-            assert_eq!(
-                SendMessageW(hwnd, WM_NCLBUTTONDOWN, HTCAPTION as usize, 0),
-                0
-            );
-            SendMessageW(hwnd, WM_NCMBUTTONUP, HTCAPTION as usize, 0);
-            SendMessageW(hwnd, WM_CONTEXTMENU, hwnd as usize, -1);
-        }
-        assert!(take_events().is_empty(), "nothing reached the core");
-        std::thread::sleep(Duration::from_millis(350));
-        // SAFETY: as above.
-        unsafe {
-            assert_eq!(
-                SendMessageW(hwnd, WM_MOUSEACTIVATE, hwnd as usize, 0),
-                MA_ACTIVATE as LRESULT,
-                "after the guard a click may activate it"
-            );
-            SendMessageW(hwnd, WM_NCMBUTTONUP, HTCAPTION as usize, 0);
-        }
-        assert_eq!(take_events(), [PinEvent::MiddleClick(PinId(91))]);
-        drop(pin);
-    }
-
-    /// Several real topmost pins, off-screen: each is independent, the newest is on top, hiding
-    /// and showing one leaves the others alone, a shown one returns to the top of the topmost
-    /// band, and no window is ever activated or made the foreground window.
-    #[test]
-    fn independent_topmost_pins_keep_their_z_order_and_never_take_focus() {
-        let ledger = Ledger::new();
-        // SAFETY: a plain query.
-        let fg_before = unsafe { GetForegroundWindow() };
-        let frames: Vec<Frame> = (0..3)
-            .map(|i| {
-                Frame::solid(
-                    &ledger,
-                    Rect::new(FAR + i * 40, FAR, 30, 20),
-                    [i as u8, 0, 0, 255],
-                )
-                .unwrap()
-            })
-            .collect();
-        let mut pins: Vec<WinPin> = frames
-            .iter()
-            .enumerate()
-            .map(|(i, f)| create(PinId(200 + i as u64), f, &spec(f.rect()), TOPMOST_TEST).unwrap())
-            .collect();
-        let h: Vec<HWND> = pins.iter().map(WinPin::hwnd).collect();
-        // A normal (not topmost) window of ours, also off-screen.
-        let normal_frame =
-            Frame::solid(&ledger, Rect::new(FAR, FAR + 100, 10, 10), [0; 4]).unwrap();
-        let normal = create(
-            PinId(299),
-            &normal_frame,
-            &spec(normal_frame.rect()),
-            Style::OFF_SCREEN_TEST,
-        )
-        .unwrap();
-        let pos = |order: &[isize], w: HWND| order.iter().position(|x| *x == w as isize).unwrap();
-        let z = z_order();
-        assert!(
-            pos(&z, h[2]) < pos(&z, h[1]) && pos(&z, h[1]) < pos(&z, h[0]),
-            "newest on top"
-        );
-        assert!(
-            pos(&z, h[0]) < pos(&z, normal.hwnd()),
-            "pins lie above normal windows"
-        );
-        assert_eq!(ex_style(normal.hwnd()) & WS_EX_TOPMOST, 0);
-        assert_ne!(
-            ex_style(normal.hwnd()) & WS_EX_NOACTIVATE,
-            0,
-            "the test style never activates"
-        );
-        // Hide the oldest: only it disappears.
-        pins[0].set_visible(false);
-        // SAFETY: queries on our own windows.
-        unsafe {
-            assert_eq!(IsWindowVisible(h[0]), 0);
-            assert_ne!(IsWindowVisible(h[1]), 0);
-            assert_ne!(IsWindowVisible(h[2]), 0);
-        }
-        // Show it again: it comes back on top of the other pins, without activation.
-        pins[0].set_visible(true);
-        let z = z_order();
-        assert!(
-            pos(&z, h[0]) < pos(&z, h[2]),
-            "a shown pin returns to the top"
-        );
-        assert_ne!(ex_style(h[0]) & WS_EX_TOPMOST, 0, "still topmost");
-        // Move and zoom the middle one; the others keep their rectangles.
-        pins[1].set_position(FAR + 500, FAR + 7);
-        pins[1]
-            .present(&frames[1], Rect::new(FAR + 500, FAR + 7, 60, 40))
-            .unwrap();
-        assert_eq!(rect_of(h[1]), (FAR + 500, FAR + 7, 60, 40));
-        assert_eq!(rect_of(h[0]), (FAR, FAR, 30, 20));
-        assert_eq!(rect_of(h[2]), (FAR + 80, FAR, 30, 20));
-        // Close the middle one: the others stay alive and visible.
-        pins[1].destroy();
-        // SAFETY: queries on our own windows.
-        unsafe {
-            assert_eq!(IsWindow(h[1]), 0);
-            assert_ne!(IsWindowVisible(h[0]), 0);
-            assert_ne!(IsWindowVisible(h[2]), 0);
-        }
-        for w in [h[0], h[2]] {
-            assert_eq!(activations(w), Some(0), "never activated");
-        }
-        // SAFETY: a plain query.
-        let fg_after = unsafe { GetForegroundWindow() };
-        assert!(
-            !h.contains(&fg_after) && fg_after != normal.hwnd(),
-            "no pin became the foreground window"
-        );
-        if fg_after != fg_before {
-            eprintln!("the foreground window changed during the test (the user switched apps)");
-        }
-        drop(pins);
-        drop(normal);
-        drop(frames);
-        drop(normal_frame);
-        assert_eq!(ledger.live(), (0, 0));
-    }
-
-    /// The picture really reaches the window, and stays there after Noeul's temporary DIB was
-    /// freed: DWM renders the layered window's retained surface into a bitmap of ours
-    /// (`PrintWindow` with `PW_RENDERFULLCONTENT`), at 100 % and zoomed.
-    #[test]
-    fn the_window_keeps_showing_the_pictures_pixels_after_the_upload() {
-        #[link(name = "user32")]
-        unsafe extern "system" {
-            fn PrintWindow(hwnd: HWND, hdc: HDC, flags: u32) -> i32;
-        }
-        const PW_RENDERFULLCONTENT: u32 = 2;
-        let ledger = Ledger::new();
-        let (w, h) = (8u32, 6u32);
-        let mut px = Vec::new();
-        for y in 0..h {
-            for x in 0..w {
-                px.extend_from_slice(&[x as u8 * 30, y as u8 * 40, 200, 255]);
-            }
-        }
-        let frame = Frame::new(&ledger, Rect::new(FAR, FAR, w, h), px).unwrap();
-        let mut pin = create(
-            PinId(301),
-            &frame,
-            &spec(frame.rect()),
-            Style::OFF_SCREEN_TEST,
-        )
-        .unwrap();
-        let shot = |pin: &WinPin, w: u32, h: u32| -> Option<Vec<u8>> {
-            let mut s = Surface::new(w, h).unwrap();
-            // SAFETY: our window renders into our own DIB section of its size.
-            let ok = unsafe { PrintWindow(pin.hwnd(), s.dc, PW_RENDERFULLCONTENT) } != 0;
-            ok.then(|| s.pixels().to_vec())
-        };
-        let Some(got) = shot(&pin, w, h) else {
-            eprintln!("SKIP: PrintWindow could not render the window on this system");
-            return;
-        };
-        let rgb = |b: &[u8], i: usize| [b[i * 4], b[i * 4 + 1], b[i * 4 + 2]];
-        for i in 0..(w * h) as usize {
-            assert_eq!(rgb(&got, i), rgb(frame.pixels(), i), "pixel {i} at 100 %");
-        }
-        // 200 %: every picture pixel is a 2×2 block of the window.
-        pin.present(&frame, Rect::new(FAR, FAR, w * 2, h * 2))
-            .unwrap();
-        let got = shot(&pin, w * 2, h * 2).expect("rendered");
-        for (x, y) in [(0u32, 0u32), (3, 2), (7, 5)] {
-            let src = (y * w + x) as usize;
-            for (dx, dy) in [(0, 0), (1, 1)] {
-                let dst = ((y * 2 + dy) * w * 2 + x * 2 + dx) as usize;
-                assert_eq!(
-                    rgb(&got, dst),
-                    rgb(frame.pixels(), src),
-                    "({x},{y}) at 200 %"
-                );
-            }
-        }
-        drop(pin);
-    }
-
-    #[test]
-    fn key_names_follow_the_contract() {
-        assert_eq!(vk_name(0x41).as_deref(), Some("A"));
-        assert_eq!(vk_name(0x37).as_deref(), Some("7"));
-        assert_eq!(vk_name(0x70).as_deref(), Some("F1"));
-        assert_eq!(vk_name(0x87).as_deref(), Some("F24"));
-        assert_eq!(vk_name(0x1B).as_deref(), Some("Escape"));
-        assert_eq!(vk_name(0x60).as_deref(), Some("Numpad0"));
-        assert_eq!(vk_name(0x5B), None, "Win keys are not names");
-        for vk in (0x08..=0xFE).filter_map(vk_name) {
-            assert!(chord_of(&vk, false, false, false).is_some(), "{vk} parses");
-        }
-        assert_eq!(point_of(0xFFFF_FFFFu32 as isize), (-1, -1));
-        assert_eq!(point_of(((-5i16 as u16 as isize) << 16) | 7), (7, -5));
-    }
-}
+mod tests;

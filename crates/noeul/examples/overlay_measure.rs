@@ -87,7 +87,7 @@ mod measure {
         fn pin_windows(&mut self) -> &mut dyn PinWindows {
             &mut self.windows
         }
-        fn clipboard_image(&mut self, _: &Arc<Ledger>) -> noeul::error::Result<Frame> {
+        fn clipboard_image(&mut self, _: &Arc<Ledger>) -> noeul::error::Result<noeul::app::Pasted> {
             Err(NoeulError::new(Code::NothingToPin, "not used"))
         }
         fn clipboard_write(&mut self, _: &[u8], _: &[u8]) -> noeul::error::Result<()> {

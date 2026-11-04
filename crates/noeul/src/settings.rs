@@ -24,6 +24,13 @@
 //! - `[capture] magnifier`: whether the magnifier shows when the overlay opens, `"on"`
 //!   (default) or `"off"`; `M` toggles it during a capture.
 //!
+//! Since Step 54 (UX spec §10, ADR 0044):
+//!
+//! - `[pins] border`: the one-pixel `border.subtle` outline around every pin, `"on"` (default) or
+//!   `"off"`;
+//! - `[pins] shadow`: the soft pin shadow around every pin (also the band that resizes it),
+//!   `"on"` (default) or `"off"`. A running Noeul redraws its pins when either changes.
+//!
 //! The rules every setting follows:
 //!
 //! - a missing file means defaults;
@@ -44,6 +51,7 @@
 use crate::detect::DetectMode;
 use crate::error::{Code, NoeulError};
 use crate::overlay::{GestureAction, Gestures};
+use crate::transform::Look;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
@@ -153,6 +161,8 @@ pub struct Settings {
     pub detection: DetectMode,
     /// Whether the overlay shows the magnifier when it opens (NOEUL-FR-041).
     pub magnifier: bool,
+    /// The outline and shadow around pins (`[pins] border`, `[pins] shadow`; UX spec §10).
+    pub pin_look: Look,
 }
 
 impl Default for Settings {
@@ -165,6 +175,7 @@ impl Default for Settings {
             preset: Preset::Noeul,
             detection: DetectMode::Window,
             magnifier: true,
+            pin_look: Look::default(),
         }
     }
 }
@@ -209,6 +220,10 @@ impl Loaded {
             "quick_save_folder": s.quick_save_folder.as_ref().map(|p| p.display().to_string()),
             "detection": s.detection.as_str(),
             "magnifier": if s.magnifier { "on" } else { "off" },
+            "pins": {
+                "border": if s.pin_look.border { "on" } else { "off" },
+                "shadow": if s.pin_look.shadow { "on" } else { "off" },
+            },
             "gestures": {
                 "double_click": s.gestures.double_click.as_str(),
                 "middle_click": s.gestures.middle_click.as_str(),
@@ -304,6 +319,18 @@ const KEYS: &[Key] = &[
         takes: "\"noeul\" or \"snipaste\"",
         default: "\"noeul\"",
     },
+    Key {
+        section: "pins",
+        name: "border",
+        takes: "\"on\" or \"off\"",
+        default: "\"on\"",
+    },
+    Key {
+        section: "pins",
+        name: "shadow",
+        takes: "\"on\" or \"off\"",
+        default: "\"on\"",
+    },
 ];
 
 /// The dotted names of every key `noeul config set` accepts.
@@ -314,7 +341,7 @@ pub fn key_names() -> Vec<String> {
 }
 
 /// The sections that hold keys (`noeul config reset <section>`).
-pub const SECTIONS: &[&str] = &["general", "capture", "gestures"];
+pub const SECTIONS: &[&str] = &["general", "capture", "gestures", "pins"];
 
 /// Applies one value to `settings`; `Err` names what the key takes.
 fn apply(settings: &mut Settings, section: &str, name: &str, v: &toml::Value) -> Result<(), ()> {
@@ -352,6 +379,18 @@ fn apply(settings: &mut Settings, section: &str, name: &str, v: &toml::Value) ->
                 .ok_or(())?;
         }
         ("gestures", "preset") => settings.preset = s.and_then(Preset::parse).ok_or(())?,
+        ("pins", "border" | "shadow") => {
+            let on = match s {
+                Some("on") => true,
+                Some("off") => false,
+                _ => return Err(()),
+            };
+            if name == "border" {
+                settings.pin_look.border = on;
+            } else {
+                settings.pin_look.shadow = on;
+            }
+        }
         _ => {}
     }
     Ok(())

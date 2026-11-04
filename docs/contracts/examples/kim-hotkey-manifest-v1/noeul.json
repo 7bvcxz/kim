@@ -14,6 +14,8 @@
     { "id": "capture.region", "title": "Capture a region", "scopes": ["global", "app"], "defaults": ["F1"] },
     { "id": "paste.float", "title": "Pin the clipboard", "scopes": ["global", "app"], "defaults": ["F3"] },
     { "id": "settings.open", "title": "Open settings", "scopes": ["app"], "defaults": ["Ctrl+Comma"] },
+    { "id": "pins.clickable", "title": "Make every pin clickable again (after click-through)", "scopes": ["global", "app"], "defaults": [] },
+    { "id": "pins.toggle-hidden", "title": "Hide all pins, or show them again", "scopes": ["global", "app"], "defaults": [] },
 
     { "id": "capture.pin", "title": "Pin the selection (keyboard twin of double-click inside)", "context": "capture-overlay", "defaults": ["Enter"] },
     { "id": "capture.copy", "title": "Copy the selection", "context": "capture-overlay", "defaults": ["Ctrl+C"] },
@@ -93,6 +95,7 @@
     { "id": "pin.thumbnail", "title": "Thumbnail mode on or off", "context": "pin", "defaults": ["T"] },
     { "id": "pin.hide", "title": "Hide the pin (show it again from the tray)", "context": "pin", "defaults": ["H"] },
     { "id": "pin.click-through", "title": "Let mouse clicks pass through the pin", "context": "pin", "defaults": ["Ctrl+Shift+T"] },
+    { "id": "pin.group-new", "title": "Move the pin to a new group", "context": "pin", "defaults": [] },
     { "id": "pin.annotate", "title": "Annotate the pin", "context": "pin", "defaults": ["Space"] }
   ]
 }

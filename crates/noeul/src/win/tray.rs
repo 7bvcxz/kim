@@ -6,7 +6,7 @@
 //! manual check is in docs/adr/0023-noeul-app-foundation.md. The icon is drawn in code (an
 //! original evening-glow disc); no image asset is shipped.
 
-use crate::tray::{Click, MenuItem};
+use crate::tray::{Click, Entry, MenuItem};
 use crate::win::wide;
 use windows_sys::Win32::Foundation::{HWND, POINT};
 use windows_sys::Win32::Graphics::Gdi::{
@@ -20,9 +20,9 @@ use windows_sys::Win32::UI::Shell::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreateIconIndirect, CreatePopupMenu, DestroyIcon, DestroyMenu, GetCursorPos,
-    HICON, ICONINFO, MF_SEPARATOR, MF_STRING, PostMessageW, SetForegroundWindow, TPM_NONOTIFY,
-    TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, WM_CONTEXTMENU, WM_LBUTTONUP, WM_MBUTTONUP,
-    WM_NULL,
+    HICON, ICONINFO, MF_CHECKED, MF_SEPARATOR, MF_STRING, PostMessageW, SetForegroundWindow,
+    TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, WM_CONTEXTMENU, WM_LBUTTONUP,
+    WM_MBUTTONUP, WM_NULL,
 };
 
 const ICON_ID: u32 = 1;
@@ -197,20 +197,28 @@ impl TrayIcon {
 
     /// Shows the menu at the pointer and returns the chosen item (modal; call it while the
     /// instance core is not borrowed).
-    pub fn menu(&self, items: &[MenuItem]) -> Option<MenuItem> {
+    pub fn menu(&self, items: &[Entry]) -> Option<MenuItem> {
         // SAFETY: a new popup menu, destroyed below.
         let menu = unsafe { CreatePopupMenu() };
         if menu.is_null() {
             return None;
         }
-        for (i, item) in items.iter().enumerate() {
-            if *item == MenuItem::Quit && i > 0 {
+        let mut groups = false;
+        for (i, e) in items.iter().enumerate() {
+            let is_group = matches!(e.item, MenuItem::Group(_));
+            if (e.item == MenuItem::Quit && i > 0) || (is_group && !groups) {
                 // SAFETY: valid menu handle.
                 unsafe { AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null()) };
             }
-            let label = wide(item.label());
+            groups |= is_group;
+            let label = wide(&e.label);
+            let flags = if e.checked {
+                MF_STRING | MF_CHECKED
+            } else {
+                MF_STRING
+            };
             // SAFETY: valid menu; the label is copied.
-            unsafe { AppendMenuW(menu, MF_STRING, item.command_id() as usize, label.as_ptr()) };
+            unsafe { AppendMenuW(menu, flags, e.item.command_id() as usize, label.as_ptr()) };
         }
         let mut pt = POINT::default();
         // SAFETY: documented requirement for tray menus: our window is foreground while the menu
@@ -232,7 +240,7 @@ impl TrayIcon {
             cmd
         };
         let cmd = u32::try_from(cmd).ok()?;
-        items.iter().copied().find(|i| i.command_id() == cmd)
+        items.iter().map(|e| e.item).find(|i| i.command_id() == cmd)
     }
 }
 

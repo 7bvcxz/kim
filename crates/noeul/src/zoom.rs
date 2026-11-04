@@ -103,14 +103,24 @@ fn premultiply(p: &[u8; 4]) -> [u32; 4] {
 /// Writes `frame` scaled to `w`×`h` into `dst` as premultiplied BGRA (top-down, `w × 4` bytes
 /// per row), as `UpdateLayeredWindow` wants it. `dst` must hold `w × h × 4` bytes.
 pub fn render(frame: &Frame, w: u32, h: u32, dst: &mut [u8]) {
+    debug_assert_eq!(dst.len() as u64, u64::from(w) * u64::from(h) * 4);
+    render_into(frame, w, h, dst, w as usize);
+}
+
+/// [`render`] into a larger surface whose rows are `stride` pixels apart (the picture inside a
+/// pin window's outline and shadow, Step 54); `dst` starts at the picture's top-left pixel.
+pub fn render_into(frame: &Frame, w: u32, h: u32, dst: &mut [u8], stride: usize) {
     let (fw, fh) = (frame.width(), frame.height());
     let src = frame.pixels().as_chunks::<4>().0;
     let out = dst.as_chunks_mut::<4>().0;
-    debug_assert_eq!(out.len() as u64, u64::from(w) * u64::from(h));
+    let wu = w as usize;
+    debug_assert!(stride >= wu && out.len() >= (h as usize).saturating_sub(1) * stride + wu);
     if (w, h) == (fw, fh) {
-        for (d, s) in out.iter_mut().zip(src) {
-            let p = premultiply(s);
-            *d = [p[0] as u8, p[1] as u8, p[2] as u8, p[3] as u8];
+        for (y, row) in src.chunks(wu).enumerate() {
+            for (d, s) in out[y * stride..y * stride + wu].iter_mut().zip(row) {
+                let p = premultiply(s);
+                *d = [p[0] as u8, p[1] as u8, p[2] as u8, p[3] as u8];
+            }
         }
         return;
     }
@@ -118,7 +128,7 @@ pub fn render(frame: &Frame, w: u32, h: u32, dst: &mut [u8]) {
     let rows = spans(fh, h);
     let fw = fw as usize;
     for (y, (y0, y1)) in rows.iter().enumerate() {
-        let line = &mut out[y * w as usize..(y + 1) * w as usize];
+        let line = &mut out[y * stride..y * stride + wu];
         for (d, (x0, x1)) in line.iter_mut().zip(&cols) {
             if y1 - y0 == 1 && x1 - x0 == 1 {
                 let p = premultiply(&src[y0 * fw + x0]);

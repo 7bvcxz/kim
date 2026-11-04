@@ -76,6 +76,7 @@ use crate::selection::{
     CaptureSelection, Captures, Origin, Outcome as SessionOutcome, SessionError,
 };
 use crate::settings::{self, KeyboardHelp, UiState};
+use crate::transform::{self, Edge, Orientation};
 use crate::tray::{Click, MenuItem, menu};
 use crate::util::rfc3339;
 use crate::zoom;
@@ -87,11 +88,21 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 /// What the core needs from the desktop besides capturing.
+/// What one clipboard read found: the image to pin and, when the clipboard also offered an
+/// animated GIF, its frame count (the image is its first frame; NOEUL-FR-068).
+#[derive(Debug)]
+pub struct Pasted {
+    pub frame: Frame,
+    /// 1 for a still picture.
+    pub frames: u32,
+}
+
 pub trait Shell {
     fn pin_windows(&mut self) -> &mut dyn PinWindows;
     /// Reads the clipboard once and returns its image (`nothing_to_pin`,
-    /// `clipboard_unavailable` or `image_invalid` otherwise). Called only for `paste.float`.
-    fn clipboard_image(&mut self, ledger: &Arc<Ledger>) -> Result<Frame>;
+    /// `clipboard_unavailable` or `image_invalid` otherwise), and how many frames the GIF next
+    /// to it has when there is one. Called only for `paste.float` and `pin.create`.
+    fn clipboard_image(&mut self, ledger: &Arc<Ledger>) -> Result<Pasted>;
     /// Puts a picture on the clipboard (Copy, NOEUL-FR-030): `png` as the registered `PNG`
     /// format and `dib` as `CF_DIBV5`, the clipboard opened for the write only and retried
     /// briefly when another program holds it (`clipboard_unavailable`). Never called for a pin.
@@ -450,6 +461,14 @@ pub enum PinEvent {
     Wheel(PinId, i32, (i32, i32), bool),
     /// A middle-click on the pin.
     MiddleClick(PinId),
+    /// The pin's border was dragged (Step 54): which side, the picture's rectangle when the drag
+    /// began, and how far the pointer moved since (device pixels).
+    Resize(PinId, Edge, Rect, (i32, i32)),
+    /// The user dragged the pin to a new position and released it with `Ctrl` held: it joins the
+    /// group of the pin it was dropped on, if any (Step 54).
+    Dropped(PinId, i32, i32),
+    /// `Shift`+double-click: thumbnail mode on or off (Step 54).
+    ShiftDoubleClick(PinId),
 }
 
 /// One entry of a pin's context menu.
@@ -460,6 +479,8 @@ pub struct PinMenuItem {
     /// The text, with its key after a tab (`Close\tEscape`).
     pub label: String,
     pub enabled: bool,
+    /// Shown with a check mark (a mode that is on: thumbnail, click-through).
+    pub checked: bool,
 }
 
 /// A pin's context menu to show (NOEUL-FR-061: it lists every pin action of this build). The
@@ -537,12 +558,28 @@ const MENU: &[Option<(&str, &str)>] = &[
     None,
     Some(("pin.zoom-in", "Zoom in")),
     Some(("pin.zoom-out", "Zoom out")),
-    Some(("pin.zoom-reset", "Zoom 100 %")),
+    Some(("pin.zoom-reset", "Zoom 100 %, opaque")),
+    Some(("pin.rotate-cw", "Rotate right")),
+    Some(("pin.rotate-ccw", "Rotate left")),
+    Some(("pin.flip-horizontal", "Flip horizontally")),
+    Some(("pin.flip-vertical", "Flip vertically")),
+    Some(("pin.opacity-up", "More opaque")),
+    Some(("pin.opacity-down", "More transparent")),
+    None,
+    Some(("pin.thumbnail", "Thumbnail")),
+    Some(("pin.click-through", "Click-through")),
+    Some(("pin.group-new", "Move to a new group")),
     None,
     Some(("pin.hide", "Hide")),
     Some(("pin.close", "Close")),
     Some(("pin.destroy", "Destroy")),
 ];
+
+/// Global actions without default keys (Step 54): the keyboard's way back from click-through
+/// and hidden pins when no pin has focus (HOTKEY_CONTRACT §7.5: only `F1` and `F3` are global
+/// defaults; the user binds these).
+pub const PINS_CLICKABLE: &str = "pins.clickable";
+pub const PINS_TOGGLE_HIDDEN: &str = "pins.toggle-hidden";
 
 /// One wheel notch.
 const WHEEL_DELTA: i32 = 120;
@@ -615,12 +652,14 @@ impl<S: Shell> App<S> {
         paths: Paths,
         id: Identity,
     ) -> App<S> {
+        let mut pins = Pins::new();
+        pins.set_look(settings.settings.pin_look);
         App {
             shell,
             capture,
             ledger: Ledger::new(),
             captures: Captures::new(),
-            pins: Pins::new(),
+            pins,
             hotkeys,
             settings,
             ui_state: UiState::load(&paths.ui_state_file()),
@@ -690,6 +729,9 @@ impl<S: Shell> App<S> {
             "pin.show" => self.pin_show(params, dry_run),
             "pin.close" => self.pin_close(params, dry_run),
             "pin.reopen" => self.pin_reopen(dry_run),
+            "pin.set" => self.pin_set(params, dry_run),
+            "group.list" => Ok(self.group_list()),
+            "group.switch" => self.group_switch(params, dry_run),
             "hotkeys.reload" => {
                 let problem = self.hotkeys.reload();
                 Ok(json!({"reloaded": problem.is_none(), "problem": problem,
@@ -709,6 +751,7 @@ impl<S: Shell> App<S> {
     /// setting at the next start.
     pub fn reload_settings(&mut self) -> Value {
         self.settings = settings::load(&self.paths.config_file());
+        self.pins.set_look(self.settings.settings.pin_look);
         self.settings.to_json()
     }
 
@@ -733,6 +776,8 @@ impl<S: Shell> App<S> {
             "capture_backend": self.capture.name(),
             "pins": {"open": self.pins.len(), "reopenable": self.pins.reopenable().map(|p| p.to_string()),
                      "hidden": self.pins.hidden(), "off_screen": self.pins.off_screen(&self.capture.desktop()),
+                     "click_through": self.pins.click_through(), "thumbnails": self.pins.thumbnails(),
+                     "group": self.pins.current_group(), "groups": self.pins.groups().len(),
                      "editor": self.overlay.as_ref().filter(|o| !o.is_capture()).map(OverlaySession::to_json)},
             "captures": {"started": started, "pinned": pinned, "copied": copied, "saved": saved,
                          "cancelled": cancelled, "open": self.captures.is_open(),
@@ -748,10 +793,179 @@ impl<S: Shell> App<S> {
         })
     }
 
-    /// A second start handed over (NOEUL-FR-003). The settings window it should open is N5.
+    /// A second start handed over (NOEUL-FR-003). The settings window it should open is N5;
+    /// until then a second start is also a way back from click-through: every pin that lets
+    /// clicks through becomes clickable again (NOEUL-FR-063, NOEUL-SEC-013).
     fn activate(&mut self) -> Value {
-        self.shell.notice("Noeul is already running.");
-        json!({"activated": true, "pid": self.id.pid, "settings_window": "planned"})
+        let clickable = self.make_all_clickable();
+        self.shell.notice(&if clickable.is_empty() {
+            "Noeul is already running.".to_string()
+        } else {
+            format!(
+                "Noeul is already running. {} pin(s) are clickable again.",
+                clickable.len()
+            )
+        });
+        json!({"activated": true, "pid": self.id.pid, "settings_window": "planned",
+               "clickable": clickable})
+    }
+
+    /// Makes every pin that lets clicks through clickable again (the tray's "Make all pins
+    /// clickable", `pins.clickable`, a second start); returns their IDs.
+    fn make_all_clickable(&mut self) -> Vec<String> {
+        let mut done = Vec::new();
+        for id in self.pins.ids() {
+            if self.pins.set_click_through(id, false) == Ok(true) {
+                done.push(id.to_string());
+            }
+        }
+        done
+    }
+
+    /// Whether a pin may start letting clicks through from its key or menu: only while the user
+    /// has a way back that needs neither the pin nor a terminal — the tray's "Make all pins
+    /// clickable" or a registered `pins.clickable` key (NOEUL-FR-063). The CLI may always turn it
+    /// on (its caller holds the CLI way back), and a second start always turns it off.
+    pub fn click_through_recoverable(&self) -> bool {
+        self.shell.tray_shown() || self.hotkeys.is_registered(PINS_CLICKABLE)
+    }
+
+    /// `group.list`: the groups with their pin counts and the current group.
+    fn group_list(&self) -> Value {
+        json!({
+            "current": self.pins.current_group(),
+            "groups": self.pins.groups().into_iter().map(|g| json!({
+                "name": g.name, "pins": g.pins, "hidden": g.hidden,
+            })).collect::<Vec<_>>(),
+        })
+    }
+
+    /// `group.switch`: switches to a group (created when new): its pins are shown, every other
+    /// pin is hidden, and new pins go to it (NOEUL-FR-064). Nothing takes focus.
+    fn group_switch(&mut self, params: &Value, dry_run: bool) -> Result<Value> {
+        let name = params["group"]
+            .as_str()
+            .and_then(crate::pins::group_name)
+            .ok_or_else(group_usage)?;
+        let (shown, hidden) = if dry_run {
+            let mut s = Vec::new();
+            let mut h = Vec::new();
+            for id in self.pins.ids() {
+                let visible = self.pins.info(id).is_some_and(|i| i.visible);
+                match (self.pins.group(id) == Some(name.as_str()), visible) {
+                    (true, false) => s.push(id),
+                    (false, true) => h.push(id),
+                    _ => {}
+                }
+            }
+            (s, h)
+        } else {
+            self.pins.switch_group(&name)
+        };
+        if !dry_run {
+            self.last_action = Some(("group.switch".into(), "switched"));
+        }
+        let ids = |v: Vec<PinId>| v.iter().map(ToString::to_string).collect::<Vec<_>>();
+        Ok(json!({"dry_run": dry_run, "group": name, "shown": ids(shown), "hidden": ids(hidden)}))
+    }
+
+    /// `pin.set` (`noeul pin set`): changes pins precisely (Step 54): `at` places one pin,
+    /// `zoom`, `opacity`, `rotation`/`mirrored` (absolute), `rotate`/`flip` (relative),
+    /// `thumbnail`, `click_through` and `move_to_group`. Every value is checked before anything
+    /// changes; a dry run changes nothing.
+    fn pin_set(&mut self, params: &Value, dry_run: bool) -> Result<Value> {
+        let ids = self.pin_targets(params)?;
+        let c = SetChange::parse(params)?;
+        if c.at.is_some() && ids.len() != 1 {
+            return Err(NoeulError::new(
+                Code::Usage,
+                "`at` places one pin: name it with `id`",
+            ));
+        }
+        let mut changed = Vec::new();
+        if !dry_run {
+            for id in &ids {
+                if self.apply_set(*id, &c) {
+                    changed.push(id.to_string());
+                }
+            }
+            if !changed.is_empty() {
+                self.last_action = Some(("pin.set".into(), "changed"));
+            }
+        }
+        let desktop = self.capture.desktop();
+        Ok(json!({
+            "dry_run": dry_run,
+            "targets": ids.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            "changed": changed,
+            "pins": ids.iter().filter_map(|id| self.pins.entry_of(&desktop, *id)).collect::<Vec<_>>(),
+        }))
+    }
+
+    /// Applies one `pin.set` to a pin; whether anything changed.
+    fn apply_set(&mut self, id: PinId, c: &SetChange) -> bool {
+        let Some(info) = self.pins.info(id) else {
+            return false;
+        };
+        let ok = |r: std::result::Result<bool, PinError>| r == Ok(true);
+        let mut any = false;
+        if let Some(g) = &c.group {
+            any |= ok(self.pins.set_group(id, g));
+        }
+        if c.thumbnail == Some(false) {
+            any |= ok(self.pins.set_thumbnail(id, false));
+        }
+        let o = info.transforms.orientation;
+        let mut target = Orientation::new(
+            c.rotation.unwrap_or(o.rotation()),
+            c.mirrored.unwrap_or(o.mirrored()),
+        )
+        .unwrap_or(o);
+        if let Some(cw) = c.rotate {
+            target = if cw {
+                target.rotate_cw()
+            } else {
+                target.rotate_ccw()
+            };
+        }
+        if let Some(h) = c.flip {
+            target = if h {
+                target.flip_horizontal()
+            } else {
+                target.flip_vertical()
+            };
+        }
+        any |= ok(self.pins.orient(id, |_| target));
+        if let Some(z) = c.zoom {
+            let anchor = self.pins.rect(id).map_or((0, 0), |r| (r.x, r.y));
+            any |= ok(self.pins.set_zoom(id, z, anchor));
+        }
+        if let Some(op) = c.opacity {
+            any |= ok(self.pins.set_opacity(id, op));
+        }
+        if let Some((x, y)) = c.at {
+            let moved = self.pins.rect(id).is_some_and(|r| (r.x, r.y) != (x, y));
+            if moved && self.pins.move_to(id, x, y) {
+                any = true;
+                self.update_dpi(id);
+            }
+        }
+        if let Some(on) = c.click_through {
+            any |= ok(self.pins.set_click_through(id, on));
+        }
+        if c.thumbnail == Some(true) {
+            any |= ok(self.pins.set_thumbnail(id, true));
+        }
+        any
+    }
+
+    /// Draws a pin's outline for the DPI of the monitor it is on now (after a move or a display
+    /// change); its picture keeps its pixel size.
+    fn update_dpi(&mut self, id: PinId) {
+        if let Some(r) = self.pins.rect(id) {
+            let dpi = crate::pins::dpi_at(&self.capture.desktop(), r);
+            let _ = self.pins.set_dpi(id, dpi);
+        }
     }
 
     fn capture(&mut self, params: &Value, dry_run: bool) -> Result<Value> {
@@ -842,10 +1056,18 @@ impl<S: Shell> App<S> {
         })
     }
 
-    /// The pins a request names: `all: true`, or one `id` that must be open.
+    /// The pins a request names: `all: true`, the pins of a `group`, or one `id` that must be
+    /// open.
     fn pin_targets(&self, params: &Value) -> Result<Vec<PinId>> {
         if ipc::flag(params, "all")? {
             return Ok(self.pins.ids());
+        }
+        if let Some(g) = params.get("group").filter(|g| !g.is_null()) {
+            let name = g
+                .as_str()
+                .and_then(crate::pins::group_name)
+                .ok_or_else(group_usage)?;
+            return Ok(self.pins.in_group(&name));
         }
         let text = params["id"]
             .as_str()
@@ -908,10 +1130,15 @@ impl<S: Shell> App<S> {
                     // A dry run never opens the clipboard.
                     return Ok(json!({"dry_run": true, "source": "clipboard", "pin": null}));
                 }
-                let frame = self.shell.clipboard_image(&self.ledger)?;
+                let pasted = self.shell.clipboard_image(&self.ledger)?;
                 let (x, y) = at.unwrap_or_else(|| self.shell.pointer());
-                let id =
-                    self.create_pin(&desktop, frame, Source::Clipboard, Placement::At(x, y))?;
+                let id = self.create_pin(
+                    &desktop,
+                    pasted.frame,
+                    Source::Clipboard,
+                    Placement::At(x, y),
+                )?;
+                self.first_frame_only(id, pasted.frames);
                 self.last_action = Some(("pin.create".into(), "pinned"));
                 Ok(json!({"dry_run": false, "source": "clipboard", "pin": self.pin_ref(id)}))
             }
@@ -1066,13 +1293,150 @@ impl<S: Shell> App<S> {
             ("pin.move-down", Some(id)) => self.nudge(id, 0, 1),
             ("pin.move-left", Some(id)) => self.nudge(id, -1, 0),
             ("pin.move-right", Some(id)) => self.nudge(id, 1, 0),
-            ("pin.zoom-in" | "pin.zoom-out" | "pin.zoom-reset", Some(id)) => {
+            ("pin.zoom-in" | "pin.zoom-out", Some(id)) => {
                 let anchor = self.pins.zoom_anchor(id, self.shell.pointer());
                 self.zoom_step(id, action, anchor)
             }
+            ("pin.zoom-reset", Some(id)) => {
+                let anchor = self.pins.zoom_anchor(id, self.shell.pointer());
+                self.reset_view(id, anchor)
+            }
+            ("pin.rotate-cw", Some(id)) => self.orient(id, Orientation::rotate_cw),
+            ("pin.rotate-ccw", Some(id)) => self.orient(id, Orientation::rotate_ccw),
+            ("pin.flip-horizontal", Some(id)) => self.orient(id, Orientation::flip_horizontal),
+            ("pin.flip-vertical", Some(id)) => self.orient(id, Orientation::flip_vertical),
+            ("pin.opacity-up", Some(id)) => self.opacity_step(id, true),
+            ("pin.opacity-down", Some(id)) => self.opacity_step(id, false),
+            ("pin.thumbnail", Some(id)) => self.toggle_thumbnail(id),
+            ("pin.click-through", Some(id)) => self.toggle_click_through(id),
+            ("pin.group-new", Some(id)) => self.new_group(id),
+            (PINS_CLICKABLE, _) => {
+                if self.make_all_clickable().is_empty() {
+                    "unchanged"
+                } else {
+                    "clickable"
+                }
+            }
+            (PINS_TOGGLE_HIDDEN, _) => self.toggle_hidden(),
             _ => "ignored",
         };
         self.last_action = Some((action.to_string(), result));
+    }
+
+    /// `pin.zoom-reset` (`0`, the middle button): 100 %, fully opaque, and out of thumbnail mode
+    /// (NOEUL-FR-061); the orientation stays.
+    fn reset_view(&mut self, id: PinId, anchor: Option<(i32, i32)>) -> &'static str {
+        if !self.pins.contains(id) {
+            return "not_found";
+        }
+        let thumb = self.pins.set_thumbnail(id, false) == Ok(true);
+        let opaque = self
+            .pins
+            .set_opacity(id, transform::OPACITY_FULL)
+            .unwrap_or(false);
+        match self.zoom_step(id, "pin.zoom-reset", anchor) {
+            "unchanged" if thumb || opaque => "reset",
+            r => r,
+        }
+    }
+
+    /// Rotates or flips a pin (`pin.rotate-*`, `pin.flip-*`).
+    fn orient(&mut self, id: PinId, f: fn(Orientation) -> Orientation) -> &'static str {
+        match self.pins.orient(id, f) {
+            Ok(true) => "transformed",
+            Ok(false) => "unchanged",
+            Err(PinError::NotFound(_)) => "not_found",
+            Err(_) => "failed",
+        }
+    }
+
+    /// `pin.opacity-up`/`-down` (`Ctrl+Plus`/`Ctrl+Minus`, `Ctrl`+wheel): 10 % steps, never below
+    /// 10 % (NOEUL-FR-062).
+    fn opacity_step(&mut self, id: PinId, up: bool) -> &'static str {
+        let Some(info) = self.pins.info(id) else {
+            return "not_found";
+        };
+        let o = info.transforms.opacity;
+        let to = if up {
+            transform::opacity_up(o)
+        } else {
+            transform::opacity_down(o)
+        };
+        match to.map(|o| self.pins.set_opacity(id, o)) {
+            Some(Ok(true)) => "changed",
+            _ => "unchanged",
+        }
+    }
+
+    /// `pin.thumbnail` (`T`, `Shift`+double-click, the menu): thumbnail mode on or off.
+    fn toggle_thumbnail(&mut self, id: PinId) -> &'static str {
+        let Some(info) = self.pins.info(id) else {
+            return "not_found";
+        };
+        let on = info.transforms.thumbnail.is_none();
+        match self.pins.set_thumbnail(id, on) {
+            Ok(true) if on => "thumbnail",
+            Ok(true) => "full_size",
+            Ok(false) => "unchanged",
+            Err(_) => "failed",
+        }
+    }
+
+    /// `pin.click-through` (`Ctrl+Shift+T`, the menu): the pin lets the mouse through, or not
+    /// (NOEUL-FR-063). Turning it on needs a way back that works without the pin (the tray or a
+    /// registered `pins.clickable` key); turning it off always works.
+    fn toggle_click_through(&mut self, id: PinId) -> &'static str {
+        let Some(info) = self.pins.info(id) else {
+            return "not_found";
+        };
+        let on = !info.transforms.click_through;
+        if on && !self.click_through_recoverable() {
+            return "no_recovery_path";
+        }
+        match self.pins.set_click_through(id, on) {
+            Ok(true) if on => {
+                self.shell.notice(
+                    "The pin lets clicks through. Make it clickable again with Ctrl+Shift+T while it has focus, the tray's Make all pins clickable, or by starting Noeul again.",
+                );
+                "on"
+            }
+            Ok(true) => "off",
+            Ok(false) => "unchanged",
+            Err(_) => "failed",
+        }
+    }
+
+    /// `pin.group-new` (the menu): moves the pin into a new group of its own (`group-2`, …).
+    fn new_group(&mut self, id: PinId) -> &'static str {
+        let name = self.pins.new_group_name();
+        match self.pins.set_group(id, &name) {
+            Ok(_) => {
+                self.shell.notice(&format!(
+                    "{id} is now in {name}. Drop other pins on it with Ctrl held to add them."
+                ));
+                "grouped"
+            }
+            Err(_) => "not_found",
+        }
+    }
+
+    /// `pins.toggle-hidden` (a global action without default keys): shows every pin when one is
+    /// hidden, otherwise hides them all.
+    fn toggle_hidden(&mut self) -> &'static str {
+        let ids = self.pins.ids();
+        if self.pins.hidden() > 0 {
+            for id in ids {
+                let _ = self.pins.show(id);
+            }
+            "shown"
+        } else if ids.is_empty() {
+            "unchanged"
+        } else {
+            for id in ids {
+                let _ = self.pins.hide(id);
+            }
+            "hidden"
+        }
     }
 
     /// One zoom step of a pin around `anchor` (`pin.zoom-in`, `-out`, `-reset`).
@@ -1113,8 +1477,8 @@ impl<S: Shell> App<S> {
         if self.overlay.is_some() {
             return "overlay_open";
         }
-        let frame = match self.shell.clipboard_image(&self.ledger) {
-            Ok(f) => f,
+        let pasted = match self.shell.clipboard_image(&self.ledger) {
+            Ok(p) => p,
             Err(e) => {
                 let text = match e.code {
                     Code::NothingToPin => "Nothing to pin: the clipboard holds no image.",
@@ -1131,7 +1495,7 @@ impl<S: Shell> App<S> {
         let (px, py) = self.shell.pointer();
         let desktop = self.capture.desktop();
         let new = NewPin {
-            frame,
+            frame: pasted.frame,
             source: Source::Clipboard,
             placement: Placement::At(px, py),
             focus: self.shell.interactive(),
@@ -1139,11 +1503,24 @@ impl<S: Shell> App<S> {
             annotations: Vec::new(),
         };
         match self.pins.create(self.shell.pin_windows(), &desktop, new) {
-            Ok(_) => "pinned",
+            Ok(id) => {
+                self.first_frame_only(id, pasted.frames);
+                "pinned"
+            }
             Err((_, _)) => {
                 self.shell.notice("The pin window could not be created.");
                 "failed"
             }
+        }
+    }
+
+    /// A pin made from an animated GIF shows its first frame only: it is marked, and a notice
+    /// says so (NOEUL-FR-068: never flattened silently; animated pins are not in this build).
+    fn first_frame_only(&mut self, id: PinId, frames: u32) {
+        if frames > 1 && self.pins.mark_animation(id, frames) {
+            self.shell.notice(&format!(
+                "This GIF has {frames} frames; Noeul shows only the first. Animated pins are not supported yet."
+            ));
         }
     }
 
@@ -1933,9 +2310,11 @@ impl<S: Shell> App<S> {
                     action: None,
                     label: String::new(),
                     enabled: false,
+                    checked: false,
                 },
                 Some((action, text)) => PinMenuItem {
                     action: Some(action),
+                    checked: false,
                     label: self
                         .hotkeys
                         .keys_for(action)
@@ -2161,7 +2540,40 @@ impl<S: Shell> App<S> {
             }
             PinEvent::Moved(id, x, y) => {
                 self.pins.moved(id, x, y);
+                self.update_dpi(id);
             }
+            PinEvent::Dropped(id, x, y) => {
+                // Released with Ctrl over another pin: join its group (Step 54).
+                self.pins.moved(id, x, y);
+                self.update_dpi(id);
+                let target = self.pins.rect(id).and_then(|r| {
+                    let c = (
+                        i32::try_from(i64::from(r.x) + i64::from(r.width / 2)).unwrap_or(r.x),
+                        i32::try_from(i64::from(r.y) + i64::from(r.height / 2)).unwrap_or(r.y),
+                    );
+                    self.pins.pin_under(id, c)
+                });
+                let group = target.and_then(|t| self.pins.group(t).map(str::to_string));
+                let result = match group {
+                    Some(g) if self.pins.set_group(id, &g) == Ok(true) => {
+                        self.shell.notice(&format!("{id} joined {g}."));
+                        "joined"
+                    }
+                    Some(_) => "unchanged",
+                    None => "moved",
+                };
+                self.last_action = Some(("pin.drop".into(), result));
+            }
+            PinEvent::Resize(id, edge, start, delta) => {
+                let r = match self.pins.resize(id, edge, start, delta) {
+                    Ok(true) => "resized",
+                    Ok(false) => "unchanged",
+                    Err(PinError::NotFound(_)) => "not_found",
+                    Err(_) => "failed",
+                };
+                self.last_action = Some(("pin.resize".into(), r));
+            }
+            PinEvent::ShiftDoubleClick(id) => self.action("pin.thumbnail", Some(id)),
             PinEvent::Closed(id) => {
                 self.cancel_pin_edit_of(id);
                 let _ = self.pins.close(id);
@@ -2183,29 +2595,35 @@ impl<S: Shell> App<S> {
                 }
             }
             PinEvent::Wheel(id, delta, pointer, ctrl) => {
-                // Ctrl+wheel is opacity (NOEUL-FR-062, N2): not in this build, so it does nothing.
-                if ctrl || !self.pins.contains(id) {
+                // Away from the user zooms in (with Ctrl: more opaque); towards the user zooms
+                // out (with Ctrl: more transparent). High-resolution wheels add up to notches.
+                if !self.pins.contains(id) {
                     return;
                 }
                 let acc = self.wheel.entry(id).or_insert(0);
                 *acc += delta;
                 let steps = *acc / WHEEL_DELTA;
                 *acc %= WHEEL_DELTA;
-                let action = if steps > 0 {
-                    "pin.zoom-in"
-                } else {
-                    "pin.zoom-out"
+                let action = match (steps > 0, ctrl) {
+                    (true, false) => "pin.zoom-in",
+                    (false, false) => "pin.zoom-out",
+                    (true, true) => "pin.opacity-up",
+                    (false, true) => "pin.opacity-down",
                 };
                 for _ in 0..steps.unsigned_abs() {
-                    // Around the pointer when it is over the pin (it is, for a real wheel).
-                    let anchor = self.pins.zoom_anchor(id, pointer);
-                    let r = self.zoom_step(id, action, anchor);
+                    let r = if ctrl {
+                        self.opacity_step(id, steps > 0)
+                    } else {
+                        // Around the pointer when it is over the pin (it is, for a real wheel).
+                        let anchor = self.pins.zoom_anchor(id, pointer);
+                        self.zoom_step(id, action, anchor)
+                    };
                     self.last_action = Some((action.to_string(), r));
                 }
             }
             PinEvent::MiddleClick(id) => {
                 let anchor = self.pins.zoom_anchor(id, self.shell.pointer());
-                let r = self.zoom_step(id, "pin.zoom-reset", anchor);
+                let r = self.reset_view(id, anchor);
                 self.last_action = Some(("pin.zoom-reset".into(), r));
             }
         }
@@ -2216,13 +2634,17 @@ impl<S: Shell> App<S> {
     pub fn pin_menu_items(&self, id: PinId) -> Vec<PinMenuItem> {
         let info = self.pins.info(id);
         let zoom = info.map_or(zoom::FULL, |i| i.zoom);
-        let (w, h) = info.map_or((1, 1), |i| i.image);
-        MENU.iter()
+        let t = info.map(|i| i.transforms).unwrap_or_default();
+        let thumb = t.thumbnail.is_some();
+        let (w, h) = info.map_or((1, 1), |i| t.orientation.size(i.image.0, i.image.1));
+        let mut items: Vec<PinMenuItem> = MENU
+            .iter()
             .map(|entry| match entry {
                 None => PinMenuItem {
                     action: None,
                     label: String::new(),
                     enabled: false,
+                    checked: false,
                 },
                 Some((action, text)) => {
                     let keys = self.hotkeys.keys_for(action).or(match *action {
@@ -2231,19 +2653,58 @@ impl<S: Shell> App<S> {
                         _ => None,
                     });
                     let enabled = match *action {
-                        "pin.zoom-in" => zoom::zoom_in(w, h, zoom).is_some(),
-                        "pin.zoom-out" => zoom::zoom_out(zoom).is_some(),
-                        "pin.zoom-reset" => zoom != zoom::FULL,
+                        "pin.zoom-in" => !thumb && zoom::zoom_in(w, h, zoom).is_some(),
+                        "pin.zoom-out" => !thumb && zoom::zoom_out(zoom).is_some(),
+                        "pin.zoom-reset" => {
+                            zoom != zoom::FULL || t.opacity != transform::OPACITY_FULL || thumb
+                        }
+                        "pin.opacity-up" => t.opacity < transform::OPACITY_FULL,
+                        "pin.opacity-down" => t.opacity > transform::OPACITY_MIN,
+                        // Turning it on needs a way back without the pin (NOEUL-FR-063).
+                        "pin.click-through" => t.click_through || self.click_through_recoverable(),
                         _ => true,
+                    };
+                    let text = match *action {
+                        "pin.group-new" => format!(
+                            "{text} (now in {})",
+                            self.pins.group(id).unwrap_or(crate::pins::DEFAULT_GROUP)
+                        ),
+                        "pin.opacity-down" if t.opacity != transform::OPACITY_FULL => {
+                            format!("{text} ({} %)", t.opacity)
+                        }
+                        _ => (*text).to_string(),
                     };
                     PinMenuItem {
                         action: Some(action),
-                        label: keys.map_or_else(|| (*text).to_string(), |k| format!("{text}\t{k}")),
+                        label: keys.map_or_else(|| text.clone(), |k| format!("{text}\t{k}")),
                         enabled,
+                        checked: match *action {
+                            "pin.thumbnail" => thumb,
+                            "pin.click-through" => t.click_through,
+                            _ => false,
+                        },
                     }
                 }
             })
-            .collect()
+            .collect();
+        if let Some(frames) = info.and_then(|i| i.animation) {
+            // Never flattened silently (NOEUL-FR-068): the menu says what the pin shows.
+            items.push(PinMenuItem {
+                action: None,
+                label: String::new(),
+                enabled: false,
+                checked: false,
+            });
+            items.push(PinMenuItem {
+                action: Some("pin.animation"),
+                label: format!(
+                    "Animated GIF: first of {frames} frames only (playback not supported yet)"
+                ),
+                enabled: false,
+                checked: false,
+            });
+        }
+        items
     }
 
     /// The pin menu the runtime should show now, if one was asked for.
@@ -2264,6 +2725,9 @@ impl<S: Shell> App<S> {
     /// left where no monitor shows it, a notice names the way back (NOEUL-SEC-013).
     pub fn display_changed(&mut self) {
         self.pins.sync();
+        for id in self.pins.ids() {
+            self.update_dpi(id);
+        }
         let desktop = self.capture.desktop();
         if desktop.state != DesktopState::Available {
             return;
@@ -2290,7 +2754,33 @@ impl<S: Shell> App<S> {
             open: self.pins.len(),
             hidden: self.pins.hidden(),
             off_screen: self.pins.off_screen(&self.capture.desktop()),
+            click_through: self.pins.click_through(),
+            groups: self.pins.groups().len(),
         })
+    }
+
+    /// The tray menu as shown: each item with its text (groups by name) and check mark.
+    pub fn tray_entries(&self) -> Vec<crate::tray::Entry> {
+        let groups = self.pins.groups();
+        let current = self.pins.current_group();
+        self.tray_menu()
+            .into_iter()
+            .map(|item| match item {
+                MenuItem::Group(i) => {
+                    let name = groups.get(usize::from(i)).map_or("", |g| g.name.as_str());
+                    crate::tray::Entry {
+                        item,
+                        label: format!("Group: {name}"),
+                        checked: name == current,
+                    }
+                }
+                _ => crate::tray::Entry {
+                    item,
+                    label: item.label().to_string(),
+                    checked: false,
+                },
+            })
+            .collect()
     }
 
     /// Hides or shows every pin, or brings the lost ones on screen (tray items).
@@ -2339,6 +2829,14 @@ impl<S: Shell> App<S> {
             MenuItem::ReopenClosedPin => {
                 let focus = self.shell.interactive();
                 let _ = self.pins.reopen(self.shell.pin_windows(), focus);
+            }
+            MenuItem::MakeAllPinsClickable => self.action(PINS_CLICKABLE, None),
+            MenuItem::Group(i) => {
+                if let Some(g) = self.pins.groups().get(usize::from(i)) {
+                    let name = g.name.clone();
+                    self.pins.switch_group(&name);
+                    self.last_action = Some(("group.switch".into(), "switched"));
+                }
             }
             MenuItem::Shortcuts { on } => {
                 if let Err(e) = self.switch_shortcuts(!on) {
@@ -2525,6 +3023,108 @@ fn hotkeys_forced_off(m: &Manager) -> bool {
     )
 }
 
+fn group_usage() -> NoeulError {
+    NoeulError::new(
+        Code::Usage,
+        "a group name is 1–32 letters, digits, spaces, `-`, `_` or `.`, starting with a letter or digit",
+    )
+    .hint("run `noeul pin group list` to see the groups")
+}
+
+/// What one `pin.set` changes (every value checked before anything changes).
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct SetChange {
+    at: Option<(i32, i32)>,
+    zoom: Option<u32>,
+    opacity: Option<u32>,
+    /// Absolute: degrees clockwise.
+    rotation: Option<u32>,
+    mirrored: Option<bool>,
+    /// Relative: `true` clockwise.
+    rotate: Option<bool>,
+    /// Relative: `true` horizontally.
+    flip: Option<bool>,
+    thumbnail: Option<bool>,
+    click_through: Option<bool>,
+    group: Option<String>,
+}
+
+impl SetChange {
+    fn parse(p: &Value) -> Result<SetChange> {
+        let bad = |what: &str| NoeulError::new(Code::Usage, what.to_string());
+        let num = |k: &str, lo: u64, hi: u64, what: &str| -> Result<Option<u32>> {
+            match p.get(k) {
+                None | Some(Value::Null) => Ok(None),
+                Some(v) => v
+                    .as_u64()
+                    .filter(|n| (lo..=hi).contains(n))
+                    .and_then(|n| u32::try_from(n).ok())
+                    .map(Some)
+                    .ok_or_else(|| bad(what)),
+            }
+        };
+        let flag = |k: &str| -> Result<Option<bool>> {
+            match p.get(k) {
+                None | Some(Value::Null) => Ok(None),
+                Some(Value::Bool(b)) => Ok(Some(*b)),
+                Some(_) => Err(bad(&format!("`{k}` must be true or false"))),
+            }
+        };
+        let word = |k: &str, yes: &str, no: &str| -> Result<Option<bool>> {
+            match p.get(k) {
+                None | Some(Value::Null) => Ok(None),
+                Some(v) if v == yes => Ok(Some(true)),
+                Some(v) if v == no => Ok(Some(false)),
+                Some(_) => Err(bad(&format!("`{k}` must be \"{yes}\" or \"{no}\""))),
+            }
+        };
+        let rotation = num("rotation", 0, 270, "`rotation` must be 0, 90, 180 or 270")?;
+        if rotation.is_some_and(|r| r % 90 != 0) {
+            return Err(bad("`rotation` must be 0, 90, 180 or 270"));
+        }
+        let at = match p.get("at") {
+            None | Some(Value::Null) => None,
+            Some(v) => Some(point(v).ok_or_else(|| bad("`at` must be {x, y} in device pixels"))?),
+        };
+        let group = match p.get("move_to_group") {
+            None | Some(Value::Null) => None,
+            Some(v) => Some(
+                v.as_str()
+                    .and_then(crate::pins::group_name)
+                    .ok_or_else(group_usage)?,
+            ),
+        };
+        let c = SetChange {
+            at,
+            zoom: num(
+                "zoom",
+                u64::from(zoom::MIN),
+                u64::from(zoom::MAX),
+                "`zoom` must be a percentage from 10 to 800",
+            )?,
+            opacity: num(
+                "opacity",
+                u64::from(transform::OPACITY_MIN),
+                u64::from(transform::OPACITY_FULL),
+                "`opacity` must be a percentage from 10 to 100",
+            )?,
+            rotation,
+            mirrored: flag("mirrored")?,
+            rotate: word("rotate", "cw", "ccw")?,
+            flip: word("flip", "horizontal", "vertical")?,
+            thumbnail: flag("thumbnail")?,
+            click_through: flag("click_through")?,
+            group,
+        };
+        if c == SetChange::default() {
+            return Err(bad(
+                "nothing to change: give at, zoom, opacity, rotation, mirrored, rotate, flip, thumbnail, click_through or move_to_group",
+            ));
+        }
+        Ok(c)
+    }
+}
+
 /// Reads `{"x", "y"}` (device pixels).
 fn point(v: &Value) -> Option<(i32, i32)> {
     let o = v.as_object()?;
@@ -2681,6 +3281,10 @@ pub(crate) mod tests {
     pub struct FakeShell {
         pub windows: FakeWindows,
         pub clipboard: Option<(u32, u32)>,
+        /// Frames of the GIF next to the clipboard image (0 or 1: none; Step 54).
+        pub clipboard_frames: u32,
+        /// The tray icon is shown (a way back from click-through, Step 54).
+        pub tray: bool,
         pub clipboard_reads: usize,
         pub notices: Vec<String>,
         pub confirm: bool,
@@ -2712,12 +3316,13 @@ pub(crate) mod tests {
         fn pin_windows(&mut self) -> &mut dyn PinWindows {
             &mut self.windows
         }
-        fn clipboard_image(&mut self, ledger: &Arc<Ledger>) -> Result<Frame> {
+        fn clipboard_image(&mut self, ledger: &Arc<Ledger>) -> Result<Pasted> {
             self.clipboard_reads += 1;
             match self.clipboard {
-                Some((w, h)) => {
-                    Ok(Frame::solid(ledger, Rect::new(0, 0, w, h), [1, 1, 1, 255]).unwrap())
-                }
+                Some((w, h)) => Ok(Pasted {
+                    frame: Frame::solid(ledger, Rect::new(0, 0, w, h), [1, 1, 1, 255]).unwrap(),
+                    frames: self.clipboard_frames.max(1),
+                }),
                 None => Err(NoeulError::new(Code::NothingToPin, "no image")),
             }
         }
@@ -2742,7 +3347,7 @@ pub(crate) mod tests {
             self.notices.push(text.to_string());
         }
         fn tray_shown(&self) -> bool {
-            false
+            self.tray
         }
         fn confirm_quit(&mut self, _: usize) -> bool {
             self.confirm

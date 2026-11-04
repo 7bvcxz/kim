@@ -1,0 +1,31 @@
+{
+  "command": "mode.delete",
+  "data": {
+    "app": {
+      "running": false
+    },
+    "backup": "rules.json.bak",
+    "changed": true,
+    "created": null,
+    "dry_run": false,
+    "modes": [
+      "nav2"
+    ],
+    "notes": [
+      "deleted 1 rule(s) limited to `nav2`"
+    ],
+    "problems": [],
+    "revision": {
+      "from": 9,
+      "to": 10
+    },
+    "rules": [
+      "r-6c7f353d-262b-4986-a206-6116b217b678"
+    ],
+    "snapshot": "20261104T101044Z-r10.json",
+    "target": "saved"
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

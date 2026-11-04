@@ -1,0 +1,37 @@
+{
+  "command": "mode.status",
+  "data": {
+    "app_running": true,
+    "engine": "running",
+    "mode": {
+      "active": "symbols",
+      "chain": [
+        "symbols",
+        "nav",
+        "base"
+      ],
+      "color": null,
+      "default": "base",
+      "held": [],
+      "icon": null,
+      "indicator": {
+        "away_from_default": true,
+        "color": null,
+        "icon": null,
+        "label": "Signs",
+        "title": "Signs",
+        "visible": true
+      },
+      "latched": "symbols",
+      "live": true,
+      "origin": "cli",
+      "previous": "base",
+      "since": "2026-11-04T10:10:44Z",
+      "title": "Signs"
+    },
+    "profile": "default"
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

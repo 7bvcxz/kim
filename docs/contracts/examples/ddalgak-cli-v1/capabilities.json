@@ -292,6 +292,116 @@
         "requires_yes": true,
         "summary": "Throw the draft away (asks, or needs --yes)",
         "usage": "ddalgak rules draft discard [--yes] [--dry-run] [--json]"
+      },
+      {
+        "dry_run": false,
+        "effect": "read",
+        "name": "mode.list",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "The profile's modes: layers, exits, rules, the default and (with a running engine) the active one",
+        "usage": "ddalgak mode list [--profile <p>] [--draft] [--endpoint <name>] [--json]"
+      },
+      {
+        "dry_run": false,
+        "effect": "read",
+        "name": "mode.show",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "One mode with its rules, the rules that switch to it and its layers",
+        "usage": "ddalgak mode show <id> [--profile <p>] [--draft] [--endpoint <name>] [--json]"
+      },
+      {
+        "dry_run": true,
+        "effect": "write",
+        "name": "mode.add",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "A new mode, exclusive or a layer over a parent",
+        "usage": "ddalgak mode add --title <name> [--id <id>] [--icon <c>] [--color <#rrggbb>] [--parent <mode>] [--one-shot] [--timeout-ms <n>] [--default] [--profile <p>] [--dry-run] [--draft] [--if-revision <n>] [--json]"
+      },
+      {
+        "dry_run": true,
+        "effect": "write",
+        "name": "mode.edit",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "Change a mode's title, badge, color, parent, exit or make it the default",
+        "usage": "ddalgak mode edit <id> [mode options] [--no-icon] [--no-color] [--no-parent] [--no-one-shot] [--no-timeout] [--dry-run] [--draft] [--if-revision <n>] [--json]"
+      },
+      {
+        "dry_run": true,
+        "effect": "write",
+        "name": "mode.rename",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "A new title; the ID stays",
+        "usage": "ddalgak mode rename <id> <title> [--profile <p>] [--dry-run] [--draft] [--if-revision <n>] [--json]"
+      },
+      {
+        "dry_run": true,
+        "effect": "write",
+        "name": "mode.copy",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "A copy of a mode and of the rules limited to it",
+        "usage": "ddalgak mode copy <id> [--id <new>] [--title <t>] [--without-rules] [--profile <p>] [--dry-run] [--draft] [--if-revision <n>] [--json]"
+      },
+      {
+        "dry_run": true,
+        "effect": "destructive",
+        "name": "mode.delete",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": true,
+        "summary": "Remove a mode nothing depends on (asks, or needs --yes)",
+        "usage": "ddalgak mode delete <id> [--delete-rules] [--yes] [--profile <p>] [--dry-run] [--draft] [--if-revision <n>] [--json]"
+      },
+      {
+        "dry_run": true,
+        "effect": "write",
+        "name": "mode.set",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "Switch the running engine to a mode (held keys are released)",
+        "usage": "ddalgak mode set <id> [--endpoint <name>] [--dry-run] [--json]"
+      },
+      {
+        "dry_run": true,
+        "effect": "write",
+        "name": "mode.toggle",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "Switch to a mode, or back to the previous one when it is active",
+        "usage": "ddalgak mode toggle <id> [--endpoint <name>] [--dry-run] [--json]"
+      },
+      {
+        "dry_run": true,
+        "effect": "write",
+        "name": "mode.reset",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "The safe reset: back to the default mode, nothing held",
+        "usage": "ddalgak mode reset [--endpoint <name>] [--dry-run] [--json]"
+      },
+      {
+        "dry_run": false,
+        "effect": "read",
+        "name": "mode.status",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "The active mode of the running engine, or the mode it starts in",
+        "usage": "ddalgak mode status [--endpoint <name>] [--json]"
       }
     ],
     "implementation": "implemented",

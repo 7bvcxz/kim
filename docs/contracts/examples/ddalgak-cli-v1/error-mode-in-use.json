@@ -1,0 +1,14 @@
+{
+  "command": "mode.delete",
+  "error": {
+    "code": "mode_in_use",
+    "details": [
+      "used by: symbols"
+    ],
+    "exit_code": 7,
+    "hint": "nothing was written",
+    "message": "mode `symbols` is a layer over `nav`; give it another parent or none first"
+  },
+  "ok": false,
+  "schema_version": 1
+}

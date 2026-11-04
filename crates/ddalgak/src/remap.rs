@@ -186,28 +186,30 @@ pub fn released_modifiers(trigger: &Trigger, pass_through: bool) -> Vec<&'static
     out
 }
 
-/// The playground preview of a remap step (§5.1 outputs, §11): `holds`, `tap`, `tap_ms`,
-/// `released_modifiers`, `widened` (held modifiers combine with the output) and `pass_through`.
-pub fn preview(
-    trigger: &str,
-    to: &str,
-    tap: Option<&str>,
-    tap_ms: Option<u32>,
-    pass_through: bool,
-) -> Value {
-    let t = Trigger::parse(trigger).ok();
-    let widened = t
-        .as_ref()
-        .and_then(Trigger::single)
-        .is_some_and(|c| c.mods.is_empty());
-    json!({
-        "holds": to,
-        "tap": tap,
-        "tap_ms": tap.map(|_| tap_ms.unwrap_or(200)),
-        "released_modifiers": t.as_ref().map(|t| released_modifiers(t, pass_through)).unwrap_or_default(),
-        "widened": widened,
-        "pass_through": pass_through,
-    })
+/// The playground preview of a remap step (§5.1 outputs, §11), exactly the `preview_remap` shape
+/// of `ddalgak-simulation-v1`: `holds`, `tap` when there is one, and the trigger modifiers that
+/// are released while the target is held, when there are any.
+pub fn preview(trigger: &str, to: &str, tap: Option<&str>, pass_through: bool) -> Value {
+    let mut v = json!({ "holds": to });
+    if let Some(t) = tap {
+        v["tap"] = json!(t);
+    }
+    let released = Trigger::parse(trigger)
+        .map(|t| released_modifiers(&t, pass_through))
+        .unwrap_or_default();
+    if !released.is_empty() {
+        v["released_modifiers"] = json!(released);
+    }
+    v
+}
+
+/// Whether a plain trigger combines with held modifiers (§3.2): the editor says so next to the
+/// summary ("Shift+CapsLock sends Shift+Escape").
+pub fn widened(trigger: &str) -> bool {
+    Trigger::parse(trigger)
+        .ok()
+        .and_then(|t| t.single().copied())
+        .is_some_and(|c| c.mods.is_empty())
 }
 
 /// The editor's live summary sentence (GUI_JOURNEYS J4): "CapsLock acts as Left Ctrl; a quick
@@ -345,19 +347,34 @@ mod tests {
 
     #[test]
     fn previews_and_summaries_name_keys_only() {
-        let p = preview("CapsLock", "LCtrl", Some("Escape"), None, false);
+        let p = preview("CapsLock", "LCtrl", Some("Escape"), false);
+        assert_eq!(p, json!({ "holds": "LCtrl", "tap": "Escape" }));
+        assert!(widened("CapsLock") && !widened("Ctrl+Shift+J"));
+        let p = preview("Ctrl+Shift+J", "Down", None, false);
         assert_eq!(
             p,
-            json!({ "holds": "LCtrl", "tap": "Escape", "tap_ms": 200, "released_modifiers": [],
-                    "widened": true, "pass_through": false })
+            json!({ "holds": "Down", "released_modifiers": ["Ctrl", "Shift"] })
         );
-        let p = preview("Ctrl+Shift+J", "Down", None, None, false);
-        assert_eq!(p["released_modifiers"], json!(["Ctrl", "Shift"]));
-        assert_eq!(p["widened"], json!(false));
         assert_eq!(
-            preview("RCtrl+F13", "F16", None, None, true)["released_modifiers"],
-            json!([])
+            preview("RCtrl+F13", "F16", None, true),
+            json!({ "holds": "F16" }),
+            "pass-through keeps the trigger's modifiers"
         );
+        // Every preview fits the playground contract (ddalgak-simulation-v1 `preview_remap`).
+        let sim: Value = serde_json::from_str(include_str!(
+            "../../../docs/contracts/schemas/ddalgak-simulation-v1.schema.json"
+        ))
+        .unwrap();
+        let mut shape = sim["$defs"]["preview_remap"].clone();
+        shape["$defs"] = sim["$defs"].clone();
+        let v = crate::jsonschema::Validator::new(&shape);
+        for p in [
+            preview("CapsLock", "LCtrl", Some("Escape"), false),
+            preview("Ctrl+Shift+J", "Down", None, false),
+            preview("LCtrl+RAlt+F13", "MouseX1", Some("F16"), false),
+        ] {
+            assert!(v.validate(&p).unwrap().is_empty(), "{p}");
+        }
         assert_eq!(
             summary("CapsLock", "LCtrl", Some("Escape"), false),
             "CapsLock acts as Left Ctrl; a quick tap is Escape"

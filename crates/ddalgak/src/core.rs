@@ -512,12 +512,13 @@ impl Core {
     /// `Some(true)`: the chord matches exactly; `Some(false)`: only through widening (a trigger
     /// without modifiers of a remap or block, with modifiers held); `None`: no match.
     fn chord_match(&self, c: &CChord, ev: &KeyEvent, widen: bool) -> Option<bool> {
-        let mods = self.mods();
+        // The key first: most chords fail there, before the modifier state is computed.
         let key_ok = match c.key {
             KeyMatch::Modifier(m) => {
                 if ev.modifier != Some(m) {
                     return None;
                 }
+                let mods = self.mods();
                 if mods.matches_without(&c.mods, m) {
                     return Some(true);
                 }
@@ -531,6 +532,7 @@ impl Core {
         if !key_ok {
             return None;
         }
+        let mods = self.mods();
         if mods.matches(&c.mods) {
             return Some(true);
         }
@@ -1056,7 +1058,7 @@ impl Core {
                 }),
             );
         }
-        if let Some(spec) = c.remap {
+        if let Some(spec) = c.is_remap.then(|| self.table.remap(i)).flatten() {
             return self.remap_down(ev, i, &c, spec);
         }
         match c.on {

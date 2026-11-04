@@ -140,7 +140,9 @@ pub struct Compiled {
     pub widen: bool,
     pub injects: bool,
     pub engine_control: bool,
-    pub remap: Option<RemapSpec>,
+    /// A remap: its outputs are in [`Table::remap`] (kept out of this record so the scan over
+    /// every binding stays small and cache-friendly).
+    pub is_remap: bool,
 }
 
 /// Most bindings a table holds (one profile's rule limit, DDALGAK_RULE_MODEL §2).
@@ -151,6 +153,8 @@ pub const MAX_BINDINGS: usize = 1000;
 pub struct Table {
     pub(crate) compiled: Vec<Compiled>,
     pub(crate) bindings: Vec<Binding>,
+    /// The compiled outputs of each remap binding (`None` for other bindings).
+    pub(crate) remaps: Vec<Option<RemapSpec>>,
     /// Per-rule rate limit (`settings.max_runs_per_second`, 1–100).
     pub max_runs_per_second: u32,
 }
@@ -194,22 +198,32 @@ impl Table {
                     widen: b.widen,
                     injects: b.injects,
                     engine_control: b.is_engine_control(),
-                    remap: match &b.action {
-                        Action::Remap(r) => Some(*r),
-                        _ => None,
-                    },
+                    is_remap: matches!(b.action, Action::Remap(_)),
                 }
+            })
+            .collect();
+        let remaps = bindings
+            .iter()
+            .map(|b| match &b.action {
+                Action::Remap(r) => Some(*r),
+                _ => None,
             })
             .collect();
         Table {
             compiled,
             bindings,
+            remaps,
             max_runs_per_second: max_runs_per_second.clamp(1, 100),
         }
     }
 
     pub fn len(&self) -> usize {
         self.compiled.len()
+    }
+
+    /// The compiled outputs of binding `index`, if it is a remap.
+    pub fn remap(&self, index: usize) -> Option<RemapSpec> {
+        self.remaps.get(index).copied().flatten()
     }
 
     pub fn is_empty(&self) -> bool {

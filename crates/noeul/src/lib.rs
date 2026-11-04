@@ -20,6 +20,9 @@
 //! | [`zoom`] | Pin zoom levels, sizes, fitting and the premultiplying scaler |
 //! | [`transform`] | Pin transforms (Step 54): orientation, opacity, thumbnails, border resizing, and the window's outline, shadow and click-through badge |
 //! | [`gif`] | Recognising an animated GIF on the clipboard, so a pin never flattens one silently |
+//! | [`paste`] | What `F3` takes from the clipboard (Step 55): formats, priority, colours, copied paths, private content, the stand-in |
+//! | [`html`] | Noeul's own sanitizer for clipboard HTML (Step 55): text and basic formatting only, no script, no remote resource |
+//! | [`card`] | Text, HTML, colour and file-name cards (Step 55): document, layout, legible colours, pixels |
 //! | [`decode`] | Local image decoding (Step 55): PNG, JPEG, GIF, BMP, ICO, TIFF, TGA with limits, alpha, ICC to sRGB, multi-image counts |
 //! | [`annotation`] | Annotation (Step 56): editable vector objects, undo/redo, the editor (tools, text, IME), the rasterizer and the export |
 //! | [`settings`], [`paths`] | `config.toml` and the stable per-user folders |
@@ -32,6 +35,7 @@
 pub mod annotation;
 pub mod app;
 pub mod capture;
+pub mod card;
 pub mod decode;
 pub mod detect;
 pub mod dib;
@@ -40,9 +44,11 @@ pub mod error;
 pub mod frame;
 pub mod gif;
 pub mod hotkeys;
+pub mod html;
 pub mod ipc;
 pub mod output;
 pub mod overlay;
+pub mod paste;
 pub mod paths;
 pub mod pins;
 pub mod selection;

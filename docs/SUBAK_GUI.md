@@ -233,10 +233,10 @@ This machine: Windows 10 Pro 22H2 19045, Intel Core i5-13600KF, 2026-11-04.
 
 | What | Result |
 | --- | --- |
-| Idle, release build (`--features test-hooks` for the off-screen flag), attached to a live cmd.exe Terminal, 30 s, no output (`step16_idle.ps1`, the Step 15 sampler's quantities) | **0.0 ms CPU, 3.95 MiB private, 11.3 MiB working set, 5 threads, 154 handles** |
+| Idle, release build (`--features test-hooks` for the off-screen flag), attached to a live cmd.exe Terminal, 30 s, no output (`step16_idle.ps1`, the Step 15 sampler's quantities) | Step 16: **0.0 ms CPU, 3.95 MiB private, 11.3 MiB working set, 5 threads, 154 handles**. Step 17, three tabs (one attached), the same sampler (`step17_idle.ps1`, `Process.TotalProcessorTime` over 30 s): **0 ms CPU, 4.34 MiB private, 11.5 MiB working set, 5 threads, 150 handles** |
 | Idle, debug build, same, 10 s (`tests/gui_window.rs::idle_window_costs_no_cpu_and_little_memory`) | Step 16: 0.0 ms CPU, 4.06 MiB private, 12.6 MiB working set, 6 threads, 153 handles. **Step 17 (with the tab bar): 0.0 ms CPU, 4.38 MiB private, 13.5 MiB working set, 6 threads, 157 handles** |
 | Step 15 references (ADR 0036) | renderer + GDI window, no IPC: 3.40 MiB private, 1 thread; egui + glow: 107.0 MiB private, 12 threads |
-| Binary sizes (release, shipped features) | `subak-gui.exe` 917 KB; `subak.exe` 1.57 MB |
+| Binary sizes (release, shipped features) | Step 16: `subak-gui.exe` 917 KB; `subak.exe` 1.57 MB. Step 17 (the hotkey contract's checker and editor in both, `subak hotkeys` in `subak.exe`): `subak-gui.exe` 1.31 MB; `subak.exe` 2.10 MB |
 | `subak.exe` carries no window or renderer | its import table names none of `CreateDIBSection`, `GetFontData`, `SetDIBitsToDevice`, `CreateWindowExW`, `ImmGetContext`, `gdi32` (checked with `grep -c -a` on the release binary); `subak-gui.exe` names all of them |
 
 The threads beyond Step 15's one: the reader and writer (blocked in the kernel when idle), and

@@ -93,8 +93,11 @@ client with no idle cost (`SUBAK-NFR-002`) and must never end a Terminal the use
 - Unit tests of the model (no, one and many Terminals, cycling, create, busy kill by id,
   hiding, stored removal, other clients' changes), the key matcher, the tab bar layout and the
   confirmation; golden frames of the tab bar at 100 % and 200 %.
-- Idle, debug build, off-screen, attached, 10 s: 0.0 ms CPU, 4.38 MiB private, 6 threads
-  (Step 16: 4.06 MiB) — the tab bar adds one small renderer and no thread or timer.
+- Idle, off-screen, attached: release build with three tabs, 30 s: **0 ms CPU, 4.34 MiB
+  private, 5 threads** (Step 16: 3.95 MiB); debug build, 10 s: 0.0 ms CPU, 4.38 MiB private,
+  6 threads (Step 16: 4.06 MiB). The tab bar adds one small renderer and no thread or timer;
+  background tabs cost nothing. Release binaries grow with the contract's checker:
+  `subak-gui.exe` 917 KB → 1.31 MB, `subak.exe` 1.57 → 2.10 MB.
 
 ## Consequences
 

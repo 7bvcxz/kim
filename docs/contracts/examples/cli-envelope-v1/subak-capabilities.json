@@ -9,7 +9,7 @@
     "version": "0.0.1",
     "cli_contract": 1,
     "json_schema_version": 1,
-    "implementation": "placeholder",
+    "implementation": "implemented",
     "summary": "Pre-alpha: per-user Host with IPC v1 and named Terminals (create, list, rename, attach, stop, kill, remove), one window and pane each; no GUI, splits or recovery yet",
     "commands": [
       {

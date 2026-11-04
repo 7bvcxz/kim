@@ -5,7 +5,7 @@
 //! version, capabilities, installed tools, catalog — every `--json` document matches the
 //! published schemas, error exit codes equal `error.exit_code`, and nothing is written.
 //!
-//! Scenario B (release `subak`): Subak's placeholder honestly describes itself through the
+//! Scenario B (release `subak`): Subak honestly describes itself through the
 //! contract (`capabilities --json`, structured usage errors).
 //!
 //! Scenario C (debug `kim`, test-signed catalog, loopback downloads): the real release `subak`
@@ -124,7 +124,7 @@ fn subak_describes_itself_honestly_through_the_contract() {
     assert_eq!(code, 0);
     assert_schema("cli-envelope-v1", &doc);
     assert_schema("tool-capabilities-v1", &doc["data"]);
-    assert_eq!(doc["data"]["implementation"], "placeholder");
+    assert_eq!(doc["data"]["implementation"], "implemented");
     let (code, doc) = doc_of(&run_sandboxed(&subak, &["attach", "--json"], &sb));
     assert_eq!((code, doc["error"]["code"].as_str()), (2, Some("usage")));
     assert_eq!(sb.entry_count(), 0);
@@ -261,7 +261,7 @@ fn agent_discovers_negotiates_and_probes_an_installed_subak() {
         ],
     );
     assert_eq!(code, 0, "{doc}");
-    assert_eq!(doc["data"]["capabilities"]["implementation"], "placeholder");
+    assert_eq!(doc["data"]["capabilities"]["implementation"], "implemented");
     // Subak implements `terminal.list` since Step 10, so requiring it succeeds...
     let (code, doc) = run_debug(
         p,

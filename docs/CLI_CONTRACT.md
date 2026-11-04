@@ -20,7 +20,7 @@ written reason to break.
 - The rules are enforced by tests: `kim` runs every command against the JSON schemas
   (`crates/kim/tests/cli_contract.rs`), checks streams, exit codes, prompts, permissions,
   partial downloads, offline mode and redaction (`cli_functional.rs`), and proves that headless
-  commands start no process (`cli_headless.rs`). Subak's placeholder is validated against the
+  commands start no process (`cli_headless.rs`). Subak is validated against the
   same schemas (`crates/subak/tests/cli.rs`).
 
 ## 2. Names and verbs
@@ -273,7 +273,7 @@ Every tool MUST implement `capabilities`. Its `data` is a
 
 ```json
 { "schema": "kim.capabilities", "schema_version": 1, "tool": "subak", "version": "0.0.1",
-  "cli_contract": 1, "json_schema_version": 1, "implementation": "placeholder",
+  "cli_contract": 1, "json_schema_version": 1, "implementation": "implemented",
   "summary": "…",
   "commands": [ { "name": "capabilities", "usage": "subak capabilities [--json]",
                   "summary": "…", "effect": "read", "network": false, "dry_run": false,
@@ -281,7 +281,8 @@ Every tool MUST implement `capabilities`. Its `data` is a
 ```
 
 - It lists every command the tool really has, nothing planned. A placeholder says
-  `"implementation": "placeholder"` (Subak today).
+  `"implementation": "placeholder"`; a tool whose listed commands all work says `implemented`
+  even while it is pre-alpha (Subak since Step 11; its `summary` says what is missing).
 - `effect` is the strongest effect the command can have with any flag; `network` says it may use
   the network; `dry_run` and `requires_yes` describe §4; `opens_window` is true only for GUI
   launchers.

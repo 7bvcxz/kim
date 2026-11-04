@@ -81,7 +81,9 @@ with their alternate screen.
 - **History rows re-wrap** at the width of the client they are replayed to: a 100-column row
   from before a resize to 80 columns wraps into two rows in a new 80-column client and joins back
   with `capture --join` (measured, §8). On Windows 10, ConPTY ends long lines with explicit line
-  breaks, so a soft wrap is not preserved across ConPTY's own repaint.
+  breaks, so a soft wrap is not preserved across ConPTY's own repaint; the newer ConPTY of
+  Windows Server 2025 (build 26100, the CI runner) sends soft wraps, which the model keeps as
+  wrapped rows that join back.
 - A snapshot is made for a client terminal of the pane's size. A read-only viewer whose window is
   smaller sees its own terminal wrap or cut the lines; a larger one sees them at the pane's size.
   The rows a snapshot's history occupies are computed for the pane's width, so a viewer of
@@ -184,7 +186,8 @@ where echo was not disabled, keys printed by mistake). The rules:
   combining marks). A character conhost measures differently (some emoji, ambiguous-width
   symbols) shifts the rest of its row in the model until ConPTY next positions the cursor.
 - **ConPTY on Windows 10** passes neither the alternate screen switch nor mouse modes through;
-  what it repaints is what is replayed. Soft wraps arrive as hard line breaks.
+  what it repaints is what is replayed. Soft wraps arrive as hard line breaks there (build 26100
+  sends them as soft wraps).
 - **History rows** are rows, not logical lines, so a long line counts as several rows against
   `history_limit` (as in tmux).
 - **Viewers of another size** see the pane at the pane's size (§3); there is no per-client size.

@@ -617,10 +617,12 @@ fn resize_and_readers_with_different_sizes_follow_the_pane_size() {
         st["terminal"]["windows"][0]["panes"][0]["size"],
         json!({"cols": 80, "rows": 24})
     );
+    // Joined: newer ConPTY (Windows Server 2025, build 26100) sends soft wraps, so a logical
+    // line may span two history rows; Windows 10 sends hard line breaks.
     let r = request(
         ep,
         "pane.capture",
-        &json!({"target": "rs", "start": "-", "end": -1}),
+        &json!({"target": "rs", "start": "-", "end": -1, "join": true}),
     );
     let host_hist: Vec<String> = r["result"]["lines"]
         .as_array()

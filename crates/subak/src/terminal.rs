@@ -280,6 +280,7 @@ pub fn status(endpoint: &str) -> Result<Value, CliError> {
     Ok(json!({
         "running": true, "endpoint": st["endpoint"], "host": st["host"],
         "terminals": list["terminals"], "clients": st["clients"],
+        "scrollback": st["scrollback"],
     }))
 }
 

@@ -20,7 +20,8 @@ Measured on Windows 10 Pro 19045 before deciding (a probe pane at 80×24):
   positions, `ESC[K`, `ESC[nX`, `ESC[nC`, SGR (16/256/truecolour), `ESC]0;title BEL` (cmd sets the
   title to the running command) and `\r\n`. Text that scrolls at the bottom arrives as a line feed
   on the last row; a `cls`, a resize or a program switching screens arrives as a full repaint from
-  `ESC[H`. Soft-wrapped lines arrive with explicit `\r\n`.
+  `ESC[H`. Soft-wrapped lines arrive with explicit `\r\n` (the newer ConPTY of Windows Server
+  2025, build 26100, seen on CI, sends real soft wraps).
 - A program's `ESC[?1049h` is **not** passed through by the inbox ConPTY; conhost switches its own
   buffer and repaints. `ESC[?2004h` (bracketed paste) is passed through.
 - Output arrives in chunks of ~83 bytes at ~0.9 MiB/s (ADR 0025).

@@ -591,11 +591,21 @@ fn human(cmd: Cmd, d: &Value, a: &Args) {
                 .as_array()
                 .map(|l| l.iter().map(|c| format!("\n{}", client_row(c))).collect())
                 .unwrap_or_default();
+            let scrollback = if d["scrollback"].is_object() {
+                format!(
+                    "\nscrollback: {} pane(s), {} line(s) of history ({}) in the Host's memory, never on disk",
+                    d["scrollback"]["panes"],
+                    d["scrollback"]["lines"],
+                    bytes_text(&d["scrollback"]["bytes"]),
+                )
+            } else {
+                String::new()
+            };
             writeln!(
                 out,
                 "Host pid {} since {} (session {}, protocol {}, job breakaway: {}, in a job: {}, \
                  idle exit after {} s)\nTerminals: {} live, {} in total (`subak ls`)\n\
-                 {pane}\nclients: {} connected, {} attached{clients}\nendpoint: {}",
+                 {pane}\nclients: {} connected, {} attached{clients}{scrollback}\nendpoint: {}",
                 d["host"]["pid"],
                 d["host"]["started_at"].as_str().unwrap_or("?"),
                 d["host"]["session_id"],
@@ -732,6 +742,14 @@ fn human(cmd: Cmd, d: &Value, a: &Args) {
                 d["clients"]["connected"],
                 d["clients"]["attached"],
             );
+            if d["scrollback"].is_object() {
+                let _ = writeln!(
+                    out,
+                    "scrollback: {} line(s) of history ({}) in the Host's memory, never on disk",
+                    d["scrollback"]["lines"],
+                    bytes_text(&d["scrollback"]["bytes"]),
+                );
+            }
             if let Some(t) = table(list) {
                 let _ = write!(out, "{t}");
             }

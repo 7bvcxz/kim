@@ -48,7 +48,7 @@ use crate::pins::{PinId, PinWindow, PinWindows, WindowSpec};
 use crate::transform::{self, Edge, View};
 use crate::win::wide;
 use crate::zoom;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, VecDeque};
 use std::ffi::c_void;
 use std::sync::OnceLock;
@@ -121,6 +121,8 @@ thread_local! {
     static EVENTS: RefCell<VecDeque<PinEvent>> = const { RefCell::new(VecDeque::new()) };
     static WAKER: RefCell<Option<Box<dyn Fn()>>> = const { RefCell::new(None) };
     static SLOTS: RefCell<BTreeMap<isize, Slot>> = const { RefCell::new(BTreeMap::new()) };
+    /// The debug-build test hook: no key state is read ([`ignore_key_state`]).
+    static IGNORE_KEYS: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Sets what runs after a pin window queued an event (the instance's pump). Same thread.
@@ -236,9 +238,19 @@ pub fn vk_name(vk: u32) -> Option<String> {
     })
 }
 
+/// Whether a key is down for the message being processed. Under the debug-build test hook
+/// ([`ignore_key_state`]) the pins are never activated, so they never have the keyboard: any key
+/// state their thread sees can only be the user's real keyboard leaking in (a modifier held
+/// elsewhere while a test runs), and it reads as up.
 fn down(vk: u16) -> bool {
     // SAFETY: plain key-state query for this thread's input.
-    unsafe { GetKeyState(i32::from(vk)) < 0 }
+    !IGNORE_KEYS.get() && unsafe { GetKeyState(i32::from(vk)) < 0 }
+}
+
+/// The debug-build test hook's instance reads no key state for its pins (see [`down`]): the
+/// messages its tests post carry everything. Same thread as the pins.
+pub fn ignore_key_state(ignore: bool) {
+    IGNORE_KEYS.set(ignore);
 }
 
 fn pin_of(hwnd: HWND) -> Option<PinId> {

@@ -786,6 +786,7 @@ pub fn run(opts: &RunOpts) -> Result<Value> {
     });
     APP.with(|a| *a.borrow_mut() = Some(app));
     pinwnd::set_waker(Some(Box::new(wake)));
+    pinwnd::ignore_key_state(dev);
     overlay::set_waker(Some(Box::new(wake)));
 
     // IPC acceptor.

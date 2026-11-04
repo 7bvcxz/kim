@@ -567,12 +567,22 @@ fn shift_double_click_and_ctrl_drop_are_reported() {
         SetKeyboardState(saved.as_ptr());
         SendMessageW(hwnd, WM_NCLBUTTONDBLCLK, HTCAPTION as usize, 0);
         SendMessageW(hwnd, WM_EXITSIZEMOVE, 0, 0);
+        // The debug-build test hook's instance reads no key state: a Shift and Ctrl the user
+        // holds elsewhere change nothing.
+        ignore_key_state(true);
+        keys[usize::from(VK_SHIFT)] = 0x80;
+        SetKeyboardState(keys.as_ptr());
+        SendMessageW(hwnd, WM_NCLBUTTONDBLCLK, HTCAPTION as usize, 0);
+        SendMessageW(hwnd, WM_EXITSIZEMOVE, 0, 0);
+        ignore_key_state(false);
+        SetKeyboardState(saved.as_ptr());
     }
     assert_eq!(
         take_events(),
         [
             PinEvent::ShiftDoubleClick(PinId(403)),
             PinEvent::Dropped(PinId(403), r.x, r.y),
+            PinEvent::Moved(PinId(403), r.x, r.y),
             PinEvent::Moved(PinId(403), r.x, r.y),
         ]
     );

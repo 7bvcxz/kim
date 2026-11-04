@@ -503,15 +503,14 @@ fn run(cmd: Cmd, a: &Args) -> Outcome {
 #[cfg(windows)]
 mod client {
     use crate::output::{CliError, Code};
-    use ddalgak::ipc::{self, Method};
+    use ddalgak::ipc::Method;
     use ddalgak::paths::Paths;
     use ddalgak::rules;
     use ddalgak::shortcuts::Shortcuts;
     use ddalgak::startup::{self, Store};
-    use ddalgak::win::{self, pipe, startup::Registry};
+    use ddalgak::win::{self, startup::Registry};
     use serde_json::{Value, json};
     use std::path::PathBuf;
-    use std::time::{Duration, Instant};
 
     /// Who answered, as verified before sending.
     pub struct Peer {
@@ -527,65 +526,24 @@ mod client {
         })
     }
 
-    /// One request to the running app, after verifying who serves the pipe.
+    /// One request to the running app, after verifying who serves the pipe (the shared client
+    /// of `ddalgak::win::client`, also used by the editor).
     #[allow(clippy::needless_pass_by_value)] // callers build the request in place
     pub fn call(endpoint: &str, method: Method, dry_run: bool) -> Result<(Value, Peer), CliError> {
-        let started = Instant::now();
-        let conn = pipe::connect(endpoint, Duration::from_secs(2)).map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                CliError::new(Code::EngineNotRunning, "Ddalgak is not running")
-                    .hint("start ddalgak-gui.exe (it shows a tray icon); the CLI never starts it")
+        let (result, peer) = win::client::call(endpoint, &method, dry_run).map_err(|e| {
+            let err = CliError::new(map_code(&e.code), e.message);
+            if e.code == "engine_not_running" {
+                err.hint("start ddalgak-gui.exe (it shows a tray icon); the CLI never starts it")
             } else {
-                CliError::new(
-                    Code::AppUnresponsive,
-                    format!("cannot connect to the app: {e}"),
-                )
+                err
             }
         })?;
-        let pid = conn.server_pid().ok_or_else(|| {
-            CliError::new(
-                Code::AppIdentityMismatch,
-                "the endpoint's server cannot be identified",
-            )
-        })?;
-        let image = win::process_image(pid).map_err(|e| {
-            CliError::new(
-                Code::AppIdentityMismatch,
-                format!("cannot verify the process serving the endpoint (pid {pid}): {e}"),
-            )
-        })?;
-        let name = image
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default();
-        let same_user = win::process_user_sid(pid).ok() == win::user_sid().ok();
-        if !name.eq_ignore_ascii_case(ddalgak::GUI_EXE) || !same_user {
-            return Err(CliError::new(
-                Code::AppIdentityMismatch,
-                format!(
-                    "the endpoint is served by `{name}` (pid {pid}){}, not by ddalgak-gui.exe of this user; nothing was sent",
-                    if same_user { "" } else { " of another user" }
-                ),
-            ));
-        }
-        conn.write_all_bytes(ipc::request(&method, dry_run).as_bytes())
-            .map_err(|e| CliError::new(Code::AppUnresponsive, format!("cannot send: {e}")))?;
-        let deadline = Instant::now() + Duration::from_millis(ipc::TIMEOUT_MS + 500);
-        let line = pipe::read_line(&conn, ipc::MAX_RESPONSE, deadline).map_err(|e| {
-            CliError::new(
-                Code::AppUnresponsive,
-                format!("the app did not answer ({e}); it is neither stopped nor restarted"),
-            )
-        })?;
-        let latency_ms = started.elapsed().as_millis();
-        let result = ipc::parse_response(&line)
-            .map_err(|(code, msg)| CliError::new(map_code(&code), msg))?;
         Ok((
             result,
             Peer {
-                pid,
-                image: image.display().to_string(),
-                latency_ms,
+                pid: peer.pid,
+                image: peer.image.display().to_string(),
+                latency_ms: peer.latency_ms,
             },
         ))
     }

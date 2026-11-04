@@ -55,6 +55,7 @@ a recorded justification.
 | 39 | #78 Step 73 – Ddalgak enable/disable and emergency recovery (merged; issue open for the maintainer's physical-keyboard checks, `DDALGAK_ENGINE.md` §16) | `step73_ddalgak_recovery.rs` (2 tests): an agent switches rules, modes and profiles off and on headlessly; the running app recovers and never turns itself back on | 9 |
 | 40 | #60 Step 55 – Noeul clipboard paste for every format | `step55_noeul_clipboard.rs` (2 tests): paste commands are discoverable headlessly; the user pastes every source off screen without touching the clipboard | 10 |
 | 41 | #19 Step 19 – Subak terminal search, clipboard and links (merged; issue open for the maintainer's visible-window, real-clipboard and real-browser checks, `SUBAK_GUI.md` §12.9) | `step19_search_clipboard.rs` (2 tests): a later window searches output kept by the Host; paste, copy, links and save output ask first and stay local | 11 |
+| 42 | #79 Step 74 – Ddalgak visual rule editor (`ddalgak-editor`) (merged; issue open for the maintainer's visible usability script, `DDALGAK_GUI_JOURNEYS.md` §8) | `step74_ddalgak_editor.rs` (2 tests): the editor binary answers help and version without a window; the editor saves through the store and shows active only after the engine reload | 12 |
 
 ## E2E runs
 

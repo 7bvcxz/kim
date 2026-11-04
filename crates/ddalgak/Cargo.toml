@@ -10,8 +10,9 @@ repository.workspace = true
 publish.workspace = true
 
 # Two binaries in one package (ADR 0022): the headless CLI and the tray app that owns the engine.
-# Neither links a GUI toolkit in Step 66; the tray icon uses the Win32 shell API directly
-# (ADR 0024). Step 74 adds the editor and must keep `ddalgak` free of GUI crates.
+# Neither links a GUI toolkit; the tray icon uses the Win32 shell API directly (ADR 0024). The
+# rule editor is its own package and process, `ddalgak-editor` (Step 74, ADR 0049), so this
+# package stays on the headless list of `cargo xtask deps-check`.
 [[bin]]
 name = "ddalgak"
 path = "src/main.rs"

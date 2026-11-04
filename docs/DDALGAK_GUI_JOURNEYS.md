@@ -1,6 +1,6 @@
 # Ddalgak GUI journeys and wireframes
 
-Status: **current** (Step 65, design; implemented in Steps 73–76; the type-text, shortcut and hotstring forms and the text editor's data model are machine-checked since Step 69, the program picker and website field since Step 70, the Mouse form, its screen map and the playground's simulated pointer since Step 71) · Requirements:
+Status: **current** (Step 65, design; implemented in Steps 73–76; the type-text, shortcut and hotstring forms and the text editor's data model are machine-checked since Step 69, the program picker and website field since Step 70, the Mouse form, its screen map and the playground's simulated pointer since Step 71; **the editor window — J1–J4, J7 and the rule part of J8 — is implemented since Step 74** (`ddalgak-editor.exe`, [ADR 0049](adr/0049-ddalgak-editor-process-and-toolkit.md); §7 says what is built and verified, §8 is the maintainer's manual script); profiles, history and import with a diff are Step 75, the playground Step 76) · Requirements:
 `DDALGAK-FR-050…053`, `DDALGAK-FR-030…042`, `DDALGAK-NFR-007` · Visual language:
 [DESIGN_SYSTEM](DESIGN_SYSTEM.md) · Model: [DDALGAK_RULE_MODEL](DDALGAK_RULE_MODEL.md)
 
@@ -27,8 +27,9 @@ glyph, and `⚠`/`✕` for warnings and errors, each always with text.
 
 ## 2. Window layout
 
-The editor window (`ddalgak-gui.exe`, opened from the tray, the `editor.open` shortcut or the
-Start menu) has three regions; `F6` cycles them (DESIGN_SYSTEM §4.1).
+The editor window (`ddalgak-editor.exe` since Step 74, its own process beside the tray app, ADR
+0049; opened from the tray, the `editor.open` shortcut or the Start menu) has three regions; `F6`
+cycles them (DESIGN_SYSTEM §4.1).
 
 ```text
 ┌──────────────────────────────────────────────────────────────────────────────────────┐
@@ -467,3 +468,138 @@ without help: a remap, a Korean text snippet, a program launch tested in the pla
 switch, a profile export and import, a rollback, and an emergency off. Steps 74–76 record the
 results (with `egui_kittest` tests for the flows and a manual run on Windows) in their completion
 reports; Step 82 repeats them in the release acceptance matrix.
+
+## 7. Step 74: the editor as built
+
+`ddalgak-editor.exe` (package `crates/ddalgak-editor`,
+[ADR 0049](adr/0049-ddalgak-editor-process-and-toolkit.md)) is a separate process: the tray
+menu's **Open rule editor** and the `editor.open` shortcut start it beside `ddalgak-gui.exe`; a
+second start brings the open window forward. It works without the tray app (the header then says
+*Ddalgak is not running*). It never runs the engine, installs a hook, injects input, opens a
+program or a website.
+
+### 7.1 What each journey has now
+
+| Journey | Built in Step 74 | Not yet (Step) |
+| --- | --- | --- |
+| J1 | Empty state with the sentence, three starters (*CapsLock acts as Ctrl*, *Type a phrase*, *Open a program*: a pre-filled, unsaved draft) and the emergency chord; nothing is created by itself | — |
+| J2 | One panel with the steps *1 Keys · 2 Effect · 3 Details · 4 Try* (Back and Next; the step labels jump directly), *Save turned off* and *Save and enable*; the consent dialog names each permission in a sentence and every launch target exactly, Cancel focused, Allow records `via: "gui"` | *Save as draft* to `rules.draft.json` (the CLI's `--draft`) is not offered: a rule saved turned off is the editor's draft |
+| J3 | Capture on key-down from the window's own events (`Esc` ends, `Tab` leaves, *Add step* for sequences up to four), the keys announced in words, **Type instead** with the contract's aliases, chips for keys the window cannot see (CapsLock, RAlt, RCtrl, LCtrl, RShift, ScrollLock, Pause, ContextMenu, NumLock, Insert), the IME guard; trigger errors (reserved, invalid) shown under the field before Next; *When pressed / When tapped alone / When held* | The *logical / this key position* toggle (letters are captured logical; `code:` keys are typed) and *only this side* (side-specific keys are typed or picked); the **Keep / Change** buttons for warnings: warnings are shown in Try with their *Use <keys>* offers |
+| J4 | Eight tiles plus *Block this key*, each form on the engine's data model with a live summary, a preview and its problems in words: remap (target, tap, tap time, pass-through), shortcut (up to eight chords, delay), text (Hangul, variables, paste, delay, the text as it would be typed in the editor's own field), program (path or app ID, arguments, start folder, window, bring to front; found / not a program; the exact command line), website (normalized address), mouse (move by / to, scroll, click; grid cells, glide, repeat; the screen map with the simulated pointer), mode (switch to, toggle, cycle, hold, back, default; **+ New mode**), pause (pause, resume, toggle, turn off); *Advanced*: description, only in modes, only in apps (stays inactive, `condition_unsupported`, until Step 77), priority | *Choose program…* (a file picker) and *Choose an app…* (paths and IDs are typed or pasted); editing `env` (kept as stored); *If a step fails*, *Accept input from other programs*; *Several steps…* (78) |
+| J5 | **Test** (`F5`) in the detail panel and the form's **Simulate**: what the rule would do, from the engine's previews; the mouse on a simulated pointer; nothing leaves the window | The playground page, live tests, focus and engine choices (76) |
+| J6 | The **Modes** page: every mode of the active profile with its policy, layer and rule count, *Enable/Disable*, **+ New mode** | Rename, color, layers and delete in the window (use `ddalgak mode …`); profiles, history and rollback (75) |
+| J7 | Search (`Ctrl+F`; titles, keys, effect names, mode titles, apps; snippet text only with *Also search snippet text*), filters (state, profile, mode, app), grouping (profile, mode, app), drag ordering and `Alt+Up/Down`, multi-select (`Ctrl`/`Shift`+click, `Shift+Up/Down`, `Space`, `Ctrl+A`) with *Enable, Disable, Duplicate, Delete, Export*, conflict/problem/warning/review/inactive badges in words, the description under each row, delete with a confirmation naming the rules (Cancel focused) and an *Undo* toast that stays, `Ctrl+Z`, **Export…** (a portable file without consent, settings or revision) and **Import…** (rules added turned off and without consent, every launch target named, nothing opened or run) | Import with a diff and whole profiles (75) |
+| J8 | The header's engine state in a glyph and a word with *Turn on / Turn off* and *Pause / Resume* (the same IPC requests as the CLI, on click only), the tray's *Open rule editor* | The indicator's shapes and attention codes in the header and the optional floating badge (Step 73's model, not drawn yet); the repair view for an invalid file (the status line names the problem; the CLI repairs) |
+
+### 7.2 Saved, loaded, active
+
+Every change is one rule-store transaction with origin `gui` (lock, re-read, one operation,
+validation before and after, atomic save; ADR 0028). The status line then says
+*saved; waiting for Ddalgak to load it* until the running app answers `rules.reload`, and
+*saved and active (revision N)* only when the app's active revision is N and its engine runs;
+otherwise *saved and loaded; the engine is off/paused*, *saved; Ddalgak is not running*,
+*saved; Ddalgak kept its previous rules: <reason>* or *saved; Ddalgak did not confirm the
+reload*. A row says *active* only in the first case (*saved, not active yet* otherwise). A change
+by the CLI or another program is seen through the folder watcher (no polling); the app is asked to
+reload, and a form open on a rule that changed shows *The rules changed outside the editor* and
+refuses to save over it (`rule_conflict`).
+
+### 7.3 Keyboard map as built
+
+| Keys | Action | Rebindable |
+| --- | --- | --- |
+| `Ctrl+N` · `Ctrl+D` · `Delete` · `Ctrl+F` · `F5` | new · duplicate · delete (asks) · search · test (simulate) | yes (`rules.*` in `hotkeys.json`; `rules.toggle` and `rules.export` ship unbound) |
+| `Up` / `Down`, `Shift+Up` / `Shift+Down`, `Space`, `Ctrl+A` | select, extend, toggle, select all shown | no |
+| `Enter` / `F2` | edit / edit with the name focused | no |
+| `Alt+Up` / `Alt+Down` | move the selected rule | no |
+| `Ctrl+Z` | undo the window's last change (outside text fields) | no |
+| `F6` / `Shift+F6` | next / previous region | no |
+| `Esc` | end the key capture, close a dialog or the unchanged form (a changed one asks) | no |
+| `F1` | the shortcut list | no |
+
+### 7.4 Measured
+
+Release build, glow, on the reference machine (Windows 10 19045), the window off-screen and not
+activated (`cargo run --release -p ddalgak-editor --example measure -- --rules N --idle S`), memory
+read from outside:
+
+| Rules | First frame | CPU while idle | Frames while idle | Working set | Private |
+| --- | --- | --- | --- | --- | --- |
+| 0 (J1) | 167 ms | 0 ms (3 s) | 0 | 76 MiB | 107 MiB |
+| 100 | 163–288 ms | 0 ms (10 s and 30 s) | 0 | 96 MiB | 126 MiB |
+| 1000 (a profile's limit), 4 modes | 223 ms | 0 ms (10 s) | 0 | 99 MiB | 128 MiB |
+| Kim Manager's preview, same machine | — | — | — | 74 MiB | 108 MiB |
+
+Before Step 74 moved validation to short-lived threads the window held 152 MiB with 100 rules.
+`DDALGAK-NFR-003` (editor open < 80 MB) is met without rules and missed by ~20 MiB with them
+(ADR 0049 consequences). The tray app is unchanged (no GUI code).
+
+### 7.5 Verification
+
+| Check | Status | Evidence |
+| --- | --- | --- |
+| Every effect form's validation, the canonical rule it saves, round trips, summaries, simulation, GUI consent with launch fingerprints | **tested** | `form::tests` |
+| Rows, badges, search, filters, grouping, 1000 rules over 32 modes | **tested** | `listing::tests`, `flows::many_rules_and_modes_stay_usable` |
+| Store transactions with origin `gui`, refused conflicts, undo only while unchanged elsewhere | **tested** | `repo::tests`, `flows::edit_duplicate_enable_disable_delete_and_undo` |
+| J1, J2 (capture, tile, form, simulation, consent with Cancel focused), J7 (edit, duplicate, enable with consent, disable, delete and undo, search, filters, grouping, bulk, reorder by keys and by drag), keyboard-only navigation, draft safety, Korean labels, import and export, Test as simulation, the Modes page | **tested** headlessly (egui_kittest, through the accessibility tree; an unnamed control fails the tests) | `crates/ddalgak-editor/tests/flows.rs` |
+| "Saved and active" only after the reload answer; engine off, not running | **tested** with an app double that reloads with the engine's own loader | `flows::a_save_is_acknowledged_only_after_the_engine_reload`, `sync::tests` |
+| A CLI change seen through the real folder watcher, never overwritten by an open form | **tested** | `flows::a_cli_change_appears_and_is_never_overwritten` |
+| The real tray app over the real pipe: active revision, CLI `rule disable` seen, engine buttons, import opens nothing | **e2e** (daily) | `e2e/tests/step74_ddalgak_editor.rs` |
+| `editor.open` registered; the tray's *Open rule editor* starts the editor beside the app | registration **tested** (`tests/cli.rs`, `shortcuts::tests`); the real start of a visible window **not tested** (no window may open on this machine) | §8 |
+| Idle CPU, startup, memory | **measured** | §7.4 |
+| The visible window: focus handover to a running editor, IME in the real text fields, a screen reader, the real tray menu, mouse-only use | **not tested** (needs the maintainer) | §8 |
+
+## 8. Manual usability script (maintainer, the real visible editor)
+
+Use a fresh user profile or back up `%APPDATA%\mouv\ddalgak\` first. Build or install
+`ddalgak-gui.exe`, `ddalgak.exe` and `ddalgak-editor.exe` into one folder. Note each step's
+result (pass, fail, remark) in the Step 74 issue.
+
+1. **J1 first start.** Start `ddalgak-gui.exe`: the tray shows `○`. Right-click the tray icon:
+   **Open rule editor** opens the editor. It says *No rules yet*, shows three starters and the
+   emergency chord; the status line says *nothing saved yet*. Choose **Open rule editor** again:
+   the same window comes to the front, no second window opens.
+2. **J2/J3 a remap by keyboard only.** Press `Ctrl+N`. Press `Ctrl+Shift+F2`: the capture box
+   shows it and its words. Press `Esc`, then type `CapsLock` into **Type instead** (or press the
+   *CapsLock* chip). `Tab` to **Next ▸**, pick **Act as another key**, capture `LCtrl` in *Acts as*,
+   `Escape` in *A quick tap alone sends*. Go to **4 Try**, **▶ Simulate**, then **Save and enable**:
+   the consent dialog appears with **Cancel** focused; press `Tab` and `Enter` on **Allow**. The
+   status line first says *waiting*, then *saved and active (revision N)* once you turned the
+   engine on (**Turn on** in the header). Press CapsLock in Notepad: it acts as Ctrl, a tap is Esc.
+3. **J4 a Korean snippet.** **+ New rule**, type `Ctrl+Shift+F3`, **Type text**; type
+   `감사합니다.` and a second line `김민수 드림` with the Korean IME (2-set): composition works in the
+   text box, the preview shows both lines, the summary *Types 13 characters on 2 lines*. Save and
+   enable (Allow). In Notepad, press Ctrl+Shift+F3: the text appears exactly.
+4. **J4 a program and a website.** Make `Ctrl+Alt+Shift+F14` → **Open a program** with
+   `C:\Windows\System32\notepad.exe` (paste it with quotes from *Copy as path*: they are removed);
+   the preview says *found*; **Test** says it would open it and opens nothing. Save and enable: the
+   dialog names the exact path. Make `Ctrl+Alt+Shift+F15` → **Open a website** `github.com`
+   (shown as `https://github.com/`). Press both chords: Notepad and the browser open only now.
+5. **J4 mouse, mode and pause.** Make a **Mouse** rule (*Move by* right 40, *Keep moving
+   smoothly*): the screen map shows your monitors and the target; **Test** moves only the simulated
+   pointer. Make a **Switch mode** rule with **+ New mode** `Navigation`. Make a **Pause Ddalgak**
+   rule on `Ctrl+Alt+Shift+F16`. Check each summary sentence reads naturally.
+6. **J7 list.** Type into the search box (`Ctrl+F`); switch *Show* to *Disabled*, *Group* to *By
+   mode*; select two rules with `Ctrl`+click and **Disable** them (one change, one revision). Drag a
+   rule by its `≡` handle above another, then `Alt+Up`: the order in `ddalgak rule list` follows.
+   **Duplicate** a rule: the copy is off. **Delete** two rules: the dialog names them, Cancel is
+   focused; delete, then **Undo** in the toast: they are back.
+7. **Truth with the CLI.** With the editor open, run `ddalgak rule disable <id>` in a terminal:
+   the row turns off within a second and the status line returns to *saved and active*. Open a
+   rule's form, change its name, run `ddalgak rule edit <id> --title X`, then **Save** in the
+   editor: it refuses (*rule_conflict*) and keeps your text. Quit the tray app: the status line
+   says *Ddalgak is not running* after the next change.
+8. **Drafts and closing.** Change a rule's name and click another rule: *Discard your changes?*
+   with **Keep editing** focused. Close the window with the change: it asks again.
+9. **Export and import.** Select two rules, **Export…** to a file; open the file: no `consent`.
+   **Import…** it into a second user profile: the plan names each website and program; the rules
+   arrive turned off with *needs review*; enabling one asks for consent with the exact target.
+10. **Korean and accessibility.** Press **한국어**: every label is Korean (summary sentences stay
+    English). With Narrator on, `Tab` through the list and the form: every control is announced
+    by name; the capture box announces the keys. Shrink the window below 860 px: the navigation
+    moves into the header and the form replaces the list.
+11. **J8 emergency.** With rules active, press `Ctrl+Alt+Shift+Esc`: the engine turns off; the
+    editor's header says *Off* after its next request (open or save something); **Turn on** works
+    again.
+12. **Idle.** Leave the editor open for a minute without input: Task Manager shows 0 % CPU for
+    `ddalgak-editor.exe`; note its memory.

@@ -91,3 +91,8 @@ not aligned to two cells).
 - 2026-11-04 (Step 16): the Subak window is plain Win32 with the `subak-term` renderer
   ([ADR 0039](0039-subak-window-plain-win32-client.md)): measured idle in release 3.95 MiB
   private, 5 threads, 0 CPU. egui + glow stays Kim Manager's toolkit only.
+- 2026-11-04 (Step 74): the Ddalgak rule editor uses this decision's egui + glow chrome in its
+  own on-demand process (`ddalgak-editor`, [ADR 0049](0049-ddalgak-editor-process-and-toolkit.md));
+  measured idle in release: 0 CPU, 0 repainted frames, 76 MiB working set empty and 96–99 MiB
+  with 100–1000 rules (Kim Manager 74 MiB on the same machine). Its memory budget
+  (`DDALGAK-NFR-003`, < 80 MB) is met only without rules so far; fallback B stays the option.

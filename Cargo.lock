@@ -1613,6 +1613,7 @@ version = "0.0.0"
 dependencies = [
  "ddalgak",
  "kim",
+ "png",
  "regex",
  "serde_json",
  "sha2",

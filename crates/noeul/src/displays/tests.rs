@@ -12,8 +12,7 @@ use crate::frame::Ledger;
 fn hard() -> Vec<Monitor> {
     vec![
         Monitor::new(Rect::new(-2880, 0, 2880, 1620), false).with_dpi(144),
-        Monitor::new(Rect::new(0, 0, 1920, 1080), true)
-            .with_work(Rect::new(0, 0, 1920, 1040)),
+        Monitor::new(Rect::new(0, 0, 1920, 1080), true).with_work(Rect::new(0, 0, 1920, 1040)),
         Monitor::new(Rect::new(1920, -840, 1350, 2400), false)
             .with_dpi(120)
             .with_rotation(90),
@@ -73,7 +72,11 @@ fn layouts_differ_in_geometry_or_only_in_details() {
     assert_eq!(compare(&a, &a), LayoutChange::Same);
     let mut reordered = a.clone();
     reordered.reverse();
-    assert_eq!(compare(&a, &reordered), LayoutChange::Same, "order is not a change");
+    assert_eq!(
+        compare(&a, &reordered),
+        LayoutChange::Same,
+        "order is not a change"
+    );
     // A new scale, a moved taskbar, HDR switched off, another primary: the picture still matches.
     let mut scale = a.clone();
     scale[1].dpi = 144;
@@ -111,14 +114,31 @@ fn monitors_are_named_by_number_primary_or_pointer() {
     assert_eq!(resolve_monitor(&d, MonitorSpec::Number(4), (0, 0)), Some(3));
     assert_eq!(resolve_monitor(&d, MonitorSpec::Number(5), (0, 0)), None);
     // The pointer at negative coordinates, on the turned monitor, and in a gap (nearest).
-    assert_eq!(resolve_monitor(&d, MonitorSpec::Pointer, (-10, 10)), Some(0));
-    assert_eq!(resolve_monitor(&d, MonitorSpec::Pointer, (2000, -800)), Some(2));
-    assert_eq!(resolve_monitor(&d, MonitorSpec::Pointer, (-100, 1700)), Some(0));
-    for s in [MonitorSpec::Primary, MonitorSpec::Pointer, MonitorSpec::Number(3)] {
+    assert_eq!(
+        resolve_monitor(&d, MonitorSpec::Pointer, (-10, 10)),
+        Some(0)
+    );
+    assert_eq!(
+        resolve_monitor(&d, MonitorSpec::Pointer, (2000, -800)),
+        Some(2)
+    );
+    assert_eq!(
+        resolve_monitor(&d, MonitorSpec::Pointer, (-100, 1700)),
+        Some(0)
+    );
+    for s in [
+        MonitorSpec::Primary,
+        MonitorSpec::Pointer,
+        MonitorSpec::Number(3),
+    ] {
         assert_eq!(MonitorSpec::from_json(&s.to_json()), Some(s));
     }
     assert_eq!(MonitorSpec::from_json(&json!(0)), None);
-    assert_eq!(MonitorSpec::from_json(&json!("3")), None, "numbers are numbers");
+    assert_eq!(
+        MonitorSpec::from_json(&json!("3")),
+        None,
+        "numbers are numbers"
+    );
     let empty = desktop(Vec::new());
     assert_eq!(resolve_monitor(&empty, MonitorSpec::Primary, (0, 0)), None);
     assert_eq!(resolve_monitor(&empty, MonitorSpec::Pointer, (0, 0)), None);
@@ -143,7 +163,11 @@ fn captured_rectangles_map_to_the_logical_pixels_of_their_monitor() {
     // Across the seam of 150 % and 100 %: the centre decides the monitor, and it says so.
     let seam = mapping(&l, Rect::new(-100, 100, 300, 50)).unwrap();
     assert_eq!((seam.monitor, seam.spans, seam.mixed_dpi), (1, 2, true));
-    assert_eq!(seam.logical, (-100, 100, 300, 50), "logical of the 100 % primary");
+    assert_eq!(
+        seam.logical,
+        (-100, 100, 300, 50),
+        "logical of the 100 % primary"
+    );
     // Edges round on their own, so neighbours still touch at every scale.
     for dpi in [120u32, 144, 168] {
         let one = [Monitor::new(Rect::new(0, 0, 3000, 3000), true).with_dpi(dpi)];
@@ -170,15 +194,28 @@ fn warnings_are_honest_about_scales_hdr_protection_clipping_and_the_pointer() {
     assert!(warnings(&l, Rect::new(10, 10, 100, 100), None, None).is_empty());
     let w = warnings(&l, Rect::new(-100, 100, 300, 50), None, None);
     assert_eq!(w.len(), 1);
-    assert!(w[0].contains("different scales") && w[0].contains("monitor 2"), "{w:?}");
+    assert!(
+        w[0].contains("different scales") && w[0].contains("monitor 2"),
+        "{w:?}"
+    );
     let w = warnings(&l, Rect::new(100, 1500, 100, 200), None, None);
     assert!(w.iter().any(|w| w.contains("monitor 4 shows HDR")), "{w:?}");
     let mut facts = WindowFacts::plain(1, Rect::new(-50, 10, 200, 100));
     facts.affinity = Affinity::Excluded;
-    let w = warnings(&l, Rect::new(-50, 10, 200, 100), Some((&facts, Rect::new(-50, 10, 200, 100))), None);
+    let w = warnings(
+        &l,
+        Rect::new(-50, 10, 200, 100),
+        Some((&facts, Rect::new(-50, 10, 200, 100))),
+        None,
+    );
     assert!(w.iter().any(|w| w.contains("excludes itself")), "{w:?}");
     facts.affinity = Affinity::Monitor;
-    let w = warnings(&l, Rect::new(0, 10, 150, 100), Some((&facts, Rect::new(0, 10, 150, 100))), None);
+    let w = warnings(
+        &l,
+        Rect::new(0, 10, 150, 100),
+        Some((&facts, Rect::new(0, 10, 150, 100))),
+        None,
+    );
     assert!(w.iter().any(|w| w.contains("black")), "{w:?}");
     assert!(w.iter().any(|w| w.contains("only the part")), "{w:?}");
     for (p, word) in [
@@ -189,9 +226,20 @@ fn warnings_are_honest_about_scales_hdr_protection_clipping_and_the_pointer() {
         let w = warnings(&l, Rect::new(10, 10, 10, 10), None, Some(p));
         assert!(w[0].contains(word), "{w:?}");
     }
-    assert!(warnings(&l, Rect::new(10, 10, 10, 10), None, Some(PointerOutcome::Drawn(Rect::new(10, 10, 12, 19)))).is_empty());
+    assert!(
+        warnings(
+            &l,
+            Rect::new(10, 10, 10, 10),
+            None,
+            Some(PointerOutcome::Drawn(Rect::new(10, 10, 12, 19)))
+        )
+        .is_empty()
+    );
     // No warning names a window title, a program or a pixel: geometry and states only.
-    assert_eq!(PointerOutcome::Hidden.to_json(), json!({"drawn": false, "rect": null, "reason": "hidden"}));
+    assert_eq!(
+        PointerOutcome::Hidden.to_json(),
+        json!({"drawn": false, "rect": null, "reason": "hidden"})
+    );
 }
 
 #[test]
@@ -207,11 +255,24 @@ fn gaps_of_the_virtual_desktop_are_opaque_black_and_monitors_keep_their_pixels()
     let f = syn.capture(&ledger, region).unwrap();
     let px = |x: i32, y: i32| {
         let i = (((y - region.y) as usize) * region.width as usize + (x - region.x) as usize) * 4;
-        [f.pixels()[i], f.pixels()[i + 1], f.pixels()[i + 2], f.pixels()[i + 3]]
+        [
+            f.pixels()[i],
+            f.pixels()[i + 1],
+            f.pixels()[i + 2],
+            f.pixels()[i + 3],
+        ]
     };
-    assert_eq!(px(-10, -20), [0, 0, 0, 255], "no monitor above the 150 % one");
+    assert_eq!(
+        px(-10, -20),
+        [0, 0, 0, 255],
+        "no monitor above the 150 % one"
+    );
     assert_eq!(px(1919, -1), [0, 0, 0, 255], "nor above the primary");
-    assert_eq!(px(1920, -20), Synthetic::pixel(1920, -20), "the turned monitor reaches up");
+    assert_eq!(
+        px(1920, -20),
+        Synthetic::pixel(1920, -20),
+        "the turned monitor reaches up"
+    );
     assert_eq!(px(-10, 0), Synthetic::pixel(-10, 0), "the 150 % monitor");
     assert_eq!(px(5, 19), Synthetic::pixel(5, 19), "the primary");
     // Exactly the uncovered pixels were filled: (1920 + 10 columns) × 20 rows.
@@ -224,7 +285,10 @@ fn gaps_of_the_virtual_desktop_are_opaque_black_and_monitors_keep_their_pixels()
     let mut none = Frame::solid(&ledger, Rect::new(0, 0, 3, 2), [1, 2, 3, 4]).unwrap();
     assert_eq!(fill_gaps(&mut none, &[]), 6);
     // Overlapping monitors (a mirrored pair listed twice) leave no gap and are not counted twice.
-    let twice = [Monitor::new(Rect::new(0, 0, 10, 10), true), Monitor::new(Rect::new(0, 0, 10, 10), false)];
+    let twice = [
+        Monitor::new(Rect::new(0, 0, 10, 10), true),
+        Monitor::new(Rect::new(0, 0, 10, 10), false),
+    ];
     let mut o = Frame::solid(&ledger, Rect::new(0, 0, 12, 10), [1, 2, 3, 4]).unwrap();
     assert_eq!(fill_gaps(&mut o, &twice), 20);
 }
@@ -254,7 +318,11 @@ fn the_synthetic_pointer_is_drawn_exactly_at_its_hotspot_or_says_why_not() {
             } else {
                 None
             }
-            .unwrap_or(if ay < 0 { [0, 0, 0, 255] } else { Synthetic::pixel(ax, ay) });
+            .unwrap_or(if ay < 0 {
+                [0, 0, 0, 255]
+            } else {
+                Synthetic::pixel(ax, ay)
+            });
             assert_eq!(got, want, "({ax}, {ay})");
         }
     }
@@ -283,7 +351,10 @@ fn layout_files_stay_far_off_screen_and_follow_attach_and_detach() {
     assert_eq!(ms[0].rect, Rect::new(ox, oy, 640, 400));
     assert_eq!(ms[0].work, Rect::new(ox, oy, 640, 368));
     assert_eq!(ms[1].rect, Rect::new(ox - 480, oy + 50, 480, 300));
-    assert_eq!((ms[2].dpi, ms[2].rotation, ms[2].hdr), (120, 90, Some(true)));
+    assert_eq!(
+        (ms[2].dpi, ms[2].rotation, ms[2].hdr),
+        (120, 90, Some(true))
+    );
     assert_eq!((ms[1].hdr, ms[1].primary), (None, false));
     assert_eq!(p, Some((ox + 10, oy + 20)));
     for bad in [
@@ -317,8 +388,11 @@ fn layout_files_stay_far_off_screen_and_follow_attach_and_detach() {
     let reach = json!({"monitors": [{"x": 8000, "y": 8000, "width": 1000, "height": 1000}]});
     let (m, _) = Synthetic::parse_layout(&reach).unwrap();
     assert_eq!((m[0].rect.right(), m[0].rect.bottom()), (-11_000, -11_000));
-    assert!(Synthetic::parse_layout(&json!({"monitors": [
-        {"x": 8000, "y": 0, "width": 1001, "height": 10}]})).is_err());
+    assert!(
+        Synthetic::parse_layout(&json!({"monitors": [
+        {"x": 8000, "y": 0, "width": 1001, "height": 10}]}))
+        .is_err()
+    );
     // A layout that would touch the real desktop it must avoid is refused.
     let guarded = Synthetic::with_layout_file(file.clone(), Some(Rect::new(ox, oy, 10, 10)));
     std::fs::write(&file, serde_json::to_vec(&ok).unwrap()).unwrap();

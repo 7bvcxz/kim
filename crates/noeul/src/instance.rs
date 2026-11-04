@@ -480,7 +480,11 @@ pub fn capture(ctx: &Ctx, a: &crate::CaptureArgs) -> Result<Outcome> {
         let mut out = Outcome::new(v.clone(), capture_human(&v));
         out.warnings = v["warnings"]
             .as_array()
-            .map(|w| w.iter().filter_map(|s| s.as_str().map(str::to_string)).collect())
+            .map(|w| {
+                w.iter()
+                    .filter_map(|s| s.as_str().map(str::to_string))
+                    .collect()
+            })
             .unwrap_or_default();
         Ok(out)
     }

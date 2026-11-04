@@ -158,6 +158,9 @@ mod measure {
         }
         fn request_element(&mut self, _: noeul::detect::ElementRequest) {}
         fn end_detection(&mut self) {}
+        fn active_window(&mut self) -> Option<noeul::detect::WindowFacts> {
+            None
+        }
     }
 
     /// Private bytes of this process (`GetProcessMemoryInfo`).

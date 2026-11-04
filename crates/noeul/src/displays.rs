@@ -184,7 +184,10 @@ impl std::fmt::Display for MonitorSpec {
 pub fn resolve_monitor(desktop: &Desktop, spec: MonitorSpec, pointer: (i32, i32)) -> Option<usize> {
     let ms = &desktop.monitors;
     match spec {
-        MonitorSpec::Primary => ms.iter().position(|m| m.primary).or_else(|| (!ms.is_empty()).then_some(0)),
+        MonitorSpec::Primary => ms
+            .iter()
+            .position(|m| m.primary)
+            .or_else(|| (!ms.is_empty()).then_some(0)),
         MonitorSpec::Pointer => dpi::monitor_index(ms, pointer),
         MonitorSpec::Number(n) => {
             let i = usize::try_from(n).ok()?.checked_sub(1)?;
@@ -245,7 +248,9 @@ pub fn mapping(monitors: &[Monitor], region: Rect) -> Option<Mapping> {
         .iter()
         .filter(|o| intersect(o.rect, region).is_some())
         .collect();
-    let mixed_dpi = touched.first().is_some_and(|f| touched.iter().any(|o| o.dpi != f.dpi));
+    let mixed_dpi = touched
+        .first()
+        .is_some_and(|f| touched.iter().any(|o| o.dpi != f.dpi));
     Some(Mapping {
         monitor: i,
         dpi: m.dpi,
@@ -367,9 +372,13 @@ pub fn warnings(
         }
     }
     match pointer {
-        Some(PointerOutcome::Hidden) => out.push("the pointer is hidden, so it is not in the picture".into()),
+        Some(PointerOutcome::Hidden) => {
+            out.push("the pointer is hidden, so it is not in the picture".into());
+        }
         Some(PointerOutcome::Outside) => {
-            out.push("the pointer is outside the captured area, so it is not in the picture".into());
+            out.push(
+                "the pointer is outside the captured area, so it is not in the picture".into(),
+            );
         }
         Some(PointerOutcome::Unavailable) => {
             out.push("the pointer could not be read, so it is not in the picture".into());
@@ -428,7 +437,10 @@ pub fn fill_gaps(frame: &mut Frame, monitors: &[Monitor]) -> u64 {
             for (l, r) in &gaps {
                 let a = usize::try_from(l - i64::from(area.x)).unwrap_or(0);
                 let b = usize::try_from(r - i64::from(area.x)).unwrap_or(0).min(w);
-                for p in px[(ry * w + a) * 4..(ry * w + b) * 4].as_chunks_mut::<4>().0 {
+                for p in px[(ry * w + a) * 4..(ry * w + b) * 4]
+                    .as_chunks_mut::<4>()
+                    .0
+                {
                     *p = [0, 0, 0, 255];
                 }
                 filled += (b - a) as u64;
@@ -488,11 +500,16 @@ pub fn draw_pointer_sprite(frame: &mut Frame, at: (i32, i32)) -> PointerOutcome 
     for sy in 0..size.1 as usize {
         for sx in 0..size.0 as usize {
             let (ax, ay) = (i64::from(at.0) + sx as i64, i64::from(at.1) + sy as i64);
-            if ax < i64::from(area.x) || ax >= area.right() || ay < i64::from(area.y) || ay >= area.bottom() {
+            if ax < i64::from(area.x)
+                || ax >= area.right()
+                || ay < i64::from(area.y)
+                || ay >= area.bottom()
+            {
                 continue;
             }
             if let Some(c) = pointer_sprite_pixel(sx, sy) {
-                let i = ((ay - i64::from(area.y)) as usize * w + (ax - i64::from(area.x)) as usize) * 4;
+                let i =
+                    ((ay - i64::from(area.y)) as usize * w + (ax - i64::from(area.x)) as usize) * 4;
                 px[i..i + 4].copy_from_slice(&c);
             }
         }

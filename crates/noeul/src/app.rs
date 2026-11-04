@@ -1105,9 +1105,10 @@ impl<S: Shell> App<S> {
         let monitor = mapping.map_or(Value::Null, |m| {
             crate::displays::monitor_json(&desktop.monitors, m.monitor)
         });
-        let window_json = window.map_or(Value::Null, |w| {
-            json!({"rect": w.rect.to_json(), "affinity": affinity_str(w.affinity)})
-        });
+        let window_json = window.map_or(
+            Value::Null,
+            |w| json!({"rect": w.rect.to_json(), "affinity": affinity_str(w.affinity)}),
+        );
         let mut v = json!({
             "dry_run": dry_run, "target": target.as_str(), "region": region.to_json(),
             "monitor": monitor, "mapping": mapping.map_or(Value::Null, |m| m.to_json()),
@@ -1195,7 +1196,8 @@ impl<S: Shell> App<S> {
             }
             Err(e) => {
                 if e.code != Code::DesktopUnavailable {
-                    self.shell.notice(&format!("Noeul could not capture: {}.", e.message));
+                    self.shell
+                        .notice(&format!("Noeul could not capture: {}.", e.message));
                 }
                 e.code.as_str()
             }
@@ -3424,12 +3426,14 @@ impl Target {
             ));
         }
         if given("region") {
-            return Rect::from_json(&p["region"]).map(Target::Region).ok_or_else(|| {
-                NoeulError::new(
-                    Code::Usage,
-                    "`region` must be {x, y, width, height} in device pixels",
-                )
-            });
+            return Rect::from_json(&p["region"])
+                .map(Target::Region)
+                .ok_or_else(|| {
+                    NoeulError::new(
+                        Code::Usage,
+                        "`region` must be {x, y, width, height} in device pixels",
+                    )
+                });
         }
         if given("monitor") {
             return MonitorSpec::from_json(&p["monitor"])
@@ -3577,6 +3581,9 @@ fn point(v: &Value) -> Option<(i32, i32)> {
 
 #[cfg(test)]
 mod paste_tests;
+
+#[cfg(test)]
+mod display_tests;
 
 #[cfg(test)]
 pub(crate) mod tests {
@@ -3932,7 +3939,7 @@ pub(crate) mod tests {
     }
 
     /// An instance on the synthetic two-monitor desktop with the default keys (no registrar).
-    fn overlay_app(tag: &str) -> (App<FakeShell>, Arc<Synthetic>, PathBuf) {
+    pub(crate) fn overlay_app(tag: &str) -> (App<FakeShell>, Arc<Synthetic>, PathBuf) {
         let dir = tmp(tag);
         let _ = std::fs::remove_dir_all(&dir);
         let paths = Paths::under(&dir);
@@ -3959,7 +3966,7 @@ pub(crate) mod tests {
         (a, syn, dir)
     }
 
-    fn ev(a: &mut App<FakeShell>, i: OverlayInput) {
+    pub(crate) fn ev(a: &mut App<FakeShell>, i: OverlayInput) {
         a.overlay_event(OverlayEvent::Input(i));
     }
 
@@ -3968,7 +3975,7 @@ pub(crate) mod tests {
         a.overlay_event(OverlayEvent::Key(c, None, false));
     }
 
-    fn drag(a: &mut App<FakeShell>, from: (i32, i32), to: (i32, i32)) {
+    pub(crate) fn drag(a: &mut App<FakeShell>, from: (i32, i32), to: (i32, i32)) {
         ev(
             a,
             OverlayInput::Press {

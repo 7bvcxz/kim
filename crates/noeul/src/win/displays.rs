@@ -28,8 +28,7 @@ use windows_sys::Win32::Devices::Display::{
 use windows_sys::Win32::Foundation::ERROR_INSUFFICIENT_BUFFER;
 use windows_sys::Win32::Graphics::Gdi::{BITMAP, DeleteObject, GetObjectW, HDC};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CURSOR_SHOWING, CURSORINFO, DI_NORMAL, DrawIconEx, GetCursorInfo, GetIconInfo, HICON,
-    ICONINFO,
+    CURSOR_SHOWING, CURSORINFO, DI_NORMAL, DrawIconEx, GetCursorInfo, GetIconInfo, HICON, ICONINFO,
 };
 
 /// What the display configuration says about one active display.
@@ -169,7 +168,7 @@ fn icon_size(info: &ICONINFO) -> Option<(i32, i32)> {
 
 /// Draws `icon` with its hotspot at `at` (device pixels of the virtual desktop) into `dc`, whose
 /// (0, 0) is `area`'s top-left corner; `area` is the captured rectangle.
-pub fn draw_icon(dc: HDC, icon: HICON, at: (i32, i32), area: Rect) -> PointerOutcome {
+pub(crate) fn draw_icon(dc: HDC, icon: HICON, at: (i32, i32), area: Rect) -> PointerOutcome {
     let mut info = ICONINFO::default();
     // SAFETY: `info` is writable; the bitmaps it receives are deleted below.
     if unsafe { GetIconInfo(icon, &raw mut info) } == 0 {
@@ -225,7 +224,7 @@ pub fn draw_icon(dc: HDC, icon: HICON, at: (i32, i32), area: Rect) -> PointerOut
 }
 
 /// Draws the user's pointer as it is now into `dc` (see [`draw_icon`]).
-pub fn draw_pointer(dc: HDC, area: Rect) -> PointerOutcome {
+pub(crate) fn draw_pointer(dc: HDC, area: Rect) -> PointerOutcome {
     let mut ci = CURSORINFO {
         cbSize: u32::try_from(size_of::<CURSORINFO>()).unwrap_or(0),
         ..Default::default()
@@ -244,14 +243,17 @@ pub fn draw_pointer(dc: HDC, area: Rect) -> PointerOutcome {
 mod tests {
     use super::*;
     use windows_sys::Win32::Graphics::Gdi::{
-        BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleDC, CreateDIBSection,
-        DIB_RGB_COLORS, DeleteDC, GdiFlush, SelectObject,
+        BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleDC, CreateDIBSection, DIB_RGB_COLORS,
+        DeleteDC, GdiFlush, SelectObject,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{IDC_ARROW, IDC_IBEAM, LoadCursorW};
 
     #[test]
     fn rotations_and_colour_bits_follow_the_documented_values() {
-        assert_eq!([1, 2, 3, 4, 0, 99].map(rotation_degrees), [0, 90, 180, 270, 0, 0]);
+        assert_eq!(
+            [1, 2, 3, 4, 0, 99].map(rotation_degrees),
+            [0, 90, 180, 270, 0, 0]
+        );
         assert!(!advanced_colour_on(0b0001), "supported only");
         assert!(advanced_colour_on(0b0011));
         assert!(advanced_colour_on(0b0110), "wide colour enforced");
@@ -366,7 +368,10 @@ mod tests {
             let PointerOutcome::Drawn(r) = outcome else {
                 panic!("{outcome:?}")
             };
-            assert!(r.x <= at.0 && r.y <= at.1, "the hotspot lies inside the image");
+            assert!(
+                r.x <= at.0 && r.y <= at.1,
+                "the hotspot lies inside the image"
+            );
             assert!(r.width >= 16 && r.height >= 16 && r.width <= 256, "{r}");
             let px = s.pixels_mut();
             let mut changed = 0;

@@ -87,9 +87,9 @@ use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::{INFINITE, WaitForMultipleObjects};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetCursorPos, GetMessageW,
-    IDYES, KillTimer, MB_ICONQUESTION, MB_SETFOREGROUND, MB_YESNO, MSG, MessageBoxW,
-    PostMessageW, PostQuitMessage, RegisterClassExW, RegisterWindowMessageW, SPI_SETWORKAREA,
-    SetTimer, TranslateMessage, WM_APP, WM_CLOSE, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_ENDSESSION,
+    IDYES, KillTimer, MB_ICONQUESTION, MB_SETFOREGROUND, MB_YESNO, MSG, MessageBoxW, PostMessageW,
+    PostQuitMessage, RegisterClassExW, RegisterWindowMessageW, SPI_SETWORKAREA, SetTimer,
+    TranslateMessage, WM_APP, WM_CLOSE, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_ENDSESSION,
     WM_QUERYENDSESSION, WM_SETTINGCHANGE, WM_TIMER, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_POPUP,
 };
 

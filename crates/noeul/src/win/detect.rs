@@ -53,9 +53,9 @@ use windows_sys::Win32::System::Threading::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GWL_EXSTYLE, GetForegroundWindow, GetLayeredWindowAttributes, GetShellWindow,
-    GetWindowDisplayAffinity, GetWindowLongW,
-    GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindowVisible, LWA_ALPHA,
-    WDA_EXCLUDEFROMCAPTURE, WDA_MONITOR, WS_EX_LAYERED, WS_EX_TRANSPARENT,
+    GetWindowDisplayAffinity, GetWindowLongW, GetWindowRect, GetWindowThreadProcessId, IsIconic,
+    IsWindowVisible, LWA_ALPHA, WDA_EXCLUDEFROMCAPTURE, WDA_MONITOR, WS_EX_LAYERED,
+    WS_EX_TRANSPARENT,
 };
 use windows_sys::core::{GUID, HRESULT};
 

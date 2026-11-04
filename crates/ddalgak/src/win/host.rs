@@ -893,7 +893,13 @@ pub fn run(opts: Options) -> Result<(), RunError> {
             unsafe { PostMessageW(hwnd_bits as HWND, WM_HOST_CONTROL, 0, 0) };
         }),
         Arc::clone(&activity),
-        Box::new(SendInputBackend),
+        // The debug test host (observe-only, no tray icon) never injects: a remapped key pressed
+        // on the real keyboard while a test runs must not type anything for the user.
+        if opts.observe_only {
+            Box::new(crate::inject::Discard)
+        } else {
+            Box::new(SendInputBackend)
+        },
     );
     let tray = if opts.tray {
         Some(Tray::new(hwnd, WM_TRAY, State::Off).map_err(|e| RunError::Io(e.to_string()))?)

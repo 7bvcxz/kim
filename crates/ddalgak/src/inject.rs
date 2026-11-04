@@ -360,6 +360,18 @@ impl Backend for Recorder {
     }
 }
 
+/// A backend that injects nothing and keeps nothing: the debug test host's, so a test host
+/// never types for the user even when a remapped key is pressed on the real keyboard while a
+/// test runs (DDALGAK-SEC-010).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Discard;
+
+impl Backend for Discard {
+    fn send(&mut self, events: &[OutEvent]) -> usize {
+        events.len()
+    }
+}
+
 /// A backend that appends to a shared log (worker tests read what the worker thread sent).
 #[derive(Clone, Debug, Default)]
 pub struct SharedRecorder(pub std::sync::Arc<Mutex<Vec<OutEvent>>>);

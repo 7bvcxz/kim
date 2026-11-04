@@ -3,23 +3,12 @@
   "data": {
     "file": "loaded",
     "ok": true,
-    "problems": [
-      {
-        "at": "profiles[0].rules[2].steps[0]",
-        "code": "step_unsupported",
-        "message": "`remap` steps are not implemented in this version yet (Step 68)",
-        "offers": [],
-        "profile": "default",
-        "rule": "caps",
-        "severity": "info",
-        "with": null
-      }
-    ],
+    "problems": [],
     "revision": 4,
     "source": "saved",
     "summary": {
       "errors": 0,
-      "infos": 1,
+      "infos": 0,
       "warnings": 0
     }
   },

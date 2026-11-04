@@ -5,9 +5,9 @@
     "app": {
       "elevated": false,
       "launched_by": "user",
-      "pid": 62368,
+      "pid": 79736,
       "running": true,
-      "started_at": "2026-11-04T03:21:19Z",
+      "started_at": "2026-11-04T04:34:06Z",
       "test_mode": true,
       "tray": false,
       "uptime_s": 0,
@@ -16,6 +16,7 @@
     "engine": {
       "hook": {
         "installed": false,
+        "mouse_installed": false,
         "observe_only": true
       },
       "last_change": null,
@@ -27,14 +28,15 @@
       "mode": "base"
     },
     "rules": {
-      "active": 3,
+      "active": 4,
       "active_rules": [
         "pause-key",
         "off-key",
-        "physical-only"
+        "physical-only",
+        "f19-remap"
       ],
       "active_set": {
-        "loaded_at": "2026-11-04T03:21:19Z",
+        "loaded_at": "2026-11-04T04:34:06Z",
         "revision": 1
       },
       "disabled": 0,
@@ -45,8 +47,8 @@
       "inactive": [
         {
           "code": "step_unsupported",
-          "reason": "`remap` steps are not implemented in this version yet (Step 68)",
-          "rule": "caps-remap"
+          "reason": "`send_keys` steps are not implemented in this version yet (Step 69)",
+          "rule": "send-later"
         }
       ],
       "last_reload": null,
@@ -59,7 +61,7 @@
         "problem": null,
         "revision": 1
       },
-      "total": 4
+      "total": 5
     },
     "session": {
       "locked": false

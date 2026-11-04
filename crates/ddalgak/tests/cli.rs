@@ -283,9 +283,13 @@ fn rules_doc(on_start: &str) -> Value {
                 { "id": "physical-only", "title": "F15 pauses (physical keys only)", "enabled": true,
                   "trigger": { "keys": "F15" },
                   "steps": [ { "type": "engine", "op": "pause" } ] },
-                { "id": "caps-remap", "title": "CapsLock acts as Ctrl", "enabled": true,
-                  "trigger": { "keys": "CapsLock" },
-                  "steps": [ { "type": "remap", "to": "LCtrl" } ],
+                { "id": "f19-remap", "title": "F19 acts as F20 (an obscure remap)", "enabled": true,
+                  "trigger": { "keys": "F19" },
+                  "steps": [ { "type": "remap", "to": "F20" } ],
+                  "consent": { "input-injection": { "granted_at": "2026-11-04T09:00:00Z", "via": "gui" } } },
+                { "id": "send-later", "title": "F18 sends a key (a later Step)", "enabled": true,
+                  "trigger": { "keys": "F18" },
+                  "steps": [ { "type": "send_keys", "keys": "F20" } ],
                   "consent": { "input-injection": { "granted_at": "2026-11-04T09:00:00Z", "via": "gui" } } }
             ] } ]
     })
@@ -423,9 +427,10 @@ fn the_app_lifecycle_through_the_cli() {
     );
     assert_eq!(
         d["rules"]["active_rules"],
-        json!(["pause-key", "off-key", "physical-only"])
+        json!(["pause-key", "off-key", "physical-only", "f19-remap"]),
+        "remaps run from Step 68"
     );
-    assert_eq!(d["rules"]["inactive"][0]["rule"], "caps-remap");
+    assert_eq!(d["rules"]["inactive"][0]["rule"], "send-later");
     assert_eq!(d["rules"]["inactive"][0]["code"], "step_unsupported");
     // Ddalgak's own shortcuts are registered with RegisterHotKey (obscure chords only; never
     // pressed by this test), unless another program owns them.
@@ -933,10 +938,10 @@ fn rules_are_managed_through_the_cli_without_the_app() {
         d["data"]["rule"]["consent"]["input-injection"]["via"],
         "cli"
     );
-    // Remaps run from Step 68: valid, enabled, and honestly inactive until then.
+    // Remaps run from Step 68: valid, enabled and active.
     assert_eq!(
         (d["data"]["state"].as_str(), d["data"]["code"].as_str()),
-        (Some("inactive"), Some("step_unsupported"))
+        (Some("active"), None)
     );
     bless("rule-show", &d);
     let (_, d) = sb.json(&["rule", "list"]);
@@ -951,7 +956,7 @@ fn rules_are_managed_through_the_cli_without_the_app() {
         [
             (pause.as_str(), "active"),
             ("off-key", "active"),
-            ("caps", "inactive")
+            ("caps", "active")
         ]
     );
     bless("rule-list", &d);

@@ -469,6 +469,43 @@ fn pin_commands_report_honestly() {
     assert_eq!(status(&sb)["pins"]["open"], 0);
     let human = String::from_utf8_lossy(&sb.run(&["pin", "list"]).stdout).to_string();
     assert!(human.contains("No pins are open"), "{human}");
+
+    // The IPC methods over the real pipe, every answer checked against the schema.
+    let mut s = noeul::win::client::open(&sb.endpoint).expect("the instance answers");
+    let mut ask = |method: &str, params: Value| -> Value {
+        let msg = noeul::ipc::request(1, method, params.clone());
+        assert_valid("noeul-ipc-v1", &msg);
+        let r = s
+            .request(method, params)
+            .unwrap_or_else(|e| panic!("{method}: {e:?}"));
+        assert_valid("noeul-ipc-v1", &noeul::ipc::ok(1, r.clone()));
+        r
+    };
+    let region = json!({"x": X0 + 20, "y": Y0 + 30, "width": 64, "height": 48});
+    let r = ask(
+        "pin.create",
+        json!({"source": "region", "region": region, "dry_run": true}),
+    );
+    assert_eq!(r["pin"], Value::Null, "a dry run captures nothing");
+    let r = ask("pin.create", json!({"source": "region", "region": region}));
+    assert_eq!(
+        (r["pin"]["id"].as_str(), r["pin"]["rect"].clone()),
+        (Some("pin-1"), region)
+    );
+    let r = ask("pin.list", json!({}));
+    assert_eq!(r["pins"][0]["image"], json!({"width": 64, "height": 48}));
+    let r = ask("pin.hide", json!({"id": "pin-1"}));
+    assert_eq!(r["hidden"], json!(["pin-1"]));
+    let r = ask("pin.show", json!({"all": true, "on_screen": true}));
+    assert_eq!(r["shown"], json!(["pin-1"]));
+    let r = ask("pin.close", json!({"all": true}));
+    assert_eq!(r["closed"], json!(["pin-1"]));
+    let r = ask("status", json!({}));
+    assert_eq!(
+        (r["pins"]["open"].as_u64(), r["pins"]["reopenable"].as_str()),
+        (Some(0), Some("pin-1"))
+    );
+    drop(s);
     let (code, _) = sb.json(&["quit", "--yes"]);
     assert_eq!(code, 0);
 }

@@ -29,7 +29,8 @@ H hides, Esc closes, Shift+Esc destroys, right-click (or Shift+F10) opens the pi
 survive a restart.
 Not in this build (labeled planned): double-click to pin and the toolbar (Step 51), copy and
 save (51), window detection and the magnifier (52), pin transforms, opacity and click-through
-(54), annotation (56), settings window (61), capture to a file and `noeul pin <file>` (62).
+(54), annotation (56), settings window (61), capture to a file or the clipboard and
+`noeul pin <file>` (62).
 
 Exit codes: 0 ok · 1 failure (I/O, permission) · 2 usage · 3 not found (not running, no pin)
             4 integrity (protocol, identity) · 5 incompatible or unsupported platform

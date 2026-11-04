@@ -119,6 +119,8 @@ fn normalize(doc: &Value, ep: &str) -> Value {
                     "latency_ms" => Some(3),
                     "output_bytes" => Some(1024),
                     "stream_id" => Some(1),
+                    // Step 13: history counters and the cursor depend on how far the shell got.
+                    "lines" | "bytes" | "total_lines" | "evicted_lines" | "x" | "y" => Some(0),
                     "id" => Some(1), // client ids
                     _ => None,
                 };
@@ -296,6 +298,12 @@ fn the_cli_schema_embeds_the_ipc_and_capabilities_definitions_unchanged() {
         "result_terminal_end",
         "client_attachment",
         "detach_terminal",
+        // Step 13.
+        "history",
+        "screen_info",
+        "result_pane_capture",
+        "result_pane_clear_history",
+        "scrollback",
     ] {
         assert_eq!(cli["$defs"][name], ipc["$defs"][name], "$defs.{name}");
     }
@@ -386,6 +394,40 @@ fn every_command_answers_one_schema_valid_document_with_stable_exit_codes() {
         (3, Some("target_not_found"))
     );
     golden("error-target-not-found", &doc, ep);
+
+    // Step 13: history counters (never content), a dry-run clear, and a capture of a pane
+    // with known content (kept after its program exited), redacted by default.
+    let (code, doc) = sub(ep, &["history", "work"]);
+    assert_eq!(code, 0, "{doc}");
+    golden("history", &doc, ep);
+    let (code, doc) = sub(ep, &["clear-history", "work", "--dry-run"]);
+    assert_eq!(code, 0, "{doc}");
+    golden("clear-history-dry-run", &doc, ep);
+    let (code, doc) = sub(
+        ep,
+        &[
+            "new",
+            "echo",
+            "--remain-on-exit",
+            "--size",
+            "40x4",
+            "--cwd",
+            &windows,
+            "--command-line",
+            &format!("cmd.exe /d /c \"echo golden-1& echo token={secret}\""),
+        ],
+    );
+    assert_eq!(code, 0, "{doc}");
+    wait_state(ep, "echo", "stopped");
+    let (code, doc) = sub(ep, &["capture", "echo"]);
+    assert_eq!(code, 0, "{doc}");
+    assert!(!doc.to_string().contains(secret), "capture redacts: {doc}");
+    golden("capture", &doc, ep);
+    let (code, doc) = sub(ep, &["capture", "echo", "--no-redact"]);
+    assert_eq!(code, 0, "{doc}");
+    assert!(doc.to_string().contains(secret), "--no-redact shows it");
+    let (code, doc) = sub(ep, &["rm", "echo", "--yes"]);
+    assert_eq!(code, 0, "{doc}");
 
     for args in [
         &["status"][..],

@@ -1,5 +1,6 @@
 //! CLI commands that concern the resident instance: `status`, `health`, `start`, `run`, `quit`,
-//! `capture`, `pin …`, and the instance queries of `hotkeys …` (ADR 0023 §4).
+//! `capture`, `pin …` (the pin engine's commands since Step 53, ADR 0029), and the instance
+//! queries of `hotkeys …` (ADR 0023 §4).
 //!
 //! Everything here talks to the instance over the identity-checked pipe (`noeul::win::client`)
 //! and never starts it implicitly: only `start`, `run` and `capture --start` do. `status` and
@@ -80,13 +81,22 @@ fn status_human(v: &Value) -> String {
             v["hotkeys"]["config"]["state"].as_str().unwrap_or("")
         );
     }
+    let count = |key: &str, word: &str| match v["pins"][key].as_u64() {
+        Some(n) if n > 0 => format!(", {n} {word}"),
+        _ => String::new(),
+    };
     let mut s = format!(
-        "Noeul {} is running (pid {}, up {} s).\nDesktop: {}\nPins: {} open{}\nImage memory: {} bytes in {} picture(s)\n",
+        "Noeul {} is running (pid {}, up {} s).\nDesktop: {}\nPins: {} open{}{}{}\nImage memory: {} bytes in {} picture(s)\n",
         v["instance"]["version"].as_str().unwrap_or("?"),
         v["instance"]["pid"],
         v["instance"]["uptime_s"],
         v["desktop"]["state"].as_str().unwrap_or("?"),
         v["pins"]["open"],
+        count("hidden", "hidden"),
+        count(
+            "off_screen",
+            "off-screen (`noeul pin show --all --on-screen`)"
+        ),
         v["pins"]["reopenable"]
             .as_str()
             .map_or(String::new(), |p| format!(", {p} can be reopened")),
@@ -478,12 +488,28 @@ pub fn pin_list(ctx: &Ctx) -> Result<Outcome> {
         if pins.is_empty() {
             human.push_str("No pins are open.\n");
         } else {
-            let mut rows = vec![vec!["PIN".to_string(), "RECT".into(), "SOURCE".into()]];
+            let mut rows = vec![vec![
+                "PIN".to_string(),
+                "RECT".into(),
+                "ZOOM".into(),
+                "STATE".into(),
+                "SOURCE".into(),
+            ]];
             for p in &pins {
                 let r = &p["rect"];
+                let mut state = vec![if p["visible"] == false {
+                    "hidden"
+                } else {
+                    "shown"
+                }];
+                if p["on_screen"] == false {
+                    state.push("off-screen");
+                }
                 rows.push(vec![
                     p["id"].as_str().unwrap_or("").into(),
                     format!("{},{},{},{}", r["x"], r["y"], r["width"], r["height"]),
+                    format!("{} %", p["zoom"]),
+                    state.join(", "),
                     p["source"].as_str().unwrap_or("").into(),
                 ]);
             }
@@ -497,6 +523,133 @@ pub fn pin_list(ctx: &Ctx) -> Result<Outcome> {
     #[cfg(not(windows))]
     {
         let _ = ctx;
+        Err(unsupported())
+    }
+}
+
+/// `noeul pin --clipboard`: the instance reads the clipboard once and pins its image, as `F3`
+/// does but without focus (NOEUL-SEC-002: an explicit paste). A dry run reads nothing.
+pub fn pin_create(ctx: &Ctx, a: &crate::PinCreateArgs) -> Result<Outcome> {
+    if !a.clipboard {
+        return Err(NoeulError::new(
+            Code::Usage,
+            "nothing to pin: add --clipboard, or use a subcommand (list, hide, show, close, reopen)",
+        )
+        .hint("a screen region is pinned with `noeul capture --region x,y,w,h --pin`; `noeul pin <file>` is planned"));
+    }
+    let at = match &a.at {
+        None => None,
+        Some(text) => Some(parse_point(text).ok_or_else(|| {
+            NoeulError::new(Code::Usage, format!("`{text}` is not a point; use x,y"))
+                .hint("for example: noeul pin --clipboard --at 100,200")
+        })?),
+    };
+    #[cfg(windows)]
+    {
+        let mut s = session_or_start(ctx, a.start && !a.dry_run)?;
+        let mut params = json!({"source": "clipboard", "dry_run": a.dry_run});
+        if let Some(at) = at {
+            params["at"] = at;
+        }
+        let v = s.request("pin.create", params)?;
+        let human = match (v["pin"]["id"].as_str(), Rect::from_json(&v["pin"]["rect"])) {
+            (Some(id), Some(r)) => format!(
+                "Pinned the clipboard image as {id} at {r} ({} %).\n",
+                v["pin"]["zoom"]
+            ),
+            _ => "Would read the clipboard once and pin its image (dry run: nothing was read).\n"
+                .to_string(),
+        };
+        Ok(Outcome::new(v, human))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (ctx, at);
+        Err(unsupported())
+    }
+}
+
+/// `x,y` in device pixels as `{"x", "y"}`.
+fn parse_point(text: &str) -> Option<Value> {
+    let (x, y) = text.split_once(',')?;
+    let coord = |s: &str| {
+        s.trim()
+            .parse::<i32>()
+            .ok()
+            .filter(|v| v.unsigned_abs() <= 1_000_000)
+    };
+    Some(json!({"x": coord(x)?, "y": coord(y)?}))
+}
+
+/// The `id`/`all` parameters of a pin request.
+#[cfg(windows)]
+fn targets(id: Option<&String>, dry_run: bool) -> Value {
+    match id {
+        Some(id) => json!({"id": id, "dry_run": dry_run}),
+        None => json!({"all": true, "dry_run": dry_run}),
+    }
+}
+
+/// Pin IDs of a result list, comma-separated.
+#[cfg(windows)]
+fn names(v: &Value) -> String {
+    v.as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// `noeul pin hide`: hides pins without closing them (reversible, so no confirmation).
+pub fn pin_hide(ctx: &Ctx, a: &crate::PinHideArgs) -> Result<Outcome> {
+    #[cfg(windows)]
+    {
+        let v = session(ctx)?.request("pin.hide", targets(a.id.as_ref(), a.dry_run))?;
+        let list = names(&v["hidden"]);
+        let human = match (list.is_empty(), a.dry_run) {
+            (true, _) => "Nothing to hide.\n".to_string(),
+            (false, true) => format!("Would hide: {list} (dry run).\n"),
+            (false, false) => format!("Hidden: {list} (`noeul pin show` brings them back).\n"),
+        };
+        Ok(Outcome::new(v, human))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (ctx, a);
+        Err(unsupported())
+    }
+}
+
+/// `noeul pin show`: shows hidden pins; `--on-screen` also brings lost pins back.
+pub fn pin_show(ctx: &Ctx, a: &crate::PinShowArgs) -> Result<Outcome> {
+    #[cfg(windows)]
+    {
+        let mut params = targets(a.id.as_ref(), a.dry_run);
+        params["on_screen"] = json!(a.on_screen);
+        let v = session(ctx)?.request("pin.show", params)?;
+        let (shown, moved) = (names(&v["shown"]), names(&v["moved"]));
+        let verb = if a.dry_run { "Would show" } else { "Shown" };
+        let mut human = String::new();
+        if !shown.is_empty() {
+            human.push_str(&format!("{verb}: {shown}.\n"));
+        }
+        if !moved.is_empty() {
+            let verb = if a.dry_run {
+                "Would bring on screen"
+            } else {
+                "Brought on screen"
+            };
+            human.push_str(&format!("{verb}: {moved}.\n"));
+        }
+        if human.is_empty() {
+            human.push_str("Nothing to show: the pins are shown and on screen.\n");
+        }
+        Ok(Outcome::new(v, human))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (ctx, a);
         Err(unsupported())
     }
 }

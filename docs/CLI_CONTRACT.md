@@ -220,6 +220,10 @@ the result of the IPC method they call (`terminal.create`, `.list`, `.info`, `.r
 for `ls` and `detach`, `null` when no Host runs); `status` combines `host.status` and
 `terminal.list` and reports `running: false` (exit 0) without a Host; the `host` commands answer
 the shapes of [IPC_PROTOCOL §4.1](contracts/IPC_PROTOCOL.md) and [CONPTY_PROOF.md](CONPTY_PROOF.md).
+`capture`, `history` and `clear-history` (Step 13, [SCROLLBACK.md](SCROLLBACK.md)) answer
+`pane.capture` (all pages joined, plus `name` and `requests`), its counters with the Terminal's
+`name` and `state`, and `pane.clear_history` plus `name`; `capture` redacts secret-looking
+values unless `--no-redact` (§10), and `clear-history` is `destructive` (asks, or needs `--yes`).
 `attach` and `host attach` (and `new --attach`) stream the terminal, so `--json` is accepted only
 with `--dry-run`. Meanings and consent are in [SESSION_MODEL §4](SESSION_MODEL.md): `stop`,
 `kill` and `rm` are `destructive` and ask, or need `--yes`; `host stop` with live Terminals also

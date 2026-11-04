@@ -61,10 +61,15 @@ pub const IMPLEMENTED: &[&str] = &[
     "selection.shrink-left",
     "selection.shrink-right",
     "pin.close",
+    "pin.destroy",
+    "pin.zoom-in",
+    "pin.zoom-out",
+    "pin.zoom-reset",
     "pin.move-up",
     "pin.move-down",
     "pin.move-left",
     "pin.move-right",
+    "pin.hide",
 ];
 
 /// Global actions of the final manifest that later Steps add, for `--help` and the docs (none
@@ -752,8 +757,29 @@ mod tests {
         assert_eq!(keys.lookup(&c("W", false, false, false), false), None);
         assert_eq!(
             keys.lookup(&c("Escape", false, false, true), false),
+            Some("pin.destroy"),
+            "Shift+Escape destroys (Step 53)"
+        );
+        assert_eq!(
+            keys.lookup(&c("Plus", false, false, false), false),
+            Some("pin.zoom-in")
+        );
+        assert_eq!(
+            keys.lookup(&c("NumpadSubtract", false, false, false), false),
+            Some("pin.zoom-out")
+        );
+        assert_eq!(
+            keys.lookup(&c("0", false, false, false), false),
+            Some("pin.zoom-reset")
+        );
+        assert_eq!(
+            keys.lookup(&c("H", false, false, false), false),
+            Some("pin.hide")
+        );
+        assert_eq!(
+            keys.lookup(&c("T", false, false, false), false),
             None,
-            "pin.destroy is not in this build"
+            "thumbnails are not in this build"
         );
         assert_eq!(
             keys.lookup(&c("F3", false, false, false), false),

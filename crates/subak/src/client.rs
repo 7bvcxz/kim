@@ -951,6 +951,11 @@ fn stream_output(
                 {
                     return Ok(End::DetachedBy(m["data"]["by"].clone()));
                 }
+                // Step 13: this client fell behind; the Host skipped output and a snapshot that
+                // repaints the screen follows (nothing to discard: frames are written at once).
+                Some("event") if m["event"] == "pane.resync" && verbose => {
+                    eprint!("subak: fell behind the pane's output; repainting\r\n");
+                }
                 Some("event") if m["event"] == "host.stopping" => {
                     stopped = m["data"]["reason"].clone();
                 }

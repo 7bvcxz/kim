@@ -56,6 +56,8 @@ pub enum Keys<'a> {
     Both { capture: &'a str, paste: &'a str },
     /// Every shortcut off in hotkeys.json (`"enabled": false`).
     Off,
+    /// Both global actions disabled, the window keys (overlay, pins) on: nothing is registered.
+    NoGlobals,
 }
 
 /// The only chords a test may register: `Ctrl+Alt+Shift+F20` … `F24` (keys missing from
@@ -146,6 +148,10 @@ impl Sandbox {
             }
             Keys::Off => serde_json::json!({"schema": "kim.hotkeys", "schema_version": 1,
                 "tool": "noeul", "enabled": false}),
+            Keys::NoGlobals => schema(serde_json::json!([
+                {"action": "capture.region", "disabled": true},
+                {"action": "paste.float", "disabled": true},
+            ])),
         };
         std::fs::write(
             self.hotkeys_file(),
@@ -171,6 +177,9 @@ impl Sandbox {
         }
         if matches!(keys, Keys::Off) {
             assert!(!state.enabled(), "shortcuts are off");
+        }
+        if matches!(keys, Keys::NoGlobals) {
+            assert!(wanted.is_empty(), "no global hotkey is registered");
         }
     }
 

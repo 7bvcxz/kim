@@ -18,6 +18,15 @@
 //! [`OverlayEvent`]s; the core feeds them to the [`Overlay`] model, redraws only what changed,
 //! and on `capture.pin` hands the session's [`crate::selection::CaptureSelection`] to a new pin.
 //! While an overlay is open, further capture requests do nothing (NOEUL-FR-013).
+//!
+//! **The pin engine** (Step 53, ADR 0029): every pin, whatever made it, goes through
+//! [`crate::pins::NewPin`]: the overlay's selection through [`App::pin_selection`] (the entry
+//! point of Step 51's double-click, with no clipboard in between), a CLI region through
+//! `capture`/`pin.create`, the clipboard through `paste.float`/`pin.create`. Pins are moved,
+//! zoomed, hidden, shown, closed and destroyed independently from their keys, the mouse, their
+//! context menu ([`PinMenu`], shown by the runtime with the core released), the tray and IPC
+//! (`pin.list`, `pin.hide`, `pin.show`, `pin.close`, `pin.reopen`). A display change
+//! ([`App::display_changed`]) keeps pins where they are and offers to bring the lost ones back.
 
 use crate::capture::{CaptureBackend, DesktopState, check_region};
 use crate::error::{Code, NoeulError, Result};
@@ -29,14 +38,17 @@ use crate::overlay::{
     Outcome as OverlayOutcome, Overlay, Scene, SystemValues,
 };
 use crate::paths::Paths;
-use crate::pins::{PinError, PinId, PinWindows, Pins, Source};
-use crate::selection::{Captures, Origin, Outcome as SessionOutcome, SessionError};
+use crate::pins::{NewPin, PinError, PinId, PinWindows, Pins, Placement, Source};
+use crate::selection::{
+    CaptureSelection, Captures, Origin, Outcome as SessionOutcome, SessionError,
+};
 use crate::settings::{self, KeyboardHelp, UiState};
 use crate::tray::{Click, MenuItem, menu};
 use crate::util::rfc3339;
+use crate::zoom;
 use kim_hotkeys::keys::Chord;
 use serde_json::{Value, json};
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -239,7 +251,61 @@ pub enum PinEvent {
     Moved(PinId, i32, i32),
     /// The window was closed by the system (e.g. Alt+F4 or end of session).
     Closed(PinId),
+    /// The context menu was asked for: a right-click at this screen point, or the keyboard
+    /// (`Shift+F10`, the menu key) with `None`.
+    Menu(PinId, Option<(i32, i32)>),
+    /// The mouse wheel turned over the pin: the delta (120 per notch, positive away from the
+    /// user), the pointer, and whether `Ctrl` was held.
+    Wheel(PinId, i32, (i32, i32), bool),
+    /// A middle-click on the pin.
+    MiddleClick(PinId),
 }
+
+/// One entry of a pin's context menu.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PinMenuItem {
+    /// The pin action it runs (`None` for a separator).
+    pub action: Option<&'static str>,
+    /// The text, with its key after a tab (`Close\tEscape`).
+    pub label: String,
+    pub enabled: bool,
+}
+
+/// A pin's context menu to show (NOEUL-FR-061: it lists every pin action of this build). The
+/// runtime shows it modally with the core released, then reports the choice through
+/// [`App::pin_menu_choice`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PinMenu {
+    pub pin: PinId,
+    /// Where it opens: the pointer of a right-click; `None` from the keyboard (the runtime then
+    /// opens it at the pin's top-left corner).
+    pub at: Option<(i32, i32)>,
+    pub items: Vec<PinMenuItem>,
+}
+
+/// How a pin is made from a capture selection (Step 51's gestures pass their own).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PinOptions {
+    /// Take keyboard focus: the user's own gesture (never under the debug-build test hook).
+    pub focus: bool,
+    /// Ignore presses on the new pin for this long: after a double-click, the system
+    /// double-click time, so the rest of the gesture cannot touch the pin (UX spec §4.2 rule 10).
+    pub guard: Option<Duration>,
+}
+
+/// The menu's entries: implemented pin actions only (NOEUL-FR-114).
+const MENU: &[Option<(&str, &str)>] = &[
+    Some(("pin.zoom-in", "Zoom in")),
+    Some(("pin.zoom-out", "Zoom out")),
+    Some(("pin.zoom-reset", "Zoom 100 %")),
+    None,
+    Some(("pin.hide", "Hide")),
+    Some(("pin.close", "Close")),
+    Some(("pin.destroy", "Destroy")),
+];
+
+/// One wheel notch.
+const WHEEL_DELTA: i32 = 120;
 
 /// Static facts about the running instance.
 #[derive(Debug, Clone)]
@@ -266,6 +332,11 @@ pub struct App<S: Shell> {
     overlay: Option<OverlaySession>,
     latency: Latency,
     ui_state: UiState,
+    menu: Option<PinMenu>,
+    /// Wheel deltas not yet worth a zoom step, per pin (high-resolution wheels send small ones).
+    wheel: BTreeMap<PinId, i32>,
+    /// Pins left off-screen by the last display change (a notice says so when it changes).
+    lost: usize,
 }
 
 impl<S: Shell> std::fmt::Debug for App<S> {
@@ -317,6 +388,9 @@ impl<S: Shell> App<S> {
             last_action: None,
             overlay: None,
             latency: Latency::default(),
+            menu: None,
+            wheel: BTreeMap::new(),
+            lost: 0,
         }
     }
 
@@ -364,7 +438,10 @@ impl<S: Shell> App<S> {
             "capture" => self.capture(params, dry_run),
             "capture.region" => self.capture_region(Origin::Cli, Instant::now(), dry_run),
             "capture.cancel" => Ok(self.capture_cancel(dry_run)),
-            "pin.list" => Ok(self.pins.list()),
+            "pin.list" => Ok(self.pins.list(&self.capture.desktop())),
+            "pin.create" => self.pin_create(params, dry_run),
+            "pin.hide" => self.pin_hide(params, dry_run),
+            "pin.show" => self.pin_show(params, dry_run),
             "pin.close" => self.pin_close(params, dry_run),
             "pin.reopen" => self.pin_reopen(dry_run),
             "hotkeys.reload" => {
@@ -394,7 +471,8 @@ impl<S: Shell> App<S> {
             },
             "desktop": self.capture.desktop().to_json(),
             "capture_backend": self.capture.name(),
-            "pins": {"open": self.pins.len(), "reopenable": self.pins.reopenable().map(|p| p.to_string())},
+            "pins": {"open": self.pins.len(), "reopenable": self.pins.reopenable().map(|p| p.to_string()),
+                     "hidden": self.pins.hidden(), "off_screen": self.pins.off_screen(&self.capture.desktop())},
             "captures": {"started": started, "pinned": pinned, "cancelled": cancelled, "open": self.captures.is_open(),
                          "ignored": self.captures.ignored(),
                          "overlay": self.overlay.as_ref().map(OverlaySession::to_json),
@@ -448,18 +526,38 @@ impl<S: Shell> App<S> {
             .map_err(session_error)?;
         self.captures.select(sid, region).map_err(session_error)?;
         let frame = self.captures.finish_pin(sid).map_err(session_error)?;
-        // A CLI-made pin never steals focus from the program the user is in (NOEUL-FR-060).
-        match self
-            .pins
-            .create(self.shell.pin_windows(), frame, Source::Capture, false)
-        {
+        let id = self.create_pin(&desktop, frame, Source::Capture, Placement::Exact)?;
+        self.last_action = Some(("capture".into(), "pinned"));
+        Ok(
+            json!({"dry_run": false, "region": region.to_json(), "pin": self.pin_ref(id),
+                   "desktop": desktop.state.as_str()}),
+        )
+    }
+
+    /// A pin requested over IPC: never with focus, so it never takes the keyboard from the
+    /// program the user is in (NOEUL-FR-060); announced like every CLI capture or clipboard read
+    /// (the default notice of NOEUL-SEC-010).
+    fn create_pin(
+        &mut self,
+        desktop: &crate::capture::Desktop,
+        frame: Frame,
+        source: Source,
+        placement: Placement,
+    ) -> Result<PinId> {
+        let new = NewPin {
+            frame,
+            source,
+            placement,
+            focus: false,
+            guard: None,
+        };
+        match self.pins.create(self.shell.pin_windows(), desktop, new) {
             Ok(id) => {
-                self.last_action = Some(("capture".into(), "pinned"));
-                Ok(
-                    json!({"dry_run": false, "region": region.to_json(), "pin": {
-                    "id": id.to_string(), "rect": region.to_json(), "source": "capture",
-                }, "desktop": desktop.state.as_str()}),
-                )
+                self.shell.notice(match source {
+                    Source::Capture => "Noeul captured a region (command line).",
+                    Source::Clipboard => "Noeul pinned the clipboard (command line).",
+                });
+                Ok(id)
             }
             Err((frame, why)) => {
                 drop(frame);
@@ -472,20 +570,141 @@ impl<S: Shell> App<S> {
         }
     }
 
-    fn pin_close(&mut self, params: &Value, dry_run: bool) -> Result<Value> {
-        let all = ipc::flag(params, "all")?;
-        let ids: Vec<PinId> = if all {
-            self.pins.ids()
-        } else {
-            let text = params["id"].as_str().ok_or_else(|| {
-                NoeulError::new(Code::Usage, "give a pin id (`id`) or `all: true`")
-            })?;
-            let id = PinId::parse(text).ok_or_else(|| pin_not_found(text))?;
-            if !self.pins.contains(id) {
-                return Err(pin_not_found(text));
+    /// `{id, rect, source, zoom}` of an open pin.
+    fn pin_ref(&self, id: PinId) -> Value {
+        self.pins.info(id).map_or(Value::Null, |i| {
+            json!({"id": id.to_string(), "rect": i.rect.to_json(), "source": i.source.as_str(),
+                   "zoom": i.zoom})
+        })
+    }
+
+    /// The pins a request names: `all: true`, or one `id` that must be open.
+    fn pin_targets(&self, params: &Value) -> Result<Vec<PinId>> {
+        if ipc::flag(params, "all")? {
+            return Ok(self.pins.ids());
+        }
+        let text = params["id"]
+            .as_str()
+            .ok_or_else(|| NoeulError::new(Code::Usage, "give a pin id (`id`) or `all: true`"))?;
+        let id = PinId::parse(text).ok_or_else(|| pin_not_found(text))?;
+        if !self.pins.contains(id) {
+            return Err(pin_not_found(text));
+        }
+        Ok(vec![id])
+    }
+
+    /// `pin.create`: the instance reads the source itself (pictures never cross the pipe).
+    /// `source: "region"` captures that region of the unlocked desktop and pins it in place;
+    /// `source: "clipboard"` reads the clipboard once and pins its image at `at` (or the
+    /// pointer), inside that monitor's work area and zoomed out when larger (NOEUL-SEC-002,
+    /// ADR 0029). A dry run captures and reads nothing.
+    fn pin_create(&mut self, params: &Value, dry_run: bool) -> Result<Value> {
+        let source = params["source"].as_str().unwrap_or("");
+        let desktop = self.capture.desktop();
+        match source {
+            "region" => {
+                let region = params
+                    .get("region")
+                    .and_then(Rect::from_json)
+                    .ok_or_else(|| {
+                        NoeulError::new(
+                            Code::Usage,
+                            "`region` must be {x, y, width, height} in device pixels",
+                        )
+                    })?;
+                check_region(&desktop, region).map_err(NoeulError::from)?;
+                if dry_run {
+                    return Ok(json!({"dry_run": true, "source": "region", "pin": null}));
+                }
+                let frame = self
+                    .capture
+                    .capture(&self.ledger, region)
+                    .map_err(NoeulError::from)?;
+                let sid = self
+                    .captures
+                    .begin(Origin::Cli, frame, Vec::new())
+                    .map_err(session_error)?;
+                self.captures.select(sid, region).map_err(session_error)?;
+                let frame = self.captures.finish_pin(sid).map_err(session_error)?;
+                let id = self.create_pin(&desktop, frame, Source::Capture, Placement::Exact)?;
+                self.last_action = Some(("pin.create".into(), "pinned"));
+                Ok(json!({"dry_run": false, "source": "region", "pin": self.pin_ref(id)}))
             }
-            vec![id]
-        };
+            "clipboard" => {
+                if let Some(e) = desktop.state.error() {
+                    return Err(e);
+                }
+                let at = match params.get("at") {
+                    None | Some(Value::Null) => None,
+                    Some(v) => Some(point(v).ok_or_else(|| {
+                        NoeulError::new(Code::Usage, "`at` must be {x, y} in device pixels")
+                    })?),
+                };
+                if dry_run {
+                    // A dry run never opens the clipboard.
+                    return Ok(json!({"dry_run": true, "source": "clipboard", "pin": null}));
+                }
+                let frame = self.shell.clipboard_image(&self.ledger)?;
+                let (x, y) = at.unwrap_or_else(|| self.shell.pointer());
+                let id =
+                    self.create_pin(&desktop, frame, Source::Clipboard, Placement::At(x, y))?;
+                self.last_action = Some(("pin.create".into(), "pinned"));
+                Ok(json!({"dry_run": false, "source": "clipboard", "pin": self.pin_ref(id)}))
+            }
+            _ => Err(NoeulError::new(
+                Code::Usage,
+                "`source` must be \"region\" (with `region`) or \"clipboard\"",
+            )
+            .hint("pinning a file is planned (NOEUL-FR-073)")),
+        }
+    }
+
+    /// `pin.hide`: hides pins without closing them. Nothing takes focus; a hidden pin that had
+    /// it hands it back to the window the user was in before.
+    fn pin_hide(&mut self, params: &Value, dry_run: bool) -> Result<Value> {
+        let ids = self.pin_targets(params)?;
+        let mut hidden = Vec::new();
+        for id in ids {
+            let visible = self.pins.info(id).is_some_and(|i| i.visible);
+            if visible && (dry_run || self.pins.hide(id).unwrap_or(false)) {
+                hidden.push(id.to_string());
+            }
+        }
+        if !dry_run && !hidden.is_empty() {
+            self.last_action = Some(("pin.hide".into(), "hidden"));
+        }
+        Ok(json!({"dry_run": dry_run, "hidden": hidden}))
+    }
+
+    /// `pin.show`: shows hidden pins (above the others, without focus); with `on_screen`, also
+    /// moves every named pin that no monitor shows into the nearest work area (NOEUL-FR-067).
+    fn pin_show(&mut self, params: &Value, dry_run: bool) -> Result<Value> {
+        let ids = self.pin_targets(params)?;
+        let bring = ipc::flag(params, "on_screen")?;
+        let desktop = self.capture.desktop();
+        let (mut shown, mut moved) = (Vec::new(), Vec::new());
+        for id in ids {
+            let Some(info) = self.pins.info(id) else {
+                continue;
+            };
+            if !info.visible && (dry_run || self.pins.show(id).unwrap_or(false)) {
+                shown.push(id.to_string());
+            }
+            let lost = bring
+                && desktop.state == DesktopState::Available
+                && !crate::pins::on_screen(&desktop, info.rect);
+            if lost && (dry_run || self.pins.bring_on_screen(id, &desktop).unwrap_or(false)) {
+                moved.push(id.to_string());
+            }
+        }
+        if !dry_run && !(shown.is_empty() && moved.is_empty()) {
+            self.last_action = Some(("pin.show".into(), "shown"));
+        }
+        Ok(json!({"dry_run": dry_run, "shown": shown, "moved": moved}))
+    }
+
+    fn pin_close(&mut self, params: &Value, dry_run: bool) -> Result<Value> {
+        let ids = self.pin_targets(params)?;
         let names: Vec<String> = ids.iter().map(ToString::to_string).collect();
         if !dry_run {
             for id in &ids {
@@ -547,25 +766,54 @@ impl<S: Shell> App<S> {
         self.hotkeys.release_all();
     }
 
-    /// A Noeul action from a global hotkey, the tray or a pin (by action ID).
+    /// A Noeul action from a global hotkey, the tray, a pin's keys or its menu (by action ID).
     pub fn action(&mut self, action: &str, pin: Option<PinId>) {
+        let found = |ok: bool, word: &'static str| if ok { word } else { "not_found" };
         let result = match (action, pin) {
             ("capture.region", _) => self.capture_region_action(Origin::Hotkey, Instant::now()),
             ("paste.float", _) => self.paste_float(),
-            ("pin.close", Some(id)) => {
-                if self.pins.close(id).is_ok() {
-                    "closed"
-                } else {
-                    "not_found"
+            ("pin.close", Some(id)) => found(self.pins.close(id).is_ok(), "closed"),
+            ("pin.destroy", Some(id)) => found(self.pins.destroy(id).is_ok(), "destroyed"),
+            ("pin.hide", Some(id)) => match self.pins.hide(id) {
+                Ok(_) => {
+                    if self.pins.hidden() == 1 {
+                        self.shell.notice(
+                            "Pin hidden. Show it again from the tray (Show all pins) or with `noeul pin show --all`.",
+                        );
+                    }
+                    "hidden"
                 }
-            }
+                Err(_) => "not_found",
+            },
             ("pin.move-up", Some(id)) => self.nudge(id, 0, -1),
             ("pin.move-down", Some(id)) => self.nudge(id, 0, 1),
             ("pin.move-left", Some(id)) => self.nudge(id, -1, 0),
             ("pin.move-right", Some(id)) => self.nudge(id, 1, 0),
+            ("pin.zoom-in" | "pin.zoom-out" | "pin.zoom-reset", Some(id)) => {
+                let anchor = self.pins.zoom_anchor(id, self.shell.pointer());
+                self.zoom_step(id, action, anchor)
+            }
             _ => "ignored",
         };
         self.last_action = Some((action.to_string(), result));
+    }
+
+    /// One zoom step of a pin around `anchor` (`pin.zoom-in`, `-out`, `-reset`).
+    fn zoom_step(&mut self, id: PinId, action: &str, anchor: Option<(i32, i32)>) -> &'static str {
+        let (Some(info), Some(anchor)) = (self.pins.info(id), anchor) else {
+            return "not_found";
+        };
+        let (w, h) = info.image;
+        let to = match action {
+            "pin.zoom-in" => zoom::zoom_in(w, h, info.zoom),
+            "pin.zoom-out" => zoom::zoom_out(info.zoom),
+            _ => Some(zoom::FULL),
+        };
+        match to.map(|z| self.pins.set_zoom(id, z, anchor)) {
+            Some(Ok(true)) => "zoomed",
+            Some(Ok(false)) | None => "unchanged",
+            Some(Err(_)) => "failed",
+        }
     }
 
     fn nudge(&mut self, id: PinId, dx: i32, dy: i32) -> &'static str {
@@ -576,12 +824,17 @@ impl<S: Shell> App<S> {
         }
     }
 
-    /// `paste.float`: read the clipboard once and pin its image at the pointer, at 100 %
-    /// (NOEUL-FR-070, image formats only in this build). Nothing to pin → a notice, no change
-    /// (NOEUL-FR-074).
+    /// `paste.float`: read the clipboard once and pin its image at the pointer, at 100 % unless
+    /// it is larger than the work area of the monitor there (then zoomed out to fit, ADR 0029;
+    /// NOEUL-FR-070, image formats only in this build). Nothing to pin → a notice, no change
+    /// (NOEUL-FR-074). While the capture overlay is open it does nothing: a new pin would cover
+    /// the overlay or take its focus.
     fn paste_float(&mut self) -> &'static str {
         if self.capture.desktop().state != DesktopState::Available {
             return "desktop_unavailable";
+        }
+        if self.overlay.is_some() {
+            return "overlay_open";
         }
         let frame = match self.shell.clipboard_image(&self.ledger) {
             Ok(f) => f,
@@ -600,12 +853,14 @@ impl<S: Shell> App<S> {
         };
         let (px, py) = self.shell.pointer();
         let desktop = self.capture.desktop();
-        let (x, y) = place(&frame, (px, py), desktop.virtual_rect);
-        let frame = frame.moved_to(x, y);
-        match self
-            .pins
-            .create(self.shell.pin_windows(), frame, Source::Clipboard, true)
-        {
+        let new = NewPin {
+            frame,
+            source: Source::Clipboard,
+            placement: Placement::At(px, py),
+            focus: self.shell.interactive(),
+            guard: None,
+        };
+        match self.pins.create(self.shell.pin_windows(), &desktop, new) {
             Ok(_) => "pinned",
             Err((_, _)) => {
                 self.shell.notice("The pin window could not be created.");
@@ -833,30 +1088,25 @@ impl<S: Shell> App<S> {
             .captures
             .select(id, rect)
             .and_then(|()| self.captures.selection(id));
+        let opts = PinOptions {
+            focus: true,
+            guard: None,
+        };
         let failed = match selection {
-            Ok(sel) => {
-                let focus = self.shell.interactive();
-                match self.pins.create(
-                    self.shell.pin_windows(),
-                    sel.into_frame(),
-                    Source::Capture,
-                    focus,
-                ) {
-                    Ok(_) => {
-                        let _ = self.captures.complete(id, SessionOutcome::Pinned);
-                        if let Some(mut ov) = self.overlay.take() {
-                            ov.window.destroy();
-                        }
-                        self.help_done();
-                        self.last_action = Some(("capture.pin".into(), "pinned"));
-                        return;
+            Ok(sel) => match self.pin_selection(sel, opts) {
+                Ok(_) => {
+                    let _ = self.captures.complete(id, SessionOutcome::Pinned);
+                    if let Some(mut ov) = self.overlay.take() {
+                        ov.window.destroy();
                     }
-                    Err((frame, _)) => {
-                        drop(frame);
-                        "The pin could not be created. Your selection is kept: try again, or press Esc."
-                    }
+                    self.help_done();
+                    self.last_action = Some(("capture.pin".into(), "pinned"));
+                    return;
                 }
-            }
+                Err(_) => {
+                    "The pin could not be created. Your selection is kept: try again, or press Esc."
+                }
+            },
             Err(_) => "The selection could not be taken. Try again, or press Esc.",
         };
         if let Some(ov) = self.overlay.as_mut() {
@@ -866,12 +1116,44 @@ impl<S: Shell> App<S> {
         self.last_action = Some(("capture.pin".into(), "failed"));
     }
 
+    /// The pin engine's entry point for a confirmed capture selection: a pin of exactly that
+    /// rectangle at the same place and pixel size, at 100 %, with no clipboard or file in between
+    /// (NOEUL-FR-020, NOEUL-FR-025, NOEUL-SEC-005). `Enter` (`capture.pin`) uses it today; Step
+    /// 51's double-click calls it with `guard` set to the system double-click time. Focus is
+    /// taken only when `opts.focus` asks and the instance is interactive (never under the test
+    /// hook). On failure the selection's copy is dropped and the reason returned; the capture
+    /// session and its frozen picture are untouched, so the overlay can stay open.
+    pub fn pin_selection(
+        &mut self,
+        sel: CaptureSelection,
+        opts: PinOptions,
+    ) -> std::result::Result<PinId, String> {
+        let desktop = self.capture.desktop();
+        let new = NewPin {
+            frame: sel.into_frame(),
+            source: Source::Capture,
+            placement: Placement::Exact,
+            focus: opts.focus && self.shell.interactive(),
+            guard: opts.guard,
+        };
+        self.pins
+            .create(self.shell.pin_windows(), &desktop, new)
+            .map_err(|(frame, why)| {
+                drop(frame);
+                why
+            })
+    }
+
     /// Routes a pin window event.
     pub fn pin_event(&mut self, e: PinEvent) {
         match e {
             PinEvent::Key(id, chord, repeat) => {
                 if let Some(a) = self.hotkeys.pin_action(&chord, repeat) {
                     self.action(&a, Some(id));
+                } else if !repeat && is_escape(&chord) {
+                    // The reserved navigation key always closes the focused pin when no pin
+                    // binding uses it, even with shortcuts off: no trapped UI (NOEUL-SEC-013).
+                    self.action("pin.close", Some(id));
                 }
             }
             PinEvent::Moved(id, x, y) => {
@@ -880,7 +1162,119 @@ impl<S: Shell> App<S> {
             PinEvent::Closed(id) => {
                 let _ = self.pins.close(id);
             }
+            PinEvent::Menu(id, at) => {
+                if !self.pins.contains(id) {
+                    return;
+                }
+                if self.shell.interactive() {
+                    self.menu = Some(PinMenu {
+                        pin: id,
+                        at,
+                        items: self.pin_menu_items(id),
+                    });
+                } else {
+                    // Under the debug-build test hook a popup menu would open on the user's
+                    // screen (Windows keeps menus on a monitor): it is recorded, not shown.
+                    self.last_action = Some(("pin.menu".into(), "not_shown"));
+                }
+            }
+            PinEvent::Wheel(id, delta, pointer, ctrl) => {
+                // Ctrl+wheel is opacity (NOEUL-FR-062, N2): not in this build, so it does nothing.
+                if ctrl || !self.pins.contains(id) {
+                    return;
+                }
+                let acc = self.wheel.entry(id).or_insert(0);
+                *acc += delta;
+                let steps = *acc / WHEEL_DELTA;
+                *acc %= WHEEL_DELTA;
+                let action = if steps > 0 {
+                    "pin.zoom-in"
+                } else {
+                    "pin.zoom-out"
+                };
+                for _ in 0..steps.unsigned_abs() {
+                    // Around the pointer when it is over the pin (it is, for a real wheel).
+                    let anchor = self.pins.zoom_anchor(id, pointer);
+                    let r = self.zoom_step(id, action, anchor);
+                    self.last_action = Some((action.to_string(), r));
+                }
+            }
+            PinEvent::MiddleClick(id) => {
+                let anchor = self.pins.zoom_anchor(id, self.shell.pointer());
+                let r = self.zoom_step(id, "pin.zoom-reset", anchor);
+                self.last_action = Some(("pin.zoom-reset".into(), r));
+            }
         }
+        self.wheel.retain(|id, _| self.pins.contains(*id));
+    }
+
+    /// The context menu of one pin, from the effective keys (a changed key reads as such).
+    pub fn pin_menu_items(&self, id: PinId) -> Vec<PinMenuItem> {
+        let info = self.pins.info(id);
+        let zoom = info.map_or(zoom::FULL, |i| i.zoom);
+        let (w, h) = info.map_or((1, 1), |i| i.image);
+        MENU.iter()
+            .map(|entry| match entry {
+                None => PinMenuItem {
+                    action: None,
+                    label: String::new(),
+                    enabled: false,
+                },
+                Some((action, text)) => {
+                    let keys = self.hotkeys.keys_for(action).or(match *action {
+                        // Escape closes a pin even without a binding (nav.cancel).
+                        "pin.close" => Some("Escape"),
+                        _ => None,
+                    });
+                    let enabled = match *action {
+                        "pin.zoom-in" => zoom::zoom_in(w, h, zoom).is_some(),
+                        "pin.zoom-out" => zoom::zoom_out(zoom).is_some(),
+                        "pin.zoom-reset" => zoom != zoom::FULL,
+                        _ => true,
+                    };
+                    PinMenuItem {
+                        action: Some(action),
+                        label: keys.map_or_else(|| (*text).to_string(), |k| format!("{text}\t{k}")),
+                        enabled,
+                    }
+                }
+            })
+            .collect()
+    }
+
+    /// The pin menu the runtime should show now, if one was asked for.
+    pub fn take_pin_menu(&mut self) -> Option<PinMenu> {
+        self.menu.take()
+    }
+
+    /// The user chose `action` in the menu of `pin` (the pin may be gone by then).
+    pub fn pin_menu_choice(&mut self, pin: PinId, action: &str) {
+        if MENU.iter().flatten().any(|(a, _)| *a == action) {
+            self.action(action, Some(pin));
+        }
+    }
+
+    /// Monitors were attached, removed or rearranged, or a work area changed
+    /// (`WM_DISPLAYCHANGE`, `WM_SETTINGCHANGE`). Pins keep their place, even off-screen
+    /// (NOEUL-FR-067): the model only follows where the system put each window. When a pin is
+    /// left where no monitor shows it, a notice names the way back (NOEUL-SEC-013).
+    pub fn display_changed(&mut self) {
+        self.pins.sync();
+        let desktop = self.capture.desktop();
+        if desktop.state != DesktopState::Available {
+            return;
+        }
+        let off = self.pins.off_screen(&desktop);
+        let before = std::mem::replace(&mut self.lost, off);
+        if off > 0 && off != before {
+            self.shell.notice(&format!(
+                "{off} pin(s) are off-screen after the display change. Use Bring pins on screen in the tray, or `noeul pin show --all --on-screen`."
+            ));
+        }
+        self.last_action = Some((
+            "display.change".into(),
+            if off > 0 { "off_screen" } else { "ok" },
+        ));
     }
 
     /// The tray menu for the current state (items appear only once implemented, NOEUL-FR-004).
@@ -889,7 +1283,30 @@ impl<S: Shell> App<S> {
             reopenable: self.pins.reopenable().is_some(),
             shortcuts_on: self.hotkeys.status_json()["enabled"] == true,
             shortcuts_switchable: !hotkeys_forced_off(&self.hotkeys),
+            open: self.pins.len(),
+            hidden: self.pins.hidden(),
+            off_screen: self.pins.off_screen(&self.capture.desktop()),
         })
+    }
+
+    /// Hides or shows every pin, or brings the lost ones on screen (tray items).
+    fn all_pins(&mut self, item: MenuItem) {
+        let desktop = self.capture.desktop();
+        for id in self.pins.ids() {
+            match item {
+                MenuItem::HideAllPins => {
+                    let _ = self.pins.hide(id);
+                }
+                MenuItem::ShowAllPins => {
+                    let _ = self.pins.show(id);
+                }
+                MenuItem::BringPinsOnScreen => {
+                    let _ = self.pins.show(id);
+                    let _ = self.pins.bring_on_screen(id, &desktop);
+                }
+                _ => {}
+            }
+        }
     }
 
     pub fn tray_click(&mut self, click: Click) {
@@ -912,8 +1329,12 @@ impl<S: Shell> App<S> {
                 self.last_action = Some(("capture.region".into(), r));
             }
             MenuItem::PinClipboard => self.action("paste.float", None),
+            MenuItem::HideAllPins | MenuItem::ShowAllPins | MenuItem::BringPinsOnScreen => {
+                self.all_pins(item);
+            }
             MenuItem::ReopenClosedPin => {
-                let _ = self.pins.reopen(self.shell.pin_windows(), true);
+                let focus = self.shell.interactive();
+                let _ = self.pins.reopen(self.shell.pin_windows(), focus);
             }
             MenuItem::Shortcuts { on } => {
                 if let Err(e) = self.switch_shortcuts(!on) {
@@ -989,18 +1410,19 @@ fn hotkeys_forced_off(m: &Manager) -> bool {
     )
 }
 
-/// Where a pasted picture goes: its top-left corner at the pointer, moved back inside the
-/// virtual desktop when it would stick out (a picture larger than the desktop keeps its top-left
-/// on the desktop).
-pub fn place(frame: &Frame, pointer: (i32, i32), desktop: Option<Rect>) -> (i32, i32) {
-    let (mut x, mut y) = pointer;
-    if let Some(d) = desktop {
-        let max_x = d.right() - i64::from(frame.width());
-        let max_y = d.bottom() - i64::from(frame.height());
-        x = i64::from(x).min(max_x).max(i64::from(d.x)) as i32;
-        y = i64::from(y).min(max_y).max(i64::from(d.y)) as i32;
+/// Reads `{"x", "y"}` (device pixels).
+fn point(v: &Value) -> Option<(i32, i32)> {
+    let o = v.as_object()?;
+    if o.len() != 2 {
+        return None;
     }
-    (x, y)
+    let c = |k: &str| {
+        o.get(k)?
+            .as_i64()
+            .filter(|n| n.unsigned_abs() <= 1_000_000)
+            .and_then(|n| i32::try_from(n).ok())
+    };
+    Some((c("x")?, c("y")?))
 }
 
 #[cfg(test)]
@@ -1914,6 +2336,7 @@ pub(crate) mod tests {
     #[test]
     fn every_ipc_answer_matches_the_schema() {
         let mut a = app(&tmp("schema"), DesktopState::Available);
+        a.shell.clipboard = Some((20, 10));
         let check = |v: Value| {
             let errors = crate::schema_errors("noeul-ipc-v1", &v);
             assert!(errors.is_empty(), "{errors:?}\n{v:#}");
@@ -1928,6 +2351,28 @@ pub(crate) mod tests {
             ),
             ("capture", json!({"region": region, "pin": true})),
             ("pin.list", json!({})),
+            (
+                "pin.create",
+                json!({"source": "region", "region": region, "dry_run": true}),
+            ),
+            ("pin.create", json!({"source": "region", "region": region})),
+            (
+                "pin.create",
+                json!({"source": "clipboard", "dry_run": true}),
+            ),
+            (
+                "pin.create",
+                json!({"source": "clipboard", "at": {"x": 5, "y": 5}}),
+            ),
+            ("pin.hide", json!({"id": "pin-2", "dry_run": true})),
+            ("pin.hide", json!({"all": true})),
+            ("pin.list", json!({})),
+            (
+                "pin.show",
+                json!({"all": true, "on_screen": true, "dry_run": true}),
+            ),
+            ("pin.show", json!({"id": "pin-3", "on_screen": true})),
+            ("status", json!({})),
             ("pin.close", json!({"all": true, "dry_run": true})),
             ("pin.close", json!({"id": "pin-1"})),
             ("pin.reopen", json!({"dry_run": true})),
@@ -1948,6 +2393,10 @@ pub(crate) mod tests {
         }
         for (method, params) in [
             ("pin.close", json!({"id": "pin-9"})),
+            ("pin.hide", json!({})),
+            ("pin.show", json!({"id": "pin-77"})),
+            ("pin.create", json!({"source": "file"})),
+            ("pin.create", json!({"source": "clipboard", "at": {"x": 1}})),
             ("quit", json!({})),
             (
                 "capture",
@@ -1985,5 +2434,468 @@ pub(crate) mod tests {
         assert!(!text.contains("10, 20, 30"), "no pixel values");
         let act = a.request("activate", &json!({})).unwrap();
         assert_eq!(act["settings_window"], "planned");
+    }
+
+    /// An instance with the default keys (no registrar) on the fake 100×100 desktop.
+    fn keyed(tag: &str) -> App<FakeShell> {
+        let dir = tmp(tag);
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut a = app(&dir, DesktopState::Available);
+        a.hotkeys = Manager::start(&Paths::under(&dir), None, || {
+            Err(kim_hotkeys::register::RegisterError::Stopped)
+        });
+        a
+    }
+
+    fn chord(name: &str, ctrl: bool, shift: bool) -> Chord {
+        crate::hotkeys::chord_of(name, ctrl, false, shift).unwrap()
+    }
+
+    fn press(a: &mut App<FakeShell>, id: PinId, name: &str, shift: bool) {
+        a.pin_event(PinEvent::Key(id, chord(name, false, shift), false));
+    }
+
+    #[test]
+    fn pin_keys_zoom_hide_destroy_and_escape_always_closes() {
+        let mut a = keyed("pin-keys");
+        a.shell.clipboard = Some((20, 10));
+        a.shell.pointer_at = Some((10, 10));
+        a.action("paste.float", None);
+        let id = PinId(1);
+        assert_eq!(a.pins.rect(id), Some(Rect::new(10, 10, 20, 10)));
+        // Plus zooms in around the pointer (inside the pin), 0 returns to 100 %.
+        a.shell.pointer_at = Some((20, 15));
+        press(&mut a, id, "Plus", false);
+        let info = a.pins.info(id).unwrap();
+        assert_eq!((info.zoom, info.rect), (110, Rect::new(9, 10, 22, 11)));
+        press(&mut a, id, "Minus", false);
+        press(&mut a, id, "Minus", false);
+        assert_eq!(a.pins.info(id).unwrap().zoom, 90);
+        press(&mut a, id, "0", false);
+        assert_eq!(a.pins.info(id).unwrap().zoom, 100);
+        assert_eq!(a.status()["last_action"]["action"], "pin.zoom-reset");
+        // H hides it (with a hint how to get it back), IPC shows it again.
+        press(&mut a, id, "H", false);
+        assert!(!a.pins.info(id).unwrap().visible);
+        assert!(a.shell.notices.last().unwrap().contains("noeul pin show"));
+        assert_eq!(a.status()["pins"]["hidden"], 1);
+        assert!(a.tray_menu().contains(&MenuItem::ShowAllPins));
+        let r = a.request("pin.show", &json!({"id": "pin-1"})).unwrap();
+        assert_eq!(r["shown"], json!(["pin-1"]));
+        // Shift+Escape destroys: nothing is kept for reopen.
+        press(&mut a, id, "Escape", true);
+        assert!(a.pins.is_empty());
+        assert_eq!(a.pins.reopenable(), None);
+        assert_eq!(a.ledger.live(), (0, 0));
+        // With every shortcut off, Escape still closes the focused pin (NOEUL-SEC-013).
+        let mut off = app(&tmp("pin-keys-off"), DesktopState::Available);
+        off.shell.clipboard = Some((5, 5));
+        off.action("paste.float", None);
+        press(&mut off, PinId(1), "Plus", false);
+        assert_eq!(
+            off.pins.info(PinId(1)).unwrap().zoom,
+            100,
+            "no zoom key while off"
+        );
+        off.pin_event(PinEvent::Key(PinId(1), chord("Escape", false, false), true));
+        assert_eq!(off.pins.len(), 1, "a held Escape does not close by repeat");
+        press(&mut off, PinId(1), "Escape", false);
+        assert!(off.pins.is_empty(), "the reserved Escape closes it");
+        assert_eq!(off.pins.reopenable(), Some(PinId(1)));
+    }
+
+    #[test]
+    fn the_pin_menu_lists_this_builds_actions_with_their_keys() {
+        let mut a = keyed("pin-menu");
+        a.shell.clipboard = Some((40, 30));
+        a.action("paste.float", None);
+        let id = PinId(1);
+        a.pin_event(PinEvent::Menu(id, Some((50, 60))));
+        let menu = a.take_pin_menu().expect("a menu request");
+        assert_eq!((menu.pin, menu.at), (id, Some((50, 60))));
+        let labels: Vec<(&str, bool)> = menu
+            .items
+            .iter()
+            .map(|i| (i.label.as_str(), i.enabled))
+            .collect();
+        assert_eq!(
+            labels,
+            [
+                ("Zoom in\tPlus", true),
+                ("Zoom out\tMinus", true),
+                ("Zoom 100 %\t0", false),
+                ("", false),
+                ("Hide\tH", true),
+                ("Close\tEscape", true),
+                ("Destroy\tShift+Escape", true),
+            ]
+        );
+        for action in menu.items.iter().filter_map(|i| i.action) {
+            assert!(
+                crate::hotkeys::IMPLEMENTED.contains(&action),
+                "{action} is implemented (NOEUL-FR-114)"
+            );
+        }
+        assert!(a.take_pin_menu().is_none(), "taken once");
+        // The choice runs the action on that pin only.
+        a.pin_menu_choice(id, "pin.zoom-in");
+        assert_eq!(a.pins.info(id).unwrap().zoom, 110);
+        a.pin_event(PinEvent::Menu(id, None));
+        let items = a.take_pin_menu().unwrap().items;
+        assert!(items[2].enabled, "100 % is offered once zoomed");
+        a.pin_menu_choice(id, "capture.region");
+        assert!(
+            !a.overlay_open(),
+            "only pin actions are accepted from the menu"
+        );
+        a.pin_menu_choice(id, "pin.close");
+        assert!(a.pins.is_empty());
+        // A menu for a pin that is gone is not shown.
+        a.pin_event(PinEvent::Menu(id, None));
+        assert!(a.take_pin_menu().is_none());
+        // Under the test hook a menu is never shown (it would open on the user's screen).
+        a.shell.interactive = Some(false);
+        a.action("paste.float", None);
+        a.pin_event(PinEvent::Menu(PinId(2), None));
+        assert!(a.take_pin_menu().is_none());
+        assert_eq!(a.status()["last_action"]["action"], "pin.menu");
+        a.shell.interactive = None;
+        a.pin_menu_choice(id, "pin.hide");
+        assert_eq!(a.status()["last_action"]["result"], "not_found");
+    }
+
+    #[test]
+    fn the_wheel_zooms_around_the_pointer_and_middle_click_resets() {
+        let mut a = keyed("pin-wheel");
+        a.shell.clipboard = Some((40, 20));
+        a.shell.pointer_at = Some((0, 0));
+        a.action("paste.float", None);
+        let id = PinId(1);
+        // A high-resolution wheel: two half notches make one step.
+        a.pin_event(PinEvent::Wheel(id, 60, (20, 10), false));
+        assert_eq!(a.pins.info(id).unwrap().zoom, 100);
+        a.pin_event(PinEvent::Wheel(id, 60, (20, 10), false));
+        let info = a.pins.info(id).unwrap();
+        assert_eq!(
+            (info.zoom, info.rect.x, info.rect.y),
+            (110, -2, -1),
+            "around (20,10)"
+        );
+        a.pin_event(PinEvent::Wheel(id, 120, (20, 10), true));
+        assert_eq!(
+            a.pins.info(id).unwrap().zoom,
+            110,
+            "Ctrl+wheel (opacity) is N2"
+        );
+        a.pin_event(PinEvent::Wheel(id, -240, (20, 10), false));
+        assert_eq!(a.pins.info(id).unwrap().zoom, 90);
+        a.pin_event(PinEvent::MiddleClick(id));
+        assert_eq!(a.pins.info(id).unwrap().zoom, 100);
+        assert!(
+            a.shell.windows.log.borrow().focused.len() <= 1,
+            "zooming never focuses"
+        );
+        a.pin_event(PinEvent::Wheel(PinId(9), 120, (0, 0), false));
+        assert!(
+            !a.wheel.contains_key(&PinId(9)),
+            "nothing is kept for pins that do not exist"
+        );
+    }
+
+    #[test]
+    fn a_monitor_disconnect_keeps_pins_and_offers_the_way_back() {
+        let (mut a, syn, _dir) = overlay_app("pin-display");
+        let left = a
+            .request(
+                "pin.create",
+                &json!({"source": "region", "region": {"x": -600, "y": 50, "width": 200, "height": 100}}),
+            )
+            .unwrap();
+        assert_eq!(left["pin"]["id"], "pin-1");
+        a.request(
+            "capture",
+            &json!({"region": {"x": 10, "y": 10, "width": 30, "height": 30}, "pin": true}),
+        )
+        .unwrap();
+        assert_eq!(a.status()["pins"]["off_screen"], 0);
+        let notices = a.shell.notices.len();
+        // The left monitor is unplugged; the runtime reports the display change.
+        syn.set_monitors(vec![
+            Monitor::new(Rect::new(0, 0, 960, 540), true).with_dpi(144),
+        ]);
+        a.display_changed();
+        let st = a.status();
+        assert_eq!(st["pins"]["off_screen"], 1);
+        assert!(
+            a.shell.notices[notices].contains("off-screen"),
+            "{:?}",
+            a.shell.notices
+        );
+        assert_eq!(
+            a.pins.rect(PinId(1)),
+            Some(Rect::new(-600, 50, 200, 100)),
+            "it keeps its place (NOEUL-FR-067)"
+        );
+        let list = a.request("pin.list", &json!({})).unwrap();
+        assert_eq!(list["pins"][0]["on_screen"], false);
+        assert_eq!(list["pins"][1]["on_screen"], true);
+        assert!(a.tray_menu().contains(&MenuItem::BringPinsOnScreen));
+        // A dry run moves nothing; the real request brings only the lost pin back.
+        let dry = a
+            .request(
+                "pin.show",
+                &json!({"all": true, "on_screen": true, "dry_run": true}),
+            )
+            .unwrap();
+        assert_eq!(dry["moved"], json!(["pin-1"]));
+        assert_eq!(a.pins.rect(PinId(1)).unwrap().x, -600);
+        let r = a
+            .request("pin.show", &json!({"all": true, "on_screen": true}))
+            .unwrap();
+        assert_eq!(
+            (r["shown"].clone(), r["moved"].clone()),
+            (json!([]), json!(["pin-1"]))
+        );
+        assert_eq!(a.pins.rect(PinId(1)), Some(Rect::new(0, 50, 200, 100)));
+        assert_eq!(a.status()["pins"]["off_screen"], 0);
+        assert!(!a.tray_menu().contains(&MenuItem::BringPinsOnScreen));
+        // The tray's item does the same for every pin, and shows hidden ones.
+        syn.set_monitors(vec![Monitor::new(Rect::new(2000, 0, 300, 300), true)]);
+        a.display_changed();
+        a.request("pin.hide", &json!({"all": true})).unwrap();
+        a.tray_command(MenuItem::BringPinsOnScreen);
+        let st = a.status();
+        assert_eq!(
+            (
+                st["pins"]["off_screen"].as_u64(),
+                st["pins"]["hidden"].as_u64()
+            ),
+            (Some(0), Some(0))
+        );
+        // While the desktop is locked nothing is reported as lost.
+        syn.set_state(DesktopState::Locked);
+        a.display_changed();
+        assert_eq!(
+            a.request("pin.list", &json!({})).unwrap()["pins"][0]["on_screen"],
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn pin_selection_is_the_step_51_entry_point_without_the_clipboard() {
+        let (mut a, _syn, _dir) = overlay_app("pin-selection");
+        a.action("capture.region", None);
+        drag(&mut a, (100, 100), (299, 199));
+        let sid = a.overlay.as_ref().unwrap().id;
+        let rect = Rect::new(100, 100, 200, 100);
+        a.captures.select(sid, rect).unwrap();
+        let sel = a.captures.selection(sid).unwrap();
+        let guard = Duration::from_millis(500);
+        let id = a
+            .pin_selection(
+                sel,
+                PinOptions {
+                    focus: true,
+                    guard: Some(guard),
+                },
+            )
+            .unwrap();
+        {
+            let log = a.shell.windows.log.borrow();
+            assert_eq!(
+                log.created,
+                [(id, rect, true)],
+                "same place and pixel size, focused"
+            );
+            assert_eq!(
+                log.guards,
+                [Some(guard)],
+                "the double-click tail is swallowed"
+            );
+        }
+        assert_eq!(a.shell.clipboard_reads, 0, "no clipboard in between");
+        assert_eq!(
+            a.ledger.live(),
+            (
+                2,
+                rect.bgra_bytes() + Rect::new(-640, 0, 1600, 540).bgra_bytes()
+            ),
+            "the pin's copy and the frozen picture, still owned by the open session"
+        );
+        // A failure hands nothing to the clipboard and keeps the session.
+        *a.shell.windows.fail.borrow_mut() = true;
+        let sel = a.captures.selection(sid).unwrap();
+        assert!(
+            a.pin_selection(
+                sel,
+                PinOptions {
+                    focus: true,
+                    guard: None
+                }
+            )
+            .is_err()
+        );
+        assert!(a.overlay_open() && a.captures.is_open());
+        assert_eq!(a.ledger.live().0, 2, "the failed copy was freed");
+        // Under the test hook a pin never takes focus, whatever the caller asks.
+        *a.shell.windows.fail.borrow_mut() = false;
+        a.shell.interactive = Some(false);
+        let sel = a.captures.selection(sid).unwrap();
+        a.pin_selection(
+            sel,
+            PinOptions {
+                focus: true,
+                guard: None,
+            },
+        )
+        .unwrap();
+        assert!(!a.shell.windows.log.borrow().created[1].2);
+    }
+
+    #[test]
+    fn paste_never_lands_over_an_open_overlay_and_a_huge_paste_fits() {
+        let (mut a, _syn, _dir) = overlay_app("pin-paste-overlay");
+        a.shell.clipboard = Some((10, 10));
+        a.action("capture.region", None);
+        a.action("paste.float", None);
+        assert!(a.pins.is_empty());
+        assert_eq!(a.shell.clipboard_reads, 0, "the clipboard is not even read");
+        assert_eq!(a.status()["last_action"]["result"], "overlay_open");
+        assert!(a.overlay_open(), "the overlay keeps its focus");
+        a.request("capture.cancel", &json!({})).unwrap();
+        // A picture larger than the monitor's work area is zoomed out to fit it.
+        let mut b = app(&tmp("pin-paste-huge"), DesktopState::Available);
+        b.shell.clipboard = Some((300, 200));
+        b.action("paste.float", None);
+        let info = b.pins.info(PinId(1)).unwrap();
+        assert_eq!(info.image, (300, 200));
+        assert_eq!(
+            (info.zoom, info.rect),
+            (33, Rect::new(1, 34, 99, 66)),
+            "fits, at the pointer"
+        );
+        // pin.create from the clipboard: at a point, never focused, announced, read once.
+        let r = b
+            .request(
+                "pin.create",
+                &json!({"source": "clipboard", "dry_run": true}),
+            )
+            .unwrap();
+        assert_eq!(r["pin"], Value::Null);
+        assert_eq!(b.shell.clipboard_reads, 1, "a dry run reads nothing");
+        b.shell.clipboard = Some((10, 10));
+        let r = b
+            .request(
+                "pin.create",
+                &json!({"source": "clipboard", "at": {"x": 95, "y": 2}}),
+            )
+            .unwrap();
+        assert_eq!(
+            r["pin"]["rect"],
+            json!({"x": 90, "y": 2, "width": 10, "height": 10})
+        );
+        assert_eq!(b.shell.clipboard_reads, 2);
+        assert!(!b.shell.windows.log.borrow().created[1].2, "never focused");
+        assert_eq!(
+            b.shell.notices.last().unwrap(),
+            "Noeul pinned the clipboard (command line)."
+        );
+        b.shell.clipboard = None;
+        let e = b
+            .request("pin.create", &json!({"source": "clipboard"}))
+            .unwrap_err();
+        assert_eq!(e.code, Code::NothingToPin);
+        let e = b
+            .request(
+                "pin.create",
+                &json!({"source": "region", "region": {"x": 95, "y": 0, "width": 10, "height": 1}}),
+            )
+            .unwrap_err();
+        assert_eq!(e.code, Code::Usage, "outside the desktop");
+    }
+
+    #[test]
+    fn pins_live_in_memory_only_and_a_restart_restores_nothing() {
+        let dir = tmp("pin-restart");
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut a = app(&dir, DesktopState::Available);
+        for x in [0, 20, 40] {
+            a.request(
+                "capture",
+                &json!({"region": {"x": x, "y": 0, "width": 10, "height": 10}, "pin": true}),
+            )
+            .unwrap();
+        }
+        a.request("pin.close", &json!({"id": "pin-2"})).unwrap();
+        a.request("pin.hide", &json!({"id": "pin-3"})).unwrap();
+        assert_eq!(
+            a.ledger.live(),
+            (3, 3 * 400),
+            "two open and one closed for reopen"
+        );
+        a.request("quit", &json!({"force": true})).unwrap();
+        assert_eq!(a.ledger.live(), (0, 0), "quit frees every picture");
+        assert!(
+            files_under(&dir).is_empty(),
+            "nothing about the pins reached the disk: {:?}",
+            files_under(&dir)
+        );
+        // The next instance starts with no pins, no reopen memory and fresh IDs.
+        let mut b = app(&dir, DesktopState::Available);
+        let list = b.request("pin.list", &json!({})).unwrap();
+        assert_eq!(list, json!({"pins": [], "reopenable": null}));
+        let e = b.request("pin.reopen", &json!({})).unwrap_err();
+        assert_eq!(e.code, Code::PinNotFound);
+        let r = b
+            .request(
+                "capture",
+                &json!({"region": {"x": 0, "y": 0, "width": 1, "height": 1}, "pin": true}),
+            )
+            .unwrap();
+        assert_eq!(r["pin"]["id"], "pin-1", "IDs belong to one instance");
+    }
+
+    #[test]
+    fn hide_show_and_close_name_their_pins_and_leave_the_others() {
+        let mut a = app(&tmp("pin-hide-show"), DesktopState::Available);
+        for x in [0, 30, 60] {
+            a.request(
+                "capture",
+                &json!({"region": {"x": x, "y": 0, "width": 10, "height": 10}, "pin": true}),
+            )
+            .unwrap();
+        }
+        let dry = a
+            .request("pin.hide", &json!({"all": true, "dry_run": true}))
+            .unwrap();
+        assert_eq!(dry["hidden"], json!(["pin-1", "pin-2", "pin-3"]));
+        assert_eq!(a.pins.hidden(), 0, "a dry run hides nothing");
+        let r = a.request("pin.hide", &json!({"id": "pin-2"})).unwrap();
+        assert_eq!(r["hidden"], json!(["pin-2"]));
+        let r = a.request("pin.hide", &json!({"all": true})).unwrap();
+        assert_eq!(
+            r["hidden"],
+            json!(["pin-1", "pin-3"]),
+            "pin-2 was hidden already"
+        );
+        a.tray_command(MenuItem::ShowAllPins);
+        assert_eq!(a.pins.hidden(), 0);
+        a.tray_command(MenuItem::HideAllPins);
+        assert_eq!(a.pins.hidden(), 3);
+        let r = a.request("pin.show", &json!({"id": "pin-1"})).unwrap();
+        assert_eq!(r["shown"], json!(["pin-1"]));
+        a.request("pin.close", &json!({"id": "pin-1"})).unwrap();
+        assert_eq!(a.pins.ids(), [PinId(2), PinId(3)]);
+        assert!(a.pins.info(PinId(2)).is_some_and(|i| !i.visible));
+        let e = a.request("pin.show", &json!({"id": "pin-1"})).unwrap_err();
+        assert_eq!(e.code, Code::PinNotFound);
+        let e = a
+            .request("pin.show", &json!({"id": "pin-2", "on_screen": "yes"}))
+            .unwrap_err();
+        assert_eq!(e.code, Code::Usage);
+        assert!(
+            a.shell.windows.log.borrow().focused.is_empty(),
+            "no IPC request gave a pin focus"
+        );
     }
 }

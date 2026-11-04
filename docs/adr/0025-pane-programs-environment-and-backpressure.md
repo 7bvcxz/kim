@@ -89,3 +89,7 @@ platform-neutral PTY interface (`KIM-NFR-011`).
   `terminal.create` `command_line` / `subak new --command-line`
   ([ADR 0027](0027-subak-cli-structure-and-headless-control.md) §4); only its first word is
   resolved, so decisions 1 and 2 still hold.
+- 2026-11-04 (Step 13): decision 6's disconnect of a lagging client is replaced by a resync
+  ([ADR 0030](0030-host-terminal-model-scrollback-and-replay.md) §4): the client stays connected,
+  its queued output is dropped, and it gets `pane.resync` and a snapshot once its queue drained.
+  The 16 MiB bound, shared frames and synchronous input are unchanged.

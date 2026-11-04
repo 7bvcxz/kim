@@ -1,0 +1,34 @@
+{
+  "command": "history",
+  "data": {
+    "history": {
+      "bytes": 0,
+      "cleared_lines": 0,
+      "evicted_lines": 0,
+      "limit_bytes": 4194304,
+      "limit_lines": 2000,
+      "lines": 0,
+      "persisted": false,
+      "total_lines": 0
+    },
+    "name": "work",
+    "pane_id": "p-000000000001",
+    "screen": {
+      "alternate": false,
+      "cursor": {
+        "visible": true,
+        "x": 0,
+        "y": 0
+      },
+      "size": {
+        "cols": 120,
+        "rows": 30
+      }
+    },
+    "state": "running",
+    "terminal_id": "t-000000000002"
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

@@ -8,6 +8,9 @@
 //! `ls`, `info`, `status`, `attach`, `detach`, `rename`, `stop`, `kill`, `rm`. The Step 10 spelling
 //! `subak terminal <verb>` still works as a **deprecated alias**: it runs the same command, reports
 //! the same command name, and adds a deprecation warning.
+//!
+//! Step 13 (ADR 0030, docs/SCROLLBACK.md) adds `capture`, `history` and `clear-history`
+//! (tmux `capture-pane`, the `history-limit` counters, `clear-history`) and `new --history-limit`.
 
 use crate::output::CliError;
 
@@ -33,6 +36,9 @@ pub enum Cmd {
     Stop,
     Kill,
     Rm,
+    Capture,
+    History,
+    ClearHistory,
 }
 
 impl Cmd {
@@ -57,6 +63,9 @@ impl Cmd {
             Self::Stop => "stop",
             Self::Kill => "kill",
             Self::Rm => "rm",
+            Self::Capture => "capture",
+            Self::History => "history",
+            Self::ClearHistory => "clear-history",
         }
     }
 
@@ -78,7 +87,9 @@ impl Cmd {
     fn positionals(&self) -> (&'static [&'static str], usize) {
         match self {
             Self::New => (&["name"], 0),
-            Self::Attach | Self::Detach => (&["target"], 0),
+            Self::Attach | Self::Detach | Self::Capture | Self::History | Self::ClearHistory => {
+                (&["target"], 0)
+            }
             Self::Info | Self::Stop | Self::Kill | Self::Rm => (&["target"], 1),
             Self::Rename => (&["target", "new name"], 2),
             _ => (&[], 0),
@@ -123,9 +134,21 @@ impl Cmd {
                 "--no-start",
                 "--attach",
                 "--read-only",
+                "--history-limit",
                 "--dry-run",
             ],
             Self::Detach => &["--endpoint", "--client", "--dry-run"],
+            Self::Capture => &[
+                "--endpoint",
+                "--start",
+                "--end",
+                "--history",
+                "--vt",
+                "--join",
+                "--no-redact",
+            ],
+            Self::History => &["--endpoint"],
+            Self::ClearHistory => &["--endpoint", "--dry-run", "--yes"],
             Self::Rename => &["--endpoint", "--dry-run"],
             Self::Stop | Self::Kill => &["--endpoint", "--dry-run", "--yes"],
             Self::Rm => &["--endpoint", "--dry-run", "--yes", "--force"],
@@ -171,12 +194,45 @@ pub struct Args {
     pub read_only: bool,
     /// `detach --client <id>`: one client, by the id `subak status` lists.
     pub client: Option<u64>,
+    /// `new --history-limit <lines>`: history rows the pane keeps (Step 13).
+    pub history_limit: Option<u64>,
+    /// `capture --start <line>|-` and `--end <line>|-` (tmux `-S`/`-E`).
+    pub start: Option<Line>,
+    pub end: Option<Line>,
+    /// `capture --history`: from the oldest history line (`--start -`).
+    pub history: bool,
+    /// `capture --vt`: keep colours and attributes as escape sequences (tmux `-e`).
+    pub vt: bool,
+    /// `capture --join`: join wrapped rows into one line (tmux `-J`).
+    pub join: bool,
+    /// `capture --no-redact`: show secret-looking values as they are.
+    pub no_redact: bool,
     /// The deprecated spelling that was used (`terminal new`), if any (ADR 0027).
     pub alias: Option<String>,
     /// Positional arguments after the command words (a target, a name).
     pub positional: Vec<String>,
     /// `new -- <program> [args…]`.
     pub command: Vec<String>,
+}
+
+/// A line of `capture --start/--end`: a number (history lines are negative) or `-`, the oldest
+/// history line (as start) or the last screen row (as end).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Line {
+    Number(i64),
+    Edge,
+}
+
+impl Line {
+    fn parse(text: &str) -> Option<Self> {
+        if text == "-" {
+            return Some(Self::Edge);
+        }
+        text.parse::<i64>()
+            .ok()
+            .filter(|n| n.unsigned_abs() <= 1_000_000_000)
+            .map(Self::Number)
+    }
 }
 
 /// One environment override of `new` (docs/PTY_PROCESSES.md §3).
@@ -230,6 +286,9 @@ fn terminal_verb(word: &str) -> Option<Cmd> {
         "stop" => Cmd::Stop,
         "kill" => Cmd::Kill,
         "rm" => Cmd::Rm,
+        "capture" | "capture-pane" => Cmd::Capture,
+        "history" => Cmd::History,
+        "clear-history" => Cmd::ClearHistory,
         _ => return None,
     })
 }
@@ -336,6 +395,49 @@ pub fn parse(raw: &[String]) -> Result<(Cmd, Args), (String, CliError)> {
                         );
                     }
                 }
+            }
+            "--history-limit" => {
+                opts.push("--history-limit");
+                if let Some(v) = value("--history-limit") {
+                    a.history_limit = v.parse::<u64>().ok().filter(|n| *n <= 100_000);
+                    if a.history_limit.is_none() {
+                        bad.get_or_insert(
+                            CliError::usage(format!("invalid --history-limit `{v}`"))
+                                .hint("a number of lines from 0 to 100000 (default 2000)"),
+                        );
+                    }
+                }
+            }
+            f @ ("--start" | "--end") => {
+                opts.push(if f == "--start" { "--start" } else { "--end" });
+                // A negative line number (`-5`) is a value here, not an option.
+                match value(f).as_deref().map(Line::parse) {
+                    Some(Some(l)) if f == "--start" => a.start = Some(l),
+                    Some(Some(l)) => a.end = Some(l),
+                    _ => {
+                        bad.get_or_insert(
+                            CliError::usage(format!("{f} needs a line number or `-`")).hint(
+                                "screen rows count from 0, history lines from -1 (the newest) down; `-` is the oldest history line (--start) or the last screen row (--end)",
+                            ),
+                        );
+                    }
+                }
+            }
+            "--history" => {
+                a.history = true;
+                opts.push("--history");
+            }
+            "--vt" => {
+                a.vt = true;
+                opts.push("--vt");
+            }
+            "--join" => {
+                a.join = true;
+                opts.push("--join");
+            }
+            "--no-redact" => {
+                a.no_redact = true;
+                opts.push("--no-redact");
             }
             "--no-shell" => {
                 a.no_shell = true;
@@ -501,7 +603,7 @@ pub fn parse(raw: &[String]) -> Result<(Cmd, Args), (String, CliError)> {
             return Err((
                 "subak".into(),
                 CliError::usage(format!("unknown command `{}`", words.join(" "))).hint(
-                    "commands: new, ls, info, status, attach, detach, rename, stop, kill, rm, host, capabilities (see `subak --help`)",
+                    "commands: new, ls, info, status, attach, detach, rename, stop, kill, rm, capture, history, clear-history, host, capabilities (see `subak --help`)",
                 ),
             ));
         }
@@ -561,6 +663,12 @@ pub fn parse(raw: &[String]) -> Result<(Cmd, Args), (String, CliError)> {
     }
     if cmd == Cmd::New && a.read_only && !a.attach {
         return fail(CliError::usage("--read-only needs --attach"));
+    }
+    if a.history && a.start.is_some() {
+        return fail(
+            CliError::usage("--history and --start conflict")
+                .hint("--history is the same as --start -"),
+        );
     }
     if cmd.streams(&a) && a.json {
         return fail(CliError::usage(format!(

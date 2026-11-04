@@ -1,6 +1,6 @@
 # Noeul UX specification
 
-Status: **current** (specification; Step 49 implemented the app foundation, [ADR 0023](adr/0023-noeul-app-foundation.md); Step 50 the `F1` selection overlay with `Enter` to pin, [ADR 0026](adr/0026-noeul-capture-overlay.md), see §4.5) · Step 48 ·
+Status: **current** (specification; Step 49 implemented the app foundation, [ADR 0023](adr/0023-noeul-app-foundation.md); Step 50 the `F1` selection overlay with `Enter` to pin, [ADR 0026](adr/0026-noeul-capture-overlay.md), see §4.5; Step 53 the floating pin engine, [ADR 0029](adr/0029-noeul-pin-engine.md), see §4.6) · Step 48 ·
 Philosophy: [NOEUL_PHILOSOPHY](NOEUL_PHILOSOPHY.md) · Requirements: [NOEUL_REQUIREMENTS](NOEUL_REQUIREMENTS.md) ·
 Parity: [NOEUL_SNIPASTE_MATRIX](NOEUL_SNIPASTE_MATRIX.md) · Shortcuts: [HOTKEY_CONTRACT §13.3](HOTKEY_CONTRACT.md) ·
 Decision: [ADR 0021](adr/0021-noeul-product-definition.md)
@@ -118,6 +118,12 @@ Each journey has a mouse path and a keyboard-only path; both reach the same resu
                                         +----------------------------------+
 ```
 
+Shipped since Step 53 ([ADR 0029](adr/0029-noeul-pin-engine.md)): the menu opens on a right-click,
+`Shift+F10` or the menu key, and lists the implemented items only — Zoom in, Zoom out, Zoom 100 %,
+Hide, Close, Destroy — each with its effective key. The other items arrive with the Steps that
+implement them (copy and save 51, transforms, opacity, thumbnails and click-through 54,
+annotation 56, groups 54). The border and shadow of §10 are not drawn yet.
+
 ### 3.4 Tray menu (optional tray icon)
 
 ```text
@@ -136,6 +142,9 @@ Each journey has a mouse path and a keyboard-only path; both reach the same resu
 | Quit Noeul                        |
 +-----------------------------------+
 ```
+
+Shipped since Step 53: Hide all pins (while every pin shows) or Show all pins (while one is
+hidden), and Bring pins on screen (only while a pin lies where no monitor shows it).
 
 ### 3.5 Settings: Gestures and Shortcuts
 
@@ -355,6 +364,52 @@ monitors and their scales, and the date in the Step report and the matrix Eviden
 11. After about twenty captures, `noeul status --json` → `captures.first_frame` gives p50/p95 of
     the first frame on this machine (NOEUL-NFR-003); `noeul quit --yes` ends it.
 
+### 4.6 Step 53: manual check of real pins
+
+Step 53 ships the pin engine ([ADR 0029](adr/0029-noeul-pin-engine.md)): independent topmost pin
+windows that move, zoom, hide, show, close and are destroyed on their own, their menu, focus
+hand-back, placement in work areas, display-change handling, `noeul pin …` and the IPC methods.
+Automated tests run every pin off-screen, never activated, never on top of the user's programs,
+and never show a menu or synthesize input, so the visible behaviour needs the maintainer, on the
+real desktop with a physical mouse and keyboard (record the Windows build, the monitors and
+their scales, and the date in the Step report and the matrix Evidence column):
+
+1. `cargo build --release -p noeul`, then `target\release\noeul.exe start` (default profile).
+2. Open Notepad and type a line. `F1`, select a part of Notepad, `Enter`: a pin of exactly that
+   rectangle appears in place and has focus. Click into Notepad and type: Notepad gets the keys
+   while the pin stays on top. The pin has no taskbar button and is not in `Alt+Tab`.
+3. Drag the pin around, also over the taskbar: it follows the pointer and stays above every
+   window. Click it, then press the arrows: it moves one pixel per press.
+4. Over the pin, turn the wheel away from you and back: it zooms in and out around the pointer;
+   `Plus`/`Minus` do the same; `0` and a middle-click return to 100 % (`noeul pin list` shows
+   `ZOOM 100 %`).
+5. Right-click the pin: the menu lists Zoom in, Zoom out, Zoom 100 % (greyed at 100 %), Hide,
+   Close and Destroy with their keys. `Shift+F10` and the menu key open it at the pin's corner.
+   Choose Hide: the pin disappears and typing goes to Notepad again.
+6. Tray → Show all pins: the pin comes back on top without taking focus (Notepad keeps typing).
+   `noeul pin hide --all` and `noeul pin show --all` in a console: the console keeps the focus.
+7. Make three pins. Click the middle one and press `Esc`: only it closes and the keyboard goes
+   back to the program you were in before, not to another pin; a second `Esc` reaches that
+   program and closes nothing. `Shift+Esc` on another pin destroys it (`noeul pin reopen` then
+   reopens only the one closed with `Esc`).
+8. Copy an image larger than the screen (e.g. a 4K picture in Paint, `Ctrl+A`, `Ctrl+C`) and
+   press `F3`: the pin fits inside the monitor's work area, clear of the taskbar;
+   `noeul pin list` shows its zoom below 100 %.
+9. `noeul capture --region <x,y,w,h of the whole virtual desktop> --pin`: the pin covers every
+   monitor. Click it and press `Esc` (or right-click → Close, or `noeul pin close --all --yes`):
+   it is gone.
+10. With two monitors: put a pin on the secondary monitor, then disconnect that monitor (or set
+    it to "Show only on 1"): the pin keeps its place off-screen, a notice says so, and
+    `noeul status` shows `1 off-screen`. Tray → Bring pins on screen (or
+    `noeul pin show --all --on-screen`): it appears on the remaining monitor inside its work area.
+    Reconnect the monitor: pins that were not brought back are where they were.
+11. With monitors at different scales (100 % and 150 %): drag a pin from one to the other; its
+    pixel size does not change.
+12. With pins showing, press `F1`: the overlay covers the pins; `F3` while the overlay is open
+    pins nothing; `Esc` leaves the overlay and the pins are still there.
+13. `noeul quit` with pins open asks for `--yes`; `noeul quit --yes`, then `noeul start`: no pin
+    comes back (pins live in memory only), and `%LOCALAPPDATA%\mouv\noeul` holds no picture.
+
 ## 5. Toolbar, menus and the tray
 
 - **Toolbar order** (tab order): Pin · Copy · Save · tools (N3) · Undo · Redo · Cancel. Pin is the
@@ -431,6 +486,15 @@ the other contexts, so its keys win there):
 | `pin.copy-text` | `Ctrl+Shift+C` | `pin.move-up`/`-down`/`-left`/`-right` | arrows (repeat) |
 | `pin.thumbnail` | `T` | `pin.click-through` | `Ctrl+Shift+T` |
 | `pin.hide` | `H` | `pin.annotate` | `Space` |
+
+Shipped since Step 53 ([ADR 0029](adr/0029-noeul-pin-engine.md)): `pin.close`, `pin.destroy`,
+`pin.zoom-in`, `pin.zoom-out`, `pin.zoom-reset`, `pin.hide` and `pin.move-*` (one device pixel per
+press). A focused pin also closes on `Escape` as the reserved navigation key when no pin binding
+uses it, so it never traps the user, even with `--no-hotkeys`. Of the mouse gestures below, drag,
+wheel zoom (around the pointer), middle-click (back to 100 %), right-click (menu) and the
+double-click that does nothing are shipped; `Ctrl`+wheel (opacity), border resizing and
+Shift+double-click (thumbnail) are not in this build (border resizing of NOEUL-FR-061 is proposed
+for Step 54 with the transforms; zooming covers resizing until then).
 
 **Choices and where they differ from Snipaste** (the matrix lists each):
 

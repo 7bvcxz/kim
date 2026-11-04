@@ -23,12 +23,11 @@ pub const MAX_CONTROL: usize = 256 * 1024;
 /// Largest data payload after its 13-byte header.
 pub const MAX_DATA: usize = 1024 * 1024;
 const DATA_HEADER: usize = 13;
-/// Data flag: the bytes replay recent output (prototype: raw history, not a VT snapshot; Step 13).
+/// Data flag: the bytes are a snapshot that reproduces the pane's terminal at `seq` (Step 13,
+/// ADR 0030); live output continues at that `seq`. A snapshot may span several frames.
 pub const FLAG_SNAPSHOT: u8 = 0x01;
 /// Data flag: client → Host input.
 pub const FLAG_INPUT: u8 = 0x02;
-/// Recent output kept for replay on attach.
-pub const HISTORY_BYTES: usize = 64 * 1024;
 /// A connection must complete `hello` → `welcome` within this time.
 pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 /// Once the first byte of a frame arrived, the rest must follow within this time.
@@ -38,7 +37,7 @@ pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 /// Event topics a client can subscribe to.
 pub const TOPICS: [&str; 4] = ["terminals", "panes", "claude", "host"];
 /// Additive capabilities announced in `welcome.features`.
-pub const FEATURES: [&str; 8] = [
+pub const FEATURES: [&str; 10] = [
     "host.health",
     "host.stats",
     "events.subscribe",
@@ -50,6 +49,10 @@ pub const FEATURES: [&str; 8] = [
     "terminal.command_line",
     // Step 12: `client.detach`, the `pane.detached` event, client ids in `host.status`.
     "client.detach",
+    // Step 13: attach sends a terminal-state snapshot; lagging clients get `pane.resync`.
+    "pane.snapshot",
+    // Step 13: `pane.capture`, `pane.clear_history`, pane `history` and `host.status.scrollback`.
+    "pane.capture",
 ];
 
 /// One decoded frame.
@@ -561,7 +564,9 @@ pub const METHODS: &[Method] = &[
     m("pane.swap", CG, false),
     m("pane.zoom", CG, false),
     m("pane.send_keys", CG, false),
-    m("pane.capture", CG, false),
+    // Step 13: reading and clearing a pane's history needs the MCP grant too (Step 37).
+    m("pane.capture", CG, true),
+    m("pane.clear_history", CG, true),
     m("claude.report", HOOK, false),
     m("claude.status", CGM, false),
 ];
@@ -601,52 +606,6 @@ pub fn new_object_id(prefix: char) -> String {
         .map_or(0, |d| d.as_nanos());
     let h = std::collections::hash_map::RandomState::new().hash_one((nanos, std::process::id()));
     format!("{prefix}-{:012x}", h & 0xFFFF_FFFF_FFFF)
-}
-
-/// Bounded history of recent pane output for replay on attach.
-#[derive(Debug)]
-pub struct Ring {
-    buf: std::collections::VecDeque<u8>,
-    cap: usize,
-    wrapped: bool,
-}
-
-impl Ring {
-    pub fn new(cap: usize) -> Self {
-        Self {
-            buf: std::collections::VecDeque::with_capacity(cap),
-            cap,
-            wrapped: false,
-        }
-    }
-
-    pub fn push(&mut self, bytes: &[u8]) {
-        let bytes = if bytes.len() > self.cap {
-            self.wrapped = true;
-            &bytes[bytes.len() - self.cap..]
-        } else {
-            bytes
-        };
-        let overflow = (self.buf.len() + bytes.len()).saturating_sub(self.cap);
-        if overflow > 0 {
-            self.wrapped = true;
-            self.buf.drain(..overflow);
-        }
-        self.buf.extend(bytes);
-    }
-
-    /// The bytes to replay. Once old output was dropped, replay starts after the first line
-    /// break so it does not begin inside an escape sequence or a UTF-8 character.
-    pub fn replay(&self) -> Vec<u8> {
-        let all: Vec<u8> = self.buf.iter().copied().collect();
-        if !self.wrapped {
-            return all;
-        }
-        match all.iter().position(|&b| b == b'\n') {
-            Some(i) => all[i + 1..].to_vec(),
-            None => Vec::new(),
-        }
-    }
 }
 
 /// tmux-style detach key: `Ctrl+B d`. `Ctrl+B Ctrl+B` sends one literal `Ctrl+B`; `Ctrl+B`
@@ -1149,22 +1108,6 @@ mod tests {
             a[2..]
                 .bytes()
                 .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
-        );
-    }
-
-    #[test]
-    fn ring_keeps_recent_output_and_replays_from_a_line_start() {
-        let mut r = Ring::new(16);
-        r.push(b"abc\n");
-        assert_eq!(r.replay(), b"abc\n");
-        r.push(b"0123456789\nxyz");
-        // 18 bytes pushed, cap 16: "c\n0123456789\nxyz" kept; replay starts after the first \n.
-        assert_eq!(r.replay(), b"0123456789\nxyz");
-        r.push(&[b'q'; 40]);
-        assert_eq!(
-            r.replay(),
-            b"",
-            "no line start left: replay nothing rather than garbage"
         );
     }
 

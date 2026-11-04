@@ -1,0 +1,13 @@
+{
+  "type": "request",
+  "id": 14,
+  "method": "pin.create",
+  "params": {
+    "source": "clipboard",
+    "at": {
+      "x": 1,
+      "y": 2,
+      "width": 3
+    }
+  }
+}

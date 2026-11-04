@@ -32,7 +32,7 @@ mod measure {
     use noeul::paths::Paths;
     use noeul::pins::PinWindows;
     use noeul::win::overlay::{Placement, WinOverlay, system_values};
-    use noeul::win::pinwnd::WinPins;
+    use noeul::win::pinwnd::{Style, WinPins};
     use serde_json::{Value, json};
     use std::sync::Arc;
     use std::time::{Duration, Instant};
@@ -173,7 +173,9 @@ mod measure {
         );
         let mut app = App::new(
             Quiet {
-                windows: WinPins,
+                windows: WinPins {
+                    style: Style::OFF_SCREEN_TEST,
+                },
                 pointer: center,
             },
             backend,

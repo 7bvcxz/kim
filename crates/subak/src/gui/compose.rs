@@ -1,8 +1,9 @@
-//! The client area as the window shows it, composed in memory from its layers: the terminal
-//! frame (pane or state screen) at the top-left, the theme's background around it, the banner
-//! across the top, and the IME composition at the cursor. `WM_PAINT` presents the same layers
-//! with GDI in the same order; tests and the test hook's frame shots use this function, so the
-//! golden frames below are the window's own content, never a capture of the screen.
+//! The client area as the window shows it, composed in memory from its layers: the tab bar strip
+//! across the top (Step 17), the terminal frame (pane or state screen) below it, the theme's
+//! background around the frame, the banner across the top of the pane, and the IME composition
+//! at the cursor. `WM_PAINT` presents the same layers with GDI in the same order; tests and the
+//! test hook's frame shots use these functions, so the golden frames below are the window's own
+//! content, never a capture of the screen.
 
 use super::screens::tokens;
 use subak_term::render::{Frame, Rgb};
@@ -17,6 +18,20 @@ pub struct BannerLayer<'a> {
     pub marker: Option<(Rgb, u32)>,
 }
 
+/// How the tab bar strip is painted around its one row of cells (DESIGN_SYSTEM §3.5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BarStyle {
+    /// The bar's fill (`bg.raised`; the system window colour in High Contrast).
+    pub fill: Rgb,
+    /// The active tab's fill, carried over the strip's full height so it joins the pane
+    /// (`bg.base`); `None` in High Contrast (reverse video marks it there).
+    pub active_fill: Option<Rgb>,
+    /// The active tab's top marker (lilac) and its height; `None` in High Contrast.
+    pub marker: Option<(Rgb, u32)>,
+    /// The hairline under the inactive part of the bar.
+    pub border: Option<Rgb>,
+}
+
 fn blit(out: &mut Frame, f: &Frame, x0: u32, y0: u32) {
     let (w, h) = (out.width, out.height);
     for y in 0..f.height.min(h.saturating_sub(y0)) {
@@ -27,24 +42,63 @@ fn blit(out: &mut Frame, f: &Frame, x0: u32, y0: u32) {
     }
 }
 
-/// Composes a `client` area.
+/// The tab bar strip: `row` (the bar's one row of cells, `cell_w` wide each) at `x0`, centred
+/// in a `width × height` band; the active tab's columns `active` get the full-height fill and
+/// the marker.
+pub fn bar_strip(
+    width: u32,
+    height: u32,
+    row: &Frame,
+    x0: u32,
+    cell_w: u32,
+    active: Option<(u16, u16)>,
+    style: &BarStyle,
+) -> Frame {
+    let (w, h) = (width.max(1), height.max(1));
+    let mut out = Frame::new(w, h, style.fill);
+    let y0 = h.saturating_sub(row.height) / 2;
+    let span = active.map(|(a, b)| (x0 + u32::from(a) * cell_w, x0 + u32::from(b) * cell_w));
+    if let (Some((a, b)), Some(fill)) = (span, style.active_fill) {
+        out.fill(a, 0, b.saturating_sub(a), h, fill);
+    }
+    blit(&mut out, row, x0, y0);
+    if let Some(c) = style.border {
+        out.fill(0, h - 1, w, 1, c);
+        if let (Some((a, b)), Some(fill)) = (span, style.active_fill) {
+            out.fill(a, h - 1, b.saturating_sub(a), 1, fill);
+        }
+    }
+    if let (Some((a, b)), Some((c, mh))) = (span, style.marker) {
+        out.fill(a, 0, b.saturating_sub(a), mh, c);
+    }
+    out
+}
+
+/// Composes a `client` area: the tab bar strip `bar` at the top (if any), the pane or state
+/// screen `main` below it, the banner across the pane's top, the IME composition at `ime`'s
+/// position (client coordinates).
 pub fn compose(
     client: (u32, u32),
     background: Rgb,
+    bar: Option<&Frame>,
     main: &Frame,
     banner: Option<&BannerLayer<'_>>,
     ime: Option<(&Frame, (u32, u32))>,
 ) -> Frame {
     let (w, h) = (client.0.max(1), client.1.max(1));
     let mut out = Frame::new(w, h, background);
-    blit(&mut out, main, 0, 0);
+    let top = bar.map_or(0, |b| b.height);
+    if let Some(b) = bar {
+        blit(&mut out, b, 0, 0);
+    }
+    blit(&mut out, main, 0, top);
     if let Some(b) = banner {
         let bh = b.frame.height;
-        out.fill(0, 0, w, bh, b.fill);
-        blit(&mut out, b.frame, 0, 0);
+        out.fill(0, top, w, bh, b.fill);
+        blit(&mut out, b.frame, 0, top);
         if let Some((color, width)) = b.marker {
-            out.fill(0, 0, width, bh, color);
-            out.fill(0, bh.saturating_sub(1), w, 1, tokens::BORDER_SUBTLE);
+            out.fill(0, top, width, bh, color);
+            out.fill(0, top + bh.saturating_sub(1), w, 1, tokens::BORDER_SUBTLE);
         }
     }
     if let Some((f, (x, y))) = ime {
@@ -57,6 +111,7 @@ pub fn compose(
 mod tests {
     use super::super::model::{EndReason, Phase, TermInfo};
     use super::super::screens::{self, Tone};
+    use super::super::tabs::{self, Item, Status};
     use super::*;
     use subak_term::TermView;
     use subak_term::render::{RenderOptions, Renderer, Theme};
@@ -142,6 +197,21 @@ mod tests {
         }
     }
 
+    fn stopped(name: &str) -> TermInfo {
+        TermInfo {
+            state: "stopped".into(),
+            ..term(name, 1)
+        }
+    }
+
+    fn hints() -> screens::Hints {
+        screens::Hints {
+            new: Some("Ctrl+T".into()),
+            close: Some("Ctrl+W".into()),
+            next: Some("Ctrl+Tab".into()),
+        }
+    }
+
     fn renderer(scale: f32, padding: f32) -> Renderer {
         Renderer::builtin(
             Theme::kim_dark(),
@@ -158,11 +228,18 @@ mod tests {
         let (cols, rows) = (60u16, 14u16);
         let mut r = renderer(scale, 8.0);
         let mut v = TermView::new(cols, rows, 0);
-        v.feed(&screens::screen(phase, "subak-golden", cols, rows).unwrap());
+        v.feed(&screens::screen(phase, "subak-golden", cols, rows, &hints()).unwrap());
         r.render(&v);
         let m = r.metrics();
         let client = (r.frame().width + 5, r.frame().height + 3);
-        let f = compose(client, Theme::kim_dark().background, r.frame(), None, None);
+        let f = compose(
+            client,
+            Theme::kim_dark().background,
+            None,
+            r.frame(),
+            None,
+            None,
+        );
         (f, (m.width, m.height), r.padding())
     }
 
@@ -171,14 +248,7 @@ mod tests {
         let phases = [
             ("connecting", Phase::Connecting),
             ("empty", Phase::Empty { notice: None }),
-            (
-                "choosing",
-                Phase::Choosing {
-                    list: vec![term("빌드", 4242), term("claude", 77)],
-                    selected: 1,
-                    notice: Some("`old` is no longer running".into()),
-                },
-            ),
+            ("stored", Phase::Stored(stopped("빌드"))),
             (
                 "failed",
                 Phase::Failed {
@@ -216,7 +286,7 @@ mod tests {
             term: term("work", 1),
             why: EndReason::DetachedBy(Some("cli client (pid 42)".into())),
         };
-        let b = screens::banner(&phase).unwrap();
+        let b = screens::banner(&phase, &hints()).unwrap();
         assert_eq!(b.tone, Tone::Info);
         let mut theme = Theme::kim_dark();
         theme.background = b.tone.fill();
@@ -237,7 +307,7 @@ mod tests {
             fill: b.tone.fill(),
             marker: Some((b.tone.color(), 3)),
         };
-        let f = compose(client, tokens::BG_BASE, r.frame(), Some(&layer), None);
+        let f = compose(client, tokens::BG_BASE, None, r.frame(), Some(&layer), None);
         assert_eq!(f.pixel(1, 1), tokens::INFO, "the status marker");
         assert_eq!(
             f.pixel(client.0 - 1, 2),
@@ -267,6 +337,7 @@ mod tests {
         let f = compose(
             client,
             tokens::BG_BASE,
+            None,
             r.frame(),
             None,
             Some((ir.frame(), at)),
@@ -276,5 +347,97 @@ mod tests {
             "ime_100",
             &golden("ime_100", &f, (m.width, m.height), 8, (cols, rows)),
         );
+    }
+
+    #[test]
+    fn golden_tab_bar_over_a_pane_at_100_and_200_percent() {
+        let items = [
+            Item {
+                name: "빌드",
+                status: Status::Running,
+            },
+            Item {
+                name: "claude",
+                status: Status::Running,
+            },
+            Item {
+                name: "kept",
+                status: Status::Stopped,
+            },
+        ];
+        for (scale, pct) in [(1.0f32, 100), (2.0, 200)] {
+            // The bar's own renderer: the UI size (12 px), no padding, bg.raised.
+            let mut theme = Theme::kim_dark();
+            theme.background = tokens::BG_RAISED;
+            theme.foreground = tokens::TEXT_SECONDARY;
+            let mut br = Renderer::builtin(
+                theme,
+                RenderOptions {
+                    scale,
+                    font_size: 12.0,
+                    padding: 0.0,
+                    ..RenderOptions::default()
+                },
+            );
+            let bm = br.metrics();
+            let cols = 60u16;
+            let bar = tabs::layout(&items, Some(1), None, cols, 0);
+            let mut bv = TermView::new(cols, 1, 0);
+            bv.feed(&bar.vt);
+            br.render(&bv);
+            let x0 = (4.0 * scale) as u32;
+            let width = x0 * 2 + u32::from(cols) * bm.width;
+            let height = ((32.0 * scale) as u32).max(bm.height + 2);
+            let marker = (2.0 * scale) as u32;
+            let strip = bar_strip(
+                width,
+                height,
+                br.frame(),
+                x0,
+                bm.width,
+                bar.active,
+                &BarStyle {
+                    fill: tokens::BG_RAISED,
+                    active_fill: Some(tokens::BG_BASE),
+                    marker: Some((tokens::ACCENT, marker)),
+                    border: Some(tokens::BORDER_SUBTLE),
+                },
+            );
+            let (a, b) = bar.active.unwrap();
+            let ax = x0 + u32::from(a) * bm.width + 1;
+            let bx = x0 + u32::from(b) * bm.width - 1;
+            assert_eq!(strip.pixel(ax, 0), tokens::ACCENT, "the active marker");
+            assert_eq!(strip.pixel(ax, marker), tokens::BG_BASE, "the active fill");
+            assert_eq!(
+                strip.pixel(bx, height - 1),
+                tokens::BG_BASE,
+                "joins the pane"
+            );
+            assert_eq!(strip.pixel(1, height - 1), tokens::BORDER_SUBTLE);
+            assert_eq!(strip.pixel(1, 1), tokens::BG_RAISED);
+            // Under the bar, the pane starts.
+            let mut r = renderer(scale, 8.0);
+            let mut pane = TermView::new(cols, 4, 0);
+            pane.feed(b"C:\\>dir\r\n");
+            r.render(&pane);
+            let client = (width.max(r.frame().width), height + r.frame().height);
+            let f = compose(client, tokens::BG_BASE, Some(&strip), r.frame(), None, None);
+            assert_eq!(f.pixel(ax, 0), tokens::ACCENT);
+            assert_eq!(
+                f.pixel(1, height),
+                tokens::BG_BASE,
+                "the pane under the bar"
+            );
+            check(
+                &format!("tabs_{pct}"),
+                &golden(
+                    &format!("tabs_{pct}"),
+                    br.frame(),
+                    (bm.width, bm.height),
+                    0,
+                    (cols, 1),
+                ),
+            );
+        }
     }
 }

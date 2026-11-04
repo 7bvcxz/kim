@@ -1,12 +1,16 @@
-//! The Win32 window of `subak-gui` (ADR 0039, docs/SUBAK_GUI.md): one top-level window, one
-//! thread, per-monitor DPI awareness v2, presented with GDI from the `subak-term` CPU renderer's
-//! frame (ADR 0036). Between events nothing runs: no timer (except the reconnect delay while
-//! disconnected), no animation, no GPU context.
+//! The Win32 window of `subak-gui` (ADR 0039, ADR 0042, docs/SUBAK_GUI.md): one top-level
+//! window, one thread, per-monitor DPI awareness v2, presented with GDI from the `subak-term` CPU
+//! renderer's frames (ADR 0036): the tab bar strip at the top (Step 17), the active tab's pane
+//! below it. Between events nothing runs: no timer (except the reconnect delay while
+//! disconnected and a `hold` shortcut's delay while its key is down), no animation, no GPU
+//! context.
 //!
 //! Message flow: the network threads queue frames and post `WM_NET`; the window feeds them to
 //! the pane's [`TermView`], renders, and invalidates only the rows that changed. Keys and the
-//! mouse go through the dispatch of ADR 0009 (IME guard, the window's shortcuts, then the
-//! program) and leave as input frames.
+//! mouse go through the dispatch of ADR 0009 (IME guard, the window's modal parts — the busy
+//! confirmation and the rename field —, the shortcuts of the hotkey contract, then the program)
+//! and leave as input frames. The tab menu is a native popup menu, opened outside the state
+//! borrow (it runs its own message loop); its choice comes back as `WM_MENU`.
 //!
 //! Re-entrancy: Win32 calls such as `SetWindowPos` send messages back to this window while its
 //! state is borrowed. Those calls are queued as [`After`] actions and run once the state is free;
@@ -22,12 +26,14 @@
 
 use super::Options;
 use super::compose;
-use super::keys::{self, Shortcut, Shortcuts, Typed, vk};
+use super::keys::{self, Action, Matcher, Outcome, Press, Typed, vk};
 use super::layout::{self, Cells, Rect};
-use super::model::{Effect, Frame as Data, Model, Phase, Want};
+use super::model::{Confirm, Effect, Frame as Data, Model, Phase, Want};
 use super::net::{self, Inbox, Link, Msg};
 use super::prefs::{LastTerminal, Placement, Prefs, ThemePref};
-use super::screens::{self, Banner, tokens};
+use super::screens::{self, Banner, Choice, Hints, tokens};
+use super::tabs::{self, Hit};
+use kim_hotkeys::keys::Side;
 use serde_json::{Value, json};
 use std::cell::RefCell;
 use std::io::Write as _;
@@ -46,7 +52,7 @@ use windows_sys::Win32::Foundation::{
 use windows_sys::Win32::Graphics::Dwm::DwmSetWindowAttribute;
 use windows_sys::Win32::Graphics::Gdi::{
     BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BeginPaint, COLOR_HIGHLIGHT, COLOR_WINDOW,
-    COLOR_WINDOWTEXT, CreateSolidBrush, DIB_RGB_COLORS, DeleteObject, EndPaint,
+    COLOR_WINDOWTEXT, ClientToScreen, CreateSolidBrush, DIB_RGB_COLORS, DeleteObject, EndPaint,
     EnumDisplayMonitors, FillRect, GetMonitorInfoW, GetSysColor, HBRUSH, HDC, HMONITOR,
     InvalidateRect, MONITORINFO, PAINTSTRUCT, ScreenToClient, SetDIBitsToDevice,
 };
@@ -73,18 +79,20 @@ use windows_sys::Win32::UI::Input::Ime::{
     ImmSetCompositionWindow,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    GetDoubleClickTime, GetKeyState, ReleaseCapture, SetCapture,
+    GetDoubleClickTime, GetKeyState, ReleaseCapture, SetCapture, ToUnicode,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    CREATESTRUCTW, CS_DBLCLKS, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow,
-    DispatchMessageW, GetClientRect, GetMessageW, GetWindowRect, HTCLIENT, IDC_ARROW, IDC_IBEAM,
-    IDI_APPLICATION, IsIconic, IsZoomed, KillTimer, LoadCursorW, LoadIconW, MINMAXINFO, MSG,
-    PostMessageW, PostQuitMessage, RegisterClassExW, SC_KEYMENU, SIZE_MAXIMIZED, SIZE_MINIMIZED,
+    AppendMenuW, CREATESTRUCTW, CS_DBLCLKS, CW_USEDEFAULT, CreatePopupMenu, CreateWindowExW,
+    DefWindowProcW, DestroyMenu, DestroyWindow, DispatchMessageW, GetClientRect, GetMessageW,
+    GetWindowRect, HTCLIENT, IDC_ARROW, IDC_IBEAM, IDI_APPLICATION, IsIconic, IsZoomed, KillTimer,
+    LoadCursorW, LoadIconW, MF_GRAYED, MF_SEPARATOR, MF_STRING, MINMAXINFO, MSG, PostMessageW,
+    PostQuitMessage, RegisterClassExW, SC_KEYMENU, SIZE_MAXIMIZED, SIZE_MINIMIZED,
     SPI_GETHIGHCONTRAST, SW_SHOWMAXIMIZED, SW_SHOWNOACTIVATE, SW_SHOWNORMAL, SWP_NOACTIVATE,
     SWP_NOMOVE, SWP_NOZORDER, SetCursor, SetTimer, SetWindowPos, SetWindowTextW, ShowWindow,
-    SystemParametersInfoW, TranslateMessage, WM_APP, WM_CHAR, WM_CLOSE, WM_COPYDATA, WM_DESTROY,
-    WM_DPICHANGED, WM_ERASEBKGND, WM_EXITSIZEMOVE, WM_GETMINMAXINFO, WM_IME_COMPOSITION,
-    WM_IME_ENDCOMPOSITION, WM_IME_SETCONTEXT, WM_IME_STARTCOMPOSITION, WM_KEYDOWN, WM_KILLFOCUS,
+    SystemParametersInfoW, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenuEx, TranslateMessage,
+    WM_APP, WM_CHAR, WM_CLOSE, WM_COPYDATA, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND,
+    WM_EXITSIZEMOVE, WM_GETMINMAXINFO, WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION,
+    WM_IME_SETCONTEXT, WM_IME_STARTCOMPOSITION, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS,
     WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE,
     WM_MOUSEWHEEL, WM_NCCREATE, WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS,
     WM_SETTINGCHANGE, WM_SIZE, WM_SYSCHAR, WM_SYSCOLORCHANGE, WM_SYSCOMMAND, WM_SYSKEYDOWN,
@@ -94,9 +102,25 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 
 /// The network threads have queued something.
 const WM_NET: u32 = WM_APP + 1;
+/// The tab menu's choice (`wParam` the command, `lParam` the tab index or -1).
+const WM_MENU: u32 = WM_APP + 2;
 const TIMER_RECONNECT: usize = 1;
 const TIMER_TEST_EXIT: usize = 2;
 const TIMER_SYNC: usize = 3;
+/// A `hold` shortcut's delay, armed only while its key is down.
+const TIMER_HOLD: usize = 4;
+/// The tab bar's text size (DESIGN_SYSTEM §2.3: UI body 12) and height (§2.4: 32), logical px.
+const BAR_FONT: f32 = 12.0;
+const BAR_HEIGHT: f32 = 32.0;
+/// The tab menu's commands.
+const CMD_RENAME: u32 = 1;
+const CMD_HIDE: u32 = 2;
+const CMD_MOVE_LEFT: u32 = 3;
+const CMD_MOVE_RIGHT: u32 = 4;
+const CMD_CLOSE: u32 = 5;
+const CMD_NEW: u32 = 6;
+/// `CMD_SHOW + k`: show the `k`-th hidden Terminal again.
+const CMD_SHOW: u32 = 100;
 /// `dwData` of a test command (`WM_COPYDATA`): "SUBK".
 pub const COPYDATA_TEST: usize = 0x5355_424B;
 /// Where the off-screen test window is placed: off every monitor of any real desktop.
@@ -162,6 +186,44 @@ enum After {
     Place(Option<(i32, i32)>, (i32, i32)),
     Title(String),
     Destroy,
+    /// The tab menu at a client point (its own message loop): the items `(command, label,
+    /// enabled)` (command 0: a separator), for tab `tab` (-1: the bar).
+    Menu {
+        items: Vec<(u32, String, bool)>,
+        at: (i32, i32),
+        tab: isize,
+    },
+}
+
+/// The tab bar: its renderer (the UI size), the laid-out bar and the composed strip.
+#[derive(Debug)]
+struct TabBar {
+    renderer: Option<Renderer>,
+    layout: tabs::Bar,
+    strip: Frame,
+    /// The strip's height and the row's left inset, in device pixels.
+    height: u32,
+    pad_x: u32,
+    /// The first visible tab (scrolling).
+    first: usize,
+}
+
+/// The rename field in the active tab (keyboard text capture).
+#[derive(Debug, Clone)]
+struct RenameUi {
+    id: String,
+    text: String,
+    /// The caret, in characters.
+    cursor: usize,
+}
+
+/// The confirmation before ending a busy Terminal.
+#[derive(Debug, Clone)]
+struct ConfirmUi {
+    info: Confirm,
+    focus: Choice,
+    /// The buttons' columns on the banner.
+    spans: Vec<(u16, u16, Choice)>,
 }
 
 /// A small one-row surface drawn over the pane: the banner, or the IME composition. Its own
@@ -213,7 +275,12 @@ struct App {
     /// Time, cell and count of the last left click (double and triple clicks).
     clicks: (Option<Instant>, (u16, u16), u32),
     wheel: i32,
-    shortcuts: Shortcuts,
+    matcher: Matcher,
+    bar: TabBar,
+    rename: Option<RenameUi>,
+    confirm: Option<ConfirmUi>,
+    /// The tab list last reported to the test hooks.
+    reported_tabs: Value,
     /// The window's last restored (not maximized or minimized) outer rectangle.
     normal: Option<Rect>,
     test_clipboard: String,
@@ -389,13 +456,30 @@ impl App {
         unsafe { InvalidateRect(self.hwnd, null(), 0) };
     }
 
+    /// The pane's top edge: the tab bar's height.
+    fn top(&self) -> u32 {
+        self.bar.height
+    }
+
     fn invalidate_rows(&self, from: u16, to: u16) {
         let c = self.cells();
+        let top = self.top();
         let rc = RECT {
             left: 0,
-            top: (c.pad + u32::from(from) * c.height) as i32,
+            top: (top + c.pad + u32::from(from) * c.height) as i32,
             right: self.client.0 as i32,
-            bottom: (c.pad + u32::from(to) * c.height) as i32,
+            bottom: (top + c.pad + u32::from(to) * c.height) as i32,
+        };
+        // SAFETY: invalidates part of our own window.
+        unsafe { InvalidateRect(self.hwnd, &raw const rc, 0) };
+    }
+
+    fn invalidate_bar(&self) {
+        let rc = RECT {
+            left: 0,
+            top: 0,
+            right: self.client.0 as i32,
+            bottom: self.top() as i32,
         };
         // SAFETY: invalidates part of our own window.
         unsafe { InvalidateRect(self.hwnd, &raw const rc, 0) };
@@ -425,11 +509,23 @@ impl App {
         self.place_ime();
     }
 
+    /// The keys the screens name, as bound now.
+    fn hints(&self) -> Hints {
+        let k = |a| self.matcher.keys_for(a).map(String::from);
+        Hints {
+            new: k(Action::NewTerminal),
+            close: k(Action::CloseTerminal),
+            next: k(Action::NextTab),
+        }
+    }
+
     /// Rebuilds the state screen for the current phase and grid.
     fn rebuild_state(&mut self) {
         let (cols, rows) = self.grid;
         let mut v = TermView::new(cols, rows, 0);
-        if let Some(vt) = screens::screen(&self.model.phase, &self.endpoint, cols, rows) {
+        if let Some(vt) =
+            screens::screen(&self.model.phase, &self.endpoint, cols, rows, &self.hints())
+        {
             v.feed(&if self.hc_theme() {
                 screens::high_contrast(&vt)
             } else {
@@ -439,24 +535,162 @@ impl App {
         self.state_view = v;
     }
 
-    /// Rebuilds the banner (its text, size and colours).
-    fn rebuild_banner(&mut self) {
-        let b = screens::banner(&self.model.phase).or_else(|| {
-            self.notice.as_ref().map(|n| Banner {
-                tone: screens::Tone::Info,
-                text: format!("{n} (any key hides this)"),
+    /// The tab bar's renderer theme: `bg.raised` with secondary text (the system colours in
+    /// High Contrast).
+    fn bar_theme(&self) -> Theme {
+        let mut theme = self.theme();
+        if !self.hc_theme() {
+            theme.background = tokens::BG_RAISED;
+            theme.foreground = tokens::TEXT_SECONDARY;
+        }
+        theme
+    }
+
+    /// Lays out and renders the tab bar (the tabs, their states, the rename field) and composes
+    /// its strip.
+    fn rebuild_bar(&mut self) {
+        let scale = self.scale();
+        let hc = self.hc_theme();
+        let theme = self.bar_theme();
+        let mut r = match self.bar.renderer.take() {
+            Some(r) if (r.options().scale - scale).abs() < f32::EPSILON => r,
+            _ => make_renderer(theme.clone(), BAR_FONT, scale, 0.0),
+        };
+        r.set_theme(theme.clone());
+        let m = r.metrics();
+        let height = (layout::px(BAR_HEIGHT, self.dpi).max(1) as u32).max(m.height + 2);
+        let pad_x = layout::px(4.0, self.dpi).max(0) as u32;
+        let cols = (self.client.0.saturating_sub(2 * pad_x) / m.width.max(1)).max(1);
+        let cols = u16::try_from(cols).unwrap_or(u16::MAX);
+        let connected = self.model.connected();
+        let items: Vec<tabs::Item<'_>> = self
+            .model
+            .tabs()
+            .iter()
+            .map(|t| tabs::Item {
+                name: &t.name,
+                status: if t.gone() {
+                    tabs::Status::Gone
+                } else if connected {
+                    tabs::Status::from_state(&t.state)
+                } else {
+                    tabs::Status::Unknown
+                },
             })
+            .collect();
+        let active = self.model.active();
+        let edit = self.rename.as_ref().map(|e| tabs::Edit {
+            text: &e.text,
+            cursor: e.cursor,
         });
-        let Some(b) = b else {
+        let bar = tabs::layout(&items, active, edit.as_ref(), cols, self.bar.first);
+        drop(items);
+        let mut view = TermView::new(cols, 1, 0);
+        if hc {
+            view.feed(&screens::high_contrast(&bar.vt));
+        } else {
+            view.feed(&bar.vt);
+        }
+        r.render(&view);
+        let style = if hc {
+            compose::BarStyle {
+                fill: theme.background,
+                active_fill: None,
+                marker: None,
+                border: Some(theme.foreground),
+            }
+        } else {
+            compose::BarStyle {
+                fill: tokens::BG_RAISED,
+                active_fill: Some(tokens::BG_BASE),
+                marker: Some((tokens::ACCENT, layout::px(2.0, self.dpi).max(1) as u32)),
+                border: Some(tokens::BORDER_SUBTLE),
+            }
+        };
+        let strip = compose::bar_strip(
+            self.client.0,
+            height,
+            r.frame(),
+            pad_x,
+            m.width,
+            bar.active,
+            &style,
+        );
+        self.bar = TabBar {
+            renderer: Some(r),
+            first: bar.first,
+            layout: bar,
+            strip,
+            height,
+            pad_x,
+        };
+        self.invalidate_bar();
+        self.report_tabs();
+    }
+
+    /// Reports the tabs to the test hooks when they changed.
+    fn report_tabs(&mut self) {
+        if !self.opts.test {
+            return;
+        }
+        let v = self.tabs_json();
+        if v != self.reported_tabs {
+            self.event(
+                &json!({"event": "tabs", "tabs": v["tabs"], "active": v["active"],
+                "hidden": v["hidden"]}),
+            );
+            self.reported_tabs = v;
+        }
+    }
+
+    fn tabs_json(&self) -> Value {
+        let active = self.model.active();
+        json!({
+            "tabs": self.model.tabs().iter().enumerate().map(|(i, t)| json!({
+                "id": t.id, "name": t.name, "state": t.state, "active": Some(i) == active,
+                "status": tabs::Status::from_state(&t.state).word(),
+            })).collect::<Vec<_>>(),
+            "active": active,
+            "hidden": self.model.hidden().iter().map(|t| json!({"id": t.id, "name": t.name}))
+                .collect::<Vec<_>>(),
+        })
+    }
+
+    /// Rebuilds the banner: the busy confirmation, else a pending shortcut sequence, else a
+    /// notice, else the phase's banner.
+    fn rebuild_banner(&mut self) {
+        let hc = self.hc_theme();
+        let content: Option<(screens::Tone, Option<Banner>)> = if let Some(c) = &self.confirm {
+            let _ = c;
+            Some((screens::Tone::Danger, None))
+        } else if let Some(keys) = self.matcher.pending_keys() {
+            Some((
+                screens::Tone::Info,
+                Some(Banner {
+                    tone: screens::Tone::Info,
+                    text: format!("{keys} … waiting for the next key (Esc cancels)"),
+                }),
+            ))
+        } else if let Some(n) = &self.notice {
+            Some((
+                screens::Tone::Info,
+                Some(Banner {
+                    tone: screens::Tone::Info,
+                    text: format!("{n} (any key hides this)"),
+                }),
+            ))
+        } else {
+            screens::banner(&self.model.phase, &self.hints()).map(|b| (b.tone, Some(b)))
+        };
+        let Some((tone, text)) = content else {
             if self.banner.take().is_some() {
                 self.invalidate_all();
             }
             return;
         };
-        let hc = self.hc_theme();
         let mut theme = self.theme();
         if !hc {
-            theme.background = b.tone.fill();
+            theme.background = tone.fill();
             theme.foreground = tokens::TEXT_PRIMARY;
         }
         let mut r = match self.banner.take() {
@@ -473,7 +707,21 @@ impl App {
         let cols = ((self.client.0.saturating_sub(2 * r.padding())) / m.width.max(1)).max(1);
         let cols = u16::try_from(cols).unwrap_or(u16::MAX);
         let mut view = TermView::new(cols, 1, 0);
-        let vt = screens::banner_vt(&b, cols);
+        let (vt, b) = match (&text, &mut self.confirm) {
+            (None, Some(c)) => {
+                let (vt, spans) = screens::confirm_vt(&c.info, c.focus, cols);
+                c.spans = spans;
+                (
+                    vt,
+                    Banner {
+                        tone,
+                        text: format!("confirm: end `{}`", c.info.name),
+                    },
+                )
+            }
+            (Some(b), _) => (screens::banner_vt(b, cols), b.clone()),
+            (None, None) => return,
+        };
         view.feed(&if hc { screens::high_contrast(&vt) } else { vt });
         r.render(&view);
         self.banner = Some((b, Overlay { renderer: r }));
@@ -481,7 +729,7 @@ impl App {
     }
 
     /// Draws the IME composition inline at the cursor (DESIGN_SYSTEM §4.4): an underlined run
-    /// on `bg.overlay`, in the terminal font.
+    /// on `bg.overlay`, in the terminal font (the tab bar's size while renaming a tab).
     fn rebuild_ime(&mut self) {
         if self.composition.is_empty() {
             if self.ime.take().is_some() {
@@ -500,14 +748,19 @@ impl App {
             .map(|c| usize::from(subak_term::screen::char_width(c)))
             .sum();
         let cols = u16::try_from(cells.max(1)).unwrap_or(u16::MAX);
+        let size = if self.rename.is_some() {
+            BAR_FONT
+        } else {
+            self.prefs.font_size
+        };
         let mut r = match self.ime.take() {
             Some(o)
-                if o.renderer.options().font_size == self.prefs.font_size
+                if o.renderer.options().font_size == size
                     && o.renderer.options().scale == self.scale() =>
             {
                 o.renderer
             }
-            _ => make_renderer(theme.clone(), self.prefs.font_size, self.scale(), 0.0),
+            _ => make_renderer(theme.clone(), size, self.scale(), 0.0),
         };
         r.set_theme(theme);
         let mut view = TermView::new(cols, 1, 0);
@@ -518,8 +771,20 @@ impl App {
         self.place_ime();
     }
 
-    /// The cursor cell's top-left corner in client pixels.
-    fn cursor_px(&self) -> (i32, i32) {
+    /// The cursor cell's top-left corner in client pixels (the rename caret while renaming),
+    /// and the cell height there.
+    fn cursor_at(&self) -> (i32, i32, i32) {
+        if self.rename.is_some()
+            && let (Some(col), Some(r)) = (self.bar.layout.caret, &self.bar.renderer)
+        {
+            let m = r.metrics();
+            let y = self.bar.height.saturating_sub(m.height) / 2;
+            return (
+                (self.bar.pad_x + u32::from(col) * m.width) as i32,
+                y as i32,
+                m.height as i32,
+            );
+        }
         let c = self.cells();
         let (col, row) = if self.model.phase.shows_pane() {
             self.pane.cursor_in_view().unwrap_or((0, 0))
@@ -528,14 +793,19 @@ impl App {
         };
         (
             (c.pad + u32::from(col) * c.width) as i32,
-            (c.pad + u32::from(row) * c.height) as i32,
+            (self.top() + c.pad + u32::from(row) * c.height) as i32,
+            c.height as i32,
         )
+    }
+
+    fn cursor_px(&self) -> (i32, i32) {
+        let (x, y, _) = self.cursor_at();
+        (x, y)
     }
 
     /// Tells the IME where the cursor is (its candidate list opens below it).
     fn place_ime(&self) {
-        let (x, y) = self.cursor_px();
-        let h = self.cells().height as i32;
+        let (x, y, h) = self.cursor_at();
         // SAFETY: our window's input context, released below; plain structures.
         unsafe {
             let himc = ImmGetContext(self.hwnd);
@@ -559,8 +829,9 @@ impl App {
         }
     }
 
-    /// The client area as the window shows it, composed in memory: the frame, the background
-    /// around it, the banner and the IME composition. What `WM_PAINT` presents, for test shots.
+    /// The client area as the window shows it, composed in memory: the tab bar, the frame, the
+    /// background around it, the banner and the IME composition. What `WM_PAINT` presents, for
+    /// test shots.
     fn composed(&self) -> Frame {
         let banner = self.banner.as_ref().map(|(b, o)| compose::BannerLayer {
             frame: o.renderer.frame(),
@@ -572,6 +843,7 @@ impl App {
         compose::compose(
             self.client,
             self.theme().background,
+            Some(&self.bar.strip),
             self.renderer.frame(),
             banner.as_ref(),
             self.ime
@@ -633,20 +905,22 @@ impl App {
         // SAFETY: standard paint handling of our own window; every frame lives in `self`.
         unsafe {
             let dc = BeginPaint(self.hwnd, &raw mut ps);
+            let top = self.top();
+            present(dc, &self.bar.strip, 0, 0);
             let f = self.renderer.frame();
-            present(dc, f, 0, 0);
+            present(dc, f, 0, top as i32);
             let (cw, ch) = self.client;
             // The background around the grid (the client area is rarely a whole number of cells).
             let rc_right = RECT {
                 left: f.width as i32,
-                top: 0,
+                top: top as i32,
                 right: cw as i32,
                 bottom: ch as i32,
             };
             FillRect(dc, &raw const rc_right, self.bg_brush);
             let rc_bottom = RECT {
                 left: 0,
-                top: f.height as i32,
+                top: (top + f.height) as i32,
                 right: f.width as i32,
                 bottom: ch as i32,
             };
@@ -656,19 +930,19 @@ impl App {
                 fill(
                     dc,
                     bf.width,
-                    0,
+                    top,
                     cw.saturating_sub(bf.width),
                     bf.height,
                     o.renderer.theme().background,
                 );
-                present(dc, bf, 0, 0);
+                present(dc, bf, 0, top as i32);
                 if !self.hc_theme() {
                     let marker = layout::px(3.0, self.dpi).max(1) as u32;
-                    fill(dc, 0, 0, marker, bf.height, b.tone.color());
+                    fill(dc, 0, top, marker, bf.height, b.tone.color());
                     fill(
                         dc,
                         0,
-                        bf.height.saturating_sub(1),
+                        top + bf.height.saturating_sub(1),
                         cw,
                         1,
                         tokens::BORDER_SUBTLE,
@@ -694,6 +968,7 @@ impl App {
         }
         self.renderer.set_theme(theme);
         self.rebuild_state();
+        self.rebuild_bar();
         self.rebuild_banner();
         self.rebuild_ime();
         self.redraw();
@@ -725,8 +1000,10 @@ impl App {
 
     /// Recomputes the grid for the client area and the current cells.
     fn relayout(&mut self) {
+        // The bar first: its height (a DPI matter) is where the pane starts.
+        self.rebuild_bar();
         let (w, h) = self.client;
-        let grid = self.cells().grid_for(w, h);
+        let grid = self.cells().grid_for(w, h.saturating_sub(self.top()));
         if grid != self.grid {
             self.grid = grid;
             if matches!(self.model.phase, Phase::Attached { .. }) {
@@ -854,10 +1131,12 @@ impl App {
     }
 
     fn apply(&mut self, effects: Vec<Effect>) {
+        let mut tabs = false;
         for e in effects {
             match e {
                 Effect::Send(m) => self.send(&m),
                 Effect::Phase => self.on_phase(),
+                Effect::Tabs => tabs = true,
                 Effect::ResetView {
                     cols,
                     rows,
@@ -882,8 +1161,68 @@ impl App {
                     }
                 }
                 Effect::Connect => self.connect(true),
+                Effect::Notice(n) => {
+                    self.event(&json!({"event": "notice", "text": n}));
+                    self.notice = Some(n);
+                    self.rebuild_banner();
+                }
+                Effect::Confirm(c) => {
+                    self.event(&json!({"event": "confirm", "id": c.id, "name": c.name,
+                        "program": c.program, "processes": c.processes}));
+                    self.matcher.cancel();
+                    self.rename = None;
+                    self.confirm = Some(ConfirmUi {
+                        info: c,
+                        focus: Choice::Cancel,
+                        spans: Vec::new(),
+                    });
+                    self.rebuild_banner();
+                    tabs = true;
+                }
+                Effect::Renamed(r) => {
+                    self.event(&json!({"event": "renamed", "ok": r.is_ok(),
+                        "error": r.as_ref().err()}));
+                    match r {
+                        Ok(()) => self.rename = None,
+                        Err(e) => {
+                            self.notice = Some(format!("The name was not changed: {e}"));
+                            self.rebuild_banner();
+                        }
+                    }
+                    tabs = true;
+                }
             }
         }
+        if tabs {
+            self.on_tabs();
+        }
+    }
+
+    /// The tabs changed: drop a rename field or a confirmation whose Terminal is no longer the
+    /// shown tab, and redraw the bar.
+    fn on_tabs(&mut self) {
+        let shown = self.model.terminal().map(|t| t.id.clone());
+        if self
+            .rename
+            .as_ref()
+            .is_some_and(|r| Some(&r.id) != shown.as_ref())
+        {
+            self.rename = None;
+        }
+        if let Some(c) = &self.confirm {
+            let still = self
+                .model
+                .tabs()
+                .iter()
+                .any(|t| t.id == c.info.id && t.running());
+            if !still || Some(&c.info.id) != shown.as_ref() {
+                let name = c.info.name.clone();
+                self.confirm = None;
+                self.notice = Some(format!("`{name}` is no longer shown; nothing was ended"));
+                self.rebuild_banner();
+            }
+        }
+        self.rebuild_bar();
     }
 
     fn reset_pane(&mut self, cols: u16, rows: u16, history: usize) {
@@ -910,13 +1249,9 @@ impl App {
             Phase::Disconnected {
                 attempt, reason, ..
             } => json!({"attempt": attempt, "reason": reason}),
-            Phase::Choosing {
-                list,
-                selected,
-                notice,
-            } => json!({"count": list.len(), "selected": selected, "notice": notice}),
             Phase::Empty { notice } => json!({"notice": notice}),
             Phase::Ended { why, .. } => json!({"why": format!("{why:?}")}),
+            Phase::Stored(t) => json!({"state": t.state}),
             _ => Value::Null,
         };
         self.event(
@@ -1041,20 +1376,75 @@ impl App {
     // Keyboard.
 
     /// A key press. Returns whether it was handled (its character, if any, is then dropped).
-    fn key_down(&mut self, code: u32, m: Mods) -> bool {
+    fn key_down(&mut self, p: &Press, m: Mods) -> bool {
+        let code = p.vk;
         // 1. IME composition guard (ADR 0009): keys belong to the input method.
         if !self.composition.is_empty() || code == vk::PROCESSKEY {
             return false;
         }
-        if matches!(code, vk::SHIFT | vk::CONTROL | vk::MENU) {
+        if matches!(
+            code,
+            vk::SHIFT
+                | vk::CONTROL
+                | vk::MENU
+                | vk::LSHIFT
+                | vk::RSHIFT
+                | vk::LCONTROL
+                | vk::RCONTROL
+                | vk::LMENU
+                | vk::RMENU
+                | vk::LWIN
+                | vk::RWIN
+        ) {
             return false;
         }
         if self.notice.take().is_some() {
             self.rebuild_banner();
         }
-        // 2. (The Ctrl+B prefix table is Step 23's.) 3. The window's shortcuts.
-        if let Some(s) = self.shortcuts.lookup(code, m) {
-            self.shortcut(s);
+        // The window's modal parts take the keyboard: nothing reaches the program, no shortcut
+        // fires (Alt+F4 still closes the window: it never gets here).
+        if self.confirm.is_some() {
+            self.confirm_key(code, m);
+            return true;
+        }
+        if self.rename.is_some() {
+            return self.rename_key(code, m);
+        }
+        // 2. (The Ctrl+B prefix table is Step 23's.) 3. The shortcuts (hotkey contract).
+        match self.matcher.press(p) {
+            Outcome::Fire(a) => {
+                self.rebuild_banner();
+                self.run(a);
+                return true;
+            }
+            Outcome::Pending => {
+                self.rebuild_banner();
+                return true;
+            }
+            Outcome::Cancelled => {
+                self.notice = Some("That key sequence is not a shortcut".into());
+                self.rebuild_banner();
+                return true;
+            }
+            Outcome::Swallowed => {
+                self.rebuild_banner();
+                return true;
+            }
+            Outcome::Hold(ms) => {
+                let ms = u32::try_from(ms).unwrap_or(u32::MAX).max(1);
+                // SAFETY: a one-shot timer of our own window, only while the key is down.
+                unsafe { SetTimer(self.hwnd, TIMER_HOLD, ms, None) };
+                return true;
+            }
+            Outcome::Ignored => {}
+        }
+        // The context-menu key opens the shown tab's menu (reserved navigation, §3.5).
+        if code == vk::APPS && m == Mods::NONE {
+            if let Some(i) = self.model.active() {
+                self.open_menu(Some(i), None);
+            } else {
+                self.open_menu(None, None);
+            }
             return true;
         }
         // 4. The program, or the state screen.
@@ -1074,18 +1464,6 @@ impl App {
                 self.redraw();
                 true
             }
-            Phase::Choosing { .. } => {
-                let fx = match code {
-                    vk::UP => self.model.choose(-1, None),
-                    vk::DOWN => self.model.choose(1, None),
-                    vk::HOME | vk::PRIOR => self.model.choose(-10_000, None),
-                    vk::END | vk::NEXT => self.model.choose(10_000, None),
-                    vk::RETURN | vk::SPACE => self.model.activate(),
-                    _ => return false,
-                };
-                self.apply(fx);
-                true
-            }
             _ if code == vk::RETURN => {
                 let fx = self.model.activate();
                 self.apply(fx);
@@ -1093,6 +1471,142 @@ impl App {
             }
             _ => false,
         }
+    }
+
+    /// A key went up: a `release` shortcut of that key fires.
+    fn key_up(&mut self, code: u32) {
+        // SAFETY: our own timer; a hold that is released early does nothing.
+        unsafe { KillTimer(self.hwnd, TIMER_HOLD) };
+        if let Some(a) = self.matcher.release(code) {
+            self.run(a);
+        }
+    }
+
+    /// The busy confirmation's keys: Tab and the arrows move between Cancel and End Terminal,
+    /// Enter or Space answers with the focused one, Esc cancels. Everything else is swallowed.
+    fn confirm_key(&mut self, code: u32, m: Mods) {
+        let Some(c) = &mut self.confirm else {
+            return;
+        };
+        match code {
+            vk::ESCAPE => self.answer_confirm(Choice::Cancel),
+            vk::TAB | vk::LEFT | vk::RIGHT if !m.ctrl && !m.alt => {
+                c.focus = match c.focus {
+                    Choice::Cancel => Choice::End,
+                    Choice::End => Choice::Cancel,
+                };
+                self.rebuild_banner();
+            }
+            vk::RETURN | vk::SPACE if m == Mods::NONE => {
+                let choice = c.focus;
+                self.answer_confirm(choice);
+            }
+            _ => {}
+        }
+    }
+
+    fn answer_confirm(&mut self, choice: Choice) {
+        let Some(c) = self.confirm.take() else {
+            return;
+        };
+        self.event(&json!({"event": "confirm_answer", "id": c.info.id,
+            "choice": if choice == Choice::End { "end" } else { "cancel" }}));
+        self.rebuild_banner();
+        if choice == Choice::End {
+            let fx = self.model.confirm_close(&c.info.id);
+            self.apply(fx);
+        }
+    }
+
+    /// Starts renaming the shown tab's Terminal (`terminal.rename`, Ctrl+Shift+R).
+    fn start_rename(&mut self) {
+        let Some(t) = self.model.terminal().cloned() else {
+            return;
+        };
+        if !self.model.connected() || t.gone() {
+            self.notice = Some(format!("`{}` cannot be renamed now", t.name));
+            self.rebuild_banner();
+            return;
+        }
+        self.matcher.cancel();
+        self.rename = Some(RenameUi {
+            id: t.id,
+            cursor: t.name.chars().count(),
+            text: t.name,
+        });
+        self.event(&json!({"event": "rename", "editing": true}));
+        self.rebuild_bar();
+        self.place_ime();
+    }
+
+    /// The rename field's keys: Enter saves (by id), Esc cancels, Backspace/Delete/arrows/Home/
+    /// End edit; characters arrive as `WM_CHAR` (or IME results). Shortcut chords are swallowed.
+    fn rename_key(&mut self, code: u32, m: Mods) -> bool {
+        let Some(r) = &mut self.rename else {
+            return false;
+        };
+        let n = r.text.chars().count();
+        let at = |r: &RenameUi, i: usize| {
+            r.text
+                .char_indices()
+                .nth(i)
+                .map_or(r.text.len(), |(b, _)| b)
+        };
+        match code {
+            vk::RETURN => {
+                let (id, name) = (r.id.clone(), r.text.trim().to_string());
+                if name.is_empty() {
+                    self.notice = Some("A Terminal name needs at least one character".into());
+                    self.rebuild_banner();
+                } else {
+                    let fx = self.model.rename(&id, &name);
+                    self.apply(fx);
+                }
+            }
+            vk::ESCAPE => {
+                self.rename = None;
+                self.event(&json!({"event": "rename", "editing": false}));
+            }
+            vk::BACK if r.cursor > 0 => {
+                let (a, b) = (at(r, r.cursor - 1), at(r, r.cursor));
+                r.text.replace_range(a..b, "");
+                r.cursor -= 1;
+            }
+            vk::DELETE if r.cursor < n => {
+                let (a, b) = (at(r, r.cursor), at(r, r.cursor + 1));
+                r.text.replace_range(a..b, "");
+            }
+            vk::LEFT => r.cursor = r.cursor.saturating_sub(1),
+            vk::RIGHT => r.cursor = (r.cursor + 1).min(n),
+            vk::HOME => r.cursor = 0,
+            vk::END => r.cursor = n,
+            vk::BACK | vk::DELETE | vk::TAB | vk::UP | vk::DOWN | vk::PRIOR | vk::NEXT => {}
+            _ if m.ctrl || m.alt || keys::special_key(code).is_some() => {}
+            // A character key: its WM_CHAR goes into the field.
+            _ => return false,
+        }
+        self.rebuild_bar();
+        self.place_ime();
+        true
+    }
+
+    /// A typed character in the rename field.
+    fn rename_char(&mut self, c: char) {
+        let Some(r) = &mut self.rename else {
+            return;
+        };
+        if c.is_control() || r.text.chars().count() >= 64 {
+            return;
+        }
+        let b = r
+            .text
+            .char_indices()
+            .nth(r.cursor)
+            .map_or(r.text.len(), |(b, _)| b);
+        r.text.insert(b, c);
+        r.cursor += 1;
+        self.rebuild_bar();
+        self.place_ime();
     }
 
     /// A character from the keyboard layout (`WM_CHAR`, `WM_SYSCHAR` with `alt`).
@@ -1118,6 +1632,15 @@ impl App {
     }
 
     fn type_char(&mut self, c: char, alt: bool, held: Mods) {
+        if self.confirm.is_some() {
+            return;
+        }
+        if self.rename.is_some() {
+            if !alt {
+                self.rename_char(c);
+            }
+            return;
+        }
         if !matches!(self.model.phase, Phase::Attached { .. }) {
             return;
         }
@@ -1133,23 +1656,213 @@ impl App {
         self.redraw();
     }
 
-    fn shortcut(&mut self, s: Shortcut) {
+    /// Before the shown tab changes: a program that asked for focus reports learns that it
+    /// lost the focus (as when the window loses it).
+    fn leave_pane(&mut self) {
+        self.rename = None;
+        if self.confirm.take().is_some() {
+            self.rebuild_banner();
+        }
+        if matches!(self.model.phase, Phase::Attached { .. })
+            && let Some(report) = self.pane.focus(false)
+        {
+            self.input(&report);
+        }
+    }
+
+    /// Runs a shortcut's (or a menu's) action.
+    fn run(&mut self, a: Action) {
         let rows = isize::try_from(self.grid.1).unwrap_or(1).max(1);
-        match s {
-            Shortcut::Copy => self.copy(),
-            Shortcut::Paste => self.paste(),
-            Shortcut::ZoomIn => self.set_font_size(Prefs::zoomed(self.prefs.font_size, 1)),
-            Shortcut::ZoomOut => self.set_font_size(Prefs::zoomed(self.prefs.font_size, -1)),
-            Shortcut::ZoomReset => self.set_font_size(Prefs::zoomed(self.prefs.font_size, 0)),
-            Shortcut::ScrollPageUp => self.scroll(rows),
-            Shortcut::ScrollPageDown => self.scroll(-rows),
-            Shortcut::ScrollLineUp => self.scroll(1),
-            Shortcut::ScrollLineDown => self.scroll(-1),
-            Shortcut::ScrollTop => self.scroll(isize::MAX / 2),
-            Shortcut::ScrollBottom => {
+        self.event(&json!({"event": "action", "action": a.id()}));
+        match a {
+            Action::NewTerminal => {
+                self.leave_pane();
+                let fx = self.model.create();
+                self.apply(fx);
+            }
+            Action::CloseTerminal => {
+                let fx = self.model.close_active();
+                self.apply(fx);
+            }
+            Action::NextTab | Action::PreviousTab => {
+                if self.model.tabs().len() > 1 {
+                    self.leave_pane();
+                }
+                let fx = self.model.cycle(if a == Action::NextTab { 1 } else { -1 });
+                self.apply(fx);
+            }
+            Action::HideTab => {
+                if let Some(i) = self.model.active() {
+                    self.leave_pane();
+                    let fx = self.model.hide(i);
+                    self.apply(fx);
+                }
+            }
+            Action::MoveTabLeft | Action::MoveTabRight => {
+                if let Some(i) = self.model.active() {
+                    let d = if a == Action::MoveTabLeft { -1 } else { 1 };
+                    let fx = self.model.move_tab(i, d);
+                    self.apply(fx);
+                }
+            }
+            Action::RenameTerminal => self.start_rename(),
+            Action::Copy => self.copy(),
+            Action::Paste => self.paste(),
+            Action::ZoomIn => self.set_font_size(Prefs::zoomed(self.prefs.font_size, 1)),
+            Action::ZoomOut => self.set_font_size(Prefs::zoomed(self.prefs.font_size, -1)),
+            Action::ZoomReset => self.set_font_size(Prefs::zoomed(self.prefs.font_size, 0)),
+            Action::ScrollPageUp => self.scroll(rows),
+            Action::ScrollPageDown => self.scroll(-rows),
+            Action::ScrollLineUp => self.scroll(1),
+            Action::ScrollLineDown => self.scroll(-1),
+            Action::ScrollTop => self.scroll(isize::MAX / 2),
+            Action::ScrollBottom => {
                 self.pane.scroll_to_bottom();
                 self.redraw();
             }
+        }
+    }
+
+    /// Shows tab `i` (a click, the menu).
+    fn select_tab(&mut self, i: usize) {
+        if self.model.active() == Some(i) {
+            return;
+        }
+        self.leave_pane();
+        let fx = self.model.select(i);
+        self.apply(fx);
+    }
+
+    /// The tab menu of tab `tab` (or of the bar), at a client point (`None`: under the tab).
+    fn open_menu(&mut self, tab: Option<usize>, at: Option<(i32, i32)>) {
+        let keys = |a| {
+            self.matcher
+                .keys_for(a)
+                .map_or_else(String::new, |k| format!("\t{k}"))
+        };
+        let mut items: Vec<(u32, String, bool)> = Vec::new();
+        let connected = self.model.connected();
+        if let Some(t) = tab.and_then(|i| self.model.tabs().get(i)) {
+            let n = self.model.tabs().len();
+            let i = tab.unwrap_or(0);
+            items.push((
+                CMD_RENAME,
+                format!("Rename…{}", keys(Action::RenameTerminal)),
+                connected && !t.gone(),
+            ));
+            items.push((
+                CMD_HIDE,
+                format!(
+                    "Hide tab (the Terminal keeps running){}",
+                    keys(Action::HideTab)
+                ),
+                true,
+            ));
+            items.push((CMD_MOVE_LEFT, "Move left".into(), i > 0));
+            items.push((CMD_MOVE_RIGHT, "Move right".into(), i + 1 < n));
+            items.push((0, String::new(), true));
+            let close = if t.gone() {
+                "Close tab".to_string()
+            } else if t.stored() {
+                "Remove Terminal (nothing runs in it)".to_string()
+            } else {
+                "Close Terminal (ends it; asks when busy)…".to_string()
+            };
+            items.push((
+                CMD_CLOSE,
+                format!("{close}{}", keys(Action::CloseTerminal)),
+                connected,
+            ));
+            items.push((0, String::new(), true));
+        }
+        items.push((
+            CMD_NEW,
+            format!("New Terminal{}", keys(Action::NewTerminal)),
+            connected,
+        ));
+        if !self.model.hidden().is_empty() {
+            items.push((0, String::new(), true));
+            for (k, h) in self.model.hidden().iter().enumerate().take(50) {
+                items.push((
+                    CMD_SHOW + k as u32,
+                    format!("Show hidden: {}", h.name),
+                    connected,
+                ));
+            }
+        }
+        let at = at.unwrap_or_else(|| {
+            let x = tab
+                .and_then(|i| {
+                    self.bar
+                        .layout
+                        .spans
+                        .iter()
+                        .find(|s| s.2 == Hit::Tab(i))
+                        .map(|s| s.0)
+                })
+                .unwrap_or(0);
+            let w = self.bar.renderer.as_ref().map_or(8, |r| r.metrics().width);
+            (
+                (self.bar.pad_x + u32::from(x) * w) as i32,
+                self.bar.height as i32,
+            )
+        });
+        let tab = tab.map_or(-1, |i| i as isize);
+        if self.opts.test {
+            // The test window never shows a menu (it would appear on the real desktop).
+            self.event(&json!({"event": "menu", "tab": tab, "items": items.iter()
+                .map(|(id, label, enabled)| json!({"id": id, "label": label, "enabled": enabled}))
+                .collect::<Vec<_>>()}));
+            return;
+        }
+        self.after.push(After::Menu { items, at, tab });
+    }
+
+    /// A tab menu choice.
+    fn menu_command(&mut self, cmd: u32, tab: Option<usize>) {
+        let shown = self.model.active();
+        let focus_tab = |app: &mut App| {
+            if let Some(i) = tab
+                && Some(i) != app.model.active()
+            {
+                app.select_tab(i);
+            }
+        };
+        match cmd {
+            CMD_RENAME => {
+                focus_tab(self);
+                self.start_rename();
+            }
+            CMD_HIDE => {
+                if let Some(i) = tab.or(shown) {
+                    if Some(i) == shown {
+                        self.leave_pane();
+                    }
+                    let fx = self.model.hide(i);
+                    self.apply(fx);
+                }
+            }
+            CMD_MOVE_LEFT | CMD_MOVE_RIGHT => {
+                if let Some(i) = tab.or(shown) {
+                    let d = if cmd == CMD_MOVE_LEFT { -1 } else { 1 };
+                    let fx = self.model.move_tab(i, d);
+                    self.apply(fx);
+                }
+            }
+            CMD_CLOSE => {
+                // "Close Terminal" acts on the shown tab, so the user sees what is ended.
+                focus_tab(self);
+                self.run(Action::CloseTerminal);
+            }
+            CMD_NEW => self.run(Action::NewTerminal),
+            c if c >= CMD_SHOW => {
+                if let Some(h) = self.model.hidden().get((c - CMD_SHOW) as usize).cloned() {
+                    self.leave_pane();
+                    let fx = self.model.unhide(&h.id);
+                    self.apply(fx);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -1204,6 +1917,24 @@ impl App {
         {
             self.input(&report);
         }
+        if focused {
+            // `subak hotkeys …` may have changed hotkeys.json meanwhile (§8.3 5).
+            if self.matcher.reload() {
+                self.event(&json!({"event": "hotkeys_reloaded",
+                    "state": self.matcher.config_state().as_str(), "problem": self.matcher.problem}));
+                if let Some(p) = self.matcher.problem.clone() {
+                    self.notice = Some(p);
+                }
+                self.rebuild_state();
+                self.rebuild_banner();
+            }
+        } else {
+            // Focus loss cancels a pending sequence (§5.3).
+            self.matcher.cancel();
+            // SAFETY: our own timer.
+            unsafe { KillTimer(self.hwnd, TIMER_HOLD) };
+            self.rebuild_banner();
+        }
         self.redraw();
     }
 
@@ -1254,7 +1985,7 @@ impl App {
             self.grid
         };
         let gx = x - c.pad as i32;
-        let gy = y - c.pad as i32;
+        let gy = y - self.top() as i32 - c.pad as i32;
         let (col, row) = (
             gx.div_euclid(c.width.max(1) as i32),
             gy.div_euclid(c.height.max(1) as i32),
@@ -1278,23 +2009,92 @@ impl App {
         }
     }
 
+    /// A click on the tab bar (`x`, `y` in client pixels inside the strip).
+    fn on_bar_mouse(&mut self, msg: u32, x: i32) {
+        let w = self.bar.renderer.as_ref().map_or(8, |r| r.metrics().width) as i32;
+        let col = (x - self.bar.pad_x as i32).div_euclid(w.max(1));
+        let hit = u16::try_from(col).ok().and_then(|c| self.bar.layout.hit(c));
+        if let Some(r) = &self.rename
+            && !matches!(hit, Some(Hit::Tab(i)) if self.model.tabs().get(i).is_some_and(|t| t.id == r.id))
+            && matches!(msg, WM_LBUTTONDOWN | WM_MBUTTONDOWN | WM_RBUTTONDOWN)
+        {
+            // A click elsewhere ends the rename field without saving.
+            self.rename = None;
+            self.rebuild_bar();
+        }
+        self.matcher.cancel();
+        match (msg, hit) {
+            (WM_LBUTTONDOWN, Some(Hit::Tab(i))) => self.select_tab(i),
+            (WM_LBUTTONDBLCLK, Some(Hit::Tab(i))) => {
+                self.select_tab(i);
+                self.start_rename();
+            }
+            (WM_LBUTTONUP, Some(Hit::Close(i))) | (WM_MBUTTONUP, Some(Hit::Tab(i))) => {
+                if Some(i) == self.model.active() {
+                    self.leave_pane();
+                }
+                let fx = self.model.hide(i);
+                self.apply(fx);
+            }
+            (WM_LBUTTONUP, Some(Hit::New)) => self.run(Action::NewTerminal),
+            (WM_LBUTTONDOWN, Some(Hit::Left)) => {
+                self.bar.first = self.bar.first.saturating_sub(1);
+                self.rebuild_bar();
+            }
+            (WM_LBUTTONDOWN, Some(Hit::Right)) => {
+                self.bar.first += 1;
+                self.rebuild_bar();
+            }
+            (WM_RBUTTONUP, Some(Hit::Tab(i) | Hit::Close(i))) => {
+                self.open_menu(Some(i), Some((x, self.bar.height as i32)));
+            }
+            (WM_RBUTTONUP, _) => self.open_menu(None, Some((x, self.bar.height as i32))),
+            _ => {}
+        }
+    }
+
+    /// A click on the busy confirmation's buttons.
+    fn on_confirm_mouse(&mut self, msg: u32, x: i32) -> bool {
+        let (Some(c), Some((_, o))) = (&self.confirm, &self.banner) else {
+            return false;
+        };
+        if msg != WM_LBUTTONUP {
+            return true;
+        }
+        let w = o.renderer.metrics().width.max(1) as i32;
+        let col = (x - o.renderer.padding() as i32).div_euclid(w);
+        let hit = c
+            .spans
+            .iter()
+            .find(|(a, b, _)| i32::from(*a) <= col && col < i32::from(*b))
+            .map(|s| s.2);
+        if let Some(choice) = hit {
+            self.answer_confirm(choice);
+        }
+        true
+    }
+
     fn on_mouse(&mut self, msg: u32, wp: WPARAM, x: i32, y: i32) {
         let m = Self::mouse_mods(wp);
-        // The chooser: a click selects, a double click opens.
-        if let Phase::Choosing { list, notice, .. } = &self.model.phase {
-            if matches!(msg, WM_LBUTTONDOWN | WM_LBUTTONDBLCLK)
-                && let Some((_, row)) = self.cell_at(x, y, false)
-            {
-                let first = screens::chooser_first_row(self.grid.1, list.len(), notice.is_some());
-                if row >= first && usize::from(row - first) < list.len() {
-                    let mut fx = self.model.choose(0, Some(usize::from(row - first)));
-                    if msg == WM_LBUTTONDBLCLK {
-                        fx.extend(self.model.activate());
-                    }
-                    self.apply(fx);
-                }
-            }
+        let top = self.top() as i32;
+        if self.drag.is_none() && y < top {
+            self.on_bar_mouse(msg, x);
             return;
+        }
+        if self.drag.is_none()
+            && self.confirm.is_some()
+            && let Some((_, o)) = &self.banner
+            && y < top + o.renderer.frame().height as i32
+            && self.on_confirm_mouse(msg, x)
+        {
+            return;
+        }
+        if matches!(msg, WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN) {
+            // A click cancels a pending shortcut sequence (§5.3) and ends a rename field.
+            self.matcher.cancel();
+            if self.rename.take().is_some() {
+                self.rebuild_bar();
+            }
         }
         if !self.model.phase.shows_pane() {
             return;
@@ -1482,11 +2282,107 @@ impl App {
             "prefs_dir": self.prefs_dir.as_ref().map(|d| d.display().to_string()),
             "notice": self.notice,
             "memory": {"renderer": self.renderer.memory_bytes()},
-            "shortcuts": keys::BINDINGS
-                .iter()
-                .map(|b| json!({"action": b.action, "title": b.title, "keys": b.keys}))
+            "shortcuts": self.matcher.bindings().into_iter()
+                .map(|(a, k, scope)| json!({"action": a, "keys": k, "scope": scope}))
                 .collect::<Vec<_>>(),
+            "hotkeys": self.hotkeys_json(),
+            "tabs": self.tabs_json()["tabs"],
+            "active": self.model.active(),
+            "hidden": self.tabs_json()["hidden"],
+            "bar": self.bar_json(),
+            "renaming": self.rename.as_ref().map(|r| json!({"id": r.id, "text": r.text, "cursor": r.cursor})),
+            "confirm": self.confirm_json(),
+            "banner_text": self.banner_text(),
         })
+    }
+
+    fn hotkeys_json(&self) -> Value {
+        json!({
+            "state": self.matcher.config_state().as_str(),
+            "problem": self.matcher.problem,
+            "off": self.matcher.off(),
+            "path": self.matcher.path().display().to_string(),
+            "pending": self.matcher.pending_keys(),
+        })
+    }
+
+    fn bar_json(&self) -> Value {
+        let spans: Vec<Value> = self
+            .bar
+            .layout
+            .spans
+            .iter()
+            .map(|(a, b, h)| {
+                let what = match h {
+                    Hit::Tab(i) => format!("tab:{i}"),
+                    Hit::Close(i) => format!("close:{i}"),
+                    Hit::New => "new".into(),
+                    Hit::Left => "left".into(),
+                    Hit::Right => "right".into(),
+                };
+                json!([a, b, what])
+            })
+            .collect();
+        let cell = self
+            .bar
+            .renderer
+            .as_ref()
+            .map(|r| [r.metrics().width, r.metrics().height]);
+        json!({
+            "text": self.bar_text(),
+            "height": self.bar.height,
+            "pad_x": self.bar.pad_x,
+            "cell": cell,
+            "spans": spans,
+        })
+    }
+
+    fn confirm_json(&self) -> Value {
+        let Some(c) = &self.confirm else {
+            return Value::Null;
+        };
+        let name = |ch: Choice| if ch == Choice::End { "end" } else { "cancel" };
+        let spans: Vec<Value> = c
+            .spans
+            .iter()
+            .map(|(a, b, ch)| json!([a, b, name(*ch)]))
+            .collect();
+        let banner = self.banner.as_ref().map(|(_, o)| {
+            json!({"cell": o.renderer.metrics().width, "pad": o.renderer.padding(),
+                "height": o.renderer.frame().height})
+        });
+        json!({
+            "id": c.info.id, "name": c.info.name, "program": c.info.program,
+            "processes": c.info.processes, "focus": name(c.focus), "spans": spans,
+            "banner": banner,
+        })
+    }
+
+    /// The tab bar's text as drawn.
+    fn bar_text(&self) -> String {
+        let mut v = TermView::new(
+            u16::try_from(
+                self.bar
+                    .layout
+                    .spans
+                    .last()
+                    .map_or(1, |s| usize::from(s.1).max(1)),
+            )
+            .unwrap_or(1),
+            1,
+            0,
+        );
+        v.feed(&self.bar.layout.vt);
+        v.row_at(0).text().trim_end().to_string()
+    }
+
+    /// The banner's text as drawn (the confirmation's buttons included).
+    fn banner_text(&self) -> Option<String> {
+        let c = self.confirm.as_ref()?;
+        let (vt, _) = screens::confirm_vt(&c.info, c.focus, 400);
+        let mut v = TermView::new(400, 1, 0);
+        v.feed(&vt);
+        Some(v.row_at(0).text().trim().to_string())
     }
 
     fn test_command(&mut self, cmd: &Value) {
@@ -1507,7 +2403,35 @@ impl App {
                     .as_u64()
                     .and_then(|v| u32::try_from(v).ok())
                     .unwrap_or(0);
-                self.key_down(code, mods_of(cmd));
+                if cmd["up"] == true {
+                    self.key_up(code);
+                } else {
+                    let m = mods_of(cmd);
+                    let p = Press {
+                        vk: code,
+                        scan: cmd["scan"]
+                            .as_u64()
+                            .and_then(|v| u32::try_from(v).ok())
+                            .unwrap_or(0),
+                        extended: false,
+                        mods: keys::contract_mods(m),
+                        ch: cmd["char"].as_str().and_then(|c| c.chars().next()),
+                        repeat: cmd["repeat"] == true,
+                    };
+                    let handled = self.key_down(&p, m);
+                    // As TranslateMessage would: an unhandled key with a character types it.
+                    if !handled && let Some(c) = cmd["char"].as_str().and_then(|c| c.chars().next())
+                    {
+                        self.type_char(c, m.alt, m);
+                    }
+                }
+            }
+            "menu" => {
+                let tab = cmd["tab"].as_u64().and_then(|t| usize::try_from(t).ok());
+                match cmd["id"].as_u64().and_then(|v| u32::try_from(v).ok()) {
+                    Some(id) => self.menu_command(id, tab),
+                    None => self.open_menu(tab, None),
+                }
             }
             "paste" => {
                 if let Some(t) = cmd["text"].as_str() {
@@ -1599,6 +2523,7 @@ impl App {
     }
 
     fn close(&mut self) {
+        self.leave_pane();
         let fx = self.model.on_close();
         self.apply(fx);
         self.save_prefs();
@@ -1706,29 +2631,136 @@ fn run_after(hwnd: HWND, after: Vec<After>) {
                 After::Destroy => {
                     DestroyWindow(hwnd);
                 }
+                After::Menu { items, at, tab } => {
+                    let menu = CreatePopupMenu();
+                    if menu.is_null() {
+                        continue;
+                    }
+                    for (id, label, enabled) in &items {
+                        if *id == 0 {
+                            AppendMenuW(menu, MF_SEPARATOR, 0, null());
+                        } else {
+                            let w = wide(label);
+                            let flags = if *enabled {
+                                MF_STRING
+                            } else {
+                                MF_STRING | MF_GRAYED
+                            };
+                            AppendMenuW(menu, flags, *id as usize, w.as_ptr());
+                        }
+                    }
+                    let mut pt = POINT { x: at.0, y: at.1 };
+                    ClientToScreen(hwnd, &raw mut pt);
+                    // A modal loop of its own: the window's state is free meanwhile, so network
+                    // messages keep being handled.
+                    let cmd = TrackPopupMenuEx(
+                        menu,
+                        TPM_RETURNCMD | TPM_RIGHTBUTTON,
+                        pt.x,
+                        pt.y,
+                        hwnd,
+                        null(),
+                    );
+                    DestroyMenu(menu);
+                    if cmd > 0 {
+                        PostMessageW(hwnd, WM_MENU, cmd as usize, tab);
+                    }
+                }
             }
         }
     }
 }
 
+/// The modifiers held, with their side when only one side is down (for side-specific bindings).
+fn sided_mods(m: Mods) -> kim_hotkeys::keys::Mods {
+    // SAFETY: reads this thread's keyboard state.
+    let down = |k: u32| unsafe { GetKeyState(k as i32) } < 0;
+    let side = |generic: bool, l: u32, r: u32| match (down(l), down(r)) {
+        (true, false) => Side::Left,
+        (false, true) => Side::Right,
+        (true, true) => Side::Any,
+        (false, false) if generic => Side::Any,
+        _ => Side::None,
+    };
+    kim_hotkeys::keys::Mods {
+        ctrl: side(m.ctrl, vk::LCONTROL, vk::RCONTROL),
+        alt: side(m.alt, vk::LMENU, vk::RMENU),
+        altgr: false,
+        shift: side(m.shift, vk::LSHIFT, vk::RSHIFT),
+        win: if down(vk::LWIN) || down(vk::RWIN) {
+            Side::Any
+        } else {
+            Side::None
+        },
+    }
+}
+
+/// The character a key produces on the current layout with Shift as held (for `char:` steps),
+/// without changing the keyboard's dead-key state (`ToUnicode` flag 4, Windows 10 1607+).
+fn produced_char(vk_code: u32, scan: u32, shift: bool) -> Option<char> {
+    let mut state = [0u8; 256];
+    if shift {
+        state[vk::SHIFT as usize] = 0x80;
+    }
+    let mut buf = [0u16; 8];
+    // SAFETY: a 256-byte key state and a buffer of the given length.
+    let n = unsafe { ToUnicode(vk_code, scan, state.as_ptr(), buf.as_mut_ptr(), 8, 4) };
+    (n == 1)
+        .then(|| char::from_u32(u32::from(buf[0])))
+        .flatten()
+}
+
 /// A key press, before `TranslateMessage` turns it into a character (as accelerators are): a
-/// key the window handles (a shortcut, a cursor or function key for the program, a chooser key)
+/// key the window handles (a shortcut, a cursor or function key for the program, a key of the
+/// confirmation or the rename field)
 /// never produces a `WM_CHAR`, so nothing has to be taken back out of the queue. Returns whether
 /// it was handled. Alt+F4 always goes on to the window (close = detach).
 fn pre_translate(msg: &MSG) -> bool {
+    let code = msg.wParam as u32;
+    if matches!(msg.message, WM_KEYUP | WM_SYSKEYUP) {
+        // Key releases keep their default handling; a `release` shortcut fires on them.
+        APP.with(|cell| {
+            if let Ok(mut slot) = cell.try_borrow_mut()
+                && let Some(app) = slot.as_mut()
+                && app.hwnd == msg.hwnd
+            {
+                app.key_up(code);
+            }
+        });
+        flush_after(msg.hwnd);
+        return false;
+    }
     if !matches!(msg.message, WM_KEYDOWN | WM_SYSKEYDOWN) {
         return false;
     }
-    let code = msg.wParam as u32;
     if msg.message == WM_SYSKEYDOWN && code == vk::F4 {
         return false;
     }
+    let lp = msg.lParam as usize;
     let handled = APP.with(|cell| {
         let Ok(mut slot) = cell.try_borrow_mut() else {
             return false;
         };
-        slot.as_mut()
-            .is_some_and(|app| app.hwnd == msg.hwnd && app.key_down(code, mods()))
+        slot.as_mut().is_some_and(|app| {
+            if app.hwnd != msg.hwnd {
+                return false;
+            }
+            let m = mods();
+            let scan = ((lp >> 16) & 0xFF) as u32;
+            let p = Press {
+                vk: code,
+                scan,
+                extended: lp & (1 << 24) != 0,
+                mods: sided_mods(m),
+                ch: app
+                    .matcher
+                    .wants_chars()
+                    .then(|| produced_char(code, scan, m.shift))
+                    .flatten(),
+                repeat: lp & (1 << 30) != 0,
+            };
+            app.key_down(&p, m)
+        })
     });
     flush_after(msg.hwnd);
     handled
@@ -1756,6 +2788,11 @@ fn handle(app: &mut App, hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> Option
             app.on_net();
             Some(0)
         }
+        WM_MENU => {
+            let tab = usize::try_from(lp).ok();
+            app.menu_command(wp as u32, tab);
+            Some(0)
+        }
         WM_SIZE => {
             let (w, h) = (u32::from(lp as u16), u32::from((lp >> 16) as u16));
             app.on_size(wp as u32, w, h);
@@ -1769,7 +2806,7 @@ fn handle(app: &mut App, hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> Option
         WM_GETMINMAXINFO => {
             let c = app.cells();
             let (w, h) = c.client_for(layout::MIN_GRID.0, layout::MIN_GRID.1);
-            let (ow, oh) = outer_for(w, h, app.dpi, app.opts.test);
+            let (ow, oh) = outer_for(w, h + app.top(), app.dpi, app.opts.test);
             // SAFETY: `lp` points at the MINMAXINFO Windows passes with this message.
             unsafe {
                 let mmi = &mut *(lp as *mut MINMAXINFO);
@@ -1869,7 +2906,14 @@ fn handle(app: &mut App, hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> Option
             Some(0)
         }
         WM_SETCURSOR if (lp & 0xffff) as u32 == HTCLIENT => {
-            let id = if app.model.phase.shows_pane() {
+            let mut pt = POINT::default();
+            // SAFETY: the cursor position, converted for our own window.
+            let over_bar = unsafe {
+                windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos(&raw mut pt);
+                ScreenToClient(hwnd, &raw mut pt);
+                pt.y < app.top() as i32
+            };
+            let id = if app.model.phase.shows_pane() && !over_bar {
                 IDC_IBEAM
             } else {
                 IDC_ARROW
@@ -1891,6 +2935,13 @@ fn handle(app: &mut App, hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> Option
                     unsafe { KillTimer(hwnd, TIMER_SYNC) };
                     app.update_title();
                     app.redraw();
+                }
+                TIMER_HOLD => {
+                    // SAFETY: our own one-shot timer.
+                    unsafe { KillTimer(hwnd, TIMER_HOLD) };
+                    if let Some(a) = app.matcher.hold_elapsed() {
+                        app.run(a);
+                    }
                 }
                 _ => {}
             }
@@ -2022,6 +3073,10 @@ pub fn run(o: Options) -> ExitCode {
             .is_some();
     let maximized = !test && restored && prefs.window.is_some_and(|w| w.maximized);
     let hc = high_contrast_on();
+    let matcher = Matcher::load(
+        prefs_dir.as_deref(),
+        crate::hotkeys::off_reason(o.no_hotkeys),
+    );
     let mut app = App {
         hwnd,
         opts: o,
@@ -2058,7 +3113,18 @@ pub fn run(o: Options) -> ExitCode {
         drag: None,
         clicks: (None, (0, 0), 0),
         wheel: 0,
-        shortcuts: Shortcuts::default(),
+        matcher,
+        bar: TabBar {
+            renderer: None,
+            layout: tabs::layout(&[], None, None, 1, 0),
+            strip: Frame::new(1, 1, tokens::BG_RAISED),
+            height: 0,
+            pad_x: 0,
+            first: 0,
+        },
+        rename: None,
+        confirm: None,
+        reported_tabs: Value::Null,
         normal: None,
         test_clipboard: String::new(),
         title: String::new(),
@@ -2068,6 +3134,12 @@ pub fn run(o: Options) -> ExitCode {
     };
     app.renderer = make_renderer(app.theme(), app.prefs.font_size, layout::scale(dpi), 8.0);
     app.renderer.set_focused(false);
+    // The tab bar's height is known before the first size is chosen.
+    app.client = (800, 600);
+    app.rebuild_bar();
+    if let Some(p) = app.matcher.problem.clone() {
+        app.notice = Some(p);
+    }
     // SAFETY: our own window's background brush (deleted when the theme changes).
     app.bg_brush = unsafe { CreateSolidBrush(colorref(app.theme().background)) };
     let outer = if restored {
@@ -2079,7 +3151,7 @@ pub fn run(o: Options) -> ExitCode {
         let (cw, ch) = app
             .cells()
             .client_for(layout::DEFAULT_GRID.0, layout::DEFAULT_GRID.1);
-        Some(outer_for(cw, ch, dpi, test))
+        Some(outer_for(cw, ch + app.top(), dpi, test))
     };
     // SAFETY: Windows 10 20H1+ dark title bar; the caption, text and border colours apply on
     // Windows 11 and are ignored (an error result) on Windows 10. Our own window.

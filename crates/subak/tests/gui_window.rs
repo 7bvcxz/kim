@@ -37,7 +37,6 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 
 const COPYDATA_TEST: usize = 0x5355_424B;
 const VK_RETURN: usize = 0x0D;
-const VK_DOWN: usize = 0x28;
 
 fn gui_exe() -> &'static str {
     env!("CARGO_BIN_EXE_subak-gui")
@@ -493,19 +492,18 @@ fn a_detached_window_reattaches_and_a_returning_host_is_reconnected() {
         "the window did not start a Host while reconnecting"
     );
     // A Host comes back (`subak new` starts one) with another Terminal: the window reconnects
-    // by itself and offers it (the old one is gone, and it says so).
+    // by itself and opens it as its tab (the old one is gone, and it says so).
     let (_, pid2) = new_terminal(&ep, "two");
-    let choosing = gui.state("choosing");
-    assert!(
-        choosing["detail"]["notice"]
+    let notice = gui.wait("notice", |v| {
+        v["text"]
             .as_str()
-            .unwrap()
-            .contains("`one` is no longer running"),
-        "{choosing}"
-    );
-    gui.key(VK_RETURN);
+            .is_some_and(|t| t.contains("`one` is no longer running"))
+    });
+    assert!(notice["text"].is_string());
     let attached = gui.state("attached");
     assert_eq!(attached["detail"]["pane_pid"], pid2);
+    let d = gui.dump();
+    assert_eq!(d["tabs"].as_array().unwrap().len(), 1, "{d}");
     let (_, st) = sub(&ep, &["host", "status"]);
     let new_host = Proc::open(pid_of(&st["data"]["host"]["pid"]));
     drop(gui);
@@ -514,7 +512,7 @@ fn a_detached_window_reattaches_and_a_returning_host_is_reconnected() {
 }
 
 #[test]
-fn state_screens_empty_choice_and_failure() {
+fn state_screens_empty_tabs_and_failure() {
     // Empty: a Host with no Terminal; a Terminal created later opens by itself.
     let host = Host::start("gui-states", &["--no-shell"]);
     let ep = host.ep.clone();
@@ -522,7 +520,15 @@ fn state_screens_empty_choice_and_failure() {
     let gui = Gui::start(&ep, None, &appdata);
     gui.state("empty");
     let d = gui.dump();
-    assert!(screen_text(&d).contains("No Terminal is running"), "{d}");
+    assert!(
+        screen_text(&d).contains("No Terminal is open in this window"),
+        "{d}"
+    );
+    assert!(
+        screen_text(&d).contains("Ctrl+T (or the + above) starts one"),
+        "{d}"
+    );
+    assert_eq!(d["tabs"].as_array().unwrap().len(), 0);
     assert_eq!(d["title"], "Subak");
     let (_, pid) = new_terminal(&ep, "later");
     let attached = gui.state("attached");
@@ -533,21 +539,16 @@ fn state_screens_empty_choice_and_failure() {
         "{d}"
     );
     drop(gui);
-    // Choosing: two Terminals and nothing named or remembered.
+    // Two Terminals and nothing named or remembered: both are tabs, the first one opens
+    // (Step 17 replaces Step 16's chooser).
     new_terminal(&ep, "second");
-    let gui = Gui::start(&ep, None, &sandbox("states-choose"));
-    let choosing = gui.state("choosing");
-    assert_eq!(choosing["detail"]["count"], 2);
-    let d = gui.dump();
-    let text = screen_text(&d);
-    assert!(
-        text.contains("Choose a Terminal") && text.contains("later") && text.contains("second"),
-        "{text}"
-    );
-    gui.key(VK_DOWN);
-    gui.key(VK_RETURN);
+    let gui = Gui::start(&ep, None, &sandbox("states-tabs"));
     let attached = gui.state("attached");
-    assert_eq!(attached["terminal"]["name"], "second");
+    assert_eq!(attached["terminal"]["name"], "later");
+    let d = gui.until("two tabs", |d| d["tabs"].as_array().unwrap().len() == 2);
+    let bar = d["bar"]["text"].as_str().unwrap();
+    assert!(bar.contains("later") && bar.contains("second"), "{bar}");
+    assert_eq!(d["active"], 0);
     drop(gui);
     // Failure: the endpoint is held by a process that is not a Subak Host.
     let squat_ep = endpoint("gui-squat");
@@ -719,8 +720,11 @@ fn dpi_resize_minimize_zoom_and_preferences() {
         d["cell"][0].as_u64().unwrap(),
         d["cell"][1].as_u64().unwrap(),
     );
+    // The tab bar (32 logical px at 100 %) sits above the pane.
+    let bar = d["bar"]["height"].as_u64().unwrap();
+    assert!((32..=40).contains(&bar), "{}", d["bar"]);
     // A resize to 80 × 24 cells: the pane follows.
-    let (w, h) = (80 * cell.0 + 16, 24 * cell.1 + 16);
+    let (w, h) = (80 * cell.0 + 16, 24 * cell.1 + 16 + bar);
     gui.cmd(&json!({"cmd": "size", "width": w, "height": h}));
     gui.until("80x24", |d| grid(d) == (80, 24));
     wait_for("the pane is 80x24", || size_of_pane() == (80, 24));
@@ -824,19 +828,46 @@ fn rendered_frames_of_the_window_content() {
     };
     let (w, h, px) = shot("gui_empty");
     assert!(w > 400 && h > 200);
-    assert_eq!(px(1, 1), (0x0E, 0x0E, 0x12), "bg.base around the text");
+    let top = gui.dump()["bar"]["height"].as_u64().unwrap() as u32;
+    assert_eq!(px(1, 1), (0x15, 0x15, 0x1B), "bg.raised: the tab bar");
+    assert_eq!(
+        px(1, top + 1),
+        (0x0E, 0x0E, 0x12),
+        "bg.base around the text"
+    );
     new_terminal(&ep, "shots");
     gui.state("attached");
     gui.type_text("echo 한글 Subak ┌─┐\r");
     gui.until("output", |d| has_line(d, "한글 Subak ┌─┐"));
     let (_, _, px) = shot("gui_attached");
     assert_eq!(px(w - 2, h - 2), (0x0E, 0x0E, 0x12), "terminal.background");
+    // The active tab: a lilac marker on top, bg.base joining the pane below it.
+    let d = gui.dump();
+    let tab = d["bar"]["spans"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s[2] == "tab:0")
+        .unwrap()
+        .clone();
+    let cw = d["bar"]["cell"][0].as_u64().unwrap() as u32;
+    let x = d["bar"]["pad_x"].as_u64().unwrap() as u32 + tab[0].as_u64().unwrap() as u32 * cw + 2;
+    assert_eq!(
+        px(x, 0),
+        (0xB7, 0xA6, 0xF5),
+        "accent: the active tab's marker"
+    );
+    assert_eq!(
+        px(x, top - 1),
+        (0x0E, 0x0E, 0x12),
+        "the active tab joins the pane"
+    );
     let (_, _) = sub(&ep, &["detach", "shots"]);
     gui.state("ended");
     let (_, _, px) = shot("gui_detached_banner");
     // The banner: the info colour as a 3 px marker at the left, a tinted fill.
-    assert_eq!(px(1, 4), (0x8A, 0xB4, 0xF8), "status.info marker");
-    let fill = px(w / 2, 2);
+    assert_eq!(px(1, top + 4), (0x8A, 0xB4, 0xF8), "status.info marker");
+    let fill = px(w / 2, top + 2);
     assert_ne!(fill, (0x0E, 0x0E, 0x12), "the banner is not the background");
     println!("EVIDENCE shots: {}", dir.display());
 }

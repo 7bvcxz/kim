@@ -743,7 +743,7 @@ pub fn config_show() -> Result<Outcome> {
         "off".to_string()
     };
     let human = format!(
-        "Settings: {} ({})\n  general.tray_icon = {}\n  capture.keyboard_help = {}\n  capture.quick_save_folder = {}\n  gestures.double_click = {}\n  gestures.middle_click = {}\n  gestures.preset = {} (Snipaste-style gestures: {preset})\nShortcuts: {}\nData folder (ui-state.json only, never pictures): {}\nChange a setting: noeul config set <key> <value>; reset: noeul config reset [<section>] --yes\n",
+        "Settings: {} ({})\n  general.tray_icon = {}\n  capture.keyboard_help = {}\n  capture.quick_save_folder = {}\n  capture.detection = {}\n  capture.magnifier = {}\n  gestures.double_click = {}\n  gestures.middle_click = {}\n  gestures.preset = {} (Snipaste-style gestures: {preset})\nShortcuts: {}\nData folder (ui-state.json only, never pictures): {}\nChange a setting: noeul config set <key> <value>; reset: noeul config reset [<section>] --yes\n",
         paths.config_file().display(),
         s.state.as_str(),
         st.tray_icon,
@@ -752,6 +752,8 @@ pub fn config_show() -> Result<Outcome> {
             || "(default: the Pictures folder + Noeul)".to_string(),
             |p| p.display().to_string()
         ),
+        st.detection.as_str(),
+        if st.magnifier { "on" } else { "off" },
         st.gestures.double_click.as_str(),
         st.gestures.middle_click.as_str(),
         st.preset.as_str(),

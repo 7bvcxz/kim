@@ -1,5 +1,6 @@
 //! Noeul (노을): a small native screenshot and floating-pin tool for Windows (pre-alpha:
-//! Step 49 foundation, Step 50 region selection overlay, Step 53 floating pin engine). See
+//! Step 49 foundation, Step 50 region selection overlay, Step 51 double-click to pin, Step 52
+//! smart selection and pixel precision, Step 53 floating pin engine). See
 //! docs/NOEUL_PHILOSOPHY.md, docs/NOEUL_REQUIREMENTS.md, docs/adr/0023-noeul-app-foundation.md,
 //! docs/adr/0026-noeul-capture-overlay.md and docs/adr/0029-noeul-pin-engine.md.
 //!
@@ -10,7 +11,9 @@
 //! | [`frame`] | Owned capture-image buffers and their accounting |
 //! | [`capture`] | The OS capture boundary: desktop state, monitors, `CaptureBackend` |
 //! | [`selection`] | Capture sessions: one at a time, the frozen picture, [`selection::CaptureSelection`] |
-//! | [`overlay`] | The region-selection overlay: state machine, double-click gesture, toolbar, geometry, DPI math, pixels |
+//! | [`overlay`] | The region-selection overlay: state machine, double-click gesture, toolbar, detection highlight, magnifier, precision keys, snapping, history, geometry, pixels |
+//! | [`detect`] | What hover detection offers: window facts and their classification, element requests and answers (rectangles only) |
+//! | [`dpi`] | Logical and device pixels on mixed-DPI layouts |
 //! | [`output`] | Copy and save of a selection: PNG and `CF_DIBV5` in memory, files only where the user asked |
 //! | [`pins`] | The pin engine's model: stable IDs, placement, zoom, hide/show, close/reopen/destroy, the window trait |
 //! | [`zoom`] | Pin zoom levels, sizes, fitting and the premultiplying scaler |

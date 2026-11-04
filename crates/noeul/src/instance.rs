@@ -594,6 +594,7 @@ fn targets(id: Option<&String>, group: Option<&String>, dry_run: bool) -> Value 
 }
 
 /// One pin's view in a line: `100 %, 90°, mirrored, 50 % opaque, thumbnail, click-through`.
+#[cfg(windows)]
 fn view_words(p: &Value) -> String {
     let mut w = vec![format!("{} %", p["zoom"])];
     let rot = p["orientation"]["rotation"].as_u64().unwrap_or(0);

@@ -27,6 +27,7 @@ Run with `cargo xtask e2e`, which refuses unless the counter below has reached 1
 | 14 | #70 Step 65 – Ddalgak philosophy, AHK v2 matrix, rule model and safety (specification) | none (no executable feature; `ddalgak-rules-v1` and `ddalgak-simulation-v1` examples are checked by `cargo xtask schema-check`; the engine e2e scenario comes with Step 66) | 14 |
 | 15 | #10 Step 10 – Terminal session lifecycle | `step10_session_lifecycle.rs`: (2 tests) an agent manages named Terminals with the real `subak terminal` commands without losing running work (detach changes nothing, destructive actions need consent, `host stop` needs `--kill-terminals`); six agents creating one name at once get exactly one Terminal. Step 08/09 scenarios updated to the new `host stop` rule | 15 |
 | 16 | #54 Step 49 – Noeul native app and capture service foundation | `step49_noeul_foundation.rs` (3 tests, real `noeul` with `--no-tray`, private endpoint, obscure chords only): headless discovery starts and writes nothing; start, hand-over to the running instance, rebind while running and quit; honest errors without an instance | 1 |
+| 17 | #11 Step 11 – PTY and shell process management | `step11_pty_shells.rs` (2 tests): an agent runs PowerShell and CMD with environment overrides and no leaked secrets; explicit programs report exit codes and failures are precise (missing program, script refused with a hint, bad working directory) | 2 |
 
 ## E2E runs
 

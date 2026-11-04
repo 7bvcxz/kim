@@ -16,6 +16,10 @@
 //! | [`tabs`] | the tab bar: layout, scrolling, clickable spans, the rename field | portable, unit-tested |
 //! | [`layout`] | DPI scale, grid ↔ client area, saved placements on monitors | portable, unit-tested |
 //! | [`keys`] | the window's shortcuts (Subak's hotkey manifest + `hotkeys.json`) and key mapping | portable, unit-tested |
+//! | `find` | the search bar: query, options, matches, the current one (Step 19) | portable, unit-tested |
+//! | `ask` | questions before a paste, a link or an export (Step 19) | portable, unit-tested |
+//! | `clip` | the clipboard, link opener and save dialog as traits, and their recording fakes (Step 19) | portable, unit-tested |
+//! | `export` | "Save output…": the pane's output, the secret detector, the file (Step 19) | portable, unit-tested |
 //! | [`prefs`] | `%APPDATA%\mouv\subak\gui.json` | portable, unit-tested |
 //! | `net` | the connection: connect or start, read frames, write frames | Windows |
 //! | `window` | the Win32 window: paint, keyboard, IME, mouse, clipboard, DPI, test hooks | Windows |
@@ -24,7 +28,15 @@
 // Portable modules: compiled and unit-tested on every target; until the Linux window (M4,
 // ADR 0011) only the Windows window uses them.
 #[cfg_attr(not(windows), allow(dead_code))]
+mod ask;
+#[cfg_attr(not(windows), allow(dead_code))]
+mod clip;
+#[cfg_attr(not(windows), allow(dead_code))]
 mod compose;
+#[cfg_attr(not(windows), allow(dead_code))]
+mod export;
+#[cfg_attr(not(windows), allow(dead_code))]
+mod find;
 pub mod float;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod keys;

@@ -16,17 +16,16 @@
       ],
       "rules": [
         {
-          "id": "both",
-          "title": "Both",
+          "id": "left-click",
+          "title": "The primary button is never a trigger",
           "enabled": true,
           "trigger": {
-            "keys": "CapsLock",
-            "pass_through": true
+            "keys": "MouseLeft"
           },
           "steps": [
             {
               "type": "remap",
-              "to": "Escape"
+              "to": "F16"
             }
           ],
           "consent": {

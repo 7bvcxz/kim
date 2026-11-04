@@ -33,9 +33,11 @@
 
 use crate::output::{CliError, Code};
 use crate::proto::{
-    self, ClientKind, ErrorCode, FLAG_INPUT, FLAG_SNAPSHOT, Frame, IpcError, Refusal, Request, Ring,
+    self, ClientKind, ErrorCode, FLAG_INPUT, FLAG_SNAPSHOT, Frame, IpcError, Refusal, Request,
 };
 use crate::pty::{self, EnvOverrides, Pty};
+use crate::redact::Redactor;
+use crate::screen::{self, HistoryRange, Limits, Pos, Screen};
 use crate::session::{self, Command, EndCause, LastExit, Level, Registry, Spec, Transition};
 use crate::win::pipe::{self, Listener, Pipe};
 use crate::win::{self, EnvBlock, JobLimits};
@@ -57,11 +59,18 @@ pub const DEFAULT_IDLE_EXIT_S: u64 = 10;
 pub const MAX_CONNECTIONS: usize = 64;
 /// Most Terminals (live and stored) one Host owns; more get `busy`.
 pub const MAX_TERMINALS: usize = 256;
-/// Bytes queued per connection before a slow client is dropped; each queued frame also counts
-/// [`FRAME_COST`], so many tiny frames (ConPTY's output arrives in chunks of ~80 bytes on
-/// Windows 10) are bounded by memory, not by a frame count (ADR 0025).
+/// Bytes queued per connection; each queued frame also counts [`FRAME_COST`], so many tiny
+/// frames (ConPTY's output arrives in chunks of ~80 bytes on Windows 10) are bounded by memory,
+/// not by a frame count (ADR 0025). Output that does not fit makes its stream lag: its queued
+/// output is dropped, and the client gets `pane.resync` and a fresh snapshot once its queue has
+/// drained to [`RESYNC_BELOW`] (ADR 0030). A control message that does not fit disconnects it.
 const QUEUE_BYTES: usize = 16 * 1024 * 1024;
 const FRAME_COST: usize = 64;
+/// A lagging stream is resynced once its connection's queue holds no more than this.
+const RESYNC_BELOW: usize = QUEUE_BYTES / 4;
+/// Largest JSON size of the lines one `pane.capture` answer carries (a control message is at
+/// most 256 KiB); older lines are left out and the answer says `truncated`.
+const CAPTURE_BYTES: usize = 192 * 1024;
 /// Most bytes the writer of one connection takes off its queue for one write.
 const WRITE_BATCH: usize = 256 * 1024;
 /// How long a graceful stop waits for the processes after `ClosePseudoConsole`.
@@ -101,6 +110,11 @@ pub fn profile_dir(env: Option<&EnvBlock>) -> Option<PathBuf> {
 struct Out {
     bytes: Arc<[u8]>,
     ack: Option<mpsc::Sender<()>>,
+    /// The stream of an output (or snapshot) frame, so a lagging stream's frames can be dropped.
+    stream: Option<u32>,
+    /// For an output frame: the pane's history mark (`total_lines`) before its bytes, so a resync
+    /// carries every history line the dropped frames had added.
+    mark: u64,
 }
 
 #[derive(Default)]
@@ -109,6 +123,8 @@ struct Pending {
     /// Bytes plus [`FRAME_COST`] per item.
     cost: usize,
     closed: bool,
+    /// A stream of this connection dropped output; the writer asks for a resync once drained.
+    lagging: bool,
 }
 
 /// The queue between a connection's senders and its writer thread.
@@ -116,6 +132,8 @@ struct Pending {
 struct Queue {
     pending: Mutex<Pending>,
     ready: Condvar,
+    /// The connection id once its handshake registered it (for the writer's resync request).
+    conn: std::sync::atomic::AtomicU64,
 }
 
 impl Queue {
@@ -125,11 +143,11 @@ impl Queue {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// The writer's side: the next batch (several small frames are written at once), or `None`
-    /// once the queue is closed and drained.
+    /// The writer's side: the next batch (several small frames are written at once; empty when
+    /// only a resync is due), or `None` once the queue is closed and drained.
     fn take(&self) -> Option<Vec<Out>> {
         let mut q = self.lock();
-        while q.items.is_empty() && !q.closed {
+        while q.items.is_empty() && !q.closed && !q.lagging {
             q = self
                 .ready
                 .wait(q)
@@ -150,7 +168,18 @@ impl Queue {
                 break; // a barrier is acknowledged as soon as everything before it is written
             }
         }
-        (!batch.is_empty()).then_some(batch)
+        (!batch.is_empty() || (q.lagging && !q.closed)).then_some(batch)
+    }
+
+    /// Whether a lagging stream should be resynced now (the queue has drained far enough);
+    /// clears the request.
+    fn resync_due(&self) -> bool {
+        let mut q = self.lock();
+        let due = q.lagging && !q.closed && q.cost <= RESYNC_BELOW;
+        if due {
+            q.lagging = false;
+        }
+        due
     }
 
     /// No more frames: the writer drains what is queued and ends.
@@ -175,7 +204,12 @@ impl Sink {
             let mut q = self.queue.lock();
             if !q.closed && q.cost + cost <= QUEUE_BYTES {
                 q.cost += cost;
-                q.items.push_back(Out { bytes, ack });
+                q.items.push_back(Out {
+                    bytes,
+                    ack,
+                    stream: None,
+                    mark: 0,
+                });
                 drop(q);
                 self.queue.ready.notify_one();
                 return true;
@@ -183,6 +217,45 @@ impl Sink {
         }
         self.pipe.cancel(); // its handler sees the error and removes the connection
         false
+    }
+
+    /// Queues an output or snapshot frame of `stream`. When it does not fit, the stream lags:
+    /// its queued output frames are dropped (control messages stay) and `Err` returns the
+    /// history mark the resync must start from. The pane never waits for a client.
+    fn push_output(&self, stream: u32, bytes: Arc<[u8]>, mark: u64) -> Result<(), u64> {
+        let cost = bytes.len() + FRAME_COST;
+        let mut q = self.queue.lock();
+        if q.closed {
+            return Ok(()); // the connection is going away
+        }
+        if q.cost + cost <= QUEUE_BYTES {
+            q.cost += cost;
+            q.items.push_back(Out {
+                bytes,
+                ack: None,
+                stream: Some(stream),
+                mark,
+            });
+            drop(q);
+            self.queue.ready.notify_one();
+            return Ok(());
+        }
+        let mut since = mark;
+        let mut freed = 0;
+        q.items.retain(|o| {
+            if o.stream == Some(stream) {
+                since = since.min(o.mark);
+                freed += o.bytes.len() + FRAME_COST;
+                false
+            } else {
+                true
+            }
+        });
+        q.cost -= freed;
+        q.lagging = true;
+        drop(q);
+        self.queue.ready.notify_one();
+        Err(since)
     }
 
     fn control(&self, msg: &Value) -> bool {
@@ -204,14 +277,23 @@ impl Sink {
     }
 }
 
+/// One attachment of a connection to a pane's stream.
+#[derive(Debug, Clone, Copy)]
+struct Att {
+    interactive: bool,
+    /// The stream lags (its output was dropped): no output is queued until the resync, which
+    /// carries the history lines since this mark.
+    lag: Option<u64>,
+}
+
 struct Conn {
     sink: Sink,
     pid: Option<u32>,
     kind: ClientKind,
     name: String,
     version: String,
-    /// Streams this connection is attached to, and whether interactively.
-    attached: BTreeMap<u32, bool>,
+    /// Streams this connection is attached to.
+    attached: BTreeMap<u32, Att>,
     topics: Vec<String>,
     event_seq: u64,
 }
@@ -226,9 +308,11 @@ impl Conn {
     }
 }
 
-/// Recent output and counters of one running pane.
+/// The terminal model and counters of one pane (ADR 0030). Kept while its Terminal exists, so
+/// a `stopped` Terminal can still be captured; dropped when the Terminal is removed.
 struct PaneOut {
-    ring: Ring,
+    screen: Screen,
+    terminal_id: String,
     seq: u64,
     input_bytes: u64,
 }
@@ -290,12 +374,21 @@ struct Stats {
     panics: u64,
     input_frames_dropped: u64,
     lagging_clients_dropped: u64,
+    /// Lagging attachments brought back with a fresh snapshot (Step 13).
+    lagging_resyncs: u64,
+    /// Output frames not queued for a lagging attachment.
+    output_frames_skipped: u64,
+    snapshots: u64,
+    snapshot_bytes: u64,
+    captures: u64,
     terminals_created: u64,
     spawn_failures: u64,
     terminals_removed: u64,
-    /// Output and input bytes of panes that already ended.
+    /// Output and input bytes, and history lines evicted or cleared, of panes already removed.
     ended_output_bytes: u64,
     ended_input_bytes: u64,
+    ended_evicted_lines: u64,
+    ended_cleared_lines: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -344,6 +437,7 @@ impl State {
                 .filter(|c| c.attached.contains_key(&p.stream))
                 .count(),
             output_bytes: self.out.get(&p.id).map_or(0, |o| o.seq),
+            history: self.out.get(&p.id).map(|o| o.screen.history()),
         }
     }
 
@@ -357,6 +451,22 @@ impl State {
 
     fn rt_of_stream(&self, stream: u32) -> Option<&Arc<PaneRt>> {
         self.rt.values().find(|r| r.stream == stream)
+    }
+
+    /// `host.status.scrollback`: what the Host keeps of terminal output, and where.
+    fn scrollback_json(&self) -> Value {
+        let lines: usize = self.out.values().map(|o| o.screen.history().lines).sum();
+        let bytes: usize = self.out.values().map(|o| o.screen.history().bytes).sum();
+        let memory: usize = self.out.values().map(|o| o.screen.memory_bytes()).sum();
+        json!({
+            "panes": self.out.len(),
+            "lines": lines,
+            "bytes": bytes,
+            "memory_bytes": memory,
+            "default_limit_lines": screen::DEFAULT_HISTORY_LINES,
+            "limit_bytes_per_pane": screen::HISTORY_BYTES,
+            "persisted": false,
+        })
     }
 
     /// Sends an event to every connection subscribed to `topic`, in the same critical section
@@ -382,6 +492,22 @@ impl State {
 
     fn removed(&mut self, terminal_id: &str, name: &str, reason: &str) {
         self.stats.terminals_removed += 1;
+        // Its screen and history go with it (docs/SCROLLBACK.md §5).
+        let panes: Vec<String> = self
+            .out
+            .iter()
+            .filter(|(_, o)| o.terminal_id == terminal_id)
+            .map(|(k, _)| k.clone())
+            .collect();
+        for k in panes {
+            if let Some(o) = self.out.remove(&k) {
+                let h = o.screen.history();
+                self.stats.ended_output_bytes += o.seq;
+                self.stats.ended_input_bytes += o.input_bytes;
+                self.stats.ended_evicted_lines += h.evicted_lines;
+                self.stats.ended_cleared_lines += h.cleared_lines;
+            }
+        }
         let data = json!({"terminal_id": terminal_id, "name": name, "reason": reason});
         self.notify("terminals", "terminal.removed", &data);
     }
@@ -474,6 +600,7 @@ pub fn serve(opts: &ServeOpts) -> Result<Value, CliError> {
             env: pty::EnvNames::default(),
             size: DEFAULT_SIZE,
             remain_on_exit: false,
+            history_limit: screen::DEFAULT_HISTORY_LINES,
         };
         let launch = Launch {
             raw_line: Some(shell.clone()),
@@ -710,7 +837,7 @@ impl Host {
         launch: &Launch,
         keep: bool,
     ) -> Result<Value, IpcError> {
-        let (tid, pane_id, stream, size, cwd, command) = {
+        let (tid, pane_id, stream, size, cwd, command, history_limit) = {
             let mut st = self.lock();
             if st.stopping {
                 return Err(IpcError::new(
@@ -736,6 +863,7 @@ impl Host {
                 p.size,
                 p.cwd.clone(),
                 p.command.clone(),
+                p.history_limit,
             );
             let data = json!({"terminal": st.terminal_json(t)});
             st.notify("terminals", "terminal.created", &data);
@@ -819,7 +947,15 @@ impl Host {
             st.out.insert(
                 pane_id.clone(),
                 PaneOut {
-                    ring: Ring::new(proto::HISTORY_BYTES),
+                    screen: Screen::new(
+                        size.0,
+                        size.1,
+                        Limits {
+                            lines: history_limit,
+                            bytes: screen::HISTORY_BYTES,
+                        },
+                    ),
+                    terminal_id: tid.clone(),
                     seq: 0,
                     input_bytes: 0,
                 },
@@ -931,14 +1067,11 @@ impl Host {
     }
 
     /// Applies the end of a pane to the model: detaches its clients, records how it ended, and
-    /// moves its Terminal to `stopped` or removes it, with the events, in one critical section.
+    /// moves its Terminal to `stopped` (its screen and history stay for `pane.capture`) or
+    /// removes it, with the events, in one critical section.
     fn finish(&self, rt: &PaneRt, report: &Value) {
         {
             let mut st = self.lock();
-            if let Some(o) = st.out.remove(&rt.pane_id) {
-                st.stats.ended_output_bytes += o.seq;
-                st.stats.ended_input_bytes += o.input_bytes;
-            }
             st.rt.remove(&rt.pane_id);
             for c in st.conns.values_mut() {
                 c.attached.remove(&rt.stream);
@@ -995,8 +1128,10 @@ impl Host {
     }
 
     /// The pane's reader thread: drains the pseudo terminal continuously (a full output pipe
-    /// would block the pane's programs), keeps the replay ring, and fans each chunk out to the
-    /// attached clients without ever waiting for one.
+    /// would block the pane's programs), feeds the pane's terminal model, and fans each chunk
+    /// out to the attached clients without ever waiting for one. Model, sequence number and
+    /// fan-out change under the one lock an attach takes, so a snapshot and the live output
+    /// after it meet exactly (ADR 0030).
     fn read_output(&self, rt: &PaneRt, out: &mut dyn Read) {
         let mut buf = vec![0u8; 64 * 1024];
         loop {
@@ -1009,17 +1144,71 @@ impl Host {
             let Some(pane) = st.out.get_mut(&rt.pane_id) else {
                 return;
             };
-            pane.ring.push(&buf[..n]);
+            let mark = pane.screen.history().total_lines;
+            pane.screen.feed(&buf[..n]);
             let seq = pane.seq;
             pane.seq += n as u64;
             let frame: Arc<[u8]> = proto::encode_data(rt.stream, seq, 0, &buf[..n]).into();
             for c in st.conns.values_mut() {
-                // Never block the pane on a client: one that lags is disconnected by its sink.
-                if c.attached.contains_key(&rt.stream) && !c.sink.push(Arc::clone(&frame), None) {
-                    c.attached.clear();
-                    st.stats.lagging_clients_dropped += 1;
+                let Some(att) = c.attached.get_mut(&rt.stream) else {
+                    continue;
+                };
+                // Never block the pane on a client: one that lags skips output until its queue
+                // drained, then gets a fresh snapshot (`pane.resync`).
+                if att.lag.is_some() {
+                    st.stats.output_frames_skipped += 1;
+                } else if let Err(since) = c.sink.push_output(rt.stream, Arc::clone(&frame), mark) {
+                    att.lag = Some(since);
+                    st.stats.output_frames_skipped += 1;
                 }
             }
+        }
+    }
+
+    /// Brings the lagging attachments of `conn` back once its queue has drained: `pane.resync`
+    /// (to a connection subscribed to `panes`), then a snapshot carrying the history lines the
+    /// client missed, then live output from the snapshot's sequence number on.
+    fn resync(&self, conn: u64) {
+        let mut guard = self.lock();
+        let st = &mut *guard;
+        let Some(c) = st.conns.get_mut(&conn) else {
+            return;
+        };
+        let lagging: Vec<(u32, u64)> = c
+            .attached
+            .iter()
+            .filter_map(|(s, a)| a.lag.map(|m| (*s, m)))
+            .collect();
+        for (stream, since) in lagging {
+            let Some((t, p)) = st.reg.pane_of_stream(stream) else {
+                continue;
+            };
+            let (tid, pid) = (t.id.clone(), p.id.clone());
+            let Some(out) = st.out.get(&pid) else {
+                continue;
+            };
+            let snap = out.screen.snapshot(HistoryRange::Since(since), true);
+            let (seq, mark) = (out.seq, out.screen.history().total_lines);
+            if c.topics.iter().any(|t| t == "panes") {
+                c.event(
+                    "pane.resync",
+                    &json!({"pane_id": pid, "terminal_id": tid, "stream_id": stream, "seq": seq}),
+                );
+            }
+            let mut lag = None;
+            for chunk in snap.chunks(proto::MAX_DATA) {
+                let frame: Arc<[u8]> = proto::encode_data(stream, seq, FLAG_SNAPSHOT, chunk).into();
+                if let Err(m) = c.sink.push_output(stream, frame, mark) {
+                    lag = Some(m.min(since));
+                    break;
+                }
+            }
+            if let Some(a) = c.attached.get_mut(&stream) {
+                a.lag = lag;
+            }
+            st.stats.lagging_resyncs += 1;
+            st.stats.snapshots += 1;
+            st.stats.snapshot_bytes += snap.len() as u64;
         }
     }
 
@@ -1046,19 +1235,23 @@ impl Host {
         };
         let writer = thread::spawn({
             let pipe = Arc::clone(pipe);
+            // The writer holds the Host only weakly, so a stuck client never keeps it alive.
+            let host = Arc::downgrade(&self);
             move || {
                 let mut buf = Vec::new();
                 while let Some(batch) = queue.take() {
                     // One write for a run of small frames (the client still reads them one
                     // by one); a single frame is written as it is.
-                    let ok = if let [one] = batch.as_slice() {
-                        pipe.write_all_bytes(&one.bytes).is_ok()
-                    } else {
-                        buf.clear();
-                        for o in &batch {
-                            buf.extend_from_slice(&o.bytes);
+                    let ok = match batch.as_slice() {
+                        [] => true,
+                        [one] => pipe.write_all_bytes(&one.bytes).is_ok(),
+                        _ => {
+                            buf.clear();
+                            for o in &batch {
+                                buf.extend_from_slice(&o.bytes);
+                            }
+                            pipe.write_all_bytes(&buf).is_ok()
                         }
-                        pipe.write_all_bytes(&buf).is_ok()
                     };
                     if !ok {
                         pipe.cancel();
@@ -1066,6 +1259,12 @@ impl Host {
                     }
                     for a in batch.into_iter().filter_map(|o| o.ack) {
                         let _ = a.send(());
+                    }
+                    // A lagging stream gets its snapshot once this client has caught up.
+                    if queue.resync_due()
+                        && let Some(h) = host.upgrade()
+                    {
+                        h.resync(queue.conn.load(Ordering::SeqCst));
                     }
                 }
             }
@@ -1161,6 +1360,7 @@ impl Host {
         }
         let id = st.next_conn;
         st.next_conn += 1;
+        sink.queue.conn.store(id, Ordering::SeqCst);
         // Queued under the lock, so no event or output can precede the welcome.
         if !sink.control(&proto::welcome(protocol, self.pid, &self.started_at)) {
             return None;
@@ -1255,8 +1455,11 @@ impl Host {
     fn input(&self, conn: u64, stream: u32, bytes: &[u8]) {
         let rt = {
             let mut st = self.lock();
-            let interactive =
-                st.conns.get(&conn).and_then(|c| c.attached.get(&stream)) == Some(&true);
+            let interactive = st
+                .conns
+                .get(&conn)
+                .and_then(|c| c.attached.get(&stream))
+                .is_some_and(|a| a.interactive);
             let rt = st.rt_of_stream(stream).cloned().filter(|r| {
                 interactive
                     && st
@@ -1299,6 +1502,8 @@ impl Host {
             "pane.detach" => Reply::Now(self.detach(conn, p)),
             "client.detach" => Reply::Now(self.detach_clients(conn, p)),
             "pane.resize" => Reply::Now(self.resize(conn, p)),
+            "pane.capture" => Reply::Now(self.capture(p)),
+            "pane.clear_history" => Reply::Now(self.clear_history(p)),
             "terminal.list" => Reply::Now(self.list(p)),
             "terminal.info" => Reply::Now(self.info(p)),
             "terminal.create" => Reply::Now(self.create_request(p)),
@@ -1371,7 +1576,7 @@ impl Host {
                     "id": id,
                     "pid": c.pid, "kind": c.kind.as_str(), "name": c.name, "version": c.version,
                     "attached": !c.attached.is_empty(),
-                    "interactive": c.attached.values().any(|i| *i),
+                    "interactive": c.attached.values().any(|a| a.interactive),
                     "streams": c.attached.keys().collect::<Vec<_>>(),
                     "topics": c.topics,
                 })
@@ -1401,6 +1606,8 @@ impl Host {
             "terminals_total": st.reg.terminals.len(),
             "pane": self.initial_pane(&st),
             "clients": {"connected": st.conns.len(), "attached": attached, "list": clients},
+            // Step 13 (docs/SCROLLBACK.md): what the Host keeps of terminal output.
+            "scrollback": st.scrollback_json(),
         })
     }
 
@@ -1426,6 +1633,17 @@ impl Host {
             "panes": st.rt.len(),
             "clients": st.conns.len(),
             "pane": {"output_bytes_total": out, "input_bytes_total": input},
+            "scrollback": {
+                "panes": st.out.len(),
+                "lines": st.out.values().map(|o| o.screen.history().lines).sum::<usize>(),
+                "bytes": st.out.values().map(|o| o.screen.history().bytes).sum::<usize>(),
+                "memory_bytes": st.out.values().map(|o| o.screen.memory_bytes()).sum::<usize>(),
+                "evicted_lines_total": st.out.values().map(|o| o.screen.history().evicted_lines).sum::<u64>() + s.ended_evicted_lines,
+                "cleared_lines_total": st.out.values().map(|o| o.screen.history().cleared_lines).sum::<u64>() + s.ended_cleared_lines,
+                "snapshots_total": s.snapshots,
+                "snapshot_bytes_total": s.snapshot_bytes,
+                "captures_total": s.captures,
+            },
             "sessions": {
                 "created_total": s.terminals_created,
                 "spawn_failures_total": s.spawn_failures,
@@ -1445,6 +1663,8 @@ impl Host {
                 "panics": s.panics,
                 "input_frames_dropped": s.input_frames_dropped,
                 "lagging_clients_dropped": s.lagging_clients_dropped,
+                "lagging_resyncs": s.lagging_resyncs,
+                "output_frames_skipped": s.output_frames_skipped,
             },
         })
     }
@@ -1550,12 +1770,33 @@ impl Host {
             Ok(_) => None, // a read-only viewer never resizes the pane
             Err(e) => return Reply::Now(Err(e)),
         };
+        // Step 13: how many history lines the snapshot carries (default: all that are kept).
+        let history = match &p["history_lines"] {
+            Value::Null => usize::MAX,
+            v => match v.as_u64().and_then(|n| usize::try_from(n).ok()) {
+                Some(n) => n,
+                None => {
+                    return Reply::Now(Err(IpcError::param(
+                        "history_lines",
+                        "history_lines must be a non-negative integer",
+                    )));
+                }
+            },
+        };
         let rt = {
-            let st = self.lock();
-            match self.attach_target(&st, &p["target"]) {
+            let mut st = self.lock();
+            let rt = match self.attach_target(&st, &p["target"]) {
                 Ok(rt) => rt,
                 Err(e) => return Reply::Now(Err(e)),
+            };
+            // The model takes the new size first, as a terminal does before it tells its PTY;
+            // output still formatted for the old size is repainted by ConPTY after the resize.
+            if let Some((c, r)) = size
+                && let Some(o) = st.out.get_mut(&rt.pane_id)
+            {
+                o.screen.resize(c, r);
             }
+            rt
         };
         if let Some((c, r)) = size
             && let Err(e) = rt.pty.resize(c, r)
@@ -1565,8 +1806,9 @@ impl Host {
                 format!("resize failed: {e}"),
             )));
         }
-        // Response, replay and the start of live output are queued under one lock, so the
-        // reader cannot interleave: no gap, no duplicate.
+        // Response, snapshot and the start of live output are queued under the lock the reader
+        // takes for every chunk, so the snapshot reflects exactly the output before `seq` and
+        // live output continues at `seq`: nothing lost, duplicated or reordered (ADR 0030).
         let mut guard = self.lock();
         let st = &mut *guard;
         // Re-checked under the lock that ends attachments, so no client stays attached to a
@@ -1587,11 +1829,18 @@ impl Host {
         let Some(out) = st.out.get(&rt.pane_id) else {
             return Reply::Queued;
         };
-        let (seq, replay) = (out.seq, out.ring.replay());
+        let info = out.screen.history();
+        let range = if history == 0 {
+            HistoryRange::None
+        } else {
+            HistoryRange::Last(history)
+        };
+        let snap = out.screen.snapshot(range, false);
+        let (seq, alternate, (cols, rows)) = (out.seq, out.screen.alternate(), out.screen.size());
         let Some(c) = st.conns.get_mut(&conn) else {
             return Reply::Queued;
         };
-        c.attached.insert(rt.stream, interactive);
+        let frames = snap.len().div_ceil(proto::MAX_DATA);
         let result = json!({
             "stream_id": rt.stream,
             "pane_id": rt.pane_id,
@@ -1600,17 +1849,200 @@ impl Host {
             "interactive": interactive,
             "pane": {"id": rt.pane_id, "pid": rt.pty.pid(),
                      "size": {"cols": pane.size.0, "rows": pane.size.1}},
-            "replay_bytes": replay.len(),
+            "replay_bytes": snap.len(),
+            "snapshot": {
+                "bytes": snap.len(), "frames": frames,
+                "history_lines": info.lines.min(history),
+                "alternate": alternate, "size": {"cols": cols, "rows": rows},
+            },
         });
         c.sink.control(&proto::response(req.id, Ok(result)));
-        if !replay.is_empty() {
-            c.sink.push(
-                proto::encode_data(rt.stream, seq - replay.len() as u64, FLAG_SNAPSHOT, &replay)
-                    .into(),
-                None,
-            );
+        let mut lag = None;
+        for chunk in snap.chunks(proto::MAX_DATA) {
+            let frame: Arc<[u8]> = proto::encode_data(rt.stream, seq, FLAG_SNAPSHOT, chunk).into();
+            if let Err(m) = c.sink.push_output(rt.stream, frame, info.total_lines) {
+                lag = Some(m);
+                break;
+            }
         }
+        c.attached.insert(rt.stream, Att { interactive, lag });
+        st.stats.snapshots += 1;
+        st.stats.snapshot_bytes += snap.len() as u64;
         Reply::Queued
+    }
+
+    /// The pane a capture or history request means: a target of any level (also a `stopped`
+    /// Terminal, whose screen is kept), or none when exactly one pane has a screen.
+    fn screen_target(st: &State, target: &Value) -> Result<(String, String), IpcError> {
+        let pane_id = match target {
+            Value::Null => {
+                let mut panes: Vec<(&String, &PaneOut)> = st.out.iter().collect();
+                panes.sort_by(|a, b| a.0.cmp(b.0));
+                match panes.as_slice() {
+                    [] => {
+                        return Err(IpcError::new(
+                            ErrorCode::TargetNotFound,
+                            "this Host keeps no pane screen (no Terminal has started)",
+                        ));
+                    }
+                    [(id, _)] => (*id).clone(),
+                    many => {
+                        return Err(IpcError::new(
+                            ErrorCode::AmbiguousTarget,
+                            "this Host has several Terminals; name one as the target",
+                        )
+                        .details(json!({
+                            "candidates": many.iter().map(|(_, o)| o.terminal_id.clone()).collect::<Vec<_>>()
+                        })));
+                    }
+                }
+            }
+            Value::String(s) => {
+                let r = st.reg.resolve(s)?;
+                st.reg.terminals[r.terminal].windows[r.window].panes[r.pane]
+                    .id
+                    .clone()
+            }
+            _ => {
+                return Err(IpcError::param(
+                    "target",
+                    "target must be a Terminal, window or pane",
+                ));
+            }
+        };
+        let t = st
+            .reg
+            .owner_of_pane(&pane_id)
+            .ok_or_else(|| IpcError::new(ErrorCode::TargetNotFound, "no such pane"))?;
+        if !st.out.contains_key(&pane_id) {
+            return Err(IpcError::new(
+                ErrorCode::InvalidState,
+                format!(
+                    "Terminal `{}` is {} and has no screen to read",
+                    t.name.display,
+                    t.state.as_str()
+                ),
+            )
+            .details(json!({"terminal_id": t.id, "state": t.state.as_str()})));
+        }
+        Ok((pane_id, t.id.clone()))
+    }
+
+    /// `pane.capture` (tmux `capture-pane`, docs/SCROLLBACK.md §4): lines of the history and the
+    /// screen as text or VT, redacted unless `redact` is false. At most [`CAPTURE_BYTES`] of
+    /// lines per answer; older ones are left out and `truncated` says so.
+    fn capture(&self, p: &Value) -> Result<Value, IpcError> {
+        let pos = |name: &str| -> Result<Option<Pos>, IpcError> {
+            match &p[name] {
+                Value::Null => Ok(None),
+                Value::String(s) if s == "-" => Ok(Some(Pos::Edge)),
+                v => v.as_i64().map(|n| Some(Pos::Line(n))).ok_or_else(|| {
+                    IpcError::param(name, format!("{name} must be a line number or \"-\""))
+                }),
+            }
+        };
+        let start = pos("start")?.unwrap_or(Pos::Line(0));
+        let end = pos("end")?.unwrap_or(Pos::Edge);
+        let vt = match optional_string(p, "format")? {
+            None | Some("text") => false,
+            Some("vt") => true,
+            Some(_) => return Err(IpcError::param("format", "format must be text or vt")),
+        };
+        let join = flag(p, "join")?;
+        let redact = match &p["redact"] {
+            Value::Null => true,
+            Value::Bool(b) => *b,
+            _ => return Err(IpcError::param("redact", "redact must be true or false")),
+        };
+        let mut st = self.lock();
+        let (pane_id, terminal_id) = Self::screen_target(&st, &p["target"])?;
+        st.stats.captures += 1;
+        let s = &st.out[&pane_id].screen;
+        let rows = s.capture(start, end, vt, false);
+        let mut red = Redactor::default();
+        let (lines, range, truncated) = match rows.range {
+            None => (Vec::new(), None, false),
+            Some((first, last)) => {
+                // Keep the newest lines that fit in one answer.
+                let mut size = 0;
+                let mut keep = rows.lines.len();
+                for (i, l) in rows.lines.iter().enumerate().rev() {
+                    let n = serde_json::to_string(l).map_or(l.len(), |j| j.len()) + 1;
+                    if size + n > CAPTURE_BYTES {
+                        break;
+                    }
+                    size += n;
+                    keep = i;
+                }
+                let from = first + i64::try_from(keep).unwrap_or(0);
+                if redact {
+                    // Earlier lines still decide whether a private key block is open.
+                    for l in &rows.lines[..keep] {
+                        red.line(l);
+                    }
+                    red.hidden = 0;
+                }
+                let lines = if join {
+                    s.capture(Pos::Line(from), Pos::Line(last), vt, true).lines
+                } else {
+                    rows.lines[keep..].to_vec()
+                };
+                let lines: Vec<String> = if redact {
+                    lines.iter().map(|l| red.line(l)).collect()
+                } else {
+                    lines
+                };
+                (lines, Some((from, last)), keep > 0)
+            }
+        };
+        let cur = s.cursor();
+        let (cols, rws) = s.size();
+        Ok(json!({
+            "terminal_id": terminal_id,
+            "pane_id": pane_id,
+            "format": if vt { "vt" } else { "text" },
+            "join": join,
+            "redact": redact,
+            "redacted": red.hidden,
+            "start": range.map(|r| r.0),
+            "end": range.map(|r| r.1),
+            "truncated": truncated,
+            "lines": lines,
+            "screen": {
+                "size": {"cols": cols, "rows": rws},
+                "alternate": s.alternate(),
+                "cursor": {"x": cur.x, "y": cur.y, "visible": cur.visible},
+            },
+            "history": session::history_json(&s.history()),
+        }))
+    }
+
+    /// `pane.clear_history` (tmux `clear-history`): drops the pane's history lines; the screen
+    /// stays. What clients already show in their own scrollback is theirs.
+    fn clear_history(&self, p: &Value) -> Result<Value, IpcError> {
+        let dry_run = flag(p, "dry_run")?;
+        let mut st = self.lock();
+        let (pane_id, terminal_id) = Self::screen_target(&st, &p["target"])?;
+        let s = &mut st
+            .out
+            .get_mut(&pane_id)
+            .expect("checked by screen_target")
+            .screen;
+        let before = s.history();
+        if dry_run {
+            return Ok(json!({"dry_run": true, "would_clear": {
+                "terminal_id": terminal_id, "pane_id": pane_id,
+                "lines": before.lines, "bytes": before.bytes,
+            }}));
+        }
+        s.clear_history();
+        Ok(json!({
+            "terminal_id": terminal_id,
+            "pane_id": pane_id,
+            "cleared_lines": before.lines,
+            "cleared_bytes": before.bytes,
+            "history": session::history_json(&s.history()),
+        }))
     }
 
     fn attach_target(&self, st: &State, target: &Value) -> Result<Arc<PaneRt>, IpcError> {
@@ -1760,7 +2192,8 @@ impl Host {
         let mut found: Vec<(u64, u32, Value)> = Vec::new();
         for id in ids {
             let c = &st.conns[&id];
-            for (&stream, &interactive) in &c.attached {
+            for (&stream, att) in &c.attached {
+                let interactive = att.interactive;
                 if streams.as_ref().is_some_and(|s| !s.contains(&stream)) {
                     continue;
                 }
@@ -1805,7 +2238,7 @@ impl Host {
         let (c, r) = size_param(params, "cols")?
             .ok_or_else(|| IpcError::param("cols", "cols and rows are required"))?;
         let rt = {
-            let st = self.lock();
+            let mut st = self.lock();
             if st.rt.is_empty() {
                 return Err(IpcError::new(
                     ErrorCode::TargetNotFound,
@@ -1818,7 +2251,7 @@ impl Host {
                 .map(|c| {
                     c.attached
                         .iter()
-                        .filter(|(_, i)| **i)
+                        .filter(|(_, a)| a.interactive)
                         .map(|(s, _)| *s)
                         .collect()
                 })
@@ -1853,9 +2286,15 @@ impl Host {
                     s
                 }
             };
-            st.rt_of_stream(stream)
+            let rt = st
+                .rt_of_stream(stream)
                 .cloned()
-                .ok_or_else(|| IpcError::new(ErrorCode::InvalidState, "the pane has ended"))?
+                .ok_or_else(|| IpcError::new(ErrorCode::InvalidState, "the pane has ended"))?;
+            // The model first, as a terminal does (see `attach`).
+            if let Some(o) = st.out.get_mut(&rt.pane_id) {
+                o.screen.resize(c, r);
+            }
+            rt
         };
         rt.pty
             .resize(c, r)
@@ -1989,6 +2428,23 @@ impl Host {
             None => self.home.as_ref().map(|h| h.display().to_string()),
         };
         let size = size_param(&p["size"], "size")?.unwrap_or(DEFAULT_SIZE);
+        // Step 13: history rows the pane keeps (tmux `history-limit`).
+        let history_limit = match &p["history_limit"] {
+            Value::Null => screen::DEFAULT_HISTORY_LINES,
+            v => v
+                .as_u64()
+                .and_then(|n| usize::try_from(n).ok())
+                .filter(|n| *n <= screen::MAX_HISTORY_LINES)
+                .ok_or_else(|| {
+                    IpcError::param(
+                        "history_limit",
+                        format!(
+                            "history_limit must be a number of lines from 0 to {}",
+                            screen::MAX_HISTORY_LINES
+                        ),
+                    )
+                })?,
+        };
         let remain_on_exit = flag(p, "remain_on_exit")?;
         let keep = flag(p, "keep_on_failure")?;
         if flag(p, "dry_run")? {
@@ -2028,6 +2484,7 @@ impl Host {
                 "size": {"cols": size.0, "rows": size.1},
                 "remain_on_exit": remain_on_exit,
                 "keep_on_failure": keep,
+                "history_limit": history_limit,
             }}));
         }
         let spec = Spec {
@@ -2038,6 +2495,7 @@ impl Host {
             env: env.names(),
             size,
             remain_on_exit,
+            history_limit,
         };
         self.create(spec, &Launch { raw_line, env }, keep)
     }

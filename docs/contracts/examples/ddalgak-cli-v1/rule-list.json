@@ -19,7 +19,7 @@
       {
         "code": null,
         "enabled": true,
-        "id": "r-f3d1eca0-ff1b-4e86-8ad3-2a4f8ccf8e40",
+        "id": "r-b5acd31c-4f3c-4331-887d-3e8a251d982f",
         "modes": null,
         "on": "press",
         "position": 0,
@@ -51,7 +51,7 @@
         "trigger": "F14"
       },
       {
-        "code": "step_unsupported",
+        "code": null,
         "enabled": true,
         "id": "caps",
         "modes": null,
@@ -60,18 +60,18 @@
         "priority": 0,
         "problems": 0,
         "profile": "default",
-        "state": "inactive",
+        "state": "active",
         "steps": [
           "remap"
         ],
-        "title": "CapsLock: acts as LCtrl",
+        "title": "CapsLock acts as Left Ctrl",
         "trigger": "CapsLock"
       }
     ],
     "source": "saved",
     "summary": {
       "errors": 0,
-      "infos": 1,
+      "infos": 0,
       "warnings": 0
     }
   },

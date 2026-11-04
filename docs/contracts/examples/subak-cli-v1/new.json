@@ -46,6 +46,16 @@
                 "unset": []
               },
               "executable": "C:\\Windows\\system32\\cmd.exe",
+              "history": {
+                "bytes": 0,
+                "cleared_lines": 0,
+                "evicted_lines": 0,
+                "limit_bytes": 4194304,
+                "limit_lines": 2000,
+                "lines": 0,
+                "persisted": false,
+                "total_lines": 0
+              },
               "id": "p-000000000001",
               "index": 0,
               "output_bytes": 1024,

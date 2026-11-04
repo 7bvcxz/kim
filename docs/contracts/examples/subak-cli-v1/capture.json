@@ -1,0 +1,47 @@
+{
+  "command": "capture",
+  "data": {
+    "end": 3,
+    "format": "text",
+    "history": {
+      "bytes": 0,
+      "cleared_lines": 0,
+      "evicted_lines": 0,
+      "limit_bytes": 4194304,
+      "limit_lines": 2000,
+      "lines": 0,
+      "persisted": false,
+      "total_lines": 0
+    },
+    "join": false,
+    "lines": [
+      "golden-1",
+      "token=***",
+      "",
+      ""
+    ],
+    "name": "echo",
+    "pane_id": "p-000000000001",
+    "redact": true,
+    "redacted": 1,
+    "requests": 1,
+    "screen": {
+      "alternate": false,
+      "cursor": {
+        "visible": true,
+        "x": 0,
+        "y": 0
+      },
+      "size": {
+        "cols": 40,
+        "rows": 4
+      }
+    },
+    "start": 0,
+    "terminal_id": "t-000000000002",
+    "truncated": false
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

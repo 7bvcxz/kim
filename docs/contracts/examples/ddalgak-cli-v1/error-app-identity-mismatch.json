@@ -5,7 +5,7 @@
     "details": [],
     "exit_code": 4,
     "hint": null,
-    "message": "the endpoint is served by `cli-4baeec39ec1dc5f6.exe` (pid 101036), not by ddalgak-gui.exe of this user; nothing was sent"
+    "message": "the endpoint is served by `cli-4baeec39ec1dc5f6.exe` (pid 65800), not by ddalgak-gui.exe of this user; nothing was sent"
   },
   "ok": false,
   "schema_version": 1

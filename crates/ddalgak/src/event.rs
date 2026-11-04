@@ -212,6 +212,19 @@ impl ModState {
         self.bits == 0 && !self.fake_ctrl
     }
 
+    /// The state without one modifier key (a key whose down was consumed is not held for the
+    /// application).
+    #[must_use]
+    pub fn without(mut self, m: ModKey) -> ModState {
+        self.set(m, false);
+        self
+    }
+
+    /// The modifier keys as [`ModKey::bit`] bits.
+    pub fn bits(&self) -> u8 {
+        self.bits
+    }
+
     /// Ctrl, Alt and Shift for the emergency chord: AltGr's fake Ctrl counts as Ctrl there, so
     /// the chord also works with AltGr on layouts that have it (recovery must stay possible).
     pub fn emergency_mods(&self) -> bool {

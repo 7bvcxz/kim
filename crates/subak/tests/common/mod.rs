@@ -248,7 +248,54 @@ pub fn processes() -> Vec<(u32, u32, String)> {
     }
     // SAFETY: valid snapshot handle.
     unsafe { CloseHandle(snap) };
+    drop_stale_parents(&mut out);
     out
+}
+
+/// Windows keeps a process's parent PID after the parent exits, and PIDs are reused quickly
+/// (CI runners especially). A process created *before* the process now holding its parent PID
+/// cannot be that process's child, so its parent is cleared (0). Without this, another test's
+/// Host, whose launcher had exited, showed up as a child of this test's Host when the Host
+/// received the launcher's old PID ("the Host has no child process: [(3764, 5828, \"subak.exe\")]").
+fn drop_stale_parents(list: &mut [(u32, u32, String)]) {
+    let pids: std::collections::HashSet<u32> = list.iter().map(|(p, _, _)| *p).collect();
+    let mut created = std::collections::HashMap::new();
+    for (pid, parent, _) in list.iter() {
+        if pids.contains(parent) {
+            for p in [*pid, *parent] {
+                created.entry(p).or_insert_with(|| creation_time(p));
+            }
+        }
+    }
+    for (pid, parent, _) in list.iter_mut() {
+        if let (Some(Some(child)), Some(Some(holder))) = (created.get(pid), created.get(parent))
+            && child < holder
+        {
+            *parent = 0;
+        }
+    }
+}
+
+/// Process creation time (100 ns units since 1601), if the process can still be opened.
+fn creation_time(pid: u32) -> Option<u64> {
+    use windows_sys::Win32::Foundation::FILETIME;
+    use windows_sys::Win32::System::Threading::GetProcessTimes;
+    // SAFETY: plain query; the handle is closed below.
+    let h = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if h.is_null() {
+        return None;
+    }
+    let (mut c, mut e, mut k, mut u) = (
+        FILETIME::default(),
+        FILETIME::default(),
+        FILETIME::default(),
+        FILETIME::default(),
+    );
+    // SAFETY: valid handle and out-pointers.
+    let ok = unsafe { GetProcessTimes(h, &raw mut c, &raw mut e, &raw mut k, &raw mut u) } != 0;
+    // SAFETY: valid handle.
+    unsafe { CloseHandle(h) };
+    ok.then(|| (u64::from(c.dwHighDateTime) << 32) | u64::from(c.dwLowDateTime))
 }
 
 /// A Host started for one test; stopped (or killed) on drop.
@@ -362,6 +409,9 @@ pub struct Raw {
     /// them here, so the next call continues the same frame instead of reading the rest of it
     /// as a new header (CI saw "bad frame length" and "frame kind 92" from exactly that).
     pending: std::cell::RefCell<Vec<u8>>,
+    /// `(stream, seq, flags)` of the last data frame returned (Step 13 checks seq and the
+    /// snapshot flag).
+    pub last_data: std::cell::Cell<Option<(u32, u64, u8)>>,
 }
 
 impl Raw {
@@ -387,6 +437,7 @@ impl Raw {
                 return Ok(Self {
                     h,
                     pending: std::cell::RefCell::new(Vec::new()),
+                    last_data: std::cell::Cell::new(None),
                 });
             }
             // SAFETY: thread-local read.
@@ -539,7 +590,12 @@ impl Raw {
                 ipc_valid(&v);
                 Got::Control(v)
             }
-            2 => Got::Data(body[13..].to_vec()),
+            2 => {
+                let stream = u32::from_le_bytes(body[..4].try_into().unwrap());
+                let seq = u64::from_le_bytes(body[4..12].try_into().unwrap());
+                self.last_data.set(Some((stream, seq, body[12])));
+                Got::Data(body[13..].to_vec())
+            }
             k => panic!("the Host sent frame kind {k}"),
         })
     }

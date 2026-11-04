@@ -1,6 +1,9 @@
 //! Ddalgak: a native, Windows-first automation engine (docs/DDALGAK_PHILOSOPHY.md, ADR 0022,
 //! ADR 0024).
 //!
+//! Step 68 adds **remaps and blocks** ([`remap`]; the core's remap state machine, the worker's
+//! output, the optional low-level mouse hook for mouse-button triggers; ADR 0031).
+//!
 //! Step 66 provides the **engine**: the normalized event model ([`event`]), the trigger syntax
 //! ([`trigger`]), compiled trigger tables ([`table`]), the allocation-free decision core that runs
 //! inside the low-level keyboard hook ([`core`]), the worker thread ([`worker`]), the lifecycle
@@ -24,6 +27,7 @@ pub mod ipc;
 pub mod lifecycle;
 pub mod model;
 pub mod paths;
+pub mod remap;
 pub mod rules;
 pub mod schema;
 pub mod shortcuts;

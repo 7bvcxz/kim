@@ -20,6 +20,7 @@
         "unset": []
       },
       "executable": "C:\\Windows\\system32\\cmd.exe",
+      "history_limit": 2000,
       "keep_on_failure": false,
       "name": "raw",
       "remain_on_exit": false,

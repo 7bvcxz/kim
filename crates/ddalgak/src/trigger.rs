@@ -1,9 +1,13 @@
 //! Rule trigger syntax (docs/DDALGAK_RULE_MODEL.md §3.1): the hotkey contract's canonical chords
 //! and sequences, parsed by `kim-hotkeys`, plus Ddalgak's extensions — the lock keys `CapsLock`
-//! and `NumLock` as keys, and one bare side-specific modifier (`RAlt`, `LCtrl`, …) as a whole
-//! trigger — without `char:` keys, leaders or `Win` chords (ADR 0022). Reserved chords are
-//! refused with the contract's reasons (`DDALGAK-SEC-009`).
+//! and `NumLock` as keys, one bare side-specific modifier (`RAlt`, `LCtrl`, …) as a whole
+//! trigger, and (Step 68, ADR 0031) the mouse buttons `MouseMiddle`, `MouseX1` and `MouseX2`,
+//! optionally with modifiers, as a whole trigger — without `char:` keys, leaders or `Win` chords
+//! (ADR 0022). The primary and secondary buttons are never triggers, so no rule can take away the
+//! user's ability to click. Reserved chords are refused with the contract's reasons
+//! (`DDALGAK-SEC-009`).
 
+use crate::inject::Button;
 use crate::vk::ModKey;
 use kim_hotkeys::keys::{Chord, Key, Mods, Sequence, Side, Step};
 use kim_hotkeys::reserved;
@@ -20,6 +24,8 @@ pub enum TKey {
     Lock(&'static str),
     /// A bare side-specific modifier; only as a single-step trigger.
     Modifier(ModKey),
+    /// A mouse button (`MouseMiddle`, `MouseX1`, `MouseX2`); only as a single-step trigger.
+    Mouse(Button),
 }
 
 /// One chord of a trigger.
@@ -42,7 +48,7 @@ impl TChord {
                 mods: self.mods,
                 key: Key::Code(c),
             }),
-            TKey::Lock(_) | TKey::Modifier(_) => None,
+            TKey::Lock(_) | TKey::Modifier(_) | TKey::Mouse(_) => None,
         }
     }
 }
@@ -51,8 +57,13 @@ impl fmt::Display for TChord {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.key {
             TKey::Modifier(m) => f.write_str(m.name()),
-            TKey::Lock(name) => {
-                // Print the modifiers through the contract's serializer, then the lock key.
+            TKey::Lock(_) | TKey::Mouse(_) => {
+                let name = match self.key {
+                    TKey::Mouse(b) => b.name(),
+                    TKey::Lock(n) => n,
+                    _ => "",
+                };
+                // Print the modifiers through the contract's serializer, then the key.
                 let shown = Chord {
                     mods: self.mods,
                     key: Key::Named("F1"),
@@ -103,6 +114,9 @@ impl fmt::Display for TriggerError {
 
 const LOCK_KEYS: [&str; 2] = ["CapsLock", "NumLock"];
 
+/// The mouse buttons that may be triggers (Step 68, ADR 0031).
+pub const MOUSE_TRIGGERS: [Button; 3] = [Button::Middle, Button::X1, Button::X2];
+
 fn parse_chord(step: &str, single: bool) -> Result<TChord, TriggerError> {
     let invalid = |why: &str| Err(TriggerError::Invalid(format!("`{step}`: {why}")));
     if let Some(m) = ModKey::from_name(step) {
@@ -129,6 +143,26 @@ fn parse_chord(step: &str, single: bool) -> Result<TChord, TriggerError> {
         return finish(TChord {
             mods: chord.mods,
             key: TKey::Lock(lock),
+        });
+    }
+    let button = Button::ALL
+        .into_iter()
+        .find(|b| step == b.name() || step.ends_with(&format!("+{}", b.name())));
+    if let Some(b) = button {
+        if !MOUSE_TRIGGERS.contains(&b) {
+            return invalid(
+                "the primary and secondary mouse buttons are never triggers (a rule must not take away clicking); use MouseMiddle, MouseX1 or MouseX2",
+            );
+        }
+        if !single {
+            return invalid("a mouse button is a whole trigger, never a sequence step");
+        }
+        let prefix = &step[..step.len() - b.name().len()];
+        let chord = Chord::parse(&format!("{prefix}F1"))
+            .map_err(|e| TriggerError::Invalid(format!("`{step}`: {}", e.message)))?;
+        return finish(TChord {
+            mods: chord.mods,
+            key: TKey::Mouse(b),
         });
     }
     if step.starts_with("char:") {
@@ -212,6 +246,14 @@ impl Trigger {
             _ => None,
         }
     }
+
+    /// The mouse button of a mouse-button trigger (it needs the low-level mouse hook).
+    pub fn mouse(&self) -> Option<Button> {
+        match self.single()?.key {
+            TKey::Mouse(b) => Some(b),
+            _ => None,
+        }
+    }
 }
 
 impl fmt::Display for Trigger {
@@ -253,9 +295,14 @@ mod tests {
             "F13 F14 F15 F16",
             "Escape",
             "A",
+            "MouseX1",
+            "Ctrl+MouseMiddle",
+            "LCtrl+Alt+Shift+MouseX2",
         ] {
             assert_eq!(ok(t).to_string(), t);
         }
+        assert_eq!(ok("Ctrl+MouseX1").mouse(), Some(Button::X1));
+        assert_eq!(ok("F13").mouse(), None);
         assert_eq!(
             ok("RAlt").single().unwrap().key,
             TKey::Modifier(ModKey::RAlt)
@@ -285,6 +332,7 @@ mod tests {
             ("HangulMode", "Input method key"),
             ("code:Lang1", "Input method key"),
             ("F13 Alt+Tab", "Task switching"),
+            ("Win+MouseX1", "Windows key shortcut"),
         ] {
             assert_eq!(
                 Trigger::parse(t),
@@ -307,6 +355,11 @@ mod tests {
             "A B C D E",
             "Ctrl+CapsLockX",
             "Hyper+J",
+            "MouseLeft",
+            "Ctrl+MouseRight",
+            "MouseX1 F13",
+            "F13 MouseX2",
+            "Shift+Ctrl+MouseX1",
         ] {
             let e = Trigger::parse(t).unwrap_err();
             assert_eq!(e.code(), "trigger_invalid", "{t}: {e}");

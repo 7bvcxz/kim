@@ -77,7 +77,8 @@
           "additionalProperties": false,
           "properties": {
             "installed": { "type": "boolean" },
-            "observe_only": { "type": "boolean" }
+            "observe_only": { "type": "boolean" },
+            "mouse_installed": { "description": "The low-level mouse hook is installed: only while the engine is on and an active rule has a mouse-button trigger (Step 68, ADR 0031).", "type": "boolean" }
           }
         }
       },
@@ -383,7 +384,8 @@
                       "properties": {
                         "installed": { "type": "boolean" },
                         "thread_alive": { "type": "boolean" },
-                        "observe_only": { "type": "boolean" }
+                        "observe_only": { "type": "boolean" },
+                        "mouse_installed": { "description": "The low-level mouse hook is installed (only while a mouse-button rule is active).", "type": "boolean" }
                       }
                     },
                     "context_watchers": { "$ref": "#/$defs/count" }

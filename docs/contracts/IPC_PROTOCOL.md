@@ -1,15 +1,18 @@
 # Subak IPC protocol v1
 
 Status: **implemented v1** (Step 09; Terminal methods added in Step 10, environment overrides
-in Step 11, verbatim command lines and `client.detach` in Step 12, as additive changes; frozen:
+in Step 11, verbatim command lines and `client.detach` in Step 12, terminal-state snapshots,
+`pane.resync`, `pane.capture` and `pane.clear_history` in Step 13, as additive changes; frozen:
 changes are additive or need major 2) · Designed in Step 03 · Decisions:
 [ADR 0005](../adr/0005-local-ipc.md),
 [ADR 0019](../adr/0019-secure-host-supervisor-and-ipc-v1.md),
 [ADR 0020](../adr/0020-terminal-session-lifecycle.md),
 [ADR 0025](../adr/0025-pane-programs-environment-and-backpressure.md),
-[ADR 0027](../adr/0027-subak-cli-structure-and-headless-control.md) · Session semantics:
+[ADR 0027](../adr/0027-subak-cli-structure-and-headless-control.md),
+[ADR 0030](../adr/0030-host-terminal-model-scrollback-and-replay.md) · Session semantics:
 [SESSION_MODEL.md](../SESSION_MODEL.md) · Programs and environment:
-[PTY_PROCESSES.md](../PTY_PROCESSES.md)
+[PTY_PROCESSES.md](../PTY_PROCESSES.md) · Scrollback and replay:
+[SCROLLBACK.md](../SCROLLBACK.md)
 
 Machine-readable schema: [schemas/ipc-v1.schema.json](schemas/ipc-v1.schema.json). Valid and
 invalid example messages live in [examples/ipc-v1/](examples/ipc-v1/hello.json) and are checked by
@@ -39,9 +42,13 @@ u32 LE length | u8 kind | payload (length - 1 bytes)
 | `0x01` | control | UTF-8 JSON object (one message) | 256 KiB |
 | `0x02` | data | `u32 LE stream_id` · `u64 LE seq` · `u8 flags` · bytes | 1 MiB of bytes |
 
-Data `flags`: bit 0 = snapshot (Host → client: the bytes reproduce recent output at `seq`),
-bit 1 = input (client → Host). Other bits must be zero. A client may send only data frames whose
-flags are exactly `input`.
+Data `flags`: bit 0 = snapshot (Host → client: the bytes reproduce the pane's terminal as it was
+at output position `seq`; live output continues with the frame whose `seq` is that same value; a
+snapshot may span several consecutive frames, all with that `seq`; until Step 12 the bytes were
+raw recent output and `seq` the offset of their first byte), bit 1 = input (client → Host). Other
+bits must be zero. A client may send only data frames whose flags are exactly `input`. For live
+output (`flags` 0), `seq` is the offset of the frame's first byte in the pane's output, so each
+frame's `seq` is the previous one's plus its length.
 
 **Limits and timeouts** (enforced by the Host):
 
@@ -52,7 +59,7 @@ flags are exactly `input`.
 | Any later frame | complete within 10 s of its first byte | `protocol_error`, close |
 | Idle connection | no limit; heartbeats are the client's choice (`host.health`) | — |
 | Connections | 64 at once (in handshake or established) | handshake error `busy`, close |
-| Send queue per connection | 16 MiB, each queued frame counting its bytes plus 64 (Step 11; until Step 10 also at most 4096 frames) | the lagging client is disconnected; the pane never waits ([PTY_PROCESSES §7](../PTY_PROCESSES.md)) |
+| Send queue per connection | 16 MiB, each queued frame counting its bytes plus 64 (Step 11; until Step 10 also at most 4096 frames) | output that does not fit: that stream's queued output is dropped and it is resynced once the queue drained to 4 MiB (`pane.resync`, Step 13; until Step 12 the client was disconnected); a control message that does not fit: the client is disconnected; the pane never waits ([SCROLLBACK §5](../SCROLLBACK.md)) |
 
 A violation closes **that connection only**. The Host first sends a connection-level error
 `{"type":"error","error":{…}}` when it can. It never panics on input; a panic in a request
@@ -86,12 +93,16 @@ handler becomes `internal_error` and the Host continues (ADR 0019 §9).
    | `busy` | 64 connections are already open |
    | `host_stopping` | the Host is shutting down |
 
-`features` of the Step 12 Host: `host.health`, `host.stats`, `events.subscribe`,
+`features` of the Step 13 Host: `host.health`, `host.stats`, `events.subscribe`,
 `identity.verified`, `terminal.lifecycle`, `terminal.environment` (Step 11: `terminal.create`
 takes `env`, panes report `executable` and their override names), `terminal.command_line`
-(Step 12: `terminal.create` takes a verbatim `command_line`, panes report it redacted) and
+(Step 12: `terminal.create` takes a verbatim `command_line`, panes report it redacted),
 `client.detach` (Step 12: the `client.detach` method, the `pane.detached` event and client `id`s
-in `host.status`). The Step 11 Host lacked the last two, the Step 10 Host also
+in `host.status`), `pane.snapshot` (Step 13: `pane.attach` sends a terminal-state snapshot and
+its `snapshot` result; lagging clients get `pane.resync`) and `pane.capture` (Step 13:
+`pane.capture`, `pane.clear_history`, pane `history`, `host.status.scrollback`). The Step 12 Host
+lacked the last two, the Step 11 Host also `terminal.command_line` and `client.detach`, the
+Step 10 Host also
 `terminal.environment`; the Step 09 Host announced `prototype.single_pane` instead of
 `terminal.lifecycle`. Clients must ignore features they do not know.
 
@@ -137,17 +148,37 @@ Host does not implement yet answers `unknown_request`, as does any name not in t
 | `terminal.restore` | `{target, dry_run, claude_resume}` | `{plan}` or `{restored}` | cli, gui, mcp* | 30 |
 | `window.create` / `.list` / `.rename` / `.kill` / `.select` | target-based | objects | cli, gui, mcp* | 21 |
 | `pane.split` / `.list` / `.kill` / `.select` / `.swap` / `.zoom` | target-based | objects | cli, gui, mcp* | 21–22 |
-| `pane.attach` | `{target?, interactive?, size?}` | `{stream_id, pane_id, terminal_id, seq, interactive, pane: {id, pid, size}, replay_bytes}`, then a snapshot data frame and live output | cli, gui, mcp* | **09**, **10**, 12–13 |
+| `pane.attach` | `{target?, interactive?, size?, history_lines?}` | `{stream_id, pane_id, terminal_id, seq, interactive, pane: {id, pid, size}, replay_bytes, snapshot: {bytes, frames, history_lines, alternate, size}}`, then the snapshot data frames and live output | cli, gui, mcp* | **09**, **10**, **13** |
 | `pane.detach` | `{stream_id?}` | `{}` | cli, gui, mcp | **09**, **10** |
 | `client.detach` | `{target?, client_id?, dry_run?}` (at least one of `target`, `client_id`) | `{detached: [attachment], terminal}` or `{dry_run: true, would_detach, terminal}` | cli, gui, mcp* | **12** |
 | `pane.resize` | `{cols, rows, stream_id?}` | `{cols, rows, stream_id}` | cli, gui | **09**, **10** |
 | `pane.send_keys` | `{target, keys: [string], literal}` | `{}` | cli, gui, mcp* | 24 (not in Step 12: the CLI writes input through an attach) |
-| `pane.capture` | `{target, start?, end?, format: "text" \| "vt"}` | `{text}` | cli, gui, mcp* | 13 |
+| `pane.capture` | `{target?, start?, end?, format?: "text" \| "vt", join?, redact?}` | `{terminal_id, pane_id, format, join, redact, redacted, start, end, truncated, lines, screen, history}` | cli, gui, mcp* | **13** |
+| `pane.clear_history` | `{target?, dry_run?}` | `{terminal_id, pane_id, cleared_lines, cleared_bytes, history}` or `{dry_run: true, would_clear}` | cli, gui, mcp* | **13** |
 | `claude.report` | `{pane_id, session_id, event, at, reason?}` | `{}` | **hook only** | 27 |
 | `claude.status` | `{target?}` | `{panes: [{pane_id, state, since, session_id?}]}` | cli, gui, mcp | 28 |
 
 `mcp*` = only once the user granted that capability to MCP clients (Step 37). Until then MCP
-clients may call only the unstarred methods. Bold Step = implemented by the Step 12 Host.
+clients may call only the unstarred methods. Bold Step = implemented by the Step 13 Host.
+
+**Snapshots, history and capture (Step 13, [SCROLLBACK.md](../SCROLLBACK.md)).** The Host feeds
+every pane's output into a terminal model. `pane.attach` answers with `seq` and `snapshot`, then
+sends the snapshot (`snapshot.bytes` in `snapshot.frames` data frames flagged *snapshot*, all at
+`seq`) and then live output from `seq` on; response, snapshot and live output are taken under the
+lock the pane's reader holds, so nothing is lost, duplicated or reordered. The snapshot is VT for a
+terminal of `snapshot.size` in its default state: up to `history_lines` history rows (default all
+kept; `0` none) scrolled into that terminal's scrollback, the screens, modes and cursor, and the
+start of a sequence that was still incomplete. `replay_bytes` equals `snapshot.bytes`.
+`pane.capture` takes a target of any level, also a `stopped` Terminal (its screen is kept until
+it is removed; `invalid_state` for one that never started), or none when exactly one pane has a
+screen; `start`/`end` are line numbers (screen rows from 0, history lines from -1, the newest,
+down) or `"-"` (the oldest history line, the last screen row), defaulting to the screen;
+`format: "vt"` keeps SGR sequences, `join` joins wrapped rows, and `redact` (default `true`)
+replaces secret-looking values with `***` and counts them in `redacted`. At most 192 KiB of lines
+per answer: older ones are left out, `truncated` is true and `start` is the first line returned.
+`screen` is `{size, alternate, cursor: {x, y, visible}}`; `history` is the pane's counters.
+`pane.clear_history` deletes the pane's history (not its screen); `dry_run` shows the counts.
+Typed by `result_pane_attach`, `result_pane_capture` and `result_pane_clear_history`.
 
 **Panes and streams (Step 10).** A Host owns any number of Terminals, each with one window and one
 pane (docs/SESSION_MODEL.md). Each pane has its own data stream id, unique in the Host.
@@ -201,7 +232,10 @@ or `null` outside any job (risk R-03). `host.environment` is `user` (built with
 pane of the Terminal the Host was started with (`--shell`; it also carries `terminal_id`) while
 that Terminal exists, else `null`; use `terminal.list` for the others. Each client lists the
 `streams` it is attached to and, since Step 12, its `id` (unique per Host for its lifetime; the
-list is ordered by it), which `client.detach` takes.
+list is ordered by it), which `client.detach` takes. Since Step 13, `scrollback` is `{panes, lines,
+bytes, memory_bytes, default_limit_lines, limit_bytes_per_pane, persisted: false}`: the panes
+whose screen the Host keeps, their history rows and bytes, the memory of their models, the
+default and per-pane limits (typed by the `scrollback` definition).
 
 ### 4.2 `host.stats` result
 
@@ -211,7 +245,10 @@ private_bytes, peak_private_bytes}}` (memory since Step 11), `terminals` (live),
 ended ones), `sessions.{created_total, spawn_failures_total, removed_total}`, and
 `ipc.{connections_total,
 rejected.{identity, limit, handshake, stopping}, requests_total, errors_total.{<code>: n},
-protocol_errors, panics, input_frames_dropped, lagging_clients_dropped}`.
+protocol_errors, panics, input_frames_dropped, lagging_clients_dropped, lagging_resyncs,
+output_frames_skipped}` (the last two since Step 13), and since Step 13 `scrollback.{panes, lines,
+bytes, memory_bytes, evicted_lines_total, cleared_lines_total, snapshots_total,
+snapshot_bytes_total, captures_total}`.
 
 ### 4.3 Terminal methods (Step 10)
 
@@ -222,7 +259,9 @@ the `terminal`, `window`, `pane` and `terminal_summary` definitions of the schem
   the `terminal.created` event): `{id, name, created_at, state, profile, remain_on_exit, busy,
   clients, active_window, windows: [{id, index, name, automatic_name, active_pane, layout,
   panes: [{id, index, cwd, command: {program, args}, executable, env: {set, unset}, title,
-  stream_id, pid, running, processes, size, clients, output_bytes}]}], failure, last_exit}`.
+  stream_id, pid, running, processes, size, clients, output_bytes, history}]}], failure, last_exit}`.
+  `history` (Step 13) is `{lines, bytes, limit_lines, limit_bytes, evicted_lines, cleared_lines,
+  total_lines, persisted: false}` while the Host keeps the pane's screen, else `null`.
   `executable` (Step 11) is the program file that runs (`null` until it started); `env` lists
   the **names** of its environment overrides, never their values. `state` is `starting`, `running`,
   `stopping`, `stopped` or `failed`. `failure` is `{code: "spawn_failed", reason, message}` for a
@@ -247,6 +286,9 @@ the `terminal`, `window`, `pane` and `terminal_summary` definitions of the schem
   may not appear; at most 256 names (1–255 characters, no `=`), values up to 32 767 characters;
   anything else is `invalid_params` with `details.field = "env"`. Values are never stored or
   shown ([PTY_PROCESSES §3](../PTY_PROCESSES.md)). `size` `{cols, rows}` (default 120×30).
+  `history_limit` (Step 13) is the number of history rows the pane keeps, 0–100 000 (default
+  2 000; `invalid_params` with `details.field = "history_limit"` otherwise); `would_create`
+  reports it.
   `remain_on_exit` keeps the Terminal as `stopped` when its program exits; `keep_on_failure`
   keeps a failed start as `failed`. A start that fails answers `spawn_failed` with
   `details.{reason, program, kept, terminal_id}`, plus `hint` and `os_error` when there are
@@ -280,14 +322,14 @@ subscribes and then lists sees every later change exactly once, after its list.
 | `host.stopping` | `host` | `{reason: "stop_requested" \| "idle"}`, before the Host ends its panes | 09 |
 | `pane.exited` | `panes` | `{pane_id, terminal_id, pid, exit_code}`, after the pane's last output | 09 (`terminal_id` 10) |
 | `pane.detached` | `panes` | `{pane_id, terminal_id, stream_id, by: {client_id, pid, kind} \| null}`, to the connection another client's `client.detach` detached, before its output stops | 12 |
+| `pane.resync` | `panes` | `{pane_id, terminal_id, stream_id, seq}`, to a connection that fell behind on the stream: the Host dropped output instead of waiting; a snapshot at `seq` follows, then live output from `seq` | 13 |
 | `terminal.created` | `terminals` | `{terminal: Terminal}` (state `starting`) | 10 |
 | `terminal.state_changed` | `terminals` | `{terminal_id, name, state, previous_state, cause}`; `cause` is `stopped`, `killed`, `exited`, `host_stopped` or `null` | 10 |
 | `terminal.renamed` | `terminals` | `{terminal_id, name, previous_name}` | 10 |
 | `terminal.removed` | `terminals` | `{terminal_id, name, reason}`; `reason` is `killed`, `removed`, `exited`, `spawn_failed` or `host_stopping` | 10 |
 
 Later Steps: `window.created`, `window.renamed`, `window.removed`, `pane.created`,
-`pane.removed`, `pane.resync` (`{stream_id}`: the client must discard buffered output; a snapshot
-follows), `claude.state_changed`.
+`pane.removed`, `claude.state_changed`.
 
 ## 6. Error codes (stable)
 

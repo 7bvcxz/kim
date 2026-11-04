@@ -1,8 +1,10 @@
 # Ddalgak rule model
 
 Status: **current** · Rules document **v1** · Step 65 (specification); the engine since Step 66, the
-rule store, validation and rule commands since Step 67 (§14) · Decisions:
-[ADR 0022](adr/0022-ddalgak-rule-model-and-safety.md), [ADR 0028](adr/0028-ddalgak-rule-store-validation-and-reload.md) · Schemas:
+rule store, validation and rule commands since Step 67, remaps, blocks and mouse-button triggers
+since Step 68 (§14) · Decisions:
+[ADR 0022](adr/0022-ddalgak-rule-model-and-safety.md), [ADR 0028](adr/0028-ddalgak-rule-store-validation-and-reload.md),
+[ADR 0031](adr/0031-ddalgak-remap-execution-and-mouse-hook.md) · Schemas:
 [ddalgak-rules-v1](contracts/schemas/ddalgak-rules-v1.schema.json),
 [ddalgak-simulation-v1](contracts/schemas/ddalgak-simulation-v1.schema.json) · Requirements:
 `DDALGAK-FR-005…042`, `DDALGAK-SEC-001…013`
@@ -15,7 +17,8 @@ reasoning behind many rules is in [DDALGAK_SAFETY](DDALGAK_SAFETY.md).
 
 Words: **MUST**/**MUST NOT** are requirements; **SHOULD** is a strong default that needs a
 written reason to break. Windows behavior from Microsoft documentation is marked *documented*.
-Nothing in this document has been run against real Windows input yet (§14).
+What has been run against real Windows input, and what has not, is listed in §14 and in
+[DDALGAK_ENGINE §8, §11](DDALGAK_ENGINE.md).
 
 ## 1. Overview and terms
 
@@ -113,6 +116,7 @@ release and hold), with these differences:
 | --- | --- |
 | **Lock keys** `CapsLock` and `NumLock` are keys, alone or with modifiers (`Shift+CapsLock`). | The contract leaves them to Ddalgak (§5.2 there); CapsLock is the most remapped key there is. |
 | **Bare side-specific modifiers** `LCtrl`, `RCtrl`, `LAlt`, `RAlt`, `LShift`, `RShift` are single-step triggers. | Right Alt as 한/영, a tap of Right Ctrl. Only with `remap` or `on: release` (§3.3). |
+| **Mouse buttons** `MouseMiddle`, `MouseX1`, `MouseX2` (Step 68), optionally with modifiers (`Ctrl+MouseX1`), as a whole trigger (never a sequence step). `MouseLeft` and `MouseRight` are never triggers. The CLI also accepts `MButton`, `XButton1`, `XButton2`. | Side buttons as Back, Copy or a modifier are popular remaps. A rule must never take away clicking. Mouse triggers need the low-level mouse hook, which exists only while such a rule is active ([ADR 0031](adr/0031-ddalgak-remap-execution-and-mouse-hook.md), permission `mouse-hook`, §6.1). Wheel triggers: Step 71. |
 | **No `char:` keys.** | Translating keys to characters inside the hook changes dead-key state in the focused application. Hotstrings (Step 69) get their own trigger kind. |
 | **No leaders (`@…`).** | Rules have no prefix tables; a sequence such as `Ctrl+K Ctrl+U` is written out. |
 | Typing and navigation keys (`A`, `Space`, `Escape`, `code:KeyH`) are allowed. | `kim_reserved` (contract §7.2) protects Kim GUIs' own controls; remapping plain keys is Ddalgak's purpose. `Alt+F4` and the emergency chord stay reserved. |
@@ -137,11 +141,18 @@ for `Ctrl+Alt` with a letter, digit or punctuation key; `ime_toggle` for `Ctrl+S
   Generic modifiers accept either side; `LCtrl`/`RCtrl` need that side.
 - **A trigger without modifiers used by `remap` or `block` matches with any modifiers held**, and
   the held modifiers combine with the output (Shift+CapsLock with CapsLock → Escape gives
-  Shift+Escape). Other action types match exactly.
+  Shift+Escape). Other action types match exactly. **An exact chord wins over that widening**:
+  with `J` → `Down` and a rule on `Ctrl+J`, Ctrl+J fires the `Ctrl+J` rule whatever their order
+  (Step 68).
 - **Reserved chords win over that widening.** When the held modifiers and the key form a chord
   reserved for triggers (§3.1), no rule matches and the event passes unchanged: with `Tab`
   remapped, `Alt+Tab` still switches windows; with `Escape` remapped, `Ctrl+Shift+Escape` still
-  opens Task Manager; with `F4` blocked, `Alt+F4` still closes the window.
+  opens Task Manager; with `F4` blocked, `Alt+F4` still closes the window; with `CapsLock` or
+  `MouseX1` remapped, any `Win` chord with them stays Windows'.
+- **Modifiers as the application sees them.** A modifier whose down a rule consumed (a remapped
+  `RAlt`) is not held for matching; a modifier Ddalgak injected (the `LCtrl` of `CapsLock` →
+  `LCtrl`) is, so a `Ctrl+J` rule fires while CapsLock is held. Ddalgak's own output never
+  triggers a rule (§7.4).
 - Logical keys (`J`) follow the active layout's virtual keys; physical keys (`code:KeyJ`) follow
   the scan code position; both as in contract §6.
 - **Consumed down, consumed up.** When a rule consumes a key-down, its key-up is consumed too;
@@ -155,12 +166,13 @@ for `Ctrl+Alt` with a letter, digit or punctuation key; `ime_toggle` for `Ctrl+S
 | `keys` | trigger syntax | Required. Canonical form only; the GUI and CLI accept the contract's aliases and store the canonical form. |
 | `on` | `press` (default), `release`, `hold` | `release`: the chord was released with no other key in between (a tap); for a bare modifier it is the only way to fire a non-remap rule, so the modifier still works in chords. `hold`: held for `hold_ms` (200–5000, default 500). Sequences fire on `press` only. |
 | `repeat` | `false` (default) | `true` (with `press`): auto-repeat fires the rule again. |
-| `pass_through` | `false` (default) | `true`: the original key also reaches the application (like AutoHotkey's `~`). Not allowed with steps that last while the trigger is held. |
+| `pass_through` | `false` (default) | `true`: the original key also reaches the application (like AutoHotkey's `~`). Not allowed with steps that last while the trigger is held, except a `remap` without `tap` (Step 68, ADR 0031): the original key and the target are both held, and the trigger's modifiers stay as they are. |
 | `injected` | `ignore` (default), `accept` | `accept`: input injected by *other* programs (an on-screen keyboard, remote-control software) may trigger the rule. Ddalgak's own injected input never triggers any rule. A rule with `accept` may not contain injecting steps (§7.4). |
 
 **Steps that last while the trigger is held** (`remap`, `mode` with `op: hold`, `mouse_click`
 with `op: hold`, `mouse_move` with `while_held`) are the rule's only step, on a single chord with
-`on: press`, no `repeat` and no `pass_through` (schema `holds_trigger`).
+`on: press`, no `repeat` and no `pass_through` (schema `holds_trigger`); only a `remap` without
+`tap` may pass the original key through.
 
 ## 4. Rules
 
@@ -190,18 +202,38 @@ hook recognizes and ignores its own input (§7.4).
 
 | Input | Values |
 | --- | --- |
-| `to` | Required. One output key or chord: a named or `code:` key, optionally with modifiers (`Ctrl+C`), or a bare modifier including `LWin`/`RWin`. IME keys are allowed (`HangulMode`). Never the Secure Attention Sequence or the emergency chord. |
+| `to` | Required. One output key or chord: a named or `code:` key, optionally with modifiers (`Ctrl+C`), a bare modifier including `LWin`/`RWin`, or (Step 68) a mouse button `MouseLeft`, `MouseRight`, `MouseMiddle`, `MouseX1`, `MouseX2` with modifiers (`Ctrl+MouseLeft`). IME keys are allowed (`HangulMode`). Never the Secure Attention Sequence or the emergency chord. |
 | `tap` | Optional dual role: a press and release of the trigger alone within `tap_ms` sends this key or chord instead. |
 | `tap_ms` | 100–1000, default 200; only with `tap`. |
 
+What each output is: a **named key** is sent by virtual key, so the active layout decides what it
+types, like the key with that label (with the layout's scan code and the extended flag for the
+navigation cluster, Right Ctrl/Alt, the Windows and media keys); a **`code:` key** is sent by scan
+code, the key at that position on every layout; **`MouseLeft`/`MouseRight`** are the logical
+primary and secondary buttons (they follow the "swap buttons" setting); **`AltGr`** in an output is
+sent as Right Alt. Media and gaming keys (`MediaPlayPause`, `VolumeUp`, `F13`–`F24`) are outputs
+like any key; whether an application reacts to them is up to it.
+
 - **Behavior.** When the trigger goes down, the target goes down; when the trigger goes up, the
-  target goes up. Auto-repeat of the trigger repeats the target's key-down. If the trigger has
-  modifiers (`Ctrl+Shift+J` → `Down`), those modifiers are logically released while the target
-  is held and restored afterwards if still physically down. A plain-key trigger keeps the other
-  held modifiers (§3.2). With `tap`, the target is pressed as soon as another key is pressed
-  during the hold or `tap_ms` passes; otherwise the release sends the `tap` output.
-- **Outputs.** Preview `{ "holds": "LCtrl", "tap": "Escape", "released_modifiers": [...] }`. Live:
-  key events for the target only.
+  target goes up. Auto-repeat of the trigger repeats the target's key-down (a bare-modifier
+  target repeats that modifier; mouse buttons do not repeat). If the trigger has modifiers
+  (`Ctrl+Shift+J` → `Down`), those modifiers are logically released while the target is held and
+  restored afterwards if still physically down; a modifier the user lets go of meanwhile has its
+  up consumed (the application already saw it go up) and is not restored. A plain-key trigger
+  keeps the other held modifiers (§3.2). With `tap`, the target is pressed as soon as another key
+  is pressed during the hold or `tap_ms` passes; otherwise the release sends the `tap` output.
+  The other key reaches the application after the target, unchanged (with its repeats and its
+  up), so CapsLock+C is Ctrl+C even within `tap_ms`; a key with its own rule decides the dual
+  role and fires its rule. Mouse clicks never decide a dual role (wait `tap_ms` before
+  Ctrl+click).
+- **Shared and held outputs** (Step 68). Two remaps holding the same output share it: it goes up
+  when the last one lets go. A target the user already holds (a physical `LCtrl` under
+  `CapsLock` → `LCtrl`) is neither pressed nor released by Ddalgak. A reload while a target is
+  held keeps it until the trigger goes up; an undecided dual role is dropped by a reload.
+- **Outputs.** Preview `{ "holds": "LCtrl", "tap": "Escape", "released_modifiers": [...] }`
+  (`tap` and `released_modifiers` only when there are any; `crates/ddalgak/src/remap.rs` builds it
+  and a test validates it against `preview_remap`). Live: key and button events for the target
+  only.
 - **Errors.** Validation: `output_is_trigger` (`F13` → `F13`), `output_reserved`. Runtime:
   `skipped_elevated_target`, `skipped_password_field`, `injection_failed`.
 - **Safety.** `input-injection`. The target is released on every path of `DDALGAK-SEC-005`.
@@ -210,8 +242,12 @@ hook recognizes and ignores its own input (§7.4).
 
 ### 5.2 `block`: disable a key or chord
 
-No inputs. The trigger is consumed and nothing happens (AutoHotkey's `Key::return`). Preview
-`{}`. Not injecting, needs no consent. Blocking a key never blocks the emergency chord.
+No inputs. The trigger is consumed and nothing happens (AutoHotkey's `Key::return`). A trigger
+without modifiers is widened like a remap's (§3.2: with `F17` blocked, `Ctrl+F17` is blocked too;
+`Alt+F4` with `F4` blocked still closes the window). Mouse buttons can be blocked (`MouseX2`).
+Preview `{}`. Not injecting, needs no consent, still works over an elevated window. Blocking a key
+never blocks the emergency chord. A rule of `block` and `engine` steps is an engine-control rule
+(the block adds nothing).
 
 ### 5.3 `send_keys`: press a combination or sequence
 
@@ -379,8 +415,10 @@ the rule is inactive (`step_unsupported`, §9).
 | `repeat`, `if`, variables | Step 78 | — |
 | Recorded macros (steps produced by the recorder) | Step 78 | as their steps |
 
-Trigger kinds planned additively: hotstrings (Step 69) and mouse buttons (Step 68, needs a mouse
-hook that a catalog update discloses first).
+Trigger kinds planned additively: hotstrings (Step 69) and mouse wheel notches (Step 71). Mouse
+buttons arrived in Step 68 (§3.1; the `mouse-hook` permission, §6.1). `send_keys` runs from Step
+69 and `delay`, with ordered multi-step runs, from Step 78 ([ADR 0031](adr/0031-ddalgak-remap-execution-and-mouse-hook.md));
+until then they are `step_unsupported`.
 
 ## 6. Permissions and consent
 
@@ -392,6 +430,7 @@ discloses before installing Ddalgak.
 | Permission | Needed by | Recorded |
 | --- | --- | --- |
 | `keyboard-hook` | the engine itself | Implicit in turning the engine on; never per rule |
+| `mouse-hook` | mouse-button triggers (Step 68) | Implicit: the low-level mouse hook exists only while the engine is on and an active rule has a mouse-button trigger; never per rule (`status` shows `engine.hook.mouse_installed`). The Kim catalog discloses it before install ([ADR 0031](adr/0031-ddalgak-remap-execution-and-mouse-hook.md) lists the catalog change) |
 | `input-injection` | `remap`, `send_keys`, `type_text`, `mouse_move`, `mouse_scroll`, `mouse_click` | Per rule |
 | `launch-programs` | `open_program`, `open_url` | Per rule, with a fingerprint of the exact targets |
 | `clipboard` | `type_text` with `method: paste` | Per rule |
@@ -471,7 +510,10 @@ and needs a guaranteed way out of that mode.
 1. **Own input is invisible to rules.** Every event Ddalgak injects carries its marker in
    `dwExtraInfo` and has `LLKHF_INJECTED` set (*documented*); the hook passes such events on
    without matching. Two remaps pointing at each other (CapsLock → Escape, Escape → CapsLock)
-   are therefore a swap, not a loop (example `01-remap.json`, profile `swap`).
+   are therefore a swap, not a loop (example `01-remap.json`, profile `swap`), and remaps do not
+   chain (`F15` → `F16` and `F16` → `F17`: F15 gives F16). Only the modifier state of injected
+   modifiers is seen by later physical keys (§3.2), which needs a physical key each time and so
+   cannot loop.
 2. **`injected: accept` rules never inject.** Accepting other programs' synthetic input is safe
    only for rules that cannot produce input themselves; the schema enforces it.
 3. **`output_is_trigger`.** A `remap` or `send_keys` whose output equals its own trigger is
@@ -672,13 +714,20 @@ as `hotkey_invalid`, `hotkey_reserved`, `usage`, `confirmation_required`, `busy`
 
 | Artifact | Pins down |
 | --- | --- |
-| [ddalgak-rules-v1](contracts/schemas/ddalgak-rules-v1.schema.json) + `contracts/examples/ddalgak-rules-v1/` | Ten valid documents (remaps and swaps, text, programs, websites, mouse, modes, engine control, profiles and conditions, an export, a future step type). Thirty-nine invalid ones, including recursive remaps (`recursive-remap-accepts-injected`, `recursive-send-keys-accepts-injected`), the emergency chord as trigger and output, reserved OS chords (`Win+L`, `Alt+Tab`, `Ctrl+Shift+Escape`, the Secure Attention Sequence), missing consent for programs, websites, injection and clipboard, shell hosts, `file:` URLs and newer versions. |
+| [ddalgak-rules-v1](contracts/schemas/ddalgak-rules-v1.schema.json) + `contracts/examples/ddalgak-rules-v1/` | Eleven valid documents (remaps and swaps, text, programs, websites, mouse, modes, engine control, profiles and conditions, an export, a future step type, and since Step 68 mouse-button remaps, pass-through and a physical-position trigger in `11-remap-mouse-and-pass-through.json`). Forty-one invalid ones, including recursive remaps (`recursive-remap-accepts-injected`, `recursive-send-keys-accepts-injected`), a dual role that also passes the key through (`remap-tap-with-pass-through`), the primary button and a mouse button in a sequence as triggers, the emergency chord as trigger and output, reserved OS chords (`Win+L`, `Alt+Tab`, `Ctrl+Shift+Escape`, the Secure Attention Sequence), missing consent for programs, websites, injection and clipboard, shell hosts, `file:` URLs and newer versions. |
 | `contracts/examples/ddalgak-rules-v1/semantic-invalid/` | Eleven schema-valid documents named `<code>--<what>.json`, each producing exactly that semantic error: `output_is_trigger` (the recursive remap `F13` → `F13`, and `send_keys` to its own trigger), duplicate IDs and triggers, unknown modes and profiles, a stale launch consent, a run over 60 s. |
 | [ddalgak-simulation-v1](contracts/schemas/ddalgak-simulation-v1.schema.json) + examples | Twenty-three playground results named `<rules example>--<what>.json` and fourteen invalid ones (effects performed or input injected in `simulate`, live launches without confirmation, live input outside the playground, previews that echo text, paths, arguments or URL paths). |
 | [kim-hotkey-manifest-v1/ddalgak.json](contracts/examples/kim-hotkey-manifest-v1/ddalgak.json) | Ddalgak's final GUI actions: four global ones (matching the Kim catalog) and the `rules` and `playground` contexts. |
 
 **Step 66** implements the engine for engine-control rules ([DDALGAK_ENGINE](DDALGAK_ENGINE.md));
 every other step type is inactive with `step_unsupported` until its Step.
+
+**Step 68** runs `remap` (§5.1) and `block` (§5.2) and adds mouse-button triggers and outputs
+(§3.1, §5.1) with the on-demand mouse hook, pass-through for remaps (§3.3) and the "exact chord
+beats widening" rule (§3.2) ([ADR 0031](adr/0031-ddalgak-remap-execution-and-mouse-hook.md),
+[DDALGAK_ENGINE §11](DDALGAK_ENGINE.md)). The CLI writes them with the Step 67 syntax:
+`ddalgak rule add --trigger CapsLock --action remap --to LCtrl --tap Escape --allow input-injection`,
+`--pass-through`, `ddalgak rule add --trigger Insert --action block`.
 
 **Step 67** implements the rule store and its validation in Ddalgak (ADR 0028): the typed model
 (`crates/ddalgak/src/model.rs`, every fixture round-trips through it without loss), the schema

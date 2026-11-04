@@ -8,10 +8,22 @@
 //!
 //! Engine-control steps are handed to the controller (the host's main thread), which owns the
 //! lifecycle; the worker never changes the engine state itself.
+//!
+//! **Output** (Step 68): the worker owns the [`Injector`] and its ledger. It carries out the
+//! core's remap instructions ([`RemapOp`]) exactly as given, sends on keys the core held back
+//! ([`Signal::Replay`]) and releases everything it holds on [`Msg::Cancel`] (pause, stop, session
+//! lock, profile switch), on [`Signal::ReleaseAll`] (sent by the hook thread after it dropped its
+//! remaps, so it is ordered after every press the hook decided before), on the emergency chord and
+//! when it stops (`Drop`). Remap instructions carry their output keys, so a held output is released
+//! correctly even after a reload changed the rules; only the activity entry needs the current
+//! rules. A repeat is sent only for an output the ledger still holds, so a late repeat can never
+//! press again what a release-all let go.
 
-use crate::core::Signal;
+use crate::core::{RemapOp, Signal};
+use crate::inject::{Backend, Injector, OutCode, OutEvent};
 use crate::stats::Stats;
 use crate::table::{Action, Binding, EngineOp};
+use crate::vk::ModKey;
 use serde_json::{Value, json};
 use std::collections::VecDeque;
 use std::sync::atomic::Ordering;
@@ -144,14 +156,23 @@ type Sink = Box<dyn Fn(Control) + Send>;
 
 impl Worker {
     /// Starts the worker. `control` receives engine-control requests (and must wake the
-    /// controller); `activity` is shared with status reporting.
-    pub fn start(stats: Arc<Stats>, control: Sink, activity: Arc<Mutex<Activity>>) -> Worker {
+    /// controller); `activity` is shared with status reporting; `backend` injects the output
+    /// (`SendInput` in the app, a recorder in tests).
+    pub fn start(
+        stats: Arc<Stats>,
+        control: Sink,
+        activity: Arc<Mutex<Activity>>,
+        backend: Box<dyn Backend>,
+    ) -> Worker {
         let (tx, rx) = sync_channel::<Msg>(QUEUE);
         let act = Arc::clone(&activity);
         let st = Arc::clone(&stats);
         let join = std::thread::Builder::new()
             .name("ddalgak-worker".into())
-            .spawn(move || run(&rx, &control, &act, &st))
+            .spawn(move || {
+                let mut inj = Injector::new(backend);
+                run(&rx, &control, &act, &st, &mut inj);
+            })
             .expect("spawn the worker thread");
         Worker {
             queue: Queue { tx, stats },
@@ -180,7 +201,81 @@ struct Hold {
     due: Instant,
 }
 
-fn run(rx: &Receiver<Msg>, control: &Sink, activity: &Mutex<Activity>, stats: &Stats) {
+type Inj = Injector<Box<dyn Backend>>;
+
+fn mod_events(bits: u8, up: bool, tracked: bool, out: &mut Vec<(OutEvent, bool)>) {
+    let mut keys: Vec<ModKey> = ModKey::ALL
+        .into_iter()
+        .filter(|m| bits & m.bit() != 0)
+        .collect();
+    if up {
+        keys.reverse();
+    }
+    for m in keys {
+        out.push((
+            OutEvent {
+                code: OutCode::Vk(m.vk()),
+                up,
+            },
+            tracked,
+        ));
+    }
+}
+
+/// Carries out one remap instruction. Returns whether every event was inserted.
+pub fn execute(inj: &mut Injector<impl Backend>, op: RemapOp) -> bool {
+    let mut ev: Vec<(OutEvent, bool)> = Vec::new();
+    match op {
+        RemapOp::Press { lift, mods, key } => {
+            mod_events(lift, true, false, &mut ev);
+            mod_events(mods, false, true, &mut ev);
+            if let Some(k) = key {
+                ev.push((OutEvent::down(k), true));
+            }
+        }
+        RemapOp::Repeat { key } => {
+            if !inj.is_held(key) {
+                return true;
+            }
+            ev.push((OutEvent::down(key), true));
+        }
+        RemapOp::Release { key, mods, restore } => {
+            if let Some(k) = key.filter(|k| inj.is_held(*k)) {
+                ev.push((OutEvent::up(k), true));
+            }
+            let held: u8 = ModKey::ALL
+                .into_iter()
+                .filter(|m| mods & m.bit() != 0 && inj.is_held(OutCode::Vk(m.vk())))
+                .fold(0, |a, m| a | m.bit());
+            mod_events(held, true, true, &mut ev);
+            mod_events(restore, false, false, &mut ev);
+        }
+        RemapOp::Tap {
+            lift,
+            mods,
+            key,
+            restore,
+        } => {
+            mod_events(lift, true, false, &mut ev);
+            mod_events(mods, false, true, &mut ev);
+            if let Some(k) = key {
+                ev.push((OutEvent::down(k), true));
+                ev.push((OutEvent::up(k), true));
+            }
+            mod_events(mods, true, true, &mut ev);
+            mod_events(restore, false, false, &mut ev);
+        }
+    }
+    inj.send_mixed(&ev)
+}
+
+fn run(
+    rx: &Receiver<Msg>,
+    control: &Sink,
+    activity: &Mutex<Activity>,
+    stats: &Stats,
+    inj: &mut Inj,
+) {
     let mut rules: Option<Rules> = None;
     let mut holds: Vec<Hold> = Vec::new();
     loop {
@@ -207,11 +302,37 @@ fn run(rx: &Receiver<Msg>, control: &Sink, activity: &Mutex<Activity>, stats: &S
                 holds.clear();
                 rules = Some(r);
             }
-            Ok(Msg::Cancel) => holds.clear(),
+            Ok(Msg::Cancel) => {
+                holds.clear();
+                inj.release_all();
+            }
             Ok(Msg::Signal { generation, signal }) => match signal {
                 Signal::Emergency => {
                     holds.clear();
+                    inj.release_all();
                     control(Control::Emergency);
+                }
+                Signal::Remap { binding, op } => {
+                    let ok = execute(inj, op);
+                    if matches!(op, RemapOp::Press { .. } | RemapOp::Tap { .. }) {
+                        let outcome = if ok { "ok" } else { "injection_failed" };
+                        record(rules.as_ref(), generation, binding, outcome, activity);
+                    }
+                }
+                Signal::Replay { code, up } => {
+                    if up {
+                        inj.release_code(code);
+                    } else {
+                        inj.press_code(code);
+                    }
+                }
+                Signal::ReleaseAll => {
+                    inj.release_all();
+                }
+                Signal::Restore { mods } => {
+                    let mut ev = Vec::new();
+                    mod_events(mods, false, false, &mut ev);
+                    inj.send_mixed(&ev);
                 }
                 Signal::Fire { binding, .. } => {
                     fire(rules.as_ref(), generation, binding, control, activity);
@@ -287,6 +408,10 @@ fn fire(
                 });
             }
         }
+        // The key was consumed; nothing else happens (§5.2).
+        Action::Block => {}
+        // Remaps run through `Signal::Remap`; a fired remap does nothing more.
+        Action::Remap(_) => return,
     }
     record(rules, generation, binding, "ok", activity);
 }
@@ -332,6 +457,7 @@ mod tests {
                 let _ = tx.lock().unwrap().send(c);
             }),
             Arc::new(Mutex::new(Activity::default())),
+            Box::new(Recorder::default()),
         );
         (w, rx, stats)
     }
@@ -478,5 +604,205 @@ mod tests {
         assert_eq!(a.len(), ACTIVITY_MAX);
         assert_eq!(a.entries().next().unwrap().rule, "r5");
         assert_eq!(a.to_json(3).as_array().unwrap().len(), 3);
+    }
+
+    // ---- Step 68: the worker carries out remap instructions (DDALGAK-SEC-005).
+
+    use crate::inject::{Button, Recorder, SharedRecorder};
+
+    const LCTRL: OutCode = OutCode::Vk(0xA2);
+    const LSHIFT: OutCode = OutCode::Vk(0xA0);
+    const F16: OutCode = OutCode::Vk(0x7F);
+
+    fn ev(code: OutCode, up: bool) -> OutEvent {
+        OutEvent { code, up }
+    }
+
+    #[test]
+    fn remap_instructions_become_exactly_these_events() {
+        let mut inj = Injector::new(Recorder::default());
+        // Ctrl+Shift+J → Down: release the user's Ctrl and Shift (not recorded), press Down.
+        let down = OutCode::Vk(0x28);
+        execute(
+            &mut inj,
+            RemapOp::Press {
+                lift: ModKey::LCtrl.bit() | ModKey::LShift.bit(),
+                mods: 0,
+                key: Some(down),
+            },
+        );
+        assert_eq!(inj.held(), &[down], "only Down is Ddalgak's");
+        execute(&mut inj, RemapOp::Repeat { key: down });
+        execute(
+            &mut inj,
+            RemapOp::Release {
+                key: Some(down),
+                mods: 0,
+                restore: ModKey::LCtrl.bit() | ModKey::LShift.bit(),
+            },
+        );
+        assert!(inj.held().is_empty());
+        assert_eq!(
+            inj.backend().sent,
+            [
+                ev(LSHIFT, true),
+                ev(LCTRL, true),
+                ev(down, false),
+                ev(down, false),
+                ev(down, true),
+                ev(LCTRL, false),
+                ev(LSHIFT, false),
+            ]
+        );
+        // A repeat or a release of what the ledger no longer holds sends nothing (a release-all
+        // came first): no key is pressed again after it was let go.
+        let mut inj = Injector::new(Recorder::default());
+        execute(&mut inj, RemapOp::Repeat { key: F16 });
+        execute(
+            &mut inj,
+            RemapOp::Release {
+                key: Some(F16),
+                mods: ModKey::LCtrl.bit(),
+                restore: 0,
+            },
+        );
+        assert!(inj.backend().sent.is_empty());
+        // A tap: modifiers around the key, in one call.
+        execute(
+            &mut inj,
+            RemapOp::Tap {
+                lift: 0,
+                mods: ModKey::LShift.bit(),
+                key: Some(OutCode::Button(Button::Middle)),
+                restore: 0,
+            },
+        );
+        assert_eq!(
+            inj.backend().sent,
+            [
+                ev(LSHIFT, false),
+                ev(OutCode::Button(Button::Middle), false),
+                ev(OutCode::Button(Button::Middle), true),
+                ev(LSHIFT, true),
+            ]
+        );
+        assert!(inj.held().is_empty(), "a tap leaves nothing held");
+    }
+
+    fn output_worker() -> (Worker, Arc<Mutex<Vec<OutEvent>>>) {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let w = Worker::start(
+            Arc::new(Stats::default()),
+            Box::new(|_| {}),
+            Arc::new(Mutex::new(Activity::default())),
+            Box::new(SharedRecorder(Arc::clone(&log))),
+        );
+        (w, log)
+    }
+
+    fn wait_for(log: &Arc<Mutex<Vec<OutEvent>>>, n: usize) -> Vec<OutEvent> {
+        let t = Instant::now();
+        while log.lock().unwrap().len() < n && t.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        log.lock().unwrap().clone()
+    }
+
+    fn remap_rules(generation: u32) -> Rules {
+        let mut r = rules(generation);
+        let b = Arc::make_mut(&mut r.bindings);
+        b[0].rule = "f15-f16".into();
+        r
+    }
+
+    #[test]
+    fn held_outputs_are_released_on_cancel_release_all_emergency_and_stop() {
+        let (w, log) = output_worker();
+        let q = w.queue();
+        q.send(Msg::Rules(remap_rules(1)));
+        let press = |key| Signal::Remap {
+            binding: 0,
+            op: RemapOp::Press {
+                lift: 0,
+                mods: 0,
+                key: Some(key),
+            },
+        };
+        q.signal(1, press(F16));
+        q.send(Msg::Cancel); // pause, stop, session lock
+        assert_eq!(wait_for(&log, 2), [ev(F16, false), ev(F16, true)]);
+        q.signal(1, press(F16));
+        q.signal(1, Signal::ReleaseAll); // desktop switch, elevated window
+        assert_eq!(wait_for(&log, 4)[2..], [ev(F16, false), ev(F16, true)]);
+        q.signal(1, press(F16));
+        q.signal(1, Signal::Emergency);
+        assert_eq!(wait_for(&log, 6)[4..], [ev(F16, false), ev(F16, true)]);
+        // A held-back key is sent on and released like any other output.
+        let c = OutCode::Exact {
+            vk: 0x43,
+            scan: 0x2E,
+            ext: false,
+        };
+        q.signal(1, Signal::Replay { code: c, up: false });
+        q.signal(
+            1,
+            Signal::Restore {
+                mods: ModKey::LShift.bit(),
+            },
+        );
+        assert_eq!(wait_for(&log, 8)[6..], [ev(c, false), ev(LSHIFT, false)]);
+        drop(q);
+        drop(w); // stop: the injector's Drop releases what is still held
+        let all = log.lock().unwrap().clone();
+        assert_eq!(all.last(), Some(&ev(c, true)), "{all:?}");
+        assert!(
+            !all.iter().any(|e| *e == ev(LSHIFT, true)),
+            "the user's Shift is never released by a stop"
+        );
+    }
+
+    #[test]
+    fn a_reload_never_strands_a_held_output() {
+        let (w, log) = output_worker();
+        let q = w.queue();
+        q.send(Msg::Rules(remap_rules(1)));
+        q.signal(
+            1,
+            Signal::Remap {
+                binding: 0,
+                op: RemapOp::Press {
+                    lift: 0,
+                    mods: 0,
+                    key: Some(F16),
+                },
+            },
+        );
+        // The rules change while F16 is held; the release comes with the new generation and a
+        // binding index that means something else now: it still releases F16.
+        q.send(Msg::Rules(rules(2)));
+        q.signal(
+            2,
+            Signal::Remap {
+                binding: 1,
+                op: RemapOp::Release {
+                    key: Some(F16),
+                    mods: 0,
+                    restore: 0,
+                },
+            },
+        );
+        assert_eq!(wait_for(&log, 2), [ev(F16, false), ev(F16, true)]);
+        let a: Vec<(String, String)> = w
+            .activity
+            .lock()
+            .unwrap()
+            .entries()
+            .map(|e| (e.rule.clone(), e.outcome.clone()))
+            .collect();
+        assert_eq!(
+            a,
+            [("f15-f16".to_string(), "ok".to_string())],
+            "one entry per press"
+        );
     }
 }

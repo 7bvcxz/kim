@@ -1481,7 +1481,9 @@ impl<S: Shell> App<S> {
         if model.editing_text() {
             return Some(OverlayInput::Char(c));
         }
-        if !model.annotate_context() {
+        // Letters and digits are matched from their key press (a named key); their character
+        // would fire the same binding twice.
+        if !model.annotate_context() || c.is_ascii_alphanumeric() {
             return None;
         }
         let chord = crate::hotkeys::char_chord(c)?;
@@ -5126,7 +5128,11 @@ pub(crate) mod tests {
             !serde_json::to_string(&st).unwrap().contains('\u{d55c}'),
             "the status never carries the label's text"
         );
-        // Not typing: `[` and `]` are the width keys (char: bindings).
+        // Not typing: a letter's character never fires its key's binding a second time
+        // (`N` selects the next annotation on its key press only).
+        a.overlay_event(OverlayEvent::Char('n', false));
+        assert!(a.status()["captures"]["overlay"]["annotation"]["selected"].is_null());
+        // `[` and `]` are the width keys (char: bindings).
         a.overlay_event(OverlayEvent::Char('[', false));
         assert_eq!(a.status()["captures"]["overlay"]["annotation"]["width"], 2);
         a.overlay_event(OverlayEvent::Char(']', false));

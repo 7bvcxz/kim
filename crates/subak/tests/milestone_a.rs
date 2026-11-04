@@ -26,9 +26,10 @@
 //! and "a console window closes" is a console created **hidden** (`CREATE_NEW_CONSOLE` +
 //! `SW_HIDE`) that receives `WM_CLOSE`, exactly what its close button sends (Step 08's
 //! technique). Each test ends what it started and checks that no pane process, pseudo console
-//! host or Host survives. Lines starting with `EVIDENCE` record what was measured; run with
-//! `--nocapture` to see them. `SUBAK_MILESTONE_A_FULL=1` makes the measurement test use the
-//! documented sample sizes (60 s idle windows, 100 attaches, 10 Host starts).
+//! host or Host survives. Lines starting with `EVIDENCE` record what was measured; they go
+//! straight to stderr, so CI logs show them too. `SUBAK_MILESTONE_A_FULL=1` makes the
+//! measurement test use the documented sample sizes (60 s idle windows, 100 attaches, 10 Host
+//! starts).
 #![cfg(windows)]
 #![allow(unsafe_code)]
 
@@ -1133,6 +1134,15 @@ fn client_id(lab: &Lab, pid: u32) -> String {
         .to_string()
 }
 
+/// Prints an `EVIDENCE` line straight to stderr. The test harness captures only `print!` and
+/// `eprint!` output, so these lines also reach the log of a passing CI run (CI runs `cargo test`
+/// without `--nocapture`), which is where the CI numbers of docs/MILESTONE_A_VALIDATION.md come
+/// from.
+fn evidence(line: &str) {
+    let mut e = std::io::stderr().lock();
+    let _ = writeln!(e, "{line}");
+}
+
 fn ms(d: Duration) -> f64 {
     d.as_secs_f64() * 1000.0
 }
@@ -1201,11 +1211,11 @@ fn a_detached_host_keeps_shells_a_dev_server_and_an_interactive_program_through_
     assert_eq!(in_window.len(), 1, "the attach client runs in the window");
     let window_client = Proc::open(in_window[0]);
     let (conhost, hwnd) = term.console();
-    eprintln!(
+    evidence(&format!(
         "EVIDENCE journey: window shell={} attach-client={} console-host={}; host={host_pid} \
          (started on demand from the window), agent={agent_pid}",
         term.proc.pid, window_client.pid, conhost.pid
-    );
+    ));
     // The user closes the window (its close button sends WM_CLOSE): every process attached to
     // that console gets CTRL_CLOSE_EVENT and ends.
     // SAFETY: posting a message to a window; no pointers involved.
@@ -1345,13 +1355,13 @@ fn a_detached_host_keeps_shells_a_dev_server_and_an_interactive_program_through_
     w.check(&lab, "reattached to `agent` and `ps`");
     let ls = lab.ok(&["ls"]);
     assert_eq!(ls["terminals"].as_array().unwrap().len(), 3);
-    eprintln!(
+    evidence(&format!(
         "EVIDENCE journey: survived {} events with the same pids ({}); console-host-killed client \
          ended by itself: {ended_by_itself}; agent answered turn 3 remembering turn 1; \
          PowerShell kept $kim; dev server on 127.0.0.1:{port} answered 3 requests",
         w.events.len(),
         w.pids()
-    );
+    ));
 
     // 12. An explicit Host stop ends everything; nothing listens any more.
     let survivors = lab.shutdown();
@@ -1547,14 +1557,14 @@ fn concurrent_sessions_and_clients_stay_independent_and_consistent() {
     drop((again, c2, s1, s2));
     lab.wait_no_clients();
     w.check(&lab, "every client gone");
-    eprintln!(
+    evidence(&format!(
         "EVIDENCE concurrent: 4 Terminals created at once by 4 `new` -> one Host ({host}); 16 \
          clients (2 interactive, 1 read-only CLI, 1 raw viewer per Terminal) saw only their own \
          Terminal; two writers drove one program to turn 10; killing, detaching and detaching \
          from outside at once left {} processes alive ({})",
         w.procs.len(),
         w.pids()
-    );
+    ));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1631,7 +1641,7 @@ fn sixty_attach_detach_cycles_keep_the_program_and_leak_nothing() {
     c.expect(&answer(turn + 1, st.pid, "cycle-0", "final"));
     drop(c);
     let grew = i64::try_from(m1).unwrap() - i64::try_from(m0).unwrap();
-    eprintln!(
+    evidence(&format!(
         "EVIDENCE cycles: 60 cycles in {:.1} s ({:.0} ms each); Host handles {h0} -> {h1}, threads \
          {t0} -> {t1}, private bytes {:.2} -> {:.2} MiB ({:+.1} KiB, min of 5 samples each); the \
          stand-in answered all {} turns as pid {}",
@@ -1642,7 +1652,7 @@ fn sixty_attach_detach_cycles_keep_the_program_and_leak_nothing() {
         grew as f64 / 1024.0,
         turn + 1,
         st.pid
-    );
+    ));
     // Leak detectors, not performance budgets: one handle or one snapshot leaked per cycle would
     // add at least 60 handles or several MiB.
     assert!(h1 <= h0 + 20, "Host handles grew from {h0} to {h1}");
@@ -1763,13 +1773,13 @@ fn scrollback_after_reattach_is_complete_ordered_and_never_repeated() {
         &lab,
         "reattached after scrollback and a full-screen program",
     );
-    eprintln!(
+    evidence(&format!(
         "EVIDENCE scrollback: 1500 lines (300 attached, 200 with no CLI client, 1000 while a \
          client was killed mid-burst): the reattached `subak attach` output, fed to a terminal \
          model, equals the Host's {} history+screen lines with sb-line-1..1500 once each and in \
          order; the stand-in's full-screen view came back after a killed client",
         mine.len()
-    );
+    ));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1882,7 +1892,7 @@ fn output_bursts_and_resize_storms_never_block_or_end_anything() {
     drop(stalled);
     let out = s["pane"]["output_bytes_total"].as_u64().unwrap()
         - base["pane"]["output_bytes_total"].as_u64().unwrap();
-    eprintln!(
+    evidence(&format!(
         "EVIDENCE burst: {:.1} MiB of output with {resizes} resizes answered, 10 CLI clients \
          attached and killed or detached, a client that never read kept (resyncs {}, skipped \
          frames {}); worst host.health {:.0} ms, worst answer from another Terminal {:.0} ms; \
@@ -1892,7 +1902,7 @@ fn output_bursts_and_resize_storms_never_block_or_end_anything() {
         s["ipc"]["output_frames_skipped"],
         ms(health_worst),
         ms(answer_worst)
-    );
+    ));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2022,7 +2032,7 @@ fn host_failure_ends_its_panes_as_documented_and_leaves_no_stale_endpoint() {
     a.send(b"after-resume\r");
     a.expect(&answer(2, fresh.pid, "fresh-start", "after-resume"));
     drop(a);
-    eprintln!(
+    evidence(&format!(
         "EVIDENCE host-failure: host={} killed -> cmd={} agent={} dev-server={} and 2 conhosts \
          ended within {:.0} ms, 2 CLI clients exited 6 (host_disconnected), port {port} closed; \
          new host={} on the same endpoint in {:.0} ms with only the new Terminal; suspended host \
@@ -2035,7 +2045,7 @@ fn host_failure_ends_its_panes_as_documented_and_leaves_no_stale_endpoint() {
         fresh.host,
         ms(restart),
         ms(hung_after)
-    );
+    ));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2066,7 +2076,7 @@ fn milestone_a_baseline_measurements() {
     } else {
         (5, 30, 15, 10)
     };
-    eprintln!(
+    evidence(&format!(
         "EVIDENCE measure-env: {}; {} logical processors ({}); {} build of subak; samples: {} \
          starts, {} attaches, {} s idle windows",
         os_version(),
@@ -2080,7 +2090,7 @@ fn milestone_a_baseline_measurements() {
         starts,
         attaches,
         idle_s
-    );
+    ));
 
     // Host start: `host start --no-shell` and `new` with the Host started on demand.
     let mut start = Vec::new();
@@ -2113,14 +2123,14 @@ fn milestone_a_baseline_measurements() {
     let (n50, n95, nmax) = percentiles(&mut on_demand);
     empty_private.sort_unstable();
     empty_ws.sort_unstable();
-    eprintln!(
+    evidence(&format!(
         "EVIDENCE measure-start: `host start` p50 {s50:.0} ms, p95 {s95:.0} ms, max {smax:.0} ms; \
          first `host health` p50 {h50:.0} ms, max {hmax:.0} ms; `new` with a Host on demand \
          p50 {n50:.0} ms, p95 {n95:.0} ms, max {nmax:.0} ms; empty Host private {:.2} MiB, \
          working set {:.2} MiB (median)",
         mib(empty_private[empty_private.len() / 2]),
         mib(empty_ws[empty_ws.len() / 2])
-    );
+    ));
 
     // Memory with Terminals, then idle CPU.
     let lab = Lab::new("m-mem");
@@ -2183,7 +2193,7 @@ fn milestone_a_baseline_measurements() {
     let idle_cpu_attached = cpu_ms(&host) - cpu0;
     drop((watch_a, watch_b));
     let pct = |cpu: u64| cpu as f64 / (idle_s as f64 * 1000.0) * 100.0;
-    eprintln!(
+    evidence(&format!(
         "EVIDENCE measure-memory: Host private/working set: 1 Terminal {:.2}/{:.2} MiB; 4 \
          Terminals (2 cmd, PowerShell, stand-in) {:.2}/{:.2} MiB; with 2 x 2000 history rows \
          {:.2}/{:.2} MiB (scrollback {:.0} KiB in the model); peak private {:.2} MiB",
@@ -2201,14 +2211,14 @@ fn milestone_a_baseline_measurements() {
         mib(full_mem["host"]["memory"]["peak_private_bytes"]
             .as_u64()
             .unwrap())
-    );
-    eprintln!(
+    ));
+    evidence(&format!(
         "EVIDENCE measure-idle: 4 idle Terminals, no client: Host CPU {idle_cpu} ms over {idle_s} \
          s ({:.3} % of one core), threads {threads0} -> {threads1}; with 2 attached clients: \
          {idle_cpu_attached} ms ({:.3} %)",
         pct(idle_cpu),
         pct(idle_cpu_attached)
-    );
+    ));
     // KIM-NFR-001: a long-running process with no activity averages < 0.1 % of one core.
     assert!(
         pct(idle_cpu) < 0.1,
@@ -2266,11 +2276,11 @@ fn milestone_a_baseline_measurements() {
         assert_eq!(c.detach_keys(), Some(0));
     }
     let (c50, c95, cmax) = percentiles(&mut cli);
-    eprintln!(
+    evidence(&format!(
         "EVIDENCE measure-attach: pane.attach -> snapshot received: pane with 2000 history rows \
          ({} bytes) p50 {:.1} ms, p95 {:.1} ms, max {:.1} ms; full-screen stand-in ({} bytes) p50 \
          {:.1} ms, p95 {:.1} ms, max {:.1} ms; `subak attach` process start -> screen shown p50 \
          {c50:.0} ms, p95 {c95:.0} ms, max {cmax:.0} ms",
         hist.3, hist.0, hist.1, hist.2, tui.3, tui.0, tui.1, tui.2
-    );
+    ));
 }

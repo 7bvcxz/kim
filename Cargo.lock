@@ -1624,6 +1624,9 @@ name = "kim-e2e"
 version = "0.0.0"
 dependencies = [
  "ddalgak",
+ "ddalgak-editor",
+ "eframe",
+ "egui_kittest",
  "kim",
  "png",
  "regex",

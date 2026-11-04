@@ -319,8 +319,12 @@ impl Pins {
         self.open.values().filter(|p| !p.visible).count()
     }
 
-    /// How many open pins no monitor shows (see [`on_screen`]).
+    /// How many open pins no monitor shows (see [`on_screen`]); 0 while the desktop is not
+    /// available (nobody knows then).
     pub fn off_screen(&self, desktop: &Desktop) -> usize {
+        if desktop.state != crate::capture::DesktopState::Available {
+            return 0;
+        }
         self.open
             .values()
             .filter(|p| !on_screen(desktop, p.rect()))

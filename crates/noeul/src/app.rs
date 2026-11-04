@@ -335,6 +335,8 @@ pub struct App<S: Shell> {
     menu: Option<PinMenu>,
     /// Wheel deltas not yet worth a zoom step, per pin (high-resolution wheels send small ones).
     wheel: BTreeMap<PinId, i32>,
+    /// Pins left off-screen by the last display change (a notice says so when it changes).
+    lost: usize,
 }
 
 impl<S: Shell> std::fmt::Debug for App<S> {
@@ -388,6 +390,7 @@ impl<S: Shell> App<S> {
             latency: Latency::default(),
             menu: None,
             wheel: BTreeMap::new(),
+            lost: 0,
         }
     }
 
@@ -1160,12 +1163,19 @@ impl<S: Shell> App<S> {
                 let _ = self.pins.close(id);
             }
             PinEvent::Menu(id, at) => {
-                if self.pins.contains(id) {
+                if !self.pins.contains(id) {
+                    return;
+                }
+                if self.shell.interactive() {
                     self.menu = Some(PinMenu {
                         pin: id,
                         at,
                         items: self.pin_menu_items(id),
                     });
+                } else {
+                    // Under the debug-build test hook a popup menu would open on the user's
+                    // screen (Windows keeps menus on a monitor): it is recorded, not shown.
+                    self.last_action = Some(("pin.menu".into(), "not_shown"));
                 }
             }
             PinEvent::Wheel(id, delta, pointer, ctrl) => {
@@ -1183,12 +1193,15 @@ impl<S: Shell> App<S> {
                     "pin.zoom-out"
                 };
                 for _ in 0..steps.unsigned_abs() {
-                    let r = self.zoom_step(id, action, Some(pointer));
+                    // Around the pointer when it is over the pin (it is, for a real wheel).
+                    let anchor = self.pins.zoom_anchor(id, pointer);
+                    let r = self.zoom_step(id, action, anchor);
                     self.last_action = Some((action.to_string(), r));
                 }
             }
             PinEvent::MiddleClick(id) => {
-                let r = self.zoom_step(id, "pin.zoom-reset", Some(self.shell.pointer()));
+                let anchor = self.pins.zoom_anchor(id, self.shell.pointer());
+                let r = self.zoom_step(id, "pin.zoom-reset", anchor);
                 self.last_action = Some(("pin.zoom-reset".into(), r));
             }
         }
@@ -1246,13 +1259,13 @@ impl<S: Shell> App<S> {
     /// (NOEUL-FR-067): the model only follows where the system put each window. When a pin is
     /// left where no monitor shows it, a notice names the way back (NOEUL-SEC-013).
     pub fn display_changed(&mut self) {
-        let before = self.pins.off_screen(&self.capture.desktop());
         self.pins.sync();
         let desktop = self.capture.desktop();
         if desktop.state != DesktopState::Available {
             return;
         }
         let off = self.pins.off_screen(&desktop);
+        let before = std::mem::replace(&mut self.lost, off);
         if off > 0 && off != before {
             self.shell.notice(&format!(
                 "{off} pin(s) are off-screen after the display change. Use Bring pins on screen in the tray, or `noeul pin show --all --on-screen`."
@@ -2421,5 +2434,468 @@ pub(crate) mod tests {
         assert!(!text.contains("10, 20, 30"), "no pixel values");
         let act = a.request("activate", &json!({})).unwrap();
         assert_eq!(act["settings_window"], "planned");
+    }
+
+    /// An instance with the default keys (no registrar) on the fake 100×100 desktop.
+    fn keyed(tag: &str) -> App<FakeShell> {
+        let dir = tmp(tag);
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut a = app(&dir, DesktopState::Available);
+        a.hotkeys = Manager::start(&Paths::under(&dir), None, || {
+            Err(kim_hotkeys::register::RegisterError::Stopped)
+        });
+        a
+    }
+
+    fn chord(name: &str, ctrl: bool, shift: bool) -> Chord {
+        crate::hotkeys::chord_of(name, ctrl, false, shift).unwrap()
+    }
+
+    fn press(a: &mut App<FakeShell>, id: PinId, name: &str, shift: bool) {
+        a.pin_event(PinEvent::Key(id, chord(name, false, shift), false));
+    }
+
+    #[test]
+    fn pin_keys_zoom_hide_destroy_and_escape_always_closes() {
+        let mut a = keyed("pin-keys");
+        a.shell.clipboard = Some((20, 10));
+        a.shell.pointer_at = Some((10, 10));
+        a.action("paste.float", None);
+        let id = PinId(1);
+        assert_eq!(a.pins.rect(id), Some(Rect::new(10, 10, 20, 10)));
+        // Plus zooms in around the pointer (inside the pin), 0 returns to 100 %.
+        a.shell.pointer_at = Some((20, 15));
+        press(&mut a, id, "Plus", false);
+        let info = a.pins.info(id).unwrap();
+        assert_eq!((info.zoom, info.rect), (110, Rect::new(9, 10, 22, 11)));
+        press(&mut a, id, "Minus", false);
+        press(&mut a, id, "Minus", false);
+        assert_eq!(a.pins.info(id).unwrap().zoom, 90);
+        press(&mut a, id, "0", false);
+        assert_eq!(a.pins.info(id).unwrap().zoom, 100);
+        assert_eq!(a.status()["last_action"]["action"], "pin.zoom-reset");
+        // H hides it (with a hint how to get it back), IPC shows it again.
+        press(&mut a, id, "H", false);
+        assert!(!a.pins.info(id).unwrap().visible);
+        assert!(a.shell.notices.last().unwrap().contains("noeul pin show"));
+        assert_eq!(a.status()["pins"]["hidden"], 1);
+        assert!(a.tray_menu().contains(&MenuItem::ShowAllPins));
+        let r = a.request("pin.show", &json!({"id": "pin-1"})).unwrap();
+        assert_eq!(r["shown"], json!(["pin-1"]));
+        // Shift+Escape destroys: nothing is kept for reopen.
+        press(&mut a, id, "Escape", true);
+        assert!(a.pins.is_empty());
+        assert_eq!(a.pins.reopenable(), None);
+        assert_eq!(a.ledger.live(), (0, 0));
+        // With every shortcut off, Escape still closes the focused pin (NOEUL-SEC-013).
+        let mut off = app(&tmp("pin-keys-off"), DesktopState::Available);
+        off.shell.clipboard = Some((5, 5));
+        off.action("paste.float", None);
+        press(&mut off, PinId(1), "Plus", false);
+        assert_eq!(
+            off.pins.info(PinId(1)).unwrap().zoom,
+            100,
+            "no zoom key while off"
+        );
+        off.pin_event(PinEvent::Key(PinId(1), chord("Escape", false, false), true));
+        assert_eq!(off.pins.len(), 1, "a held Escape does not close by repeat");
+        press(&mut off, PinId(1), "Escape", false);
+        assert!(off.pins.is_empty(), "the reserved Escape closes it");
+        assert_eq!(off.pins.reopenable(), Some(PinId(1)));
+    }
+
+    #[test]
+    fn the_pin_menu_lists_this_builds_actions_with_their_keys() {
+        let mut a = keyed("pin-menu");
+        a.shell.clipboard = Some((40, 30));
+        a.action("paste.float", None);
+        let id = PinId(1);
+        a.pin_event(PinEvent::Menu(id, Some((50, 60))));
+        let menu = a.take_pin_menu().expect("a menu request");
+        assert_eq!((menu.pin, menu.at), (id, Some((50, 60))));
+        let labels: Vec<(&str, bool)> = menu
+            .items
+            .iter()
+            .map(|i| (i.label.as_str(), i.enabled))
+            .collect();
+        assert_eq!(
+            labels,
+            [
+                ("Zoom in\tPlus", true),
+                ("Zoom out\tMinus", true),
+                ("Zoom 100 %\t0", false),
+                ("", false),
+                ("Hide\tH", true),
+                ("Close\tEscape", true),
+                ("Destroy\tShift+Escape", true),
+            ]
+        );
+        for action in menu.items.iter().filter_map(|i| i.action) {
+            assert!(
+                crate::hotkeys::IMPLEMENTED.contains(&action),
+                "{action} is implemented (NOEUL-FR-114)"
+            );
+        }
+        assert!(a.take_pin_menu().is_none(), "taken once");
+        // The choice runs the action on that pin only.
+        a.pin_menu_choice(id, "pin.zoom-in");
+        assert_eq!(a.pins.info(id).unwrap().zoom, 110);
+        a.pin_event(PinEvent::Menu(id, None));
+        let items = a.take_pin_menu().unwrap().items;
+        assert!(items[2].enabled, "100 % is offered once zoomed");
+        a.pin_menu_choice(id, "capture.region");
+        assert!(
+            !a.overlay_open(),
+            "only pin actions are accepted from the menu"
+        );
+        a.pin_menu_choice(id, "pin.close");
+        assert!(a.pins.is_empty());
+        // A menu for a pin that is gone is not shown.
+        a.pin_event(PinEvent::Menu(id, None));
+        assert!(a.take_pin_menu().is_none());
+        // Under the test hook a menu is never shown (it would open on the user's screen).
+        a.shell.interactive = Some(false);
+        a.action("paste.float", None);
+        a.pin_event(PinEvent::Menu(PinId(2), None));
+        assert!(a.take_pin_menu().is_none());
+        assert_eq!(a.status()["last_action"]["action"], "pin.menu");
+        a.shell.interactive = None;
+        a.pin_menu_choice(id, "pin.hide");
+        assert_eq!(a.status()["last_action"]["result"], "not_found");
+    }
+
+    #[test]
+    fn the_wheel_zooms_around_the_pointer_and_middle_click_resets() {
+        let mut a = keyed("pin-wheel");
+        a.shell.clipboard = Some((40, 20));
+        a.shell.pointer_at = Some((0, 0));
+        a.action("paste.float", None);
+        let id = PinId(1);
+        // A high-resolution wheel: two half notches make one step.
+        a.pin_event(PinEvent::Wheel(id, 60, (20, 10), false));
+        assert_eq!(a.pins.info(id).unwrap().zoom, 100);
+        a.pin_event(PinEvent::Wheel(id, 60, (20, 10), false));
+        let info = a.pins.info(id).unwrap();
+        assert_eq!(
+            (info.zoom, info.rect.x, info.rect.y),
+            (110, -2, -1),
+            "around (20,10)"
+        );
+        a.pin_event(PinEvent::Wheel(id, 120, (20, 10), true));
+        assert_eq!(
+            a.pins.info(id).unwrap().zoom,
+            110,
+            "Ctrl+wheel (opacity) is N2"
+        );
+        a.pin_event(PinEvent::Wheel(id, -240, (20, 10), false));
+        assert_eq!(a.pins.info(id).unwrap().zoom, 90);
+        a.pin_event(PinEvent::MiddleClick(id));
+        assert_eq!(a.pins.info(id).unwrap().zoom, 100);
+        assert!(
+            a.shell.windows.log.borrow().focused.len() <= 1,
+            "zooming never focuses"
+        );
+        a.pin_event(PinEvent::Wheel(PinId(9), 120, (0, 0), false));
+        assert!(
+            !a.wheel.contains_key(&PinId(9)),
+            "nothing is kept for pins that do not exist"
+        );
+    }
+
+    #[test]
+    fn a_monitor_disconnect_keeps_pins_and_offers_the_way_back() {
+        let (mut a, syn, _dir) = overlay_app("pin-display");
+        let left = a
+            .request(
+                "pin.create",
+                &json!({"source": "region", "region": {"x": -600, "y": 50, "width": 200, "height": 100}}),
+            )
+            .unwrap();
+        assert_eq!(left["pin"]["id"], "pin-1");
+        a.request(
+            "capture",
+            &json!({"region": {"x": 10, "y": 10, "width": 30, "height": 30}, "pin": true}),
+        )
+        .unwrap();
+        assert_eq!(a.status()["pins"]["off_screen"], 0);
+        let notices = a.shell.notices.len();
+        // The left monitor is unplugged; the runtime reports the display change.
+        syn.set_monitors(vec![
+            Monitor::new(Rect::new(0, 0, 960, 540), true).with_dpi(144),
+        ]);
+        a.display_changed();
+        let st = a.status();
+        assert_eq!(st["pins"]["off_screen"], 1);
+        assert!(
+            a.shell.notices[notices].contains("off-screen"),
+            "{:?}",
+            a.shell.notices
+        );
+        assert_eq!(
+            a.pins.rect(PinId(1)),
+            Some(Rect::new(-600, 50, 200, 100)),
+            "it keeps its place (NOEUL-FR-067)"
+        );
+        let list = a.request("pin.list", &json!({})).unwrap();
+        assert_eq!(list["pins"][0]["on_screen"], false);
+        assert_eq!(list["pins"][1]["on_screen"], true);
+        assert!(a.tray_menu().contains(&MenuItem::BringPinsOnScreen));
+        // A dry run moves nothing; the real request brings only the lost pin back.
+        let dry = a
+            .request(
+                "pin.show",
+                &json!({"all": true, "on_screen": true, "dry_run": true}),
+            )
+            .unwrap();
+        assert_eq!(dry["moved"], json!(["pin-1"]));
+        assert_eq!(a.pins.rect(PinId(1)).unwrap().x, -600);
+        let r = a
+            .request("pin.show", &json!({"all": true, "on_screen": true}))
+            .unwrap();
+        assert_eq!(
+            (r["shown"].clone(), r["moved"].clone()),
+            (json!([]), json!(["pin-1"]))
+        );
+        assert_eq!(a.pins.rect(PinId(1)), Some(Rect::new(0, 50, 200, 100)));
+        assert_eq!(a.status()["pins"]["off_screen"], 0);
+        assert!(!a.tray_menu().contains(&MenuItem::BringPinsOnScreen));
+        // The tray's item does the same for every pin, and shows hidden ones.
+        syn.set_monitors(vec![Monitor::new(Rect::new(2000, 0, 300, 300), true)]);
+        a.display_changed();
+        a.request("pin.hide", &json!({"all": true})).unwrap();
+        a.tray_command(MenuItem::BringPinsOnScreen);
+        let st = a.status();
+        assert_eq!(
+            (
+                st["pins"]["off_screen"].as_u64(),
+                st["pins"]["hidden"].as_u64()
+            ),
+            (Some(0), Some(0))
+        );
+        // While the desktop is locked nothing is reported as lost.
+        syn.set_state(DesktopState::Locked);
+        a.display_changed();
+        assert_eq!(
+            a.request("pin.list", &json!({})).unwrap()["pins"][0]["on_screen"],
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn pin_selection_is_the_step_51_entry_point_without_the_clipboard() {
+        let (mut a, _syn, _dir) = overlay_app("pin-selection");
+        a.action("capture.region", None);
+        drag(&mut a, (100, 100), (299, 199));
+        let sid = a.overlay.as_ref().unwrap().id;
+        let rect = Rect::new(100, 100, 200, 100);
+        a.captures.select(sid, rect).unwrap();
+        let sel = a.captures.selection(sid).unwrap();
+        let guard = Duration::from_millis(500);
+        let id = a
+            .pin_selection(
+                sel,
+                PinOptions {
+                    focus: true,
+                    guard: Some(guard),
+                },
+            )
+            .unwrap();
+        {
+            let log = a.shell.windows.log.borrow();
+            assert_eq!(
+                log.created,
+                [(id, rect, true)],
+                "same place and pixel size, focused"
+            );
+            assert_eq!(
+                log.guards,
+                [Some(guard)],
+                "the double-click tail is swallowed"
+            );
+        }
+        assert_eq!(a.shell.clipboard_reads, 0, "no clipboard in between");
+        assert_eq!(
+            a.ledger.live(),
+            (
+                2,
+                rect.bgra_bytes() + Rect::new(-640, 0, 1600, 540).bgra_bytes()
+            ),
+            "the pin's copy and the frozen picture, still owned by the open session"
+        );
+        // A failure hands nothing to the clipboard and keeps the session.
+        *a.shell.windows.fail.borrow_mut() = true;
+        let sel = a.captures.selection(sid).unwrap();
+        assert!(
+            a.pin_selection(
+                sel,
+                PinOptions {
+                    focus: true,
+                    guard: None
+                }
+            )
+            .is_err()
+        );
+        assert!(a.overlay_open() && a.captures.is_open());
+        assert_eq!(a.ledger.live().0, 2, "the failed copy was freed");
+        // Under the test hook a pin never takes focus, whatever the caller asks.
+        *a.shell.windows.fail.borrow_mut() = false;
+        a.shell.interactive = Some(false);
+        let sel = a.captures.selection(sid).unwrap();
+        a.pin_selection(
+            sel,
+            PinOptions {
+                focus: true,
+                guard: None,
+            },
+        )
+        .unwrap();
+        assert!(!a.shell.windows.log.borrow().created[1].2);
+    }
+
+    #[test]
+    fn paste_never_lands_over_an_open_overlay_and_a_huge_paste_fits() {
+        let (mut a, _syn, _dir) = overlay_app("pin-paste-overlay");
+        a.shell.clipboard = Some((10, 10));
+        a.action("capture.region", None);
+        a.action("paste.float", None);
+        assert!(a.pins.is_empty());
+        assert_eq!(a.shell.clipboard_reads, 0, "the clipboard is not even read");
+        assert_eq!(a.status()["last_action"]["result"], "overlay_open");
+        assert!(a.overlay_open(), "the overlay keeps its focus");
+        a.request("capture.cancel", &json!({})).unwrap();
+        // A picture larger than the monitor's work area is zoomed out to fit it.
+        let mut b = app(&tmp("pin-paste-huge"), DesktopState::Available);
+        b.shell.clipboard = Some((300, 200));
+        b.action("paste.float", None);
+        let info = b.pins.info(PinId(1)).unwrap();
+        assert_eq!(info.image, (300, 200));
+        assert_eq!(
+            (info.zoom, info.rect),
+            (33, Rect::new(1, 34, 99, 66)),
+            "fits, at the pointer"
+        );
+        // pin.create from the clipboard: at a point, never focused, announced, read once.
+        let r = b
+            .request(
+                "pin.create",
+                &json!({"source": "clipboard", "dry_run": true}),
+            )
+            .unwrap();
+        assert_eq!(r["pin"], Value::Null);
+        assert_eq!(b.shell.clipboard_reads, 1, "a dry run reads nothing");
+        b.shell.clipboard = Some((10, 10));
+        let r = b
+            .request(
+                "pin.create",
+                &json!({"source": "clipboard", "at": {"x": 95, "y": 2}}),
+            )
+            .unwrap();
+        assert_eq!(
+            r["pin"]["rect"],
+            json!({"x": 90, "y": 2, "width": 10, "height": 10})
+        );
+        assert_eq!(b.shell.clipboard_reads, 2);
+        assert!(!b.shell.windows.log.borrow().created[1].2, "never focused");
+        assert_eq!(
+            b.shell.notices.last().unwrap(),
+            "Noeul pinned the clipboard (command line)."
+        );
+        b.shell.clipboard = None;
+        let e = b
+            .request("pin.create", &json!({"source": "clipboard"}))
+            .unwrap_err();
+        assert_eq!(e.code, Code::NothingToPin);
+        let e = b
+            .request(
+                "pin.create",
+                &json!({"source": "region", "region": {"x": 95, "y": 0, "width": 10, "height": 1}}),
+            )
+            .unwrap_err();
+        assert_eq!(e.code, Code::Usage, "outside the desktop");
+    }
+
+    #[test]
+    fn pins_live_in_memory_only_and_a_restart_restores_nothing() {
+        let dir = tmp("pin-restart");
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut a = app(&dir, DesktopState::Available);
+        for x in [0, 20, 40] {
+            a.request(
+                "capture",
+                &json!({"region": {"x": x, "y": 0, "width": 10, "height": 10}, "pin": true}),
+            )
+            .unwrap();
+        }
+        a.request("pin.close", &json!({"id": "pin-2"})).unwrap();
+        a.request("pin.hide", &json!({"id": "pin-3"})).unwrap();
+        assert_eq!(
+            a.ledger.live(),
+            (3, 3 * 400),
+            "two open and one closed for reopen"
+        );
+        a.request("quit", &json!({"force": true})).unwrap();
+        assert_eq!(a.ledger.live(), (0, 0), "quit frees every picture");
+        assert!(
+            files_under(&dir).is_empty(),
+            "nothing about the pins reached the disk: {:?}",
+            files_under(&dir)
+        );
+        // The next instance starts with no pins, no reopen memory and fresh IDs.
+        let mut b = app(&dir, DesktopState::Available);
+        let list = b.request("pin.list", &json!({})).unwrap();
+        assert_eq!(list, json!({"pins": [], "reopenable": null}));
+        let e = b.request("pin.reopen", &json!({})).unwrap_err();
+        assert_eq!(e.code, Code::PinNotFound);
+        let r = b
+            .request(
+                "capture",
+                &json!({"region": {"x": 0, "y": 0, "width": 1, "height": 1}, "pin": true}),
+            )
+            .unwrap();
+        assert_eq!(r["pin"]["id"], "pin-1", "IDs belong to one instance");
+    }
+
+    #[test]
+    fn hide_show_and_close_name_their_pins_and_leave_the_others() {
+        let mut a = app(&tmp("pin-hide-show"), DesktopState::Available);
+        for x in [0, 30, 60] {
+            a.request(
+                "capture",
+                &json!({"region": {"x": x, "y": 0, "width": 10, "height": 10}, "pin": true}),
+            )
+            .unwrap();
+        }
+        let dry = a
+            .request("pin.hide", &json!({"all": true, "dry_run": true}))
+            .unwrap();
+        assert_eq!(dry["hidden"], json!(["pin-1", "pin-2", "pin-3"]));
+        assert_eq!(a.pins.hidden(), 0, "a dry run hides nothing");
+        let r = a.request("pin.hide", &json!({"id": "pin-2"})).unwrap();
+        assert_eq!(r["hidden"], json!(["pin-2"]));
+        let r = a.request("pin.hide", &json!({"all": true})).unwrap();
+        assert_eq!(
+            r["hidden"],
+            json!(["pin-1", "pin-3"]),
+            "pin-2 was hidden already"
+        );
+        a.tray_command(MenuItem::ShowAllPins);
+        assert_eq!(a.pins.hidden(), 0);
+        a.tray_command(MenuItem::HideAllPins);
+        assert_eq!(a.pins.hidden(), 3);
+        let r = a.request("pin.show", &json!({"id": "pin-1"})).unwrap();
+        assert_eq!(r["shown"], json!(["pin-1"]));
+        a.request("pin.close", &json!({"id": "pin-1"})).unwrap();
+        assert_eq!(a.pins.ids(), [PinId(2), PinId(3)]);
+        assert!(a.pins.info(PinId(2)).is_some_and(|i| !i.visible));
+        let e = a.request("pin.show", &json!({"id": "pin-1"})).unwrap_err();
+        assert_eq!(e.code, Code::PinNotFound);
+        let e = a
+            .request("pin.show", &json!({"id": "pin-2", "on_screen": "yes"}))
+            .unwrap_err();
+        assert_eq!(e.code, Code::Usage);
+        assert!(
+            a.shell.windows.log.borrow().focused.is_empty(),
+            "no IPC request gave a pin focus"
+        );
     }
 }

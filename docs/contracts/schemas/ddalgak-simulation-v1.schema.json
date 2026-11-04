@@ -194,14 +194,16 @@
       "properties": {"keys": {"type": "string"}}
     },
     "preview_type_text": {
-      "description": "Counts only: the text itself appears in the playground's own field, never in this output.",
+      "description": "Counts only: the text itself appears in the playground's own field, never in this output. Since Step 69 the names of the variables a template uses and the number of Left presses to the insertion point ({cursor}).",
       "type": "object",
       "additionalProperties": false,
       "required": ["characters", "lines", "method"],
       "properties": {
         "characters": {"type": "integer", "minimum": 1},
         "lines": {"type": "integer", "minimum": 1},
-        "method": {"enum": ["unicode", "paste"]}
+        "method": {"enum": ["unicode", "paste"]},
+        "variables": {"type": "array", "minItems": 1, "items": {"enum": ["date", "time", "datetime", "year", "month", "day", "hour", "minute", "second"]}},
+        "cursor_back": {"type": "integer", "minimum": 0}
       }
     },
     "preview_open_program": {

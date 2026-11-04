@@ -32,16 +32,28 @@
 //! [`Core::tick`]) or the trigger goes up (the tap output is sent). Instructions carry the output
 //! keys, not rule indexes, so a held output is still released correctly after a reload.
 //!
+//! **Hotstrings** (Step 69, §3.4): while a hotstring rule is active, every key that reaches the
+//! application unchanged is translated by the platform ([`Translate`]) and fed into a bounded
+//! buffer ([`hotstring::Buffer`], the longest abbreviation plus one character), which every reset
+//! clears. The key that completes an abbreviation is consumed (and given back by the worker when
+//! nothing is typed) and the worker gets [`Signal::Hotstring`]. For typing runs the core also
+//! publishes the modifier state the application sees and a count of physical key presses
+//! ([`RunShared`]), and consumes the physical release of a modifier a run released logically.
+//!
 //! The core keeps only what matching needs (keys down, one pending tap, hold or sequence step,
-//! the active remaps). It records no keys (`DDALGAK-SEC-001`).
+//! the active remaps, the bounded hotstring buffer). It records no keys (`DDALGAK-SEC-001`).
 
 use crate::event::{KeyEvent, KeySet, ModState, Normalizer, RawKey, Source, Transition};
+use crate::hotstring::{self, Translate, Typed};
 use crate::inject::OutCode;
 use crate::remap::{Output, families};
+use crate::run::{HotstringFire, RunShared};
 use crate::table::{CChord, Compiled, Injected, KeyMatch, On, RemapSpec, Table};
 use crate::vk::{self, ModKey};
 use kim_hotkeys::keys::{Chord, Key, Side};
 use kim_hotkeys::scope::Scope;
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
 /// Why a rule stepped aside (DDALGAK_RULE_MODEL §12).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -147,6 +159,11 @@ pub enum Signal {
     /// that are still physically held (not recorded).
     Restore {
         mods: u8,
+    },
+    /// A hotstring's abbreviation was typed (Step 69): the worker erases it and runs the rule.
+    Hotstring {
+        binding: u16,
+        fire: HotstringFire,
     },
 }
 
@@ -310,17 +327,33 @@ pub struct Core {
     /// Keys whose down was held back while a dual role was decided and then sent on: their
     /// repeats and up are sent on too.
     replayed: KeySet,
+    /// What typing runs need from the hook (Step 69); `None` without a worker (tests).
+    runs: Option<Arc<RunShared>>,
+    /// The platform's key translation for hotstrings; `None`: hotstrings never match.
+    translate: Option<Translate>,
+    /// The bounded hotstring buffer.
+    hs: hotstring::Buffer,
+    /// Physical key presses (a number, never which keys).
+    typed: u32,
 }
+
+const WIN_BITS: u8 = 0x40 | 0x80;
 
 fn is_mouse(vk: u16) -> bool {
     matches!(vk, 0x01 | 0x02 | 0x04..=0x06)
+}
+
+const VK_BACK: u16 = 0x08;
+const VK_SCROLL: u16 = 0x91;
+
+fn table_longest(t: &Table) -> usize {
+    t.longest_hotstring
 }
 
 impl Core {
     pub fn new(table: Table) -> Core {
         let rate = Rate::new(table.len(), table.max_runs_per_second);
         Core {
-            table,
             norm: Normalizer::new(),
             consumed: KeySet::default(),
             owner: [NONE; 256],
@@ -333,7 +366,27 @@ impl Core {
             mod_refs: [0; 8],
             key_refs: [None; SLOTS],
             replayed: KeySet::default(),
+            hs: hotstring::Buffer::bounded(table_longest(&table)),
+            table,
+            runs: None,
+            translate: None,
+            typed: 0,
         }
+    }
+
+    /// Shares the modifier state and the key count with the worker's typing runs.
+    pub fn set_runs(&mut self, runs: Arc<RunShared>) {
+        self.runs = Some(runs);
+    }
+
+    /// Sets the platform's key translation (hotstrings).
+    pub fn set_translator(&mut self, t: Translate) {
+        self.translate = Some(t);
+    }
+
+    /// The hotstring buffer's length and bound (tests and diagnostics; never its content).
+    pub fn hotstring_buffer(&self) -> (usize, usize) {
+        (self.hs.len(), self.hs.capacity())
     }
 
     /// Replaces the rules (a reload). Pending taps, holds, sequences and undecided dual roles are
@@ -342,6 +395,7 @@ impl Core {
     /// keys, not rule indexes).
     pub fn set_table(&mut self, table: Table) {
         self.rate = Rate::new(table.len(), table.max_runs_per_second);
+        self.hs = hotstring::Buffer::bounded(table_longest(&table));
         self.table = table;
         self.owner = [NONE; 256];
         self.release = None;
@@ -375,6 +429,7 @@ impl Core {
     /// because the trigger's up may never arrive.
     pub fn reset_keys(&mut self) -> Vec<Signal> {
         self.norm.reset();
+        self.hs.clear();
         self.release = None;
         self.hold = None;
         self.seq = None;
@@ -392,6 +447,7 @@ impl Core {
     /// decided before), and the user's trigger modifiers that a remap had released and that are
     /// still physically held are restored.
     pub fn cancel_pending(&mut self) -> Vec<Signal> {
+        self.hs.clear();
         self.release = None;
         self.seq = None;
         let mut out = Vec::new();
@@ -772,7 +828,26 @@ impl Core {
 
     /// Decides one event. Never allocates, never blocks.
     pub fn decide(&mut self, raw: &RawKey, mode: Mode, flags: &Flags) -> Decision {
+        let d = self.decide_event(raw, mode, flags);
+        if let Some(rs) = &self.runs {
+            rs.visible.store(self.mods().bits(), Ordering::SeqCst);
+            rs.phys
+                .store(self.norm.mods_physical().bits(), Ordering::SeqCst);
+        }
+        d
+    }
+
+    fn decide_event(&mut self, raw: &RawKey, mode: Mode, flags: &Flags) -> Decision {
         let ev = self.norm.normalize(raw);
+        if ev.source == Source::Physical
+            && ev.transition == Transition::Down
+            && ev.modifier.is_none()
+        {
+            self.typed = self.typed.wrapping_add(1);
+            if let Some(rs) = &self.runs {
+                rs.typed.store(self.typed, Ordering::SeqCst);
+            }
+        }
         // 1. Emergency chord, on physical state only.
         if ev.source == Source::Physical
             && ev.transition == Transition::Down
@@ -856,6 +931,16 @@ impl Core {
                 code: Self::replay_code(ev),
                 up: true,
             });
+        }
+        // The user lets go of a modifier that a typing run released logically: the application
+        // already saw it go up.
+        if let Some(m) = ev.modifier
+            && ev.source == Source::Physical
+            && !consume
+            && let Some(rs) = &self.runs
+            && rs.lifted.fetch_and(!m.bit(), Ordering::SeqCst) & m.bit() != 0
+        {
+            consume = true;
         }
         // The user lets go of a trigger modifier that a remap released logically: the
         // application already saw it go up.
@@ -948,6 +1033,11 @@ impl Core {
             for s in self.slots.iter_mut().flatten() {
                 s.lift &= !m.bit();
             }
+            if ev.source == Source::Physical
+                && let Some(rs) = &self.runs
+            {
+                rs.lifted.fetch_and(!m.bit(), Ordering::SeqCst);
+            }
         }
         let pre = self.resolve_pending(ev);
         let mut d = self.down_inner(ev, mode, flags);
@@ -980,6 +1070,7 @@ impl Core {
             if ev.modifier.is_some() || ev.altgr_fake_ctrl {
                 return self.pass(ev, None); // modifiers form the next chord
             }
+            self.hs.clear();
             if guard.is_some() || seq.epoch != flags.focus_epoch {
                 self.seq = None;
             } else {
@@ -993,6 +1084,9 @@ impl Core {
         let mut seq_start = [0u64; SEQ_WORDS];
         let mut any_seq = false;
         for (i, c) in self.table.compiled.iter().enumerate() {
+            if c.len == 0 {
+                continue; // a hotstring binding: matched on typed characters
+            }
             let Some(exact) = self.chord_match(&c.steps[0], ev, c.widen && c.len == 1) else {
                 continue;
             };
@@ -1035,7 +1129,11 @@ impl Core {
                     epoch: flags.focus_epoch,
                 });
                 self.consumed.insert(ev.vk);
+                self.hs.clear();
                 return Decision::new(true, None, ev.source);
+            }
+            if let Some(d) = self.hotstring(ev, mode, flags) {
+                return d;
             }
             let signal = skipped.map(|(b, code)| Signal::Skipped {
                 binding: u16::try_from(b).unwrap_or(NONE),
@@ -1043,6 +1141,8 @@ impl Core {
             });
             return self.pass(ev, signal);
         };
+        // A rule takes the key: what the application shows is no longer what was typed.
+        self.hs.clear();
         let c: Compiled = self.table.compiled[i];
         let b = u16::try_from(i).unwrap_or(NONE);
         // 5. Stepping aside: the key passes unchanged.
@@ -1134,6 +1234,95 @@ impl Core {
         finish(self, Some(Signal::Remap { binding, op }))
     }
 
+    /// Hotstrings (§3.4): feeds a key that reaches the application unchanged into the bounded
+    /// buffer and decides whether it completes an abbreviation. `None`: the key passes as usual.
+    fn hotstring(&mut self, ev: &KeyEvent, mode: Mode, flags: &Flags) -> Option<Decision> {
+        if !self.table.has_hotstrings() {
+            return None;
+        }
+        let translate = self.translate?;
+        // Modifiers and lock keys change what the next key types, not the text.
+        if ev.modifier.is_some()
+            || ev.altgr_fake_ctrl
+            || matches!(ev.vk, vk::VK_CAPITAL | vk::VK_NUMLOCK | VK_SCROLL)
+        {
+            return None;
+        }
+        if flags.focus_epoch != self.hs.epoch
+            || ev.time_ms.wrapping_sub(self.hs.last_ms) > hotstring::IDLE_MS
+        {
+            self.hs.clear();
+        }
+        self.hs.epoch = flags.focus_epoch;
+        self.hs.last_ms = ev.time_ms;
+        let m = self.mods();
+        // Never in a password field, on the secure desktop, during an IME composition, over an
+        // elevated window, while paused, for other programs' input, mouse buttons, IME keys or
+        // shortcuts with Ctrl, Alt or Win: the buffer is cleared and nothing is kept.
+        if ev.source != Source::Physical
+            || mode == Mode::Paused
+            || Self::guard(flags).is_some()
+            || flags.elevated_foreground
+            || is_mouse(ev.vk)
+            || vk::is_ime_vk(ev.vk)
+            || (m.ctrl() && !m.altgr())
+            || m.alt()
+            || m.win()
+        {
+            self.hs.clear();
+            return None;
+        }
+        if ev.vk == VK_BACK {
+            self.hs.pop();
+            return None;
+        }
+        let c = match translate(ev.vk, ev.scan, m.shift(), m.altgr()) {
+            Typed::Char('\r') => '\n',
+            Typed::Char(c) if !c.is_control() || c == '\n' || c == '\t' => c,
+            _ => {
+                self.hs.clear(); // navigation, function keys, dead keys
+                return None;
+            }
+        };
+        let Some(hit) = hotstring::find(&self.table.hotstrings, &self.hs, c) else {
+            self.hs.push(c);
+            return None;
+        };
+        self.hs.clear();
+        let (b, consumed, erase, retype) = {
+            let (b, spec) = &self.table.hotstrings[hit.index];
+            (
+                *b,
+                spec.consumes(),
+                spec.erase,
+                !spec.immediate && !spec.omit_end,
+            )
+        };
+        let binding = usize::from(b);
+        if !self.rate.allow(binding, ev.time_ms) {
+            return Some(self.pass(ev, Some(Signal::RateLimited { binding: b })));
+        }
+        let fire = HotstringFire {
+            erase: if erase {
+                u8::try_from(hit.typed).unwrap_or(u8::MAX)
+            } else {
+                0
+            },
+            case: hit.case,
+            key: Self::replay_code(ev),
+            mods: m.bits() & !WIN_BITS,
+            retype,
+            consumed,
+            typed: self.typed,
+        };
+        let signal = Signal::Hotstring { binding: b, fire };
+        Some(if consumed {
+            self.take(ev, binding, Some(signal))
+        } else {
+            self.pass(ev, Some(signal))
+        })
+    }
+
     fn sequence_step(&mut self, ev: &KeyEvent, seq: Seq) -> Decision {
         let swallow = |core: &mut Core, signal: Option<Signal>| {
             core.consumed.insert(ev.vk);
@@ -1194,6 +1383,7 @@ mod tests {
             widen: false,
             injects: false,
             action: Action::Engine(vec![EngineOp::Pause]),
+            hotstring: None,
         }
     }
 
@@ -1792,6 +1982,7 @@ mod tests {
             widen: plain,
             injects: true,
             action: Action::Remap(remap_spec(to, None, 200)),
+            hotstring: None,
         }
     }
 

@@ -269,6 +269,25 @@ pub fn rule_problems(rule: &Value, at: &str) -> Vec<(&'static str, String)> {
                                 "{at_s}: the output contains the Secure Attention Sequence or the emergency chord, which Ddalgak never produces"
                             ),
                         );
+                    } else if s.get("type").and_then(Value::as_str) == Some("type_text") {
+                        // The validator quotes failing strings; a snippet's text never appears in
+                        // a message (DDALGAK-SEC-011), only what is wrong with it.
+                        let msg = match s.get("text").and_then(Value::as_str) {
+                            Some(t) => crate::text::text_problem(
+                                t,
+                                s.get("variables").and_then(Value::as_bool) == Some(true),
+                            )
+                            .map(|p| format!("{at_s}.text: {p}")),
+                            None => None,
+                        };
+                        let msg = msg.unwrap_or_else(|| {
+                            if errs.iter().any(|e| e.contains(".text")) {
+                                format!("{at_s}.text: the text is not valid (the text is not shown)")
+                            } else {
+                                rebase(first, &at_s)
+                            }
+                        });
+                        push("step_invalid", msg);
                     } else {
                         push("step_invalid", rebase(first, &at_s));
                     }

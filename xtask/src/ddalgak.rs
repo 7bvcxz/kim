@@ -11,7 +11,8 @@
 //!   and priority (`duplicate_trigger`);
 //! * a `launch-programs` consent covers exactly the rule's current targets (`consent_stale`,
 //!   recomputing the SHA-256 fingerprint of §6.2);
-//! * a run's delays stay within 60 seconds (`run_too_long`).
+//! * a run's delays stay within 60 seconds (`run_too_long`; since Step 69 the key delays of typed
+//!   text and the delays between sent chords count too).
 //!
 //! Valid examples must produce no error. Each file in `examples/ddalgak-rules-v1/semantic-invalid/`
 //! is named `<expected_code>--<what>.json`, must pass the schema, and must produce exactly that
@@ -276,6 +277,17 @@ pub fn semantic_errors(doc: &Value) -> Vec<Finding> {
                 if s["type"] == "delay" {
                     delay_ms += s["ms"].as_u64().unwrap_or(0);
                 }
+                // Typing delays count too (Step 69): one key delay between characters as written,
+                // one step delay between chords.
+                let gaps = |n: usize| n.saturating_sub(1) as u64;
+                if s["type"] == "type_text" {
+                    let chars = s["text"].as_str().map_or(0, |t| t.chars().count());
+                    delay_ms += s["key_delay_ms"].as_u64().unwrap_or(0) * gaps(chars);
+                }
+                if s["type"] == "send_keys" {
+                    let chords = s["keys"].as_str().map_or(0, |k| k.split(' ').count());
+                    delay_ms += s["step_delay_ms"].as_u64().unwrap_or(0) * gaps(chords);
+                }
             }
             if delay_ms > MAX_RUN_DELAY_MS {
                 push("run_too_long", format!("{at}.steps"));
@@ -297,15 +309,21 @@ pub fn semantic_errors(doc: &Value) -> Vec<Finding> {
 }
 
 /// What makes two enabled rules of one profile claim the same input: the trigger (keys, `on`,
-/// `hold_ms`), the modes (unordered; none = every mode), the conditions and the priority.
+/// `hold_ms`, or a hotstring's abbreviation), the modes (unordered; none = every mode), the conditions and the priority.
 fn trigger_key(rule: &Value) -> String {
     let t = &rule["trigger"];
     let modes: BTreeSet<&str> = list(&rule["modes"]).filter_map(Value::as_str).collect();
     let mut when = String::new();
     canonical_json(&rule["when"], &mut when);
+    // A hotstring (Step 69) claims its abbreviation, in any case unless it is case-sensitive.
+    let keys = match t["hotstring"]["abbreviation"].as_str() {
+        Some(a) if t["hotstring"]["case"] == "sensitive" => format!("hotstring:{a}"),
+        Some(a) => format!("hotstring:{}", a.to_lowercase()),
+        None => t["keys"].as_str().unwrap_or_default().to_string(),
+    };
     format!(
         "{}|{}|{}|{:?}|{}|{}",
-        t["keys"].as_str().unwrap_or_default(),
+        keys,
         t["on"].as_str().unwrap_or("press"),
         t["hold_ms"].as_u64().unwrap_or(500),
         modes,

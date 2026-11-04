@@ -231,6 +231,12 @@ impl Trigger {
             .then_some("Reserved for debuggers")
     }
 
+    /// A trigger without keys: the binding of a hotstring rule (Step 69), which the core matches
+    /// on typed characters instead.
+    pub fn none() -> Trigger {
+        Trigger { steps: Vec::new() }
+    }
+
     pub fn steps(&self) -> &[TChord] {
         &self.steps
     }

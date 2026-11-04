@@ -520,7 +520,14 @@ fn run(
     let wants_mouse = table.has_mouse();
     CTX.with(|c| {
         *c.borrow_mut() = Some(Ctx {
-            core: Core::new(table),
+            core: {
+                let mut core = Core::new(table);
+                // Typing runs read the modifier state and the key count; hotstrings translate
+                // keys without changing keyboard state (Step 69, ADR 0034).
+                core.set_runs(queue.runs());
+                core.set_translator(super::typing::translate);
+                core
+            },
             shared: Arc::clone(shared),
             queue,
             generation,

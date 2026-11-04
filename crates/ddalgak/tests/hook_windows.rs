@@ -56,6 +56,7 @@ fn binding(rule: &str, keys: &str, injected: Injected, op: EngineOp) -> Binding 
         widen: false,
         injects: false,
         action: Action::Engine(vec![op]),
+        hotstring: None,
     }
 }
 
@@ -83,6 +84,7 @@ fn engine_with(bindings: Vec<Binding>, lifetime: Duration, observe_only: bool) -
         }),
         Arc::new(Mutex::new(Activity::default())),
         Box::new(SendInputBackend),
+        ddalgak::run::Env::inert(),
     );
     worker.queue().send(Msg::Rules(Rules {
         generation: 1,
@@ -360,6 +362,7 @@ fn remap_binding(rule: &str, keys: &str, to: &str, tap: Option<&str>) -> Binding
             tap: tap.map(|t| Output::parse(t).unwrap()),
             tap_ms: 200,
         }),
+        hotstring: None,
     }
 }
 

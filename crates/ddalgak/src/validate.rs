@@ -297,6 +297,17 @@ pub fn semantic_errors(doc: &Value, skip: &dyn Fn(usize, usize) -> bool) -> Vec<
                 if s["type"] == "delay" {
                     delay_ms += s["ms"].as_u64().unwrap_or(0);
                 }
+                // Typing delays count too (Step 69): one key delay between characters as written,
+                // one step delay between chords.
+                let gaps = |n: usize| n.saturating_sub(1) as u64;
+                if s["type"] == "type_text" {
+                    let chars = s["text"].as_str().map_or(0, |t| t.chars().count());
+                    delay_ms += s["key_delay_ms"].as_u64().unwrap_or(0) * gaps(chars);
+                }
+                if s["type"] == "send_keys" {
+                    let chords = s["keys"].as_str().map_or(0, |k| k.split(' ').count());
+                    delay_ms += s["step_delay_ms"].as_u64().unwrap_or(0) * gaps(chords);
+                }
             }
             if delay_ms > MAX_RUN_DELAY_MS {
                 push("run_too_long", format!("{at}.steps"));
@@ -318,16 +329,22 @@ pub fn semantic_errors(doc: &Value, skip: &dyn Fn(usize, usize) -> bool) -> Vec<
 }
 
 /// What makes two enabled rules of one profile claim the same input (the reference's key): the
-/// trigger (keys, `on`, `hold_ms`), the modes (unordered; none = every mode), the conditions and
-/// the priority.
+/// trigger (keys, `on`, `hold_ms`, or a hotstring's abbreviation), the modes (unordered; none =
+/// every mode), the conditions and the priority.
 fn trigger_key(rule: &Value) -> String {
     let t = &rule["trigger"];
     let modes: BTreeSet<&str> = list(&rule["modes"]).filter_map(Value::as_str).collect();
     let mut when = String::new();
     canonical_json(&rule["when"], &mut when);
+    // A hotstring (Step 69) claims its abbreviation, in any case unless it is case-sensitive.
+    let keys = match t["hotstring"]["abbreviation"].as_str() {
+        Some(a) if t["hotstring"]["case"] == "sensitive" => format!("hotstring:{a}"),
+        Some(a) => format!("hotstring:{}", a.to_lowercase()),
+        None => t["keys"].as_str().unwrap_or_default().to_string(),
+    };
     format!(
         "{}|{}|{}|{:?}|{}|{}",
-        t["keys"].as_str().unwrap_or_default(),
+        keys,
         t["on"].as_str().unwrap_or("press"),
         t["hold_ms"].as_u64().unwrap_or(500),
         modes,
@@ -399,12 +416,10 @@ fn profile_index(at: &str) -> Option<usize> {
         .ok()
 }
 
-/// The Step that implements each step type this version does not run yet (ADR 0031 moved
-/// `send_keys` to Step 69, with typing, and `delay` to Step 78, with ordered multi-step runs).
+/// The Step that implements each step type this version does not run yet (ADR 0031 moved `delay`
+/// to Step 78, with ordered multi-step runs; `send_keys` and `type_text` run since Step 69).
 pub const LATER_STEPS: &[(&str, &str)] = &[
-    ("send_keys", "Step 69"),
     ("delay", "Step 78"),
-    ("type_text", "Step 69"),
     ("open_program", "Step 70"),
     ("open_url", "Step 70"),
     ("mouse_move", "Step 71"),
@@ -635,7 +650,11 @@ fn extend(
                     pi,
                     ri,
                     rule,
-                    trigger: Trigger::parse(&rule.trigger.keys).ok(),
+                    trigger: rule
+                        .trigger
+                        .keys
+                        .as_deref()
+                        .and_then(|k| Trigger::parse(k).ok()),
                 }),
                 RuleEntry::Raw(_) => None,
             })
@@ -644,7 +663,7 @@ fn extend(
         let used_keys: BTreeSet<&str> = items
             .iter()
             .filter(|i| i.rule.enabled)
-            .map(|i| i.rule.trigger.keys.as_str())
+            .filter_map(|i| i.rule.trigger.keys.as_deref())
             .collect();
         let suggestions = |item: &Item| rebinds(item, &used_keys, ctx);
         // The reference's duplicate triggers get the same rebind offers as the runtime's findings.
@@ -683,7 +702,7 @@ fn extend(
             let rule = item.rule;
             let at = format!("profiles[{}].rules[{}]", item.pi, item.ri);
             // The crate's own trigger parser must agree with the schema (defense in depth).
-            if let Err(e) = Trigger::parse(&rule.trigger.keys) {
+            if let Some(Err(e)) = rule.trigger.keys.as_deref().map(Trigger::parse) {
                 push(
                     item,
                     e.code(),
@@ -709,6 +728,14 @@ fn extend(
                         .keys()
                         .next()
                         .map(|k| format!("trigger.{k}"))
+                })
+                .or_else(|| {
+                    rule.trigger.hotstring.as_ref().and_then(|h| {
+                        h.extra
+                            .keys()
+                            .next()
+                            .map(|k| format!("trigger.hotstring.{k}"))
+                    })
                 })
                 .or_else(|| rule.when.as_ref().and_then(|w| w.has_unknown_fields()))
                 .or_else(|| {
@@ -741,7 +768,17 @@ fn extend(
                     Vec::new(),
                 );
             }
-            if let Some((i, s)) = rule
+            if let Some((i, why)) = crate::rules::later_step(rule) {
+                push(
+                    item,
+                    "step_unsupported",
+                    Severity::Info,
+                    format!("{at}.steps[{i}]"),
+                    why,
+                    None,
+                    Vec::new(),
+                );
+            } else if let Some((i, s)) = rule
                 .steps
                 .iter()
                 .enumerate()
@@ -767,8 +804,10 @@ fn extend(
                 );
             }
             // Ddalgak's own GUI shortcuts win over rules (§7.5).
-            if let Some((action, keys)) =
-                ctx.shortcuts.iter().find(|(_, k)| *k == rule.trigger.keys)
+            if let Some((action, keys)) = ctx
+                .shortcuts
+                .iter()
+                .find(|(_, k)| Some(k.as_str()) == rule.trigger.keys.as_deref())
             {
                 let mut offers: Vec<Offer> =
                     suggestions(item).into_iter().map(Offer::Rebind).collect();
@@ -867,7 +906,7 @@ fn extend(
                 first: i
                     .rule
                     .trigger
-                    .keys
+                    .keys_text()
                     .split(' ')
                     .next()
                     .unwrap_or_default()
@@ -921,7 +960,7 @@ fn extend(
                                     format!(
                                         "rule `{}` takes `{}` first in every mode this rule works in ({}), so this rule never fires",
                                         ra.id,
-                                        rb.trigger.keys,
+                                        rb.trigger.keys_text(),
                                         shared.join(", ")
                                     ),
                                     Some(json!({ "rule": ra.id })),
@@ -937,7 +976,7 @@ fn extend(
                                         "in mode {} rule `{}` takes `{}` first (intended layering)",
                                         shared.join(", "),
                                         ra.id,
-                                        rb.trigger.keys
+                                        rb.trigger.keys_text()
                                     ),
                                     Some(json!({ "rule": ra.id })),
                                     Vec::new(),
@@ -961,7 +1000,8 @@ fn extend(
                             format!("profiles[{}].rules[{}].trigger", b.item.pi, b.item.ri),
                             format!(
                                 "rule `{}` fires on `{}`, the start of this sequence, so this sequence never completes",
-                                ra.id, ra.trigger.keys
+                                ra.id,
+                                ra.trigger.keys_text()
                             ),
                             Some(json!({ "rule": ra.id })),
                             vec![Offer::Disable, Offer::Keep],
@@ -974,7 +1014,7 @@ fn extend(
         let mut by_keys: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
         for (k, p) in pre.iter().enumerate() {
             by_keys
-                .entry(p.item.rule.trigger.keys.as_str())
+                .entry(p.item.rule.trigger.keys_text())
                 .or_default()
                 .push(k);
         }
@@ -1071,7 +1111,7 @@ fn rebinds(item: &Item, used: &BTreeSet<&str>, ctx: &Context) -> Vec<String> {
         add(&mut c.mods.alt, alt);
         add(&mut c.mods.shift, true);
         let keys = c.to_string();
-        if keys == item.rule.trigger.keys || out.contains(&keys) {
+        if keys == item.rule.trigger.keys_text() || out.contains(&keys) {
             continue;
         }
         let ok = Trigger::parse(&keys).is_ok_and(|t| chord_warning(&t).is_none())
@@ -1172,7 +1212,7 @@ pub fn missing_consent(rule: &Rule) -> Vec<Permission> {
 
 /// A trigger's display for messages: `RuleTrigger` keys.
 pub fn keys_of(t: &RuleTrigger) -> &str {
-    &t.keys
+    t.keys_text()
 }
 
 /// The reference checker of `cargo xtask schema-check`, compiled here for the agreement tests.

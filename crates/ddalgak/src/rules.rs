@@ -11,19 +11,25 @@
 //! - Of the active profile's enabled rules, every rule with an error or an `*_unsupported` info
 //!   is **inactive** with that code; the others keep working.
 //! - Of the remaining rules, those whose steps are all `engine` steps (§5.11), a `remap` (§5.1)
-//!   and `block` (§5.2; Step 68) become bindings. Every other action type is inactive with
-//!   `step_unsupported` until its Step (69–72, 78).
+//!   and `block` (§5.2; Step 68), and since Step 69 a single `type_text` (§5.4) or `send_keys`
+//!   (§5.3) step, with a keys or a hotstring trigger (§3.4), become bindings. Every other action
+//!   type, and a typing step among other steps, is inactive with `step_unsupported` until its
+//!   Step (70–72, 78).
 //! - Modes: there is no mode switching before Step 72, so the profile's `default_mode` is active;
 //!   rules limited to other modes are counted, not run.
 //! - Precedence (§7.1): mode-scoped rules first, then higher `priority`, then file order.
 
+use crate::hotstring;
+use crate::model::Rule;
 use crate::remap::Output;
+use crate::run::{KeysSpec, TextSpec};
 use crate::store::{self, MIGRATIONS};
 use crate::table::{Action, Binding, EngineOp, Injected, On, RemapSpec};
 use crate::trigger::{TKey, Trigger};
 use crate::validate::Context;
 use serde_json::{Map, Value, json};
 use std::path::Path;
+use std::sync::Arc;
 
 pub use crate::store::FileState;
 
@@ -80,11 +86,36 @@ impl Loaded {
     }
 }
 
-/// The step types this version runs (Step 66: `engine`; Step 68: `remap`, `block`). A rule made
-/// of `engine` and `block` steps is an engine-control rule (a `block` step adds nothing to a rule
-/// that consumes its key anyway); a `remap` is always the rule's only step (schema
-/// `holds_trigger`).
-pub const RUNNABLE_STEPS: [&str; 3] = ["engine", "remap", "block"];
+/// The step types this version runs (Step 66: `engine`; Step 68: `remap`, `block`; Step 69:
+/// `send_keys`, `type_text`). A rule made of `engine` and `block` steps is an engine-control rule
+/// (a `block` step adds nothing to a rule that consumes its key anyway); a `remap` is always the
+/// rule's only step (schema `holds_trigger`); a typing step runs alone until ordered multi-step
+/// runs (Step 78).
+pub const RUNNABLE_STEPS: [&str; 5] = ["engine", "remap", "block", "send_keys", "type_text"];
+
+const TYPING_ALONE: &str = "a `type_text` or `send_keys` step runs alone in this version; ordered multi-step runs arrive in Step 78";
+const HOTSTRING_STEPS: &str = "a hotstring runs one `type_text` or `send_keys` step in this version; other steps after a hotstring arrive with ordered multi-step runs (Step 78)";
+
+/// A combination of runnable steps this version does not run yet (`step_unsupported`): the step
+/// index and why.
+pub fn later_step(rule: &Rule) -> Option<(usize, String)> {
+    use crate::model::Action as A;
+    let typing = |a: &A| matches!(a, A::TypeText(_) | A::SendKeys(_));
+    if rule.trigger.hotstring.is_some() {
+        if let Some(i) = rule.steps.iter().position(|s| !typing(s)) {
+            return Some((i, HOTSTRING_STEPS.into()));
+        }
+        if rule.steps.len() > 1 {
+            return Some((1, HOTSTRING_STEPS.into()));
+        }
+    }
+    if rule.steps.len() > 1
+        && let Some(i) = rule.steps.iter().position(typing)
+    {
+        return Some((i, TYPING_ALONE.into()));
+    }
+    None
+}
 
 /// Reads and interprets the rules file.
 pub fn load(path: &Path) -> Loaded {
@@ -119,12 +150,120 @@ const RULE_FIELDS: &[&str] = &[
 ];
 const TRIGGER_FIELDS: &[&str] = &[
     "keys",
+    "hotstring",
     "on",
     "hold_ms",
     "repeat",
     "pass_through",
     "injected",
 ];
+
+const HOTSTRING_FIELDS: &[&str] = &[
+    "abbreviation",
+    "case",
+    "inside_words",
+    "immediate",
+    "end_chars",
+    "omit_end",
+    "erase",
+];
+
+/// Compiles `trigger.hotstring` (§3.4).
+fn compile_hotstring(h: &Value) -> Result<hotstring::Spec, (&'static str, String)> {
+    let o = h.as_object().ok_or((
+        "trigger_invalid",
+        "`trigger.hotstring` must be an object".to_string(),
+    ))?;
+    if let Some(f) = unknown_field(o, HOTSTRING_FIELDS) {
+        return Err(("rule_unsupported", format!("unknown hotstring field `{f}`")));
+    }
+    let bad = |what: &str| {
+        (
+            "trigger_invalid",
+            format!("`trigger.hotstring.{what}` has a wrong type or value"),
+        )
+    };
+    let abbreviation = o
+        .get("abbreviation")
+        .and_then(Value::as_str)
+        .ok_or_else(|| bad("abbreviation"))?;
+    let len = abbreviation.chars().count();
+    if !(1..=hotstring::MAX_ABBREVIATION).contains(&len)
+        || abbreviation
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control())
+    {
+        return Err(bad("abbreviation"));
+    }
+    let flag = |k: &str, default: bool| -> Result<bool, (&'static str, String)> {
+        match o.get(k) {
+            None => Ok(default),
+            Some(v) => v.as_bool().ok_or_else(|| bad(k)),
+        }
+    };
+    let mut spec = hotstring::Spec::new(abbreviation);
+    spec.case = match o
+        .get("case")
+        .map(|v| v.as_str().and_then(hotstring::Case::parse))
+    {
+        None => hotstring::Case::Conform,
+        Some(Some(c)) => c,
+        Some(None) => return Err(bad("case")),
+    };
+    spec.inside_words = flag("inside_words", false)?;
+    spec.immediate = flag("immediate", false)?;
+    spec.omit_end = flag("omit_end", false)?;
+    spec.erase = flag("erase", true)?;
+    if let Some(e) = o.get("end_chars") {
+        let e = e
+            .as_str()
+            .filter(|e| !e.is_empty())
+            .ok_or_else(|| bad("end_chars"))?;
+        spec.end_chars = e.chars().collect();
+    }
+    Ok(spec)
+}
+
+/// Compiles a typing step (`type_text`, `send_keys`).
+fn compile_run(s: &Value, ty: &str) -> Result<Action, (&'static str, String)> {
+    if ty == "type_text" {
+        let text = s.get("text").and_then(Value::as_str).ok_or((
+            "step_invalid",
+            "a `type_text` step needs `text`".to_string(),
+        ))?;
+        return Ok(Action::Type(Arc::new(TextSpec {
+            text: text.to_string(),
+            paste: s.get("method").and_then(Value::as_str) == Some("paste"),
+            key_delay_ms: s
+                .get("key_delay_ms")
+                .and_then(Value::as_u64)
+                .map_or(0, |d| u32::try_from(d.min(200)).unwrap_or(0)),
+            variables: s.get("variables").and_then(Value::as_bool) == Some(true),
+        })));
+    }
+    let keys = s.get("keys").and_then(Value::as_str).ok_or((
+        "step_invalid",
+        "a `send_keys` step needs `keys`".to_string(),
+    ))?;
+    let chords = keys
+        .split(' ')
+        .map(|k| match Output::parse(k) {
+            Ok(o) if matches!(o.key, Some(crate::inject::OutCode::Button(_))) => Err((
+                "step_invalid",
+                format!("`{k}`: send_keys presses keys, not mouse buttons"),
+            )),
+            Ok(o) => Ok(o),
+            Err(e) => Err(("step_invalid", e)),
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Action::Keys(Arc::new(KeysSpec {
+        chords,
+        step_delay_ms: s
+            .get("step_delay_ms")
+            .and_then(Value::as_u64)
+            .map_or(0, |d| u32::try_from(d.min(1000)).unwrap_or(0)),
+    })))
+}
 
 struct Candidate {
     binding: Binding,
@@ -233,11 +372,22 @@ fn compile(r: &Map<String, Value>) -> Result<(Binding, i64), (&'static str, Stri
     if let Some(f) = unknown_field(t, TRIGGER_FIELDS) {
         return Err(("rule_unsupported", format!("unknown trigger field `{f}`")));
     }
-    let keys = t
-        .get("keys")
-        .and_then(Value::as_str)
-        .ok_or(("trigger_invalid", "`trigger.keys` is required".to_string()))?;
-    let trigger = Trigger::parse(keys).map_err(|e| (e.code(), e.to_string()))?;
+    let hotstring = t.get("hotstring").map(compile_hotstring).transpose()?;
+    let trigger = match (t.get("keys"), &hotstring) {
+        (Some(k), None) => {
+            let k = k
+                .as_str()
+                .ok_or(("trigger_invalid", "`trigger.keys` must be text".to_string()))?;
+            Trigger::parse(k).map_err(|e| (e.code(), e.to_string()))?
+        }
+        (None, Some(_)) => Trigger::none(),
+        _ => {
+            return Err((
+                "trigger_invalid",
+                "a trigger has `keys` or a `hotstring`, not both".into(),
+            ));
+        }
+    };
     let bad = |k: &str| {
         (
             "trigger_invalid",
@@ -268,6 +418,17 @@ fn compile(r: &Map<String, Value>) -> Result<(Binding, i64), (&'static str, Stri
         .and_then(Value::as_array)
         .ok_or(("step_invalid", "`steps` must hold 1–32 steps".to_string()))?;
     let is_remap = steps.first().and_then(|s| s.get("type")) == Some(&json!("remap"));
+    let kinds: Vec<&str> = steps
+        .iter()
+        .map(|s| s.get("type").and_then(Value::as_str).unwrap_or_default())
+        .collect();
+    let typing = |k: &&str| matches!(*k, "type_text" | "send_keys");
+    if hotstring.is_some() && (kinds.len() != 1 || !kinds.iter().all(typing)) {
+        return Err(("step_unsupported", HOTSTRING_STEPS.into()));
+    }
+    if kinds.len() > 1 && kinds.iter().any(typing) {
+        return Err(("step_unsupported", TYPING_ALONE.into()));
+    }
     if let Some(c) = trigger.single()
         && matches!(c.key, TKey::Modifier(_))
         && on != On::Release
@@ -280,6 +441,7 @@ fn compile(r: &Map<String, Value>) -> Result<(Binding, i64), (&'static str, Stri
     }
     let mut ops = Vec::new();
     let mut remap = None;
+    let mut run = None;
     for (i, s) in steps.iter().enumerate() {
         let ty = s.get("type").and_then(Value::as_str).unwrap_or_default();
         match ty {
@@ -292,6 +454,7 @@ fn compile(r: &Map<String, Value>) -> Result<(Binding, i64), (&'static str, Stri
                 ops.push(op);
             }
             "block" => {}
+            "type_text" | "send_keys" => run = Some(compile_run(s, ty)?),
             "remap" => {
                 if steps.len() != 1 || trigger.is_sequence() || on != On::Press || repeat {
                     return Err((
@@ -331,10 +494,11 @@ fn compile(r: &Map<String, Value>) -> Result<(Binding, i64), (&'static str, Stri
     }
     // Remaps and blocks are wildcards: a plain trigger matches with modifiers held (§3.2).
     let plain = trigger.single().is_some_and(|c| c.mods.is_empty());
-    let (action, widen, injects) = match remap {
-        Some(spec) => (Action::Remap(spec), plain, true),
-        None if ops.is_empty() => (Action::Block, plain, false),
-        None => (Action::Engine(ops), false, false),
+    let (action, widen, injects) = match (remap, run) {
+        (Some(spec), _) => (Action::Remap(spec), plain, true),
+        (None, Some(a)) => (a, false, true),
+        (None, None) if ops.is_empty() => (Action::Block, plain, false),
+        (None, None) => (Action::Engine(ops), false, false),
     };
     Ok((
         Binding {
@@ -347,6 +511,7 @@ fn compile(r: &Map<String, Value>) -> Result<(Binding, i64), (&'static str, Stri
             widen,
             injects,
             action,
+            hotstring: hotstring.map(Arc::new),
         },
         priority,
     ))
@@ -602,7 +767,11 @@ mod tests {
                 assert!(
                     matches!(
                         b.action,
-                        Action::Engine(_) | Action::Remap(_) | Action::Block
+                        Action::Engine(_)
+                            | Action::Remap(_)
+                            | Action::Block
+                            | Action::Type(_)
+                            | Action::Keys(_)
                     ),
                     "{}: {}",
                     p.display(),

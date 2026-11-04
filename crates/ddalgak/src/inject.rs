@@ -14,6 +14,11 @@
 //! sends events *without* recording them: the remap uses it to release the user's own trigger
 //! modifiers while its target is held and to restore them afterwards (they are the user's keys,
 //! not Ddalgak's, so pausing must not release them).
+//!
+//! Step 69 adds a fourth kind: a **Unicode unit** ([`OutCode::Unicode`]) for typed text. Text is
+//! always sent as down and up pairs in one call, so the ledger never keeps a unit held unless
+//! `SendInput` inserted only part of a call; [`Injector::send_balanced`] releases such leftovers
+//! at once.
 
 use std::sync::Mutex;
 
@@ -87,6 +92,9 @@ pub enum OutCode {
         ext: bool,
     },
     Button(Button),
+    /// One UTF-16 unit typed as a Unicode key event (`KEYEVENTF_UNICODE`, `VK_PACKET` for the
+    /// application), independent of the layout and the IME (Step 69, `type_text`).
+    Unicode(u16),
 }
 
 impl OutCode {
@@ -247,6 +255,26 @@ impl<B: Backend> Injector<B> {
             }
         }
         n == plain.len()
+    }
+
+    /// Sends a call whose downs and ups pair up (typed text, a tapped chord, Backspaces): every
+    /// event is recorded, and whatever `SendInput` left pressed by inserting only part of the call
+    /// is released at once, so typing never leaves a key down (`DDALGAK-SEC-005`).
+    pub fn send_balanced(&mut self, events: &[OutEvent]) -> bool {
+        let before: Vec<OutCode> = self.held.clone();
+        let ok = self.send_tracked(events);
+        if !ok {
+            let stray: Vec<OutCode> = self
+                .held
+                .iter()
+                .filter(|c| !before.contains(c))
+                .copied()
+                .collect();
+            for c in stray.into_iter().rev() {
+                self.release_code(c);
+            }
+        }
+        ok
     }
 
     /// Presses and holds an output.
@@ -486,6 +514,32 @@ mod tests {
         i.send_mixed(&[(vk(0xA2, true), false), (vk(0x7F, false), true)]);
         assert_eq!(i.held(), &[OutCode::Vk(0x7F)]);
         assert_eq!(i.backend().sent.len(), 4);
+    }
+
+    #[test]
+    fn balanced_calls_never_leave_a_key_down() {
+        let mut i = Injector::new(Recorder {
+            limit: Some(3),
+            ..Recorder::default()
+        });
+        let ev = crate::text::events("가나");
+        assert!(
+            !i.send_balanced(&ev),
+            "only three of four events were inserted"
+        );
+        assert_eq!(i.failed, 1);
+        assert!(i.held().is_empty(), "the stray down of 나 was released");
+        let sent = &i.backend().sent;
+        assert_eq!(
+            sent.last(),
+            Some(&OutEvent::up(OutCode::Unicode(0xB098))),
+            "{sent:?}"
+        );
+        // A key held before (a remap's target) is not touched.
+        let mut i = Injector::new(Recorder::default());
+        i.press(0x7F);
+        assert!(i.send_balanced(&crate::text::events("a")));
+        assert_eq!(i.held(), &[OutCode::Vk(0x7F)]);
     }
 
     #[test]

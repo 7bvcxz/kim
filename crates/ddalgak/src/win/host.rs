@@ -900,6 +900,18 @@ pub fn run(opts: Options) -> Result<(), RunError> {
         } else {
             Box::new(SendInputBackend)
         },
+        // Typing runs ask the platform about the focused target, use the clipboard (paste) and
+        // the local clock. The test host never touches the real clipboard and sees a fixed,
+        // editable target (it injects nothing anyway).
+        if opts.observe_only {
+            crate::run::Env::inert()
+        } else {
+            crate::run::Env {
+                probe: Box::new(super::typing::WinProbe::new(Arc::clone(&shared))),
+                clipboard: Box::new(super::typing::WinClipboard::new(hwnd)),
+                clock: super::typing::local_time,
+            }
+        },
     );
     let tray = if opts.tray {
         Some(Tray::new(hwnd, WM_TRAY, State::Off).map_err(|e| RunError::Io(e.to_string()))?)

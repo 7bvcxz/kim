@@ -247,6 +247,8 @@ pub struct StepInputs {
     pub text: Option<String>,
     pub method: Option<String>,
     pub key_delay_ms: Option<u32>,
+    /// `--variables`: the text is a template (date and time variables, `{cursor}`).
+    pub variables: bool,
     pub path: Option<String>,
     pub app_id: Option<String>,
     pub args: Vec<String>,
@@ -295,6 +297,7 @@ pub fn build_step(kind: &str, i: &StepInputs) -> Result<Action, String> {
             text: need(&i.text, "--text <text>", kind)?,
             method: parse("method", &i.method, TextMethod::parse)?,
             key_delay_ms: i.key_delay_ms,
+            variables: i.variables.then_some(true),
             extra: extra(),
         }),
         "open_program" => {
@@ -600,7 +603,8 @@ pub fn duplicate(
         t.chars().take(80).collect()
     });
     if let Some(t) = trigger {
-        copy.trigger.keys = t;
+        copy.trigger.keys = Some(t);
+        copy.trigger.hotstring = None;
     }
     let now = crate::time::now_rfc3339();
     copy.created_at = Some(now.clone());

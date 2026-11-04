@@ -492,6 +492,15 @@ fn the_gesture_setting_and_the_preset_reach_the_running_instance() {
     let (code, on) = sb.json(&["config", "set", "gestures.preset", "snipaste"]);
     assert_eq!(code, 0, "{on:#}");
     assert_eq!(on["data"]["hotkeys"]["written"], true);
+    // Shown by name in the shortcut list, with the gestures.
+    let human = String::from_utf8_lossy(&sb.run(&["hotkeys", "list"]).stdout).to_string();
+    assert!(human.contains("Snipaste-style gestures: on"), "{human}");
+    assert!(
+        human.contains("Double-click inside a selection  capture-overlay  copy"),
+        "{human}"
+    );
+    let human = String::from_utf8_lossy(&sb.run(&["config", "show"]).stdout).to_string();
+    assert!(human.contains("Snipaste-style gestures (on)"), "{human}");
     let (_, list) = sb.json(&["hotkeys", "list"]);
     let keys_of = |list: &Value, id: &str| -> Vec<String> {
         list["data"]["actions"]

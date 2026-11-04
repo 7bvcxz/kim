@@ -413,6 +413,21 @@ fn list(paths: &Paths, a: &ListArgs, ctx: &Ctx) -> Result<Outcome, NoeulError> {
         }
     );
     human.push_str(&table(&rows));
+    // The mouse gestures belong to the shortcut list (HOTKEY_CONTRACT §11.1, NOEUL-FR-024); they
+    // are settings, so `--json` has them in `noeul config show --json`.
+    let s = noeul::settings::load(&paths.config_file()).settings;
+    let preset = s.preset;
+    human.push_str(&format!(
+        "\nGestures (change with `noeul config set gestures.<name> <action>`):\n  Double-click inside a selection  capture-overlay  {}\n  Middle-click inside a selection  capture-overlay  {}\n  Double-click on a pin            pin              none\n  {}: {}\n",
+        s.gestures.double_click.as_str(),
+        s.gestures.middle_click.as_str(),
+        noeul::settings::Preset::Snipaste.title(),
+        if preset == noeul::settings::Preset::Snipaste {
+            "on (double-click and Enter copy, Ctrl+T and middle-click pin; `noeul config reset gestures --yes` undoes it)"
+        } else {
+            "off (`noeul config set gestures.preset snipaste` turns it on)"
+        }
+    ));
     human.push_str(&format!(
         "\nFile: {} ({})\nChange with `noeul hotkeys set <action> <keys>`, `disable`, `reset`; `noeul hotkeys check --all-tools` finds conflicts.\n",
         w.path,

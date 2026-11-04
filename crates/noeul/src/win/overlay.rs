@@ -970,6 +970,35 @@ mod tests {
             [a[0], a[1], a[2]],
             "the border above the selection"
         );
+        // The toolbar (Step 51): no room below or above on the 150 % monitor, so inside the
+        // selection's bottom edge; the Pin button is accent-filled and GDI drew its label.
+        let bar = scene
+            .toolbar
+            .clone()
+            .expect("a toolbar next to the selection");
+        assert_eq!(bar.dpi, 144);
+        assert_eq!(
+            (
+                bar.rect.x - picture.x,
+                bar.rect.y - picture.y,
+                bar.rect.width,
+                bar.rect.height
+            ),
+            (640, 193, 360, 48)
+        );
+        let pin = bar.buttons[0].rect;
+        let (mut fill, mut ink) = (0, 0);
+        for y in pin.y - picture.y..pin.y - picture.y + i32::try_from(pin.height).unwrap() {
+            for x in pin.x - picture.x..pin.x - picture.x + i32::try_from(pin.width).unwrap() {
+                if at(x, y) == [a[0], a[1], a[2]] {
+                    fill += 1;
+                } else {
+                    ink += 1;
+                }
+            }
+        }
+        assert!(fill > 1000, "accent fill: {fill}");
+        assert!(ink > 20, "the label's text was drawn: {ink} pixels");
         // Keys arrive as chords for the core to match.
         // SAFETY: as above.
         unsafe {

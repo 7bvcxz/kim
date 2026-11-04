@@ -334,7 +334,9 @@ mod tests {
             | "non-canonical-modifier-order"
             | "sequence-release-trigger"
             | "hold-ms-without-hold"
-            | "bare-modifier-press-action" => "trigger_invalid",
+            | "bare-modifier-press-action"
+            | "mouse-primary-button-trigger"
+            | "mouse-button-sequence-trigger" => "trigger_invalid",
             // whole-file problems
             "newer-schema-version" | "no-modes" | "rule-id-with-dot" => "file",
             _ => "step_invalid",

@@ -1,0 +1,175 @@
+{
+  "schema": "ddalgak.rules",
+  "schema_version": 1,
+  "hotkey_contract": 1,
+  "revision": 3,
+  "active_profile": "default",
+  "settings": {
+    "engine_on_start": "off",
+    "max_runs_per_second": 20
+  },
+  "profiles": [
+    {
+      "id": "default",
+      "title": "Mouse buttons and pass-through",
+      "description": "Step 68 remaps: mouse buttons as triggers and outputs (the low-level mouse hook exists only while such a rule is enabled), a key that keeps working while it also holds another key, a physical-position trigger and a right-side modifier.",
+      "default_mode": "base",
+      "modes": [
+        {
+          "id": "base",
+          "title": "Base"
+        }
+      ],
+      "rules": [
+        {
+          "id": "x1-back",
+          "title": "Mouse button X1 goes back (Alt+Left)",
+          "enabled": true,
+          "trigger": {
+            "keys": "MouseX1"
+          },
+          "steps": [
+            {
+              "type": "remap",
+              "to": "Alt+Left"
+            }
+          ],
+          "consent": {
+            "input-injection": {
+              "granted_at": "2026-11-04T10:00:00Z",
+              "via": "gui"
+            }
+          }
+        },
+        {
+          "id": "ctrl-middle-f16",
+          "title": "Ctrl and the middle button act as F16",
+          "enabled": true,
+          "trigger": {
+            "keys": "Ctrl+MouseMiddle"
+          },
+          "steps": [
+            {
+              "type": "remap",
+              "to": "F16"
+            }
+          ],
+          "consent": {
+            "input-injection": {
+              "granted_at": "2026-11-04T10:00:00Z",
+              "via": "cli"
+            }
+          }
+        },
+        {
+          "id": "no-x2",
+          "title": "Mouse button X2 does nothing",
+          "enabled": true,
+          "trigger": {
+            "keys": "MouseX2"
+          },
+          "steps": [
+            {
+              "type": "block"
+            }
+          ]
+        },
+        {
+          "id": "f15-middle-click",
+          "title": "F15 acts as the middle mouse button",
+          "enabled": true,
+          "trigger": {
+            "keys": "F15"
+          },
+          "steps": [
+            {
+              "type": "remap",
+              "to": "MouseMiddle"
+            }
+          ],
+          "consent": {
+            "input-injection": {
+              "granted_at": "2026-11-04T10:01:00Z",
+              "via": "gui"
+            }
+          }
+        },
+        {
+          "id": "f14-also-f16",
+          "title": "F14 also holds F16 (the original key still reaches the app)",
+          "enabled": true,
+          "trigger": {
+            "keys": "F14",
+            "pass_through": true
+          },
+          "steps": [
+            {
+              "type": "remap",
+              "to": "F16"
+            }
+          ],
+          "consent": {
+            "input-injection": {
+              "granted_at": "2026-11-04T10:02:00Z",
+              "via": "cli"
+            }
+          }
+        },
+        {
+          "id": "position-j-down",
+          "title": "Ctrl+Shift and the key at the J position act as Down, on every layout",
+          "enabled": true,
+          "trigger": {
+            "keys": "Ctrl+Shift+code:KeyJ"
+          },
+          "steps": [
+            {
+              "type": "remap",
+              "to": "Down"
+            }
+          ],
+          "consent": {
+            "input-injection": {
+              "granted_at": "2026-11-04T10:03:00Z",
+              "via": "gui"
+            }
+          }
+        },
+        {
+          "id": "rctrl-menu",
+          "title": "Right Ctrl acts as the context-menu key",
+          "enabled": true,
+          "trigger": {
+            "keys": "RCtrl"
+          },
+          "steps": [
+            {
+              "type": "remap",
+              "to": "ContextMenu"
+            }
+          ],
+          "consent": {
+            "input-injection": {
+              "granted_at": "2026-11-04T10:04:00Z",
+              "via": "gui"
+            }
+          }
+        },
+        {
+          "id": "f13-physical-h",
+          "title": "F13 acts as the key at the H position",
+          "enabled": false,
+          "trigger": {
+            "keys": "F13"
+          },
+          "steps": [
+            {
+              "type": "remap",
+              "to": "code:KeyH"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

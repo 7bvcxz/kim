@@ -859,6 +859,91 @@ mod tests {
     }
 
     #[test]
+    fn mouse_buttons_are_triggers_and_outputs_with_their_limits() {
+        // Step 68: the middle and X buttons as triggers (with modifiers), all five as remap
+        // outputs; AutoHotkey-style names are accepted and stored canonically.
+        assert_eq!(canonical_trigger("mousex1").unwrap(), "MouseX1");
+        assert_eq!(canonical_trigger("XButton2").unwrap(), "MouseX2");
+        assert_eq!(
+            canonical_trigger("shift+ctrl+mbutton").unwrap(),
+            "Ctrl+Shift+MouseMiddle"
+        );
+        for refused in ["MouseLeft", "ctrl+lbutton", "RButton", "MouseX1 F13"] {
+            assert_eq!(
+                canonical_trigger(refused).unwrap_err().code(),
+                "trigger_invalid",
+                "{refused}"
+            );
+        }
+        assert_eq!(
+            canonical_trigger("Win+MouseX1").unwrap_err().code(),
+            "trigger_reserved"
+        );
+        assert_eq!(canonical_output("lbutton", 1).unwrap(), "MouseLeft");
+        assert_eq!(
+            canonical_output("ctrl+mouseright", 1).unwrap(),
+            "Ctrl+MouseRight"
+        );
+        assert!(
+            canonical_output("Ctrl+C MouseLeft", 8).is_err(),
+            "send_keys presses keys only"
+        );
+        assert_eq!(canonical_output("code:KeyH", 1).unwrap(), "code:KeyH");
+    }
+
+    #[test]
+    fn remap_rules_with_pass_through_and_dual_roles_are_checked_on_add() {
+        let mut doc = Document::empty();
+        let step = |to: &str, tap: Option<&str>| {
+            build_step(
+                "remap",
+                &StepInputs {
+                    to: Some(to.into()),
+                    tap: tap.map(str::to_string),
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        };
+        let mut n = new_rule("F14", vec![step("F16", None)]);
+        n.rule.trigger.pass_through = Some(true);
+        n.allow = vec![Permission::InputInjection];
+        assert!(add(&mut doc, n).unwrap().consent_needed.is_empty());
+        // A dual role cannot also pass the original key through (schema, ADR 0031): the CLI's
+        // review of the change refuses it.
+        let report = |d: &Document| {
+            crate::validate::check(&d.to_value(), &crate::validate::Context::default())
+        };
+        let before = report(&doc);
+        let mut tried = doc.clone();
+        let mut n = new_rule("F15", vec![step("LCtrl", Some("Escape"))]);
+        n.rule.trigger.pass_through = Some(true);
+        n.allow = vec![Permission::InputInjection];
+        add(&mut tried, n).unwrap();
+        let refused = review(&before, &report(&tried)).unwrap_err();
+        assert_eq!(refused.code(), "rule_invalid", "{refused:?}");
+        // A mouse-button trigger remapped to a key.
+        let mut n = new_rule("MouseX1", vec![step("Alt+Left", None)]);
+        n.allow = vec![Permission::InputInjection];
+        assert!(add(&mut doc, n).is_ok());
+        // `block` needs no consent.
+        let block = build_step("block", &StepInputs::default()).unwrap();
+        assert!(
+            add(&mut doc, new_rule("Insert", vec![block]))
+                .unwrap()
+                .consent_needed
+                .is_empty()
+        );
+        let l = crate::rules::from_store(&crate::store::interpret(
+            doc.to_text().as_bytes(),
+            &crate::validate::Context::default(),
+            crate::store::MIGRATIONS,
+        ));
+        let active: Vec<String> = l.bindings.iter().map(|b| b.trigger.to_string()).collect();
+        assert_eq!(active, ["F14", "MouseX1", "Insert"], "{:?}", l.inactive);
+    }
+
+    #[test]
     fn add_generates_ids_records_consent_or_saves_disabled() {
         let mut doc = Document::empty();
         let c = add(&mut doc, new_rule("F13", vec![engine(EngineOp::Pause)])).unwrap();

@@ -891,7 +891,8 @@ Step 55 ([ADR 0047](adr/0047-noeul-clipboard-paste-and-rich-sources.md)) makes `
    text**, and the **names of copied non-image files** (`[paste] file_cards`, off). The pin's
    menu offers the other kinds the clipboard had ("Pin clipboard as: …"), and
    `noeul pin --clipboard --as text|html|color|image|image_file|files` chooses one from a script;
-   both read the clipboard again, once.
+   both read the clipboard again, once. HTML above 4 MiB (a whole document) is pinned as its
+   plain text unless HTML was asked for.
 3. **Pictures** are decoded by Noeul itself (PNG, JPEG, GIF, BMP, ICO, TIFF, TGA): alpha kept, an
    embedded colour profile converted to sRGB, a photo's EXIF orientation applied; at most
    128 MiB, 32767 pixels a side and 40 million pixels; a malformed or oversized picture pins

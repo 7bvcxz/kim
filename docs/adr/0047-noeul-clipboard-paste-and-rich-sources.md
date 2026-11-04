@@ -49,7 +49,9 @@ first), **image file** (image files of `CF_HDROP`, or the text of one copied loc
 integers 0–255, three numbers 0–1), **HTML**, **text**, and **file names** (non-image files as a
 card, setting `[paste] file_cards`, off). A browser's "Copy image" offers a bitmap and HTML with an
 `<img>`: the image wins. An editor's copy offers text and HTML: the HTML card wins, `--as text` or
-the menu's "Pin clipboard as: Plain text" gives the text. The pin keeps only the *names* of the
+the menu's "Pin clipboard as: Plain text" gives the text; HTML above its 4 MiB limit (a whole
+word-processor document) falls back to the plain text when no kind was asked for. The pin keeps
+only the *names* of the
 kinds that were offered; choosing another kind reads the clipboard again, once, on that request.
 Keeping the alternatives' content would store clipboard content beyond the pin the user asked for.
 
@@ -165,6 +167,13 @@ running Noeul (the default "notify" of NOEUL-SEC-010; the setting to allow silen
   inside HTML (shown as placeholders like remote ones), tables as aligned grids (rows of cells),
   CSS beyond the whitelist, a notice without the tray icon (with the icon off, a paste that pins
   nothing is silent; PASTE-14), and dropping files on the settings window (N5).
+- **Measured** (`cargo run --release -p noeul --example paste_measure`, this machine, Windows 10
+  Pro 19045, 2026-11-04, while other builds ran; medians of 15 runs, in memory, before the
+  window): decoding a generated 3840 × 2160 PNG (210 KiB; a real screenshot compresses less and
+  decodes slower) 35.2 ms; a 10 KB text card (cut at 240 lines) 46.1 ms at 100 % and 58.7 ms at
+  150 %; an HTML card of 60 paragraphs 30.7 ms and 31.5 ms. Creating and painting the pin window
+  comes on top (ADR 0029). NOEUL-NFR-005's p95 from `F3` to the visible pin is not measured
+  end to end with the real hotkey (manual).
 - The test hook's windows no longer read the thread's key state (Step 55's first commit): a
   modifier held elsewhere while tests run cannot change what a test's posted messages mean.
 - Verification: unit tests for every module (decoders with generated pictures of every format,

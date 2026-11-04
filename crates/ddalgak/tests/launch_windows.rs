@@ -91,7 +91,7 @@ fn a_real_hidden_launch_passes_arguments_folder_and_environment_exactly() {
         stop_on_error: true,
     };
     // The test host's launcher: only programs inside `sandbox`, always hidden.
-    let host = TestHostLauncher::new(Arc::new(WinLauncher), Some(sandbox.clone()));
+    let host = TestHostLauncher::new(Arc::new(WinLauncher), Some(sandbox));
     let t = Instant::now();
     assert_eq!(run(&plan, &host), "ok");
     let started = t.elapsed();

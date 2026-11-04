@@ -1,0 +1,14 @@
+{
+  "command": "config.set",
+  "error": {
+    "code": "config_invalid",
+    "details": [
+      "config.toml line 1: the file is not valid TOML (TOML parse error at line 1, column 12); the default settings apply and the file is left as it is"
+    ],
+    "exit_code": 4,
+    "hint": "fix the file by hand (`subak config check` names every problem), or `subak config reset --all --yes` (keeps a backup)",
+    "message": "config.toml is invalid; nothing was changed"
+  },
+  "ok": false,
+  "schema_version": 1
+}

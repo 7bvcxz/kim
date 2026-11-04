@@ -1,0 +1,23 @@
+{
+  "command": "config.check",
+  "data": {
+    "path": "C:\\Users\\me\\AppData\\Roaming\\mouv\\subak\\config.toml",
+    "problems": [
+      {
+        "key": "profiles[1].env.GITHUB_TOKEN",
+        "line": 22,
+        "message": "profile `dev`: it sets `GITHUB_TOKEN`, which looks secret; secrets do not belong in config.toml (shown as ***): let the program read them from your environment instead",
+        "severity": "warning"
+      }
+    ],
+    "profiles": 2,
+    "state": "user",
+    "unknown": [
+      "appearance.future_knob"
+    ],
+    "valid": true
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

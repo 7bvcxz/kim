@@ -20,8 +20,8 @@
         "network": false,
         "opens_window": false,
         "requires_yes": false,
-        "summary": "Create a named Terminal running a program (resolved on its PATH, never through a shell; or one verbatim command line) in its own pseudo console and job; starts a Host on demand",
-        "usage": "subak new [<name>] [--cwd <dir>] [--env NAME[=VALUE]]... [--unset-env NAME]... [--size <cols>x<rows>] [--remain-on-exit] [--keep-on-failure] [--no-start] [--history-limit <lines>] [--attach [--read-only]] [--dry-run] [--json] [-- <program> [args...] | --command-line <line>]"
+        "summary": "Create a named Terminal running a program (resolved on its PATH, never through a shell; or one verbatim command line) in its own pseudo console and job; starts a Host on demand; --profile (or the default profile) starts a shell profile of config.toml",
+        "usage": "subak new [<name>] [--cwd <dir>] [--env NAME[=VALUE]]... [--unset-env NAME]... [--size <cols>x<rows>] [--remain-on-exit] [--keep-on-failure] [--no-start] [--history-limit <lines>] [--profile <name> | --no-profile] [--attach [--read-only]] [--dry-run] [--json] [-- <program> [args...] | --command-line <line>]"
       },
       {
         "dry_run": false,
@@ -292,13 +292,93 @@
         "requires_yes": false,
         "summary": "Validate a kim.hotkeys document and replace the user layer (keeps a backup)",
         "usage": "subak hotkeys import <file> [--dry-run] [--json]"
+      },
+      {
+        "dry_run": false,
+        "effect": "read",
+        "name": "config.show",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "Every setting of config.toml with its value, default and source, the shell profiles (secret-looking values as ***), problems and unknown keys",
+        "usage": "subak config show [--json]"
+      },
+      {
+        "dry_run": false,
+        "effect": "read",
+        "name": "config.check",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "Validate config.toml: every problem with its key and line; exits 0 (valid tells)",
+        "usage": "subak config check [--json]"
+      },
+      {
+        "dry_run": true,
+        "effect": "write",
+        "name": "config.set",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "Change one setting by editing its line in place (comments and unknown keys stay); an invalid value is refused and nothing is written",
+        "usage": "subak config set <key> <value> [--dry-run] [--json]"
+      },
+      {
+        "dry_run": true,
+        "effect": "destructive",
+        "name": "config.reset",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": true,
+        "summary": "Return settings to their defaults; --all keeps a backup and also replaces an invalid file",
+        "usage": "subak config reset (<key> | <section> | --all [--yes]) [--dry-run] [--json]"
+      },
+      {
+        "dry_run": false,
+        "effect": "read",
+        "name": "config.export",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "Print config.toml (or the defaults) with every secret-looking value replaced by ***",
+        "usage": "subak config export [--json]"
+      },
+      {
+        "dry_run": true,
+        "effect": "write",
+        "name": "config.import",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "Validate a settings file and replace config.toml with it (keeps a backup); secrets are refused (secret_in_config)",
+        "usage": "subak config import <file> [--dry-run] [--json]"
+      },
+      {
+        "dry_run": false,
+        "effect": "read",
+        "name": "profile.list",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "The shell profiles of config.toml, secret-looking values as ***",
+        "usage": "subak profile list [--json]"
+      },
+      {
+        "dry_run": false,
+        "effect": "read",
+        "name": "profile.show",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "One shell profile (names ignore case)",
+        "usage": "subak profile show <name> [--json]"
       }
     ],
     "implementation": "implemented",
     "json_schema_version": 1,
     "schema": "kim.capabilities",
     "schema_version": 1,
-    "summary": "Pre-alpha: per-user Host with IPC v1, named Terminals (new, ls, attach, detach, rename, stop, kill, rm, capture, history), the tabbed window subak-gui and its hotkeys; no splits or recovery yet",
+    "summary": "Pre-alpha: per-user Host with IPC v1, named Terminals (new, ls, attach, rename, kill, capture…), the tabbed window subak-gui, its hotkeys, settings and shell profiles; no splits or recovery yet",
     "tool": "subak",
     "version": "0.0.1"
   },

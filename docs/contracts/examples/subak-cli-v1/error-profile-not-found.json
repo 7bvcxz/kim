@@ -1,0 +1,14 @@
+{
+  "command": "profile.show",
+  "error": {
+    "code": "profile_not_found",
+    "details": [
+      "config.toml line 22: profile `dev`: it sets `GITHUB_TOKEN`, which looks secret; secrets do not belong in config.toml (shown as ***): let the program read them from your environment instead"
+    ],
+    "exit_code": 3,
+    "hint": "profiles: PowerShell, dev",
+    "message": "no profile is named `nope`"
+  },
+  "ok": false,
+  "schema_version": 1
+}

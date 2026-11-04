@@ -1,0 +1,65 @@
+{
+  "schema": "ddalgak.rules",
+  "schema_version": 1,
+  "hotkey_contract": 1,
+  "active_profile": "default",
+  "profiles": [
+    {
+      "id": "default",
+      "title": "Default",
+      "default_mode": "base",
+      "modes": [
+        {
+          "id": "base",
+          "title": "Base"
+        }
+      ],
+      "rules": [
+        {
+          "id": "btw",
+          "title": "btw",
+          "enabled": true,
+          "trigger": {
+            "hotstring": {
+              "abbreviation": "btw"
+            }
+          },
+          "steps": [
+            {
+              "type": "type_text",
+              "text": "by the way"
+            }
+          ],
+          "consent": {
+            "input-injection": {
+              "granted_at": "2026-11-04T09:00:00Z",
+              "via": "gui"
+            }
+          }
+        },
+        {
+          "id": "btw-upper",
+          "title": "btw-upper",
+          "enabled": true,
+          "trigger": {
+            "hotstring": {
+              "abbreviation": "BTW"
+            }
+          },
+          "steps": [
+            {
+              "type": "type_text",
+              "text": "BY THE WAY"
+            }
+          ],
+          "consent": {
+            "input-injection": {
+              "granted_at": "2026-11-04T09:00:00Z",
+              "via": "gui"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

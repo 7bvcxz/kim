@@ -218,7 +218,7 @@ fn list(a: &Args, files: &Files, ctx: &Context) -> Outcome {
             "profile": s.profile,
             "position": s.position,
             "enabled": e.enabled().unwrap_or(false),
-            "trigger": r.map(|r| r.trigger.keys.clone()),
+            "trigger": r.map(|r| r.trigger.display()),
             "on": r.map(|r| r.trigger.on().as_str()),
             "modes": r.and_then(|r| r.modes.clone()),
             "priority": r.map_or(0, Rule::priority),
@@ -266,6 +266,21 @@ fn show(a: &Args, files: &Files, ctx: &Context) -> Outcome {
         .into_iter()
         .find(|s| s.profile == doc.profiles[pi].id && s.position == ri)
         .expect("listed");
+    // Snippet text is personal: shown only when asked for (--show-text), otherwise replaced by
+    // its counts, so scripts and agents listing rules never receive it (DDALGAK-SEC-011).
+    let mut rule = doc.profiles[pi].rules[ri].to_value();
+    let show_text = a.has("--show-text");
+    let mut redacted = 0;
+    if !show_text && let Some(steps) = rule["steps"].as_array_mut() {
+        for s in steps.iter_mut().filter(|s| s["type"] == "type_text") {
+            if let Some(t) = s["text"].as_str() {
+                let vars = s["variables"] == true;
+                let method = s["method"].as_str().unwrap_or("unicode").to_string();
+                s["text"] = json!({ "redacted": true, "preview": ddalgak::text::preview(t, vars, &method) });
+                redacted += 1;
+            }
+        }
+    }
     let data = json!({
         "source": src,
         "revision": l.revision(),
@@ -273,7 +288,8 @@ fn show(a: &Args, files: &Files, ctx: &Context) -> Outcome {
         "position": ri,
         "state": state.state,
         "code": state.code,
-        "rule": doc.profiles[pi].rules[ri].to_value(),
+        "text_redacted": redacted > 0,
+        "rule": rule,
         "problems": rule_problems(&l, std::slice::from_ref(id)).iter().map(|p| p.to_json()).collect::<Vec<_>>(),
     });
     Ok((data, Vec::new()))
@@ -329,7 +345,17 @@ fn inputs(a: &Args) -> Result<StepInputs, CliError> {
         tap_ms: num(a, "--tap-ms")?,
         keys: a.get("--keys").map(str::to_string),
         step_delay_ms: num(a, "--step-delay-ms")?,
-        text: a.get("--text").map(str::to_string),
+        text: a
+            .get("--text")
+            .map(|t| {
+                if a.has("--escapes") {
+                    ddalgak::text::unescape(t).map_err(CliError::usage)
+                } else {
+                    Ok(t.to_string())
+                }
+            })
+            .transpose()?,
+        variables: a.has("--variables"),
         method: a.get("--method").map(str::to_string),
         key_delay_ms: num(a, "--key-delay-ms")?,
         path: a.get("--path").map(str::to_string),
@@ -419,9 +445,18 @@ fn canonical(keys: &str) -> Result<String, CliError> {
 }
 
 /// A short default title: `F13: engine pause`; remaps and blocks get the editor's summary
-/// sentence ("CapsLock acts as Left Ctrl; a quick tap is Escape").
+/// sentence ("CapsLock acts as Left Ctrl; a quick tap is Escape"); typed text only its counts
+/// ("Ctrl+Shift+F2: types 13 characters on 2 lines"), never the text.
 fn default_title(keys: &str, steps: &[Action]) -> String {
     let what = match steps.first() {
+        Some(Action::TypeText(t)) => {
+            let method = t.method.map_or("unicode", |m| m.as_str());
+            let mut s = ddalgak::text::summary(&t.text, t.variables == Some(true), method);
+            if let Some(first) = s.get(..1) {
+                s = first.to_lowercase() + &s[1..];
+            }
+            s
+        }
         Some(Action::Engine(e)) => format!("engine {}", e.op.as_str()),
         Some(Action::Remap(r)) if steps.len() == 1 => {
             let t = ddalgak::remap::summary(keys, &r.to, r.tap.as_deref(), false);
@@ -453,13 +488,28 @@ fn new_rule(a: &Args) -> Result<NewRule, CliError> {
         }
         base = v;
     }
-    let keys = match a.get("--trigger") {
-        Some(k) => canonical(k)?,
-        None => base["trigger"]["keys"]
+    let hotstring = match (a.get("--trigger"), a.get("--hotstring")) {
+        (Some(_), Some(_)) => {
+            return Err(CliError::usage(
+                "use --trigger <keys> or --hotstring <abbreviation>, not both",
+            ));
+        }
+        (None, Some(h)) => Some(h.to_string()),
+        (None, None) => base["trigger"]["hotstring"]["abbreviation"]
+            .as_str()
+            .map(str::to_string),
+        (Some(_), None) => None,
+    };
+    let keys = match (a.get("--trigger"), &hotstring) {
+        (Some(k), _) => canonical(k)?,
+        (None, Some(_)) => String::new(),
+        (None, None) => base["trigger"]["keys"]
             .as_str()
             .map(canonical)
             .transpose()?
-            .ok_or_else(|| CliError::usage("`rule add` needs --trigger <keys>"))?,
+            .ok_or_else(|| {
+                CliError::usage("`rule add` needs --trigger <keys> or --hotstring <abbreviation>")
+            })?,
     };
     let steps = match steps(a)? {
         Some(s) => s,
@@ -475,16 +525,30 @@ fn new_rule(a: &Args) -> Result<NewRule, CliError> {
     };
     let mut v = base;
     v["id"] = json!("placeholder");
+    let shown = match &hotstring {
+        Some(h) => format!("\"{h}\" (hotstring)"),
+        None => keys.clone(),
+    };
     if v.get("title").is_none() {
-        v["title"] = json!(default_title(&keys, &steps));
+        v["title"] = json!(default_title(&shown, &steps));
     }
     if v.get("enabled").is_none() {
         v["enabled"] = json!(true);
     }
-    if v["trigger"].is_object() {
-        v["trigger"]["keys"] = json!(keys);
-    } else {
-        v["trigger"] = json!({ "keys": keys });
+    if !v["trigger"].is_object() {
+        v["trigger"] = json!({});
+    }
+    match &hotstring {
+        Some(h) => {
+            if let Some(t) = v["trigger"].as_object_mut() {
+                t.remove("keys");
+            }
+            if !v["trigger"]["hotstring"].is_object() {
+                v["trigger"]["hotstring"] = json!({});
+            }
+            v["trigger"]["hotstring"]["abbreviation"] = json!(h);
+        }
+        None => v["trigger"]["keys"] = json!(keys),
     }
     v["steps"] = serde_json::to_value(&steps).unwrap_or_default();
     let mut rule: Rule = serde_json::from_value(v)
@@ -508,8 +572,64 @@ fn new_rule(a: &Args) -> Result<NewRule, CliError> {
     })
 }
 
+const HOTSTRING_FLAGS: [&str; 6] = [
+    "--case",
+    "--inside-words",
+    "--immediate",
+    "--end-chars",
+    "--omit-end",
+    "--keep-abbreviation",
+];
+
+/// The hotstring options given as flags, as a JSON object (`--case`, `--immediate`, …).
+fn hotstring_options(a: &Args) -> Result<Map<String, Value>, CliError> {
+    let mut o = Map::new();
+    if let Some(c) = a.get("--case") {
+        if !["conform", "insensitive", "sensitive"].contains(&c) {
+            return Err(CliError::usage(
+                "--case takes conform, insensitive or sensitive",
+            ));
+        }
+        o.insert("case".into(), json!(c));
+    }
+    for (flag, field, value) in [
+        ("--inside-words", "inside_words", true),
+        ("--immediate", "immediate", true),
+        ("--omit-end", "omit_end", true),
+        ("--keep-abbreviation", "erase", false),
+    ] {
+        if a.has(flag) {
+            o.insert(field.into(), json!(value));
+        }
+    }
+    if let Some(e) = a.get("--end-chars") {
+        let e = if a.has("--escapes") {
+            ddalgak::text::unescape(e).map_err(CliError::usage)?
+        } else {
+            e.to_string()
+        };
+        o.insert("end_chars".into(), json!(e));
+    }
+    Ok(o)
+}
+
 /// The rule fields given as flags (`--title`, `--on`, `--mode`, …).
 fn apply_fields(a: &Args, rule: &mut Rule) -> Result<(), CliError> {
+    let hs = hotstring_options(a)?;
+    if !hs.is_empty() {
+        let Some(h) = rule.trigger.hotstring.as_mut() else {
+            return Err(CliError::usage(format!(
+                "{} apply to hotstrings only (--hotstring <abbreviation>)",
+                HOTSTRING_FLAGS.join(", ")
+            )));
+        };
+        let mut v = serde_json::to_value(&*h).unwrap_or_default();
+        for (k, x) in hs {
+            v[k] = x;
+        }
+        *h = serde_json::from_value(v)
+            .map_err(|e| CliError::new(Code::RuleInvalid, format!("not a hotstring: {e}")))?;
+    }
     if let Some(t) = a.get("--title") {
         rule.title = t.to_string();
     }
@@ -556,8 +676,25 @@ fn edit_patch(a: &Args) -> Result<Value, CliError> {
             if d.is_empty() { Value::Null } else { json!(d) },
         );
     }
+    if a.get("--trigger").is_some() && a.get("--hotstring").is_some() {
+        return Err(CliError::usage(
+            "use --trigger <keys> or --hotstring <abbreviation>, not both",
+        ));
+    }
     if let Some(k) = a.get("--trigger") {
         trigger.insert("keys".into(), json!(canonical(k)?));
+        trigger.insert("hotstring".into(), Value::Null);
+    }
+    let hs = hotstring_options(a)?;
+    if let Some(h) = a.get("--hotstring") {
+        let mut o = hs;
+        o.insert("abbreviation".into(), json!(h));
+        trigger.insert("hotstring".into(), Value::Object(o));
+        for k in ["keys", "on", "hold_ms", "repeat", "pass_through"] {
+            trigger.insert(k.into(), Value::Null);
+        }
+    } else if !hs.is_empty() {
+        trigger.insert("hotstring".into(), Value::Object(hs));
     }
     if let Some(on) = enum_flag(a, "--on", ON)? {
         trigger.insert("on".into(), json!(on.as_str()));

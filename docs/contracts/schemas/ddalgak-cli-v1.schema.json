@@ -241,7 +241,7 @@
           "profile": { "type": "string" },
           "mode": { "type": "string" },
           "outcome": {
-            "enum": ["ok", "skipped_paused", "skipped_password_field", "skipped_secure_desktop", "skipped_elevated_target", "skipped_ime_composition", "skipped_injected_input", "busy", "rate_limited", "injection_failed", "cancelled", "timeout"]
+            "enum": ["ok", "skipped_paused", "skipped_password_field", "skipped_secure_desktop", "skipped_elevated_target", "skipped_ime_composition", "skipped_injected_input", "skipped_disabled_field", "busy", "rate_limited", "injection_failed", "focus_changed", "clipboard_busy", "clipboard_not_restorable", "clipboard_restore_failed", "cancelled", "timeout"]
           }
         }
       }
@@ -721,7 +721,8 @@
                 "position": { "$ref": "#/$defs/count" },
                 "state": { "$ref": "#/$defs/rule_state" },
                 "code": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/inactive_code" }] },
-                "rule": { "description": "The rule as stored (ddalgak-rules-v1 `rule`, unknown fields included).", "type": "object", "required": ["id"] },
+                "text_redacted": { "description": "Step 69: the text of each type_text step was replaced by {\"redacted\": true, \"preview\": <counts>} (the default; `--show-text` shows it).", "type": "boolean" },
+                "rule": { "description": "The rule as stored (ddalgak-rules-v1 `rule`, unknown fields included), with snippet text redacted unless `--show-text` was given.", "type": "object", "required": ["id"] },
                 "problems": { "type": "array", "items": { "$ref": "#/$defs/problem" } }
               }
             }

@@ -58,8 +58,8 @@
       "inactive": [
         {
           "code": "step_unsupported",
-          "reason": "`send_keys` steps are not implemented in this version yet (Step 69)",
-          "rule": "send-later"
+          "reason": "`mouse_scroll` steps are not implemented in this version yet (Step 71)",
+          "rule": "scroll-later"
         }
       ],
       "last_reload": null,

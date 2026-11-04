@@ -249,10 +249,15 @@ impl Rule {
     }
 }
 
-/// `trigger` (§3).
+/// `trigger` (§3): keys, or (Step 69) a typed abbreviation.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Trigger {
-    pub keys: String,
+    /// The keys (§3.1); absent for a hotstring trigger.
+    #[serde(default, skip_serializing_if = "none")]
+    pub keys: Option<String>,
+    /// A typed abbreviation (§3.4, Step 69); absent for a keys trigger.
+    #[serde(default, skip_serializing_if = "none")]
+    pub hotstring: Option<Hotstring>,
     #[serde(default, skip_serializing_if = "none")]
     pub on: Option<TriggerOn>,
     #[serde(default, skip_serializing_if = "none")]
@@ -270,13 +275,37 @@ pub struct Trigger {
 impl Trigger {
     pub fn keys(keys: impl Into<String>) -> Trigger {
         Trigger {
-            keys: keys.into(),
+            keys: Some(keys.into()),
+            hotstring: None,
             on: None,
             hold_ms: None,
             repeat: None,
             pass_through: None,
             injected: None,
             extra: Map::new(),
+        }
+    }
+
+    /// A hotstring trigger with the default options.
+    pub fn hotstring(abbreviation: impl Into<String>) -> Trigger {
+        Trigger {
+            hotstring: Some(Hotstring::new(abbreviation)),
+            keys: None,
+            ..Trigger::keys("")
+        }
+    }
+
+    /// The keys as text; empty for a hotstring trigger.
+    pub fn keys_text(&self) -> &str {
+        self.keys.as_deref().unwrap_or_default()
+    }
+
+    /// What the rule list and messages show: the keys, or `"btw" (hotstring)`.
+    pub fn display(&self) -> String {
+        match (&self.keys, &self.hotstring) {
+            (Some(k), _) => k.clone(),
+            (None, Some(h)) => format!("\"{}\" (hotstring)", h.abbreviation),
+            (None, None) => String::new(),
         }
     }
 
@@ -287,7 +316,7 @@ impl Trigger {
     /// What makes two triggers claim the same input: keys, `on` and the hold time.
     pub fn claim(&self) -> (String, TriggerOn, u32) {
         (
-            self.keys.clone(),
+            self.display(),
             self.on(),
             if self.on() == TriggerOn::Hold {
                 self.hold_ms.unwrap_or(500)
@@ -295,6 +324,41 @@ impl Trigger {
                 500
             },
         )
+    }
+}
+
+/// `trigger.hotstring` (§3.4, Step 69).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Hotstring {
+    pub abbreviation: String,
+    #[serde(default, skip_serializing_if = "none")]
+    pub case: Option<HotstringCase>,
+    #[serde(default, skip_serializing_if = "none")]
+    pub inside_words: Option<bool>,
+    #[serde(default, skip_serializing_if = "none")]
+    pub immediate: Option<bool>,
+    #[serde(default, skip_serializing_if = "none")]
+    pub end_chars: Option<String>,
+    #[serde(default, skip_serializing_if = "none")]
+    pub omit_end: Option<bool>,
+    #[serde(default, skip_serializing_if = "none")]
+    pub erase: Option<bool>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+impl Hotstring {
+    pub fn new(abbreviation: impl Into<String>) -> Hotstring {
+        Hotstring {
+            abbreviation: abbreviation.into(),
+            case: None,
+            inside_words: None,
+            immediate: None,
+            end_chars: None,
+            omit_end: None,
+            erase: None,
+            extra: Map::new(),
+        }
     }
 }
 
@@ -490,6 +554,9 @@ step_struct!(
         method: Option<TextMethod>,
         #[serde(default, skip_serializing_if = "none")]
         key_delay_ms: Option<u32>,
+        /// `text` is a template with the date and time variables and `{cursor}` (Step 69).
+        #[serde(default, skip_serializing_if = "none")]
+        variables: Option<bool>,
     }
 );
 step_struct!(
@@ -606,6 +673,11 @@ macro_rules! snake_enum {
 }
 
 snake_enum!(TextMethod { Unicode = "unicode", Paste = "paste" });
+snake_enum!(HotstringCase {
+    Conform = "conform",
+    Insensitive = "insensitive",
+    Sensitive = "sensitive",
+});
 snake_enum!(WindowState { Normal = "normal", Maximized = "maximized", Minimized = "minimized" });
 snake_enum!(IfRunning { StartNew = "start_new", Activate = "activate" });
 snake_enum!(MoveMode { Relative = "relative", Absolute = "absolute" });

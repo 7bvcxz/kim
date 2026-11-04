@@ -22,7 +22,8 @@ use std::io::Write;
 use std::process::ExitCode;
 
 const HELP: &str = "\
-ddalgak — Ddalgak automation engine (pre-alpha: engine core, rule store, remaps; Steps 66–68)
+ddalgak — Ddalgak automation engine (pre-alpha: engine core, rule store, remaps, typing and
+hotstrings; Steps 66–69)
 
 USAGE:
     ddalgak [--help | --version]
@@ -75,21 +76,25 @@ COMMANDS:
 
 RULES (rules.json; these commands work without the app):
     rule list     Every rule with its trigger and state: active, disabled, inactive (with a
-                  code), other_mode or other_profile. rule show prints one rule in full.
+                  code), other_mode or other_profile. rule show prints one rule in full; the
+                  text of a type_text step only with --show-text (otherwise its counts).
     rule check    Validate everything: the schema, IDs, mode and profile references, recursive
                   outputs, duplicate triggers, rules that can never fire (shadowed triggers,
                   hidden sequences), stale launch consent, collisions with Ddalgak's own
                   shortcuts, missing program files. Each problem comes with offers (another
                   free chord, disable, --allow, keep); offers are never applied by themselves.
-    rule add      A new rule with a new ID (r-<uuid>, or --id). Actions: --action engine --op
+    rule add      A new rule with a new ID (r-<uuid>, or --id), triggered by --trigger <keys>
+                  or --hotstring <abbreviation>. Actions: --action engine --op
                   pause|resume|toggle_pause|disable; remap --to <key> [--tap <key>]; block;
-                  send_keys --keys <seq>; type_text --text <t> [--method paste]; open_program
-                  --path <exe> [--arg <a>]...; open_url --url <url>; mode --op <op>
-                  [--target-mode <m>]...; delay --ms <n>; any step as --step '<json>'.
+                  send_keys --keys <seq> [--step-delay-ms <n>]; type_text --text <t>
+                  [--escapes] [--variables] [--method paste] [--key-delay-ms <n>];
+                  open_program --path <exe> [--arg <a>]...; open_url --url <url>; mode --op
+                  <op> [--target-mode <m>]...; delay --ms <n>; any step as --step '<json>'.
                   Rule options: --title, --description, --on press|release|hold, --hold-ms,
                   --repeat, --pass-through, --accept-injected, --mode <m>..., --priority,
-                  --on-error stop|continue. Engine, remap and block rules run; the others
-                  stay inactive (step_unsupported) until their Step.
+                  --on-error stop|continue. Engine, remap, block, send_keys and type_text
+                  rules run (a typing step alone); the others stay inactive
+                  (step_unsupported) until their Step.
     remaps        A key, chord or mouse button acts as another key, chord, modifier or mouse
                   button for exactly as long as it is held (keys: docs/HOTKEY_CONTRACT.md §5;
                   code:KeyJ is the key at that position on every layout; MouseLeft, MouseRight,
@@ -104,6 +109,29 @@ RULES (rules.json; these commands work without the app):
                     ddalgak rule add --trigger MouseX1 --action remap --to Alt+Left
                     ddalgak rule add --trigger F14 --action remap --to F16 --pass-through
                     ddalgak rule add --trigger Insert --action block
+    typing        type_text types its text exactly as written (Hangul, emoji, new lines, tabs)
+                  as Unicode key events, or pastes it (--method paste: the clipboard is copied
+                  first, restored after 500 ms, and the paste is refused when its content
+                  cannot be copied). --escapes reads \\n, \\t, \\\\ and \\u{AC00} in --text.
+                  --variables fills in {date}, {time}, {datetime}, {year}, {month}, {day},
+                  {hour}, {minute}, {second} and {cursor} (where the cursor ends up); no
+                  environment or clipboard variables. Typing stops when focus moves to another
+                  window (focus_changed) and never types into password fields, elevated or
+                  read-only windows; pause, stop and the emergency chord cancel it. The text
+                  never appears in status, activity, messages or JSON output.
+    hotstrings    --hotstring btw: typing the abbreviation and an end character (space, Tab,
+                  Enter or one of - ( ) [ ] { } ' : ; \" / \\ , . ? !) erases it and types the
+                  replacement. Options: --case conform|insensitive|sensitive, --inside-words,
+                  --immediate (no end character), --end-chars <chars>, --omit-end,
+                  --keep-abbreviation. Never in password fields, during an IME composition or
+                  in Hangul mode; Ddalgak keeps only the last few characters (the longest
+                  abbreviation plus one) and forgets them on every focus change. Examples
+                  (they also need --allow input-injection):
+                    ddalgak rule add --hotstring btw --action type_text --text 'by the way'
+                    ddalgak rule add --hotstring ';dd' --immediate --action type_text
+                      --text '{date}' --variables
+                    ddalgak rule add --trigger Ctrl+Shift+F2 --action type_text --escapes
+                      --text '감사합니다.\\n김민수 드림'
     rule edit     Change fields with the same options, or --patch '<json merge patch>'. IDs
                   never change. Changed launch targets need a fresh --allow launch-programs.
     rule delete   Remove rules (asks, or needs --yes). duplicate makes a disabled copy.

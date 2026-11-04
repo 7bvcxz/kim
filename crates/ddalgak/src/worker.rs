@@ -18,9 +18,18 @@
 //! correctly even after a reload changed the rules; only the activity entry needs the current
 //! rules. A repeat is sent only for an output the ledger still holds, so a late repeat can never
 //! press again what a release-all let go.
+//!
+//! **Typing runs** (Step 69, [`crate::run`]): `type_text` and `send_keys` rules and hotstrings run
+//! one at a time as a plan of pieces, carried out between the worker's other messages (one
+//! `SendInput` call per piece, waits as timeouts), so remaps keep working while text is typed.
+//! A trigger while a run is in progress is dropped with `busy` (a hotstring's consumed key is
+//! given back). Pause, stop, session lock, a reload, the emergency chord and the worker's end
+//! cancel the run at its next piece (`cancelled`), after restoring the clipboard and the
+//! modifiers. A run has a timeout only while it waits, so an idle engine still has no timer.
 
 use crate::core::{RemapOp, Signal};
 use crate::inject::{Backend, Injector, OutCode, OutEvent};
+use crate::run::{self, Env, HotstringFire, Next, Run, RunShared};
 use crate::stats::Stats;
 use crate::table::{Action, Binding, EngineOp};
 use crate::vk::ModKey;
@@ -125,6 +134,7 @@ pub enum Msg {
 pub struct Queue {
     tx: SyncSender<Msg>,
     stats: Arc<Stats>,
+    runs: Arc<RunShared>,
 }
 
 impl Queue {
@@ -142,6 +152,11 @@ impl Queue {
     pub fn send(&self, msg: Msg) {
         let _ = self.tx.send(msg);
     }
+
+    /// What the hook's core shares with the typing runs (modifier state, key count).
+    pub fn runs(&self) -> Arc<RunShared> {
+        Arc::clone(&self.runs)
+    }
 }
 
 /// The running worker; stops and joins on drop.
@@ -157,25 +172,37 @@ type Sink = Box<dyn Fn(Control) + Send>;
 impl Worker {
     /// Starts the worker. `control` receives engine-control requests (and must wake the
     /// controller); `activity` is shared with status reporting; `backend` injects the output
-    /// (`SendInput` in the app, a recorder in tests).
+    /// (`SendInput` in the app, a recorder in tests); `env` is what typing runs ask the platform
+    /// (the focused target, the clipboard, the local time).
     pub fn start(
         stats: Arc<Stats>,
         control: Sink,
         activity: Arc<Mutex<Activity>>,
         backend: Box<dyn Backend>,
+        env: Env,
     ) -> Worker {
         let (tx, rx) = sync_channel::<Msg>(QUEUE);
         let act = Arc::clone(&activity);
         let st = Arc::clone(&stats);
+        let runs = Arc::new(RunShared::default());
+        let shared = Arc::clone(&runs);
         let join = std::thread::Builder::new()
             .name("ddalgak-worker".into())
             .spawn(move || {
                 let mut inj = Injector::new(backend);
-                run(&rx, &control, &act, &st, &mut inj);
+                let mut env = env;
+                let mut ctx = Ctx {
+                    inj: &mut inj,
+                    env: &mut env,
+                    shared: &shared,
+                    activity: &act,
+                    active: None,
+                };
+                run(&rx, &control, &st, &mut ctx);
             })
             .expect("spawn the worker thread");
         Worker {
-            queue: Queue { tx, stats },
+            queue: Queue { tx, stats, runs },
             join: Some(join),
             activity,
         }
@@ -202,6 +229,98 @@ struct Hold {
 }
 
 type Inj = Injector<Box<dyn Backend>>;
+
+/// The typing run in progress and when its next piece is due.
+struct Active {
+    run: Run,
+    due: Instant,
+}
+
+/// What the loop's typing runs work with.
+struct Ctx<'a> {
+    inj: &'a mut Inj,
+    env: &'a mut Env,
+    shared: &'a RunShared,
+    activity: &'a Mutex<Activity>,
+    active: Option<Active>,
+}
+
+impl Ctx<'_> {
+    fn push(&self, run: &Run, outcome: &str) {
+        if let Ok(mut a) = self.activity.lock() {
+            a.push(Entry {
+                at: crate::time::now_rfc3339(),
+                rule: run.rule.clone(),
+                profile: run.profile.clone(),
+                mode: run.mode.clone(),
+                outcome: outcome.to_string(),
+            });
+        }
+    }
+
+    /// Starts a typing run for a fired rule, or drops the trigger with `busy`.
+    fn start(&mut self, r: &Rules, b: &Binding, hs: Option<HotstringFire>) {
+        if self.active.is_some() {
+            if let Ok(mut a) = self.activity.lock() {
+                a.push(Entry {
+                    at: crate::time::now_rfc3339(),
+                    rule: b.rule.clone(),
+                    profile: r.profile.clone(),
+                    mode: r.mode.clone(),
+                    outcome: "busy".into(),
+                });
+            }
+            if let Some(h) = &hs {
+                run::give_back(self.inj, h);
+            }
+            return;
+        }
+        let local = (self.env.clock)();
+        let pieces = match &b.action {
+            Action::Type(t) => run::plan_text(t, hs.as_ref(), &local),
+            Action::Keys(k) => run::plan_keys(k, hs.as_ref()),
+            _ => return,
+        };
+        let now = Instant::now();
+        let run = Run::new(
+            b.rule.clone(),
+            r.profile.clone(),
+            r.mode.clone(),
+            pieces,
+            hs,
+            now,
+        );
+        self.active = Some(Active { run, due: now });
+        self.step();
+    }
+
+    /// Carries out the run's next pieces when they are due.
+    fn step(&mut self) {
+        let Some(a) = self.active.as_mut() else {
+            return;
+        };
+        let now = Instant::now();
+        if a.due > now {
+            return;
+        }
+        match a.run.step(now, self.inj, self.env, self.shared) {
+            Next::At(t) => a.due = t,
+            Next::Done(code) => {
+                if let Some(a) = self.active.take() {
+                    self.push(&a.run, code);
+                }
+            }
+        }
+    }
+
+    /// Ends the run in progress (pause, stop, emergency, reload).
+    fn cancel(&mut self) {
+        if let Some(mut a) = self.active.take() {
+            let code = a.run.cancel(self.inj, self.env, self.shared);
+            self.push(&a.run, code);
+        }
+    }
+}
 
 fn mod_events(bits: u8, up: bool, tracked: bool, out: &mut Vec<(OutEvent, bool)>) {
     let mut keys: Vec<ModKey> = ModKey::ALL
@@ -269,23 +388,28 @@ pub fn execute(inj: &mut Injector<impl Backend>, op: RemapOp) -> bool {
     inj.send_mixed(&ev)
 }
 
-fn run(
-    rx: &Receiver<Msg>,
-    control: &Sink,
-    activity: &Mutex<Activity>,
-    stats: &Stats,
-    inj: &mut Inj,
-) {
+#[allow(clippy::too_many_lines)]
+fn run(rx: &Receiver<Msg>, control: &Sink, stats: &Stats, ctx: &mut Ctx<'_>) {
     let mut rules: Option<Rules> = None;
     let mut holds: Vec<Hold> = Vec::new();
+    let activity = ctx.activity;
     loop {
-        let msg = match holds.iter().map(|h| h.due).min() {
+        let next = holds
+            .iter()
+            .map(|h| h.due)
+            .chain(ctx.active.as_ref().map(|a| a.due))
+            .min();
+        let msg = match next {
             None => rx.recv().map_err(|_| RecvTimeoutError::Disconnected),
             Some(due) => rx.recv_timeout(due.saturating_duration_since(Instant::now())),
         };
         stats.worker_wakeups.fetch_add(1, Ordering::Relaxed);
+        let inj = &mut *ctx.inj;
         match msg {
-            Err(RecvTimeoutError::Disconnected) | Ok(Msg::Stop) => break,
+            Err(RecvTimeoutError::Disconnected) | Ok(Msg::Stop) => {
+                ctx.cancel();
+                break;
+            }
             Err(RecvTimeoutError::Timeout) => {
                 let now = Instant::now();
                 let due: Vec<Hold> = {
@@ -295,22 +419,36 @@ fn run(
                     due
                 };
                 for h in due {
-                    fire(rules.as_ref(), h.generation, h.binding, control, activity);
+                    if fire(rules.as_ref(), h.generation, h.binding, control, activity)
+                        && let Some((r, b)) = current(rules.as_ref(), h.generation, h.binding)
+                    {
+                        ctx.start(r, b, None);
+                    }
                 }
             }
             Ok(Msg::Rules(r)) => {
                 holds.clear();
+                ctx.cancel();
                 rules = Some(r);
             }
             Ok(Msg::Cancel) => {
                 holds.clear();
-                inj.release_all();
+                ctx.cancel();
+                ctx.inj.release_all();
             }
             Ok(Msg::Signal { generation, signal }) => match signal {
                 Signal::Emergency => {
                     holds.clear();
-                    inj.release_all();
+                    ctx.cancel();
+                    ctx.inj.release_all();
                     control(Control::Emergency);
+                }
+                Signal::Hotstring { binding, fire } => {
+                    match current(rules.as_ref(), generation, binding) {
+                        Some((r, b)) if b.action.is_run() => ctx.start(r, b, Some(fire)),
+                        // A reload came in between: nothing runs, the key goes back.
+                        _ => run::give_back(inj, &fire),
+                    }
                 }
                 Signal::Remap { binding, op } => {
                     let ok = execute(inj, op);
@@ -335,7 +473,11 @@ fn run(
                     inj.send_mixed(&ev);
                 }
                 Signal::Fire { binding, .. } => {
-                    fire(rules.as_ref(), generation, binding, control, activity);
+                    if fire(rules.as_ref(), generation, binding, control, activity)
+                        && let Some((r, b)) = current(rules.as_ref(), generation, binding)
+                    {
+                        ctx.start(r, b, None);
+                    }
                 }
                 Signal::Skipped { binding, code } => {
                     record(rules.as_ref(), generation, binding, code.as_str(), activity);
@@ -359,6 +501,7 @@ fn run(
                 }
             },
         }
+        ctx.step();
     }
 }
 
@@ -389,15 +532,16 @@ fn record(
 }
 
 /// Runs a fired rule. Signals of an older table generation are dropped (a reload happened).
+/// Returns `true` for a typing rule, which the caller starts as a run.
 fn fire(
     rules: Option<&Rules>,
     generation: u32,
     binding: u16,
     control: &Sink,
     activity: &Mutex<Activity>,
-) {
+) -> bool {
     let Some((_, b)) = current(rules, generation, binding) else {
-        return;
+        return false;
     };
     match &b.action {
         Action::Engine(ops) => {
@@ -411,9 +555,12 @@ fn fire(
         // The key was consumed; nothing else happens (§5.2).
         Action::Block => {}
         // Remaps run through `Signal::Remap`; a fired remap does nothing more.
-        Action::Remap(_) => return,
+        Action::Remap(_) => return false,
+        // Typing runs record their own outcome when they end.
+        Action::Type(_) | Action::Keys(_) => return true,
     }
     record(rules, generation, binding, "ok", activity);
+    false
 }
 
 #[cfg(test)]
@@ -435,6 +582,7 @@ mod tests {
             widen: false,
             injects: false,
             action: Action::Engine(vec![op]),
+            hotstring: None,
         };
         Rules {
             generation,
@@ -458,6 +606,7 @@ mod tests {
             }),
             Arc::new(Mutex::new(Activity::default())),
             Box::new(Recorder::default()),
+            Env::inert(),
         );
         (w, rx, stats)
     }
@@ -580,6 +729,7 @@ mod tests {
         let q = Queue {
             tx,
             stats: Arc::clone(&stats),
+            runs: Arc::default(),
         };
         let t = Instant::now();
         for _ in 0..10 {
@@ -696,6 +846,7 @@ mod tests {
             Box::new(|_| {}),
             Arc::new(Mutex::new(Activity::default())),
             Box::new(SharedRecorder(Arc::clone(&log))),
+            Env::inert(),
         );
         (w, log)
     }
@@ -804,5 +955,228 @@ mod tests {
             [("f15-f16".to_string(), "ok".to_string())],
             "one entry per press"
         );
+    }
+
+    // ---- Step 69: typing runs on the worker (fake backend, fake probe, no clipboard).
+
+    use crate::run::{HotstringFire, KeysSpec, TextSpec};
+    use crate::text::{self, CaseForm};
+
+    fn typing_rules(generation: u32, text: &str, key_delay_ms: u32) -> Rules {
+        let b = |id: &str, action| Binding {
+            rule: id.into(),
+            trigger: Trigger::parse("F13").unwrap(),
+            on: On::Press,
+            repeat: false,
+            pass_through: false,
+            injected: Injected::Ignore,
+            widen: false,
+            injects: true,
+            action,
+            hotstring: None,
+        };
+        Rules {
+            generation,
+            bindings: Arc::new(vec![
+                b(
+                    "sign",
+                    Action::Type(Arc::new(TextSpec {
+                        text: text.into(),
+                        paste: false,
+                        key_delay_ms,
+                        variables: false,
+                    })),
+                ),
+                b(
+                    "copy",
+                    Action::Keys(Arc::new(KeysSpec {
+                        chords: vec![crate::remap::Output::parse("Ctrl+C").unwrap()],
+                        step_delay_ms: 0,
+                    })),
+                ),
+            ]),
+            profile: "default".into(),
+            mode: "base".into(),
+        }
+    }
+
+    fn outcomes(w: &Worker) -> Vec<(String, String)> {
+        w.activity
+            .lock()
+            .unwrap()
+            .entries()
+            .map(|e| (e.rule.clone(), e.outcome.clone()))
+            .collect()
+    }
+
+    fn wait_outcomes(w: &Worker, n: usize) -> Vec<(String, String)> {
+        let t = Instant::now();
+        while outcomes(w).len() < n && t.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        outcomes(w)
+    }
+
+    fn fire(binding: u16) -> Signal {
+        Signal::Fire {
+            binding,
+            kind: FireKind::Press,
+        }
+    }
+
+    #[test]
+    fn a_typing_rule_types_exactly_its_text_and_records_only_its_outcome() {
+        let (w, log) = output_worker();
+        let q = w.queue();
+        q.send(Msg::Rules(typing_rules(1, "감사합니다 👍\n", 0)));
+        q.signal(1, fire(0));
+        assert_eq!(
+            wait_outcomes(&w, 1),
+            [("sign".to_string(), "ok".to_string())]
+        );
+        assert_eq!(*log.lock().unwrap(), text::events("감사합니다 👍\n"));
+        let j = w.activity.lock().unwrap().to_json(10).to_string();
+        assert!(!j.contains("감사"), "activity never holds the text: {j}");
+        // send_keys taps its chord.
+        q.signal(1, fire(1));
+        assert_eq!(
+            wait_outcomes(&w, 2)[1],
+            ("copy".to_string(), "ok".to_string())
+        );
+        let all = log.lock().unwrap().clone();
+        assert_eq!(
+            all[all.len() - 4..],
+            run::chord_events(&crate::remap::Output::parse("Ctrl+C").unwrap())[..]
+        );
+    }
+
+    fn hotstring_fire(typed: u32) -> HotstringFire {
+        HotstringFire {
+            erase: 3,
+            case: CaseForm::AsWritten,
+            key: OutCode::Exact {
+                vk: 0x20,
+                scan: 0x39,
+                ext: false,
+            },
+            mods: 0,
+            retype: true,
+            consumed: true,
+            typed,
+        }
+    }
+
+    #[test]
+    fn a_trigger_while_typing_is_busy_and_a_hotstring_gets_its_key_back() {
+        let (w, log) = output_worker();
+        let q = w.queue();
+        q.send(Msg::Rules(typing_rules(1, "abcdefgh", 30)));
+        q.signal(1, fire(0));
+        wait_for(&log, 2);
+        q.signal(1, fire(1)); // another typing rule
+        q.signal(
+            1,
+            Signal::Hotstring {
+                binding: 0,
+                fire: hotstring_fire(0),
+            },
+        );
+        let got = wait_outcomes(&w, 3);
+        assert_eq!(
+            got,
+            [
+                ("copy".to_string(), "busy".to_string()),
+                ("sign".to_string(), "busy".to_string()),
+                ("sign".to_string(), "ok".to_string()),
+            ]
+        );
+        let all = log.lock().unwrap().clone();
+        let key = OutCode::Exact {
+            vk: 0x20,
+            scan: 0x39,
+            ext: false,
+        };
+        let back = all.iter().position(|e| *e == OutEvent::down(key)).unwrap();
+        assert_eq!(all[back + 1], OutEvent::up(key), "given back unchanged");
+        let typed: Vec<OutEvent> = all.iter().filter(|e| e.code != key).copied().collect();
+        assert_eq!(
+            typed,
+            text::events("abcdefgh"),
+            "the run itself was not disturbed"
+        );
+    }
+
+    #[test]
+    fn pause_emergency_and_reload_cancel_a_run_at_its_next_piece() {
+        for how in ["pause", "emergency", "reload"] {
+            let (tx, rx) = channel();
+            let tx = Mutex::new(tx);
+            let log = Arc::new(Mutex::new(Vec::new()));
+            let w = Worker::start(
+                Arc::new(Stats::default()),
+                Box::new(move |c| {
+                    let _ = tx.lock().unwrap().send(c);
+                }),
+                Arc::new(Mutex::new(Activity::default())),
+                Box::new(SharedRecorder(Arc::clone(&log))),
+                Env::inert(),
+            );
+            let q = w.queue();
+            q.send(Msg::Rules(typing_rules(1, &"x".repeat(200), 20)));
+            q.signal(1, fire(0));
+            wait_for(&log, 6);
+            match how {
+                "pause" => q.send(Msg::Cancel),
+                "emergency" => q.signal(1, Signal::Emergency),
+                _ => q.send(Msg::Rules(typing_rules(2, "y", 0))),
+            }
+            assert_eq!(
+                wait_outcomes(&w, 1),
+                [("sign".to_string(), "cancelled".to_string())],
+                "{how}"
+            );
+            let n = log.lock().unwrap().len();
+            std::thread::sleep(Duration::from_millis(100));
+            assert_eq!(log.lock().unwrap().len(), n, "{how}: nothing more is typed");
+            assert!(n < 2 * 200, "{how}: stopped early ({n} events)");
+            if how == "emergency" {
+                assert_eq!(
+                    rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+                    Control::Emergency
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_hotstring_from_an_older_table_only_gets_its_key_back() {
+        let (w, log) = output_worker();
+        let q = w.queue();
+        q.send(Msg::Rules(typing_rules(2, "by the way", 0)));
+        q.signal(
+            1,
+            Signal::Hotstring {
+                binding: 0,
+                fire: hotstring_fire(0),
+            },
+        );
+        let got = wait_for(&log, 2);
+        assert_eq!(got.len(), 2);
+        assert!(outcomes(&w).is_empty(), "nothing ran");
+        // A current one erases, types and types the end key again.
+        q.signal(
+            2,
+            Signal::Hotstring {
+                binding: 0,
+                fire: hotstring_fire(0),
+            },
+        );
+        assert_eq!(wait_outcomes(&w, 1)[0].1, "ok");
+        let all = log.lock().unwrap().clone();
+        let bs = all
+            .iter()
+            .filter(|e| **e == OutEvent::down(OutCode::Vk(text::VK_BACK)))
+            .count();
+        assert_eq!(bs, 3);
     }
 }

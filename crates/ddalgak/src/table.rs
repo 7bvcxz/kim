@@ -9,10 +9,13 @@
 //! fixed-size records with virtual keys and scan codes, so the hook callback compares numbers and
 //! never allocates.
 
+use crate::hotstring;
 use crate::remap::Output;
+use crate::run::{KeysSpec, TextSpec};
 use crate::trigger::{TKey, Trigger};
 use crate::vk::{self, ModKey};
 use kim_hotkeys::keys::Mods;
+use std::sync::Arc;
 
 /// When a trigger fires (DDALGAK_RULE_MODEL §3.3).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -72,8 +75,8 @@ pub struct RemapSpec {
 }
 
 /// What a binding does when it fires. Step 66 runs engine-control rules, Step 68 remaps and
-/// blocks; the other action types arrive in Steps 69–72 and are inactive until then (never
-/// broader, §9).
+/// blocks, Step 69 typed text and sent keys; the other action types arrive in Steps 70–72 and are
+/// inactive until then (never broader, §9).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Action {
     Engine(Vec<EngineOp>),
@@ -82,6 +85,17 @@ pub enum Action {
     Remap(RemapSpec),
     /// The trigger is consumed and nothing happens (§5.2).
     Block,
+    /// Types a text (§5.4, Step 69): a run on the worker.
+    Type(Arc<TextSpec>),
+    /// Taps chords in order (§5.3, Step 69): a run on the worker.
+    Keys(Arc<KeysSpec>),
+}
+
+impl Action {
+    /// A typing run (`type_text`, `send_keys`).
+    pub fn is_run(&self) -> bool {
+        matches!(self, Action::Type(_) | Action::Keys(_))
+    }
 }
 
 /// One active rule as the engine sees it.
@@ -101,6 +115,9 @@ pub struct Binding {
     /// The rule injects input (skipped while an elevated window has focus).
     pub injects: bool,
     pub action: Action,
+    /// A hotstring trigger (Step 69): `trigger` is then [`Trigger::none`] and the core matches
+    /// typed characters.
+    pub hotstring: Option<Arc<hotstring::Spec>>,
 }
 
 impl Binding {
@@ -155,6 +172,10 @@ pub struct Table {
     pub(crate) bindings: Vec<Binding>,
     /// The compiled outputs of each remap binding (`None` for other bindings).
     pub(crate) remaps: Vec<Option<RemapSpec>>,
+    /// The hotstring bindings in precedence order, with their binding index.
+    pub(crate) hotstrings: Vec<(u16, Arc<hotstring::Spec>)>,
+    /// The longest active abbreviation (the bound of the core's buffer).
+    pub(crate) longest_hotstring: usize,
     /// Per-rule rate limit (`settings.max_runs_per_second`, 1–100).
     pub max_runs_per_second: u32,
 }
@@ -209,10 +230,25 @@ impl Table {
                 _ => None,
             })
             .collect();
+        let hotstrings: Vec<(u16, Arc<hotstring::Spec>)> = bindings
+            .iter()
+            .enumerate()
+            .filter_map(|(i, b)| {
+                let h = b.hotstring.clone()?;
+                Some((u16::try_from(i).ok()?, h))
+            })
+            .collect();
+        let longest_hotstring = hotstrings
+            .iter()
+            .map(|(_, h)| h.abbreviation.len())
+            .max()
+            .unwrap_or(0);
         Table {
             compiled,
             bindings,
             remaps,
+            hotstrings,
+            longest_hotstring,
             max_runs_per_second: max_runs_per_second.clamp(1, 100),
         }
     }
@@ -242,5 +278,11 @@ impl Table {
     /// installed (Step 68, ADR 0031; disclosed as the `mouse-hook` permission).
     pub fn has_mouse(&self) -> bool {
         self.bindings.iter().any(|b| b.trigger.mouse().is_some())
+    }
+
+    /// Whether a hotstring rule is active (only then does the core translate keys and keep its
+    /// bounded buffer).
+    pub fn has_hotstrings(&self) -> bool {
+        !self.hotstrings.is_empty()
     }
 }

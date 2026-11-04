@@ -1,6 +1,6 @@
 # Ddalgak and AutoHotkey v2: feature matrix
 
-Status: **current** (inventory) · **Matrix v2, 2026-11-04** (Step 68: remap rows) · Reference: AutoHotkey **v2.0.31**
+Status: **current** (inventory) · **Matrix v2, 2026-11-04** (Step 68: remap rows; Step 69: hotstring and sending rows) · Reference: AutoHotkey **v2.0.31**
 (the newest v2 entry of the official changelog, dated 2026-10-25) · Owner: mouv · Applies to:
 Ddalgak · Created in Step 65
 
@@ -99,15 +99,15 @@ Where a page did not state something, the row says so instead of filling the gap
 
 | # | AutoHotkey v2 behavior | Src | Ddalgak | Status | Step | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
-| 2.1 | Auto-replace `::btw::by the way` | HS | Hotstring triggers (a new trigger kind) with `type_text` | planned | 69 | — |
-| 2.2 | Options `*` (no end character), `?` (inside words), `C`/`C1` (case), `O` (omit end character), `B0` (no backspacing) | HS | Step 69 decides the set; word boundaries and case handling are required (`DDALGAK-FR-070`) | planned | 69 | — |
-| 2.3 | `R` raw and `T` text modes, `Kn` key delay, `SI`/`SP`/`SE` send modes | HS | Text is always typed as Unicode or pasted; `key_delay_ms` exists | partial | 69 | — |
+| 2.1 | Auto-replace `::btw::by the way` | HS | Hotstring triggers (`trigger.hotstring`, a new trigger kind) with `type_text` or `send_keys`: the abbreviation is erased and the replacement typed | supported | 69 | Step 69: core, worker and CLI tests (DDALGAK_ENGINE §12); real typing manual |
+| 2.2 | Options `*` (no end character), `?` (inside words), `C`/`C1` (case), `O` (omit end character), `B0` (no backspacing) | HS | `immediate`, `inside_words`, `case: sensitive`/`insensitive` (default `conform`), `omit_end`, `erase: false` (RULE_MODEL §3.4) | supported | 69 | Step 69: core, worker and CLI tests (DDALGAK_ENGINE §12); real typing manual |
+| 2.3 | `R` raw and `T` text modes, `Kn` key delay, `SI`/`SP`/`SE` send modes | HS | Text is always literal (no key syntax), typed as Unicode or pasted; `key_delay_ms`; only `SendInput` | partial | 69 | Step 69: core, worker and CLI tests (DDALGAK_ENGINE §12); real typing manual |
 | 2.4 | `X`: execute an expression instead of replacing | HS | No expressions; a hotstring can run any rule steps instead | not intended | — | — |
-| 2.5 | Configurable end characters (`#Hotstring EndChars`) | HS | Step 69 | planned | 69 | — |
-| 2.6 | Case conformity of the replacement | HS | Step 69 | planned | 69 | — |
-| 2.7 | Recognizer resets on window change, navigation keys and (by default) mouse clicks | HS | Same resets; plus never in password fields and no history beyond the current abbreviation buffer | planned | 69 | — |
-| 2.8 | Input method editors: the InputHook documentation states that IMEs are not supported | IH | Korean IME is a first-class test target; nothing fires during a composition | planned | 69 | — |
-| 2.9 | Abbreviations up to 40 characters; replacement up to about 5000 characters with SendInput | HS | `type_text` up to 4096 characters; abbreviation limit decided in Step 69 | partial | 69 | — |
+| 2.5 | Configurable end characters (`#Hotstring EndChars`) | HS | `end_chars` per hotstring; default AutoHotkey's set | supported | 69 | Step 69: core, worker and CLI tests (DDALGAK_ENGINE §12); real typing manual |
+| 2.6 | Case conformity of the replacement | HS | `case: conform` (the default): `BTW` → upper case, `Btw` → first letter upper case | supported | 69 | Step 69: core, worker and CLI tests (DDALGAK_ENGINE §12); real typing manual |
+| 2.7 | Recognizer resets on window change, navigation keys and (by default) mouse clicks | HS | Window and focus changes, navigation and non-text keys, shortcuts, password fields, IME compositions, pause, 10 s idle; a bounded buffer (longest abbreviation + 1), never stored. Mouse clicks inside the same field are not seen (no mouse hook for hotstrings) | partial | 69 | Step 69: core, worker and CLI tests (DDALGAK_ENGINE §12); real typing manual |
+| 2.8 | Input method editors: the InputHook documentation states that IMEs are not supported | IH | Nothing fires during a composition or while the IME is in a native mode (Hangul); typed text bypasses the IME (Unicode events) | partial | 69 | Step 69: core and fake-probe tests; the Korean IME itself is a manual check (DDALGAK_ENGINE §12) |
+| 2.9 | Abbreviations up to 40 characters; replacement up to about 5000 characters with SendInput | HS | Abbreviations 1–40 characters; `type_text` up to 4096 characters | partial | 69 | Step 69: core, worker and CLI tests (DDALGAK_ENGINE §12); real typing manual |
 
 ## 3. Remapping
 
@@ -131,13 +131,13 @@ Where a page did not state something, the row says so instead of filling the gap
 
 | # | AutoHotkey v2 behavior | Src | Ddalgak | Status | Step | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
-| 4.1 | `Send` keys with modifiers (`Send "^c"`) | SD | `send_keys` with up to eight chords | supported | 69 | — |
-| 4.2 | Literal text (`SendText`, `{Text}`) and Unicode characters (`{U+nnnn}`) | SD | `type_text`, Unicode events independent of layout and IME | supported | 69 | — |
+| 4.1 | `Send` keys with modifiers (`Send "^c"`) | SD | `send_keys` with up to eight chords | supported | 69 | Step 69: core, worker and CLI tests (DDALGAK_ENGINE §12); real typing manual |
+| 4.2 | Literal text (`SendText`, `{Text}`) and Unicode characters (`{U+nnnn}`) | SD | `type_text`, Unicode events independent of layout and IME; the CLI's `--escapes` reads `\u{…}` | supported | 69 | Step 69: core, worker and CLI tests (DDALGAK_ENGINE §12); real typing manual |
 | 4.3 | Send modes Input (default, buffers user input), Event and Play (Play may not work under UAC or on Windows 11) | SD, F | `SendInput` only, inserted serially (M2); one call per remap change | partial | 68 | Step 68: core and worker tests; real-input smoke on obscure keys (DDALGAK_ENGINE §11) |
 | 4.4 | `{Blind}`: keep physically held modifiers | SD | Fixed, documented modifier handling per action (RULE_MODEL §5.1, §5.3); no per-call flag | partial | 68 | — |
 | 4.5 | `{Key down}` / `{Key up}` | SD | Only through `remap` and `hold`, which always release; no stray key-down | partial | 68 | Step 68: core and worker tests; real-input smoke on obscure keys (DDALGAK_ENGINE §11) |
 | 4.6 | `SendLevel` / `#InputLevel` | SL, IL | No levels: own input never triggers rules | not intended | — | — |
-| 4.7 | Key delays (`SetKeyDelay`) | SD | `key_delay_ms` (text), `step_delay_ms` (sequences) | partial | 69 | — |
+| 4.7 | Key delays (`SetKeyDelay`) | SD | `key_delay_ms` (text), `step_delay_ms` (sequences) | partial | 69 | Step 69: core, worker and CLI tests (DDALGAK_ENGINE §12); real typing manual |
 | 4.8 | `ControlSend`: keys to a window or control without focusing it (listed in the FAQ as a workaround for programs that ignore `Send`) | F | Not in v1; may be considered with window actions | not intended | — | — |
 | 4.9 | `Click` with button, count, down/up and relative coordinates | C | `mouse_click` (`click`, `double_click`, `hold`; optional point) | supported | 71 | — |
 | 4.10 | `MouseMove` absolute or relative, with a speed in Event mode | MM | `mouse_move` absolute, relative, or continuous while held with speed and acceleration | supported | 71 | — |
@@ -149,7 +149,7 @@ Where a page did not state something, the row says so instead of filling the gap
 | 4.16 | `*RunAs`: run as administrator | R | Never elevates (`KIM-SEC-004`, `DDALGAK-SEC-007`) | not intended | — | — |
 | 4.17 | `RunWait` and exit codes | R | A separately consented command action | planned | 79 | — |
 | 4.18 | `Run` options `Max`, `Min`, `Hide` | R | `normal`, `maximized`, `minimized`; no hidden programs | partial | 70 | — |
-| 4.19 | `A_Clipboard`, `ClipWait`, `ClipboardAll`, `OnClipboardChange` | CB | `type_text` paste with restore now; clipboard actions in Step 79; no clipboard monitoring | partial | 69, 79 | — |
+| 4.19 | `A_Clipboard`, `ClipWait`, `ClipboardAll`, `OnClipboardChange` | CB | `type_text` paste with restore of every format (refused when one cannot be copied), kept out of clipboard history; clipboard actions in Step 79; no clipboard monitoring | partial | 69, 79 | Step 69: fake-clipboard tests; the real clipboard is a manual check (DDALGAK_ENGINE §12) |
 | 4.20 | `SetTimer`: periodic or one-shot timers | ST | Scheduled triggers with an idle budget | planned | 79 | — |
 | 4.21 | `Sleep`, rounded up to the OS timer granularity (about 10 or 15.6 ms) | SP | `delay` (1–10000 ms, 60 s per run), same granularity | supported | 67 | — |
 | 4.22 | Message boxes (`MsgBox`), tooltips near the cursor, tray notifications (`TrayTip`, a toast on Windows 10 and later) | TT | `notify`: local notifications only, never modal from a hotkey | planned | 79 | — |

@@ -175,10 +175,18 @@
     "output_key": {"type": "string", "allOf": [{"$ref": "#/$defs/output_step_syntax"}, {"$ref": "#/$defs/output_reserved_free"}]},
     "output_sequence": {"type": "string", "allOf": [{"$ref": "#/$defs/output_sequence_syntax"}, {"$ref": "#/$defs/output_reserved_free"}]},
     "trigger": {
+      "description": "Keys (`keys`, with `on`, `hold_ms`, `repeat`, `pass_through`) or, since Step 69, a typed abbreviation (`hotstring`). An older reader without `hotstring` keeps such a rule inactive.",
       "type": "object",
-      "required": ["keys"],
+      "oneOf": [
+        {"required": ["keys"], "not": {"required": ["hotstring"]}},
+        {
+          "required": ["hotstring"],
+          "not": {"anyOf": [{"required": ["keys"]}, {"required": ["on"]}, {"required": ["hold_ms"]}, {"required": ["repeat"]}, {"required": ["pass_through"]}]}
+        }
+      ],
       "properties": {
         "keys": {"$ref": "#/$defs/trigger_keys"},
+        "hotstring": {"$ref": "#/$defs/hotstring"},
         "on": {"description": "press (default), release (single chord released with no other key in between; a tap of a bare modifier), hold (held for hold_ms).", "enum": ["press", "release", "hold"]},
         "hold_ms": {"type": "integer", "minimum": 200, "maximum": 5000},
         "repeat": {"description": "Auto-repeat fires the rule again (press only). Default false.", "type": "boolean"},
@@ -214,6 +222,35 @@
           ]
         }
       ]
+    },
+    "hotstring": {
+      "description": "A typed abbreviation as a trigger (Step 69, DDALGAK_RULE_MODEL §3.4): typing `abbreviation` followed by an end character (or, with `immediate`, its last character) erases it and runs the rule. Ddalgak keeps only a bounded buffer of the last characters (the longest abbreviation plus one), never in password fields, during an IME composition or across focus changes, and never stores or logs it.",
+      "type": "object",
+      "required": ["abbreviation"],
+      "properties": {
+        "abbreviation": {"description": "1–40 characters without spaces or control characters.", "type": "string", "minLength": 1, "maxLength": 40, "pattern": "^[^\\s\\x00-\\x1f\\x7f]+$"},
+        "case": {"description": "conform (default): any case matches and the replacement follows it (BTW → BY THE WAY, Btw → By the way); insensitive: any case matches, the replacement as written; sensitive: only the exact case matches.", "enum": ["conform", "insensitive", "sensitive"]},
+        "inside_words": {"description": "false (default): only at the start of a word (after a space, punctuation or nothing); true: also inside a word.", "type": "boolean"},
+        "immediate": {"description": "false (default): fires on an end character after the abbreviation; true: fires as soon as the abbreviation is complete.", "type": "boolean"},
+        "end_chars": {"description": "The end characters; default -()[]{}':;\"/\\,.?! plus space, tab and Enter. \\n stands for Enter and \\t for Tab.", "type": "string", "minLength": 1, "maxLength": 32, "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f]+$"},
+        "omit_end": {"description": "true: the end character is not typed after the replacement.", "type": "boolean"},
+        "erase": {"description": "true (default): the abbreviation is erased with Backspace before the replacement; false: it stays and the replacement follows it.", "type": "boolean"}
+      },
+      "allOf": [
+        {
+          "description": "end_chars and omit_end apply only to hotstrings that wait for an end character.",
+          "anyOf": [
+            {"not": {"required": ["immediate"]}},
+            {"properties": {"immediate": {"const": false}}},
+            {"not": {"anyOf": [{"required": ["end_chars"]}, {"required": ["omit_end"]}]}}
+          ]
+        }
+      ]
+    },
+    "text_template": {
+      "description": "Text with variables (`variables: true`): `{date}`, `{time}`, `{datetime}`, `{year}`, `{month}`, `{day}`, `{hour}`, `{minute}`, `{second}`, at most one `{cursor}` (the insertion point), `{{` and `}}` for braces. Nothing else in braces: no environment or clipboard variables.",
+      "type": "string",
+      "pattern": "^(?:[^{}\\x00-\\x08\\x0b-\\x1f\\x7f]|\\{\\{|\\}\\}|\\{(?:date|time|datetime|year|month|day|hour|minute|second)\\})*(?:\\{cursor\\}(?:[^{}\\x00-\\x08\\x0b-\\x1f\\x7f]|\\{\\{|\\}\\}|\\{(?:date|time|datetime|year|month|day|hour|minute|second)\\})*)?$"
     },
     "app_matcher": {
       "description": "The focused window's process: by image file name (case-insensitive) or by full path.",
@@ -351,8 +388,14 @@
           "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f]+$"
         },
         "method": {"description": "unicode (default): one Unicode key event per character, independent of layout and IME. paste: through the clipboard, which is restored afterwards (needs clipboard consent).", "enum": ["unicode", "paste"]},
-        "key_delay_ms": {"type": "integer", "minimum": 0, "maximum": 200}
-      }
+        "key_delay_ms": {"type": "integer", "minimum": 0, "maximum": 200},
+        "variables": {"description": "true: `text` is a template with the date and time variables and the insertion point `{cursor}` (Step 69). Default false: typed literally.", "type": "boolean"}
+      },
+      "anyOf": [
+        {"not": {"required": ["variables"]}},
+        {"properties": {"variables": {"const": false}}},
+        {"properties": {"text": {"$ref": "#/$defs/text_template"}}}
+      ]
     },
     "step_open_program": {
       "type": "object",
@@ -522,6 +565,13 @@
                 {"properties": {"steps": {"items": {"required": ["type"], "properties": {"type": {"const": "remap"}}, "not": {"required": ["tap"]}}}}}
               ]
             }
+          ]
+        },
+        {
+          "description": "A hotstring trigger runs steps that end at once: never a step that lasts while the trigger is held, and never a block (Step 69).",
+          "anyOf": [
+            {"properties": {"trigger": {"not": {"required": ["hotstring"]}}}},
+            {"properties": {"steps": {"items": {"not": {"anyOf": [{"$ref": "#/$defs/holds_trigger"}, {"required": ["type"], "properties": {"type": {"const": "block"}}}]}}}}}
           ]
         },
         {

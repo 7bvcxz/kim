@@ -8,6 +8,8 @@
 //!   read scan codes see the right key (Up is not Numpad8, Right Ctrl is not Left Ctrl).
 //! - **Scan codes** (`code:` outputs) are sent with `KEYEVENTF_SCANCODE`: Windows turns the
 //!   position into the active layout's key.
+//! - **Unicode units** (typed text, Step 69) are `KEYEVENTF_UNICODE` events with the UTF-16 unit in
+//!   `wScan` and no virtual key: one down and one up per unit, a surrogate pair as two units.
 //! - **Mouse buttons** are `MOUSEINPUT` button events. `MouseLeft`/`MouseRight` are the logical
 //!   primary and secondary buttons: with "swap buttons" on, the physical events are swapped
 //!   (DDALGAK_RULE_MODEL §5.9).
@@ -20,7 +22,7 @@ use crate::event::OWN_MARKER;
 use crate::inject::{Backend, Button, OutCode, OutEvent, OutKey};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY,
-    KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, MAPVK_VK_TO_VSC_EX, MOUSE_EVENT_FLAGS,
+    KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, KEYEVENTF_UNICODE, MAPVK_VK_TO_VSC_EX, MOUSE_EVENT_FLAGS,
     MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP,
     MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP, MOUSEINPUT,
     MapVirtualKeyW, SendInput,
@@ -85,6 +87,9 @@ fn inputs(events: &[OutEvent], extra: usize) -> Vec<INPUT> {
                     key_input(vk, u16::try_from(sc & 0xFF).unwrap_or(0), flags, extra)
                 }
                 OutCode::Scan(scan) => key_input(0, scan, up | KEYEVENTF_SCANCODE, extra),
+                // Typed text: the UTF-16 unit in `wScan`, no virtual key (*documented* for
+                // KEYEVENTF_UNICODE; the application receives VK_PACKET and the character).
+                OutCode::Unicode(unit) => key_input(0, unit, up | KEYEVENTF_UNICODE, extra),
                 OutCode::Exact { vk, scan, ext } => {
                     let flags = up | if ext { KEYEVENTF_EXTENDEDKEY } else { 0 };
                     key_input(vk, scan, flags, extra)
@@ -171,6 +176,50 @@ mod tests {
             button_flags(Button::X2, true, false),
             (MOUSEEVENTF_XUP, u32::from(XBUTTON2))
         );
+    }
+
+    #[test]
+    fn typed_text_becomes_exactly_these_unicode_inputs() {
+        // Pure construction of INPUT structures; nothing is sent (the maintainer's foreground
+        // window must never receive test text).
+        let text = "가\u{1100}\u{1161}👍\n\t{";
+        let built = inputs(&crate::text::events(text), OWN_MARKER);
+        let got: Vec<(u16, u16, u32)> = built
+            .iter()
+            .map(|i| {
+                assert_eq!(i.r#type, INPUT_KEYBOARD);
+                // SAFETY: reading the union field the constructor wrote.
+                let ki = unsafe { i.Anonymous.ki };
+                assert_eq!(ki.dwExtraInfo, OWN_MARKER, "every event is marked");
+                (ki.wVk, ki.wScan, ki.dwFlags)
+            })
+            .collect();
+        let u = KEYEVENTF_UNICODE;
+        let up = KEYEVENTF_KEYUP;
+        let mut want = Vec::new();
+        for unit in [0xAC00u16, 0x1100, 0x1161, 0xD83D, 0xDC4D] {
+            want.push((0, unit, u));
+            want.push((0, unit, u | up));
+        }
+        let (enter, tab) = (&got[10], &got[12]);
+        assert_eq!(
+            got[..10],
+            want[..],
+            "composed, decomposed Hangul, then the pair"
+        );
+        assert_eq!(
+            (enter.0, enter.2 & up),
+            (0x0D, 0),
+            "\\n is Enter by virtual key"
+        );
+        assert_eq!(got[11].0, 0x0D);
+        assert_ne!(got[11].2 & up, 0);
+        assert_eq!((tab.0, tab.2 & u), (0x09, 0), "\\t is Tab by virtual key");
+        assert_eq!(
+            got[14..],
+            [(0, u16::from(b'{'), u), (0, u16::from(b'{'), u | up)]
+        );
+        assert_eq!(got.len(), 16);
     }
 
     #[test]

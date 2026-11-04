@@ -1,7 +1,7 @@
 # Ddalgak safety: risks, scope and policies
 
 Status: **current** (Step 65, specification; Step 66 ran the engine checks it owns on real
-Windows, Step 68 the remap checks, §11) · Requirements: `DDALGAK-SEC-001…014`, `DDALGAK-NFR-002`, `DDALGAK-NFR-006`,
+Windows, Step 68 the remap checks, Step 69 the typing checks, §11) · Requirements: `DDALGAK-SEC-001…014`, `DDALGAK-NFR-002`, `DDALGAK-NFR-006`,
 `DDALGAK-NFR-009`, `KIM-SEC-020…023` · Decision: [ADR 0022](adr/0022-ddalgak-rule-model-and-safety.md)
 
 A keyboard hook sees every key, and an injector can type into any window the user can reach.
@@ -102,7 +102,13 @@ CLI follows the identity checks of [ADR 0005](adr/0005-local-ipc.md)/[ADR 0019](
   check (DDALGAK_ENGINE §11, check 5); automated tests may not drive the IME on this machine.
 - **Typed text** uses Unicode key events (`KEYEVENTF_UNICODE`), so Hangul syllables, emoji and
   characters outside the Basic Multilingual Plane arrive independent of the active layout and
-  IME mode. Applications that ignore Unicode key events get the `paste` method.
+  IME mode. Applications that ignore Unicode key events get the `paste` method. A run never starts
+  during an IME composition, and hotstrings never fire while the IME is in a native mode such as
+  Hangul (read from the focused window's IME window; Step 69).
+- **Hotstrings translate keys without side effects.** The hook asks the focused window's layout
+  what a key types with `ToUnicodeEx` and its "keyboard state is not changed" flag (Windows 10
+  1607 and later, *documented*), only while a hotstring rule exists and only for keys that reach
+  the application unchanged; a dead key clears the buffer ([ADR 0034](adr/0034-ddalgak-typing-runs-hotstrings-and-clipboard.md)).
 - **AltGr layouts.** `Ctrl+Alt+<key>` triggers get `altgr_collision` warnings; on such layouts
   Windows reports AltGr as `LCtrl+RAlt` (*documented*).
 - **Dead keys.** Ddalgak never translates keys to characters inside the hook (no `char:`
@@ -164,11 +170,27 @@ CLI follows the identity checks of [ADR 0005](adr/0005-local-ipc.md)/[ADR 0019](
   without exposing them may not be recognized, and the documentation says so; rules in such
   applications can be excluded with `except_apps`.
 - **No keylogging** (`DDALGAK-SEC-001`): the hook keeps only the state needed for matching (which
-  keys are down, a pending sequence step, the hotstring buffer from Step 69 limited to the
-  longest abbreviation and cleared on every reset). Nothing else is retained.
+  keys are down, a pending sequence step, and since Step 69 the hotstring buffer: at most the
+  longest active abbreviation plus one character, only while a hotstring rule exists, cleared on
+  every reset — focus change, password field, IME composition, secure desktop, pause, navigation
+  and shortcut keys, other programs' input, a match, 10 s idle). Nothing else is retained; the
+  buffer is never stored, logged, sent or shown, and a count of key presses (a number) is all a
+  typing run learns about what was typed meanwhile.
+- **Typing never follows focus** (Step 69): before every `SendInput` call of a run the focused
+  window and control are compared with the ones the run started in; a change stops the run
+  (`focus_changed`) and nothing is typed into the new window. Disabled and read-only focus
+  targets, and a missing or disabled foreground window, are refused (`skipped_disabled_field`).
+- **The clipboard is the user's** (Step 69, `paste` only, with `clipboard` consent): Ddalgak copies
+  every format first and refuses to paste when one cannot be copied faithfully
+  (`clipboard_not_restorable`), keeps the snippet out of clipboard history and the cloud
+  clipboard, restores the previous content after 500 ms on every path (a newer clipboard written
+  meanwhile by another program wins), and never reads the clipboard otherwise.
 - **Activity and logs** contain rule IDs, profile and mode IDs, outcome codes, step indexes and
   durations only; never key names the user typed, text, window titles, paths, arguments, URLs or
-  clipboard contents (`DDALGAK-SEC-011`). Persisting them is opt-in.
+  clipboard contents (`DDALGAK-SEC-011`). Persisting them is opt-in. Since Step 69 validation
+  messages describe what is wrong with a snippet (its length, the position of a bad character)
+  without quoting it, and `ddalgak rule show` replaces snippet text with its counts unless the
+  user asks with `--show-text`; a CLI test greps every output for the text.
 - **Rule content** is personal data in the user's profile (snippets, paths, URLs). The GUI says
   that `rules.json` is not a password store; an export dialog reminds users that the file
   contains their snippets and targets.
@@ -223,7 +245,7 @@ Likelihood (L) and impact (I): **H**igh / **M**edium / **L**ow.
 | DR-01 | The hook is slow or blocked and Windows removes it silently, so rules stop without notice | M | M | Short callback, worker threads, hook health check on demand (§7) | 66, 82 |
 | DR-02 | A bug leaves a modifier or mouse button logically pressed | M | H | Injector ledger owned by the worker, reference-counted remap outputs, release on every exit path including an elevated window taking focus, tests per path (§10; Step 68 tested the pause and key-reset paths with real input) | 68, 71, 73 |
 | DR-03 | The emergency chord does not work on some keyboards, laptops or remote sessions | M | H | Physical-state detection; Step 73 tests laptops, external keyboards, RDP; an ADR 0017 note if the chord must change | 73 |
-| DR-04 | Password-field detection misses custom controls | M | H | UI Automation plus edit styles; `except_apps`; documented as best effort (§8) | 66, 69, 82 |
+| DR-04 | Password-field detection misses custom controls | M | H | Win32 edit styles (Step 66), checked again before every typing call (Step 69); UI Automation and browser fields not yet; `except_apps`; documented as best effort (§8) | 66, 69, 82 |
 | DR-05 | Injected 한/영 (`HangulMode`) or Unicode text behaves differently across IME versions | M | M | Real-Windows tests with the Korean IME; `paste` fallback | 68, 69 |
 | DR-06 | Users expect AutoHotkey scripts to work | H | M | Matrix with explicit statuses; importer previews only a declarative subset (§5 of the philosophy) | 65, 80 |
 | DR-07 | Games or anti-cheat flag Ddalgak | M | M | No concealment or evasion; Gaming profile and pause; honest documentation (§6) | 82 |
@@ -277,3 +299,16 @@ and the worker. **Not tested** (manual checks in DDALGAK_ENGINE §11): physical 
 applications and the shell, the Korean IME and `HangulMode` output, a layout switch, Ctrl/Win/Alt
 combinations with remaps active, real mouse buttons, an elevated window taking focus or a session
 lock while a remap holds its target, and a killed app (Step 73).
+
+**Step 69** (typing, Windows 10 19045; details in [DDALGAK_ENGINE §12](DDALGAK_ENGINE.md)): the exact
+event sequences of typed text (multiline, emoji, composed and decomposed Hangul, escapes), chunks,
+delays, the insertion point, modifier release and restore, the target checks before every call
+(focus change, password field, secure desktop, elevated window, IME composition and native mode,
+disabled field), cancellation by pause, the emergency chord and a reload, paste with copy,
+private marking and restore of the clipboard, and hotstring matching with every buffer reset are
+**tested** with a fake injector, a fake probe, a fake clipboard and synthetic event streams; no
+character was injected and the real clipboard was never touched. A CLI test checks that snippet
+text appears in no output. Read-only, disabled and password edits are recognized on the test's own
+hidden windows. **Not tested** (manual script in DDALGAK_ENGINE §12): real typing into
+applications, the Korean IME (DR-05), the real clipboard, browser and UWP password fields (DR-04),
+an elevated window and a focus switch during a real run.

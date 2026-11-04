@@ -30,7 +30,9 @@ use kim_e2e::{TempDir, bin};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+#[cfg(windows)]
+use std::time::Instant;
+use std::time::Duration;
 
 /// The synthetic desktop's primary monitor starts here (`noeul::capture::OFF_SCREEN`).
 #[cfg(windows)]
@@ -202,12 +204,14 @@ impl Noeul {
         (code, doc)
     }
 
+    #[cfg(windows)]
     fn start(&self) -> u64 {
         let (code, start) = self.json(&["start", "--no-tray"]);
         assert_eq!(code, 0, "{start:#}");
         start["data"]["pid"].as_u64().unwrap()
     }
 
+    #[cfg(windows)]
     fn status(&self) -> Value {
         let (code, st) = self.json(&["status"]);
         assert_eq!(code, 0, "{st:#}");
@@ -215,6 +219,7 @@ impl Noeul {
         st["data"].clone()
     }
 
+    #[cfg(windows)]
     fn eventually(&self, what: &str, mut f: impl FnMut(&Value) -> bool) -> Value {
         let until = Instant::now() + Duration::from_secs(15);
         loop {

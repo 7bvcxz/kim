@@ -741,6 +741,7 @@
                     "consumed": { "$ref": "#/$defs/count" },
                     "own_injected": { "$ref": "#/$defs/count" },
                     "other_injected": { "$ref": "#/$defs/count" },
+                    "physical": { "description": "Step 75: key (and, while the mouse hook exists, mouse-button) events from a device, not injected; a count only, no key is kept.", "$ref": "#/$defs/count" },
                     "dropped_signals": { "$ref": "#/$defs/count" },
                     "panics": { "$ref": "#/$defs/count" },
                     "callback_us": {

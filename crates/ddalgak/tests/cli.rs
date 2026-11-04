@@ -19,7 +19,16 @@
 //! save, a corrupt file (safe mode, file kept), read-only file and folder, and the reload of a
 //! running app that keeps its hook installed. Every sandbox is its own `%APPDATA%`, so the user's
 //! real rules are never read or written.
+//!
+//! Step 75: every real-input step whose result a person's input on this desktop can change (a
+//! held modifier keeps an exact trigger such as `F13` from matching) runs as attempts
+//! (`common/quiet.rs`), judged with the test host's own count of physical events (`health`
+//! counters): only an attempt without physical input may fail the test, a disturbed one is
+//! retried and reported.
 #![cfg(windows)]
+
+#[path = "common/quiet.rs"]
+mod quiet;
 
 #[path = "../../../xtask/src/jsonschema.rs"]
 #[allow(dead_code)]
@@ -389,6 +398,15 @@ fn elevated() -> bool {
     ddalgak::win::is_elevated()
 }
 
+/// Taps an obscure key as another program would (no Ddalgak marker); `false` when `SendInput`
+/// refused it.
+fn tap_other(vk: u16) -> bool {
+    ddalgak::win::inject::send_as_other_program(&[
+        OutKey { vk, up: false },
+        OutKey { vk, up: true },
+    ]) == 2
+}
+
 #[test]
 fn version_help_capabilities_and_offline_contract() {
     let sb = Sandbox::new("offline");
@@ -738,37 +756,19 @@ fn injected_input_reaches_only_accepting_rules_in_the_real_app() {
     let (_, d) = sb.json(&["engine", "start"]);
     assert_eq!(d["data"]["engine"]["state"], "running");
     // Injected as another program would (no Ddalgak marker), obscure keys only, always released.
-    let tap = |vk: u16| {
-        ddalgak::win::inject::send_as_other_program(&[
-            OutKey { vk, up: false },
-            OutKey { vk, up: true },
-        ])
-    };
-    let wait_state = |want: &str| {
-        let until = Instant::now() + Duration::from_secs(5);
-        loop {
-            let (_, st) = sb.json(&["status"]);
-            if st["data"]["engine"]["state"] == want {
-                return st;
-            }
-            assert!(Instant::now() < until, "engine never became {want}: {st:#}");
-            std::thread::sleep(Duration::from_millis(50));
-        }
-    };
     // The desktop can lock between the check and any call, and UIPI refuses input while an
     // elevated window has focus: a refused SendInput ends the test with what was verified so far.
-    let refused = |step: &str| {
-        eprintln!(
-            "skipped (SendInput refused) at `{step}`: locked desktop or an elevated window has focus"
-        );
-    };
+    // F13 and F14 are exact triggers: a modifier a person holds keeps them from matching, so each
+    // tap runs as attempts (Step 75).
+    let state = |want: &'static str| move |d: &Value| d["engine"]["state"] == want;
     let mut verified = Vec::new();
     'steps: {
-        if tap(VK_F13) != 2 {
-            refused("F13 pauses");
+        let Some(st) = sb
+            .tap_until("F13 pauses", VK_F13, state("paused"))
+            .verified("F13 pauses")
+        else {
             break 'steps;
-        }
-        let st = wait_state("paused");
+        };
         let activity = st["data"]["activity"].as_array().unwrap();
         assert!(
             activity
@@ -782,17 +782,20 @@ fn injected_input_reaches_only_accepting_rules_in_the_real_app() {
         );
         bless("status-paused-by-rule", &st);
         verified.push("an injected F13 reached the accepting rule; the real app paused");
-        if tap(VK_F13) != 2 {
-            refused("F13 resumes while paused");
+        if sb
+            .tap_until("F13 resumes while paused", VK_F13, state("running"))
+            .verified("F13 resumes while paused")
+            .is_none()
+        {
             break 'steps;
         }
-        wait_state("running");
         verified.push("engine-control rules keep working while paused");
-        if tap(VK_F14) != 2 {
-            refused("F14 turns the engine off");
+        let Some(st) = sb
+            .tap_until("F14 turns the engine off", VK_F14, state("off"))
+            .verified("F14 turns the engine off")
+        else {
             break 'steps;
-        }
-        let st = wait_state("off");
+        };
         assert_eq!(st["data"]["engine"]["hook"]["installed"], false);
         assert_eq!(st["data"]["engine"]["off_reason"], "stopped");
         verified.push("a rule turned the engine off and the hook was removed");
@@ -1693,37 +1696,16 @@ fn a_running_app_reloads_valid_rules_and_keeps_its_hook() {
     // through the swapped table in the same, still installed hook.
     if hook_on && ddalgak::win::input_desktop_available() {
         add_engine(&sb, "live-key", "F17", "toggle_pause");
-        let tap = |vk: u16| {
-            ddalgak::win::inject::send_as_other_program(&[
-                OutKey { vk, up: false },
-                OutKey { vk, up: true },
-            ])
-        };
-        if tap(VK_F17) == 2 {
-            let until = Instant::now() + Duration::from_secs(5);
-            loop {
-                let (_, st) = sb.json(&["status"]);
-                if st["data"]["engine"]["state"] == "paused" {
-                    assert_eq!(
-                        st["data"]["engine"]["last_change"]["origin"],
-                        "rule:live-key"
-                    );
-                    eprintln!(
-                        "verified with real SendInput: a reloaded rule fired in the running hook"
-                    );
-                    break;
-                }
-                assert!(
-                    Instant::now() < until,
-                    "the reloaded rule did not fire: {st:#}"
-                );
-                std::thread::sleep(Duration::from_millis(50));
-            }
-            let _ = tap(VK_F17);
-        } else {
-            eprintln!(
-                "skipped (SendInput refused): locked desktop or an elevated window has focus"
+        let paused = sb.tap_until("the reloaded rule fires", VK_F17, |d| {
+            d["engine"]["state"] == "paused"
+        });
+        if let Some(st) = paused.verified("the reloaded rule fires") {
+            assert_eq!(
+                st["data"]["engine"]["last_change"]["origin"],
+                "rule:live-key"
             );
+            eprintln!("verified with real SendInput: a reloaded rule fired in the running hook");
+            let _ = tap_other(VK_F17);
         }
     } else if hook_on {
         eprintln!("skipped (locked): no interactive input desktop for the live part");
@@ -2254,21 +2236,25 @@ fn launch_rules_through_the_cli_and_the_real_test_host() {
         assert_eq!(host.wait_exit(Duration::from_secs(10)), Some(0));
         return;
     }
-    let tap = |vk: u16| {
-        ddalgak::win::inject::send_as_other_program(&[
-            OutKey { vk, up: false },
-            OutKey { vk, up: true },
-        ])
-    };
     let mut verified: Vec<String> = Vec::new();
+    // F15 and F16 are exact triggers: a modifier a person holds keeps them from matching, so
+    // each launch runs as attempts judged with the physical input the host saw (Step 75).
     'steps: {
         let t = Instant::now();
-        if tap(VK_F15) != 2 {
-            eprintln!("skipped (SendInput refused) at F15: locked desktop or an elevated window");
+        let started = quiet::attempts(
+            "an injected F15 starts the hidden test program",
+            || sb.physical(),
+            |_| {
+                quiet::sent(tap_other(VK_F15), "F15")?;
+                marker::wait(&marker_file, Duration::from_secs(10)).ok_or_else(|| {
+                    quiet::Fail::Failed("the hidden marker program did not run".into())
+                })
+            },
+            || {},
+        );
+        let Some(m) = started.verified("F15 starts the test program") else {
             break 'steps;
-        }
-        let m = marker::wait(&marker_file, Duration::from_secs(20))
-            .expect("the hidden marker program ran");
+        };
         marker::kill_if_running(m.pid, &exe);
         assert_eq!(m.args, ["첫 번째 인자"]);
         assert_eq!(m.env, SECRET);
@@ -2276,31 +2262,68 @@ fn launch_rules_through_the_cli_and_the_real_test_host() {
             "an injected F15 started the hidden test program from a path with spaces and Korean characters ({:?} to its marker)",
             t.elapsed()
         ));
-        if tap(VK_F16) != 2 {
-            eprintln!("skipped (SendInput refused) at F16");
+        // A double press: the second one opens nothing (rate_limited, or busy while running).
+        // A disturbed attempt (a held modifier dropped one press) starts over with an empty
+        // record once the one-second rate limit has run out.
+        let read_opened = || -> Vec<Value> {
+            std::fs::read_to_string(&record)
+                .unwrap_or_default()
+                .lines()
+                .map(|l| serde_json::from_str(l).unwrap())
+                .collect()
+        };
+        let site_outcomes = || -> Vec<String> {
+            let (_, st) = sb.json(&["status"]);
+            st["data"]["activity"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|a| a["rule"] == "open-site")
+                .map(|a| a["outcome"].as_str().unwrap().to_string())
+                .collect()
+        };
+        let double = quiet::attempts(
+            "an injected F16 double press hands the URL off once",
+            || sb.physical(),
+            |_| {
+                let before = site_outcomes().len();
+                quiet::sent(tap_other(VK_F16), "F16")?;
+                let _ = tap_other(VK_F16);
+                quiet::check(
+                    quiet::eventually(10_000, || !read_opened().is_empty()),
+                    || "no hand-off was recorded".into(),
+                )?;
+                std::thread::sleep(Duration::from_millis(300));
+                let opened = read_opened();
+                // Physical input can only keep a press from matching: more than one hand-off
+                // is always a failure.
+                assert!(opened.len() <= 1, "more than one hand-off: {opened:?}");
+                assert_eq!(
+                    opened,
+                    [json!({ "verb": "open", "target": normalized, "show": "normal" })],
+                    "the verb open on the normalized URL, no browser opened"
+                );
+                let mut outcomes = site_outcomes();
+                let until = Instant::now() + Duration::from_secs(5);
+                while outcomes.len() < before + 2 && Instant::now() < until {
+                    std::thread::sleep(Duration::from_millis(50));
+                    outcomes = site_outcomes();
+                }
+                let new = outcomes[before.min(outcomes.len())..].to_vec();
+                quiet::check(
+                    new.iter().any(|o| o == "ok")
+                        && new.iter().any(|o| o == "rate_limited" || o == "busy"),
+                    || format!("one press ran, the other was dropped: {new:?}"),
+                )
+            },
+            || {
+                let _ = std::fs::remove_file(&record);
+                std::thread::sleep(Duration::from_millis(1100));
+            },
+        );
+        if double.verified("F16 double press").is_none() {
             break 'steps;
         }
-        // A double press: the second one opens nothing (rate_limited, or busy while running).
-        let _ = tap(VK_F16);
-        let until = Instant::now() + Duration::from_secs(10);
-        let lines = loop {
-            let text = std::fs::read_to_string(&record).unwrap_or_default();
-            if !text.is_empty() || Instant::now() > until {
-                break text;
-            }
-            std::thread::sleep(Duration::from_millis(25));
-        };
-        std::thread::sleep(Duration::from_millis(300));
-        let lines = std::fs::read_to_string(&record).unwrap_or(lines);
-        let opened: Vec<Value> = lines
-            .lines()
-            .map(|l| serde_json::from_str(l).unwrap())
-            .collect();
-        assert_eq!(
-            opened,
-            [json!({ "verb": "open", "target": normalized, "show": "normal" })],
-            "exactly one hand-off, the verb open on the normalized URL, no browser opened"
-        );
         verified.push(
             "an injected F16 handed the normalized URL to the recording shell with the verb open, once"
                 .into(),
@@ -2595,37 +2618,27 @@ fn mouse_rules_through_the_cli_and_the_real_test_host() {
         st["data"]["engine"]["hook"]["mouse_installed"], false,
         "mouse actions never install the mouse hook (no pointer tracking)"
     );
-    if ddalgak::win::input_desktop_available()
-        && ddalgak::win::inject::send_as_other_program(&[
-            OutKey {
-                vk: VK_F13,
-                up: false,
-            },
-            OutKey {
-                vk: VK_F13,
-                up: true,
-            },
-        ]) == 2
-    {
-        let until = Instant::now() + Duration::from_secs(5);
-        let outcome = loop {
-            let (_, st) = sb.json(&["status"]);
-            let last = st["data"]["activity"]
+    if ddalgak::win::input_desktop_available() {
+        // An exact trigger: a modifier a person holds keeps it from matching (Step 75).
+        let what = "mouse rules refuse another program's key";
+        let seen = sb.tap_until(what, VK_F13, |d| {
+            d["activity"].as_array().is_some_and(|a| !a.is_empty())
+        });
+        if let Some(st) = seen.verified(what) {
+            let outcome = st["data"]["activity"]
                 .as_array()
-                .and_then(|a| a.last().cloned());
-            if let Some(l) = last {
-                break l;
-            }
-            assert!(Instant::now() < until, "no activity: {st:#}");
-            std::thread::sleep(Duration::from_millis(25));
-        };
-        assert_eq!(
-            (outcome["rule"].as_str(), outcome["outcome"].as_str()),
-            (Some("glide-right"), Some("skipped_injected_input")),
-            "mouse rules accept physical keys only"
-        );
+                .unwrap()
+                .last()
+                .unwrap()
+                .clone();
+            assert_eq!(
+                (outcome["rule"].as_str(), outcome["outcome"].as_str()),
+                (Some("glide-right"), Some("skipped_injected_input")),
+                "mouse rules accept physical keys only"
+            );
+        }
     } else {
-        eprintln!("skipped (locked or SendInput refused): the injected-input check");
+        eprintln!("skipped (locked): the injected-input check");
     }
     sb.json(&["quit"]);
     assert_eq!(host.wait_exit(Duration::from_secs(10)), Some(0));
@@ -2903,38 +2916,65 @@ fn modes_through_the_cli_and_the_real_test_host() {
     err(&["mode", "set", "game"], "engine_off");
     ok(&["engine", "start"]);
     assert_eq!(mode(&sb)["active"], "base");
-    // Mode rules on obscure keys through the real hook, as another program's input.
-    let wait = |want: &str| {
+    // Mode rules on obscure keys through the real hook, as another program's input. Exact
+    // triggers: a modifier a person holds keeps them from matching, so each step runs as
+    // attempts judged with the physical input the host saw (Step 75).
+    let wait = |want: &str| -> quiet::Step<Value> {
         let until = Instant::now() + Duration::from_secs(5);
         loop {
             let m = mode(&sb);
             if m["active"] == want {
-                return m;
+                return Ok(m);
             }
-            assert!(Instant::now() < until, "never {want}: {m:#}");
+            if Instant::now() >= until {
+                return Err(quiet::Fail::Failed(format!("never {want}: {m:#}")));
+            }
             std::thread::sleep(Duration::from_millis(25));
         }
     };
     let send =
         |vk: u16, up: bool| ddalgak::win::inject::send_as_other_program(&[OutKey { vk, up }]) == 1;
-    if ddalgak::win::input_desktop_available() && send(VK_F14, false) && send(VK_F14, true) {
-        let m = wait("game");
-        assert_eq!(m["origin"], "rule:to-game");
-        if send(VK_F13, false) {
-            let m = wait("nav");
-            assert_eq!(m["held"], json!(["nav"]));
-            assert_eq!(m["latched"], "game");
-            assert!(send(VK_F13, true), "F13 must be released");
-            let m = wait("game");
-            assert_eq!(m["origin"], "released:hold-nav");
-            eprintln!("verified with real SendInput: a set and a held layer through the hook");
-        } else {
-            let _ = send(VK_F13, true);
-            eprintln!("skipped (SendInput refused) at F13");
+    if ddalgak::win::input_desktop_available() {
+        'modes: {
+            let set = quiet::attempts(
+                "F14 sets the game mode",
+                || sb.physical(),
+                |_| {
+                    quiet::sent(send(VK_F14, false), "F14 down")?;
+                    quiet::sent(send(VK_F14, true), "F14 up")?;
+                    wait("game")
+                },
+                || {},
+            );
+            let Some(m) = set.verified("F14 sets the game mode") else {
+                let _ = send(VK_F14, true);
+                break 'modes;
+            };
+            assert_eq!(m["origin"], "rule:to-game");
+            let held = quiet::attempts(
+                "F13 holds the nav layer until its key-up",
+                || sb.physical(),
+                |_| {
+                    quiet::sent(send(VK_F13, false), "F13 down")?;
+                    let during = wait("nav");
+                    assert!(send(VK_F13, true), "F13 must be released");
+                    let during = during?;
+                    let after = wait("game")?;
+                    quiet::check(after["origin"] == "released:hold-nav", || {
+                        format!("the layer ended with its key-up: {after:#}")
+                    })?;
+                    Ok(during)
+                },
+                || {},
+            );
+            if let Some(m) = held.verified("F13 holds the nav layer") {
+                assert_eq!(m["held"], json!(["nav"]));
+                assert_eq!(m["latched"], "game");
+                eprintln!("verified with real SendInput: a set and a held layer through the hook");
+            }
         }
     } else {
-        let _ = send(VK_F14, true);
-        eprintln!("skipped (locked or SendInput refused): mode rules through the real hook");
+        eprintln!("skipped (locked): mode rules through the real hook");
     }
     let (_, st) = sb.json(&["status"]);
     bless("status-running-in-a-mode", &st);
@@ -3041,6 +3081,52 @@ impl Sandbox {
             assert!(Instant::now() < until, "the test host did not answer");
             std::thread::sleep(Duration::from_millis(100));
         }
+    }
+
+    /// Step 75: the physical (not injected) input events the test host's hook has seen.
+    fn physical(&self) -> u64 {
+        let (_, h) = self.json(&["health"]);
+        h["data"]["counters"]["physical"].as_u64().unwrap_or(0)
+    }
+
+    /// Polls `status` until `cond` holds (at most `ms`): the status, or the last one as a failed
+    /// attempt.
+    fn status_within(
+        &self,
+        ms: u64,
+        what: &str,
+        cond: impl Fn(&Value) -> bool,
+    ) -> quiet::Step<Value> {
+        let until = Instant::now() + Duration::from_millis(ms);
+        loop {
+            let (_, st) = self.json(&["status"]);
+            if cond(&st["data"]) {
+                return Ok(st);
+            }
+            if Instant::now() >= until {
+                return Err(quiet::Fail::Failed(format!("never {what}: {st:#}")));
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// Step 75: taps `vk` as another program until `status` satisfies `cond`, as attempts judged
+    /// with the physical input the host saw (`quiet::attempts`).
+    fn tap_until(
+        &self,
+        what: &str,
+        vk: u16,
+        cond: impl Fn(&Value) -> bool,
+    ) -> quiet::Outcome<Value> {
+        quiet::attempts(
+            what,
+            || self.physical(),
+            |_| {
+                quiet::sent(tap_other(vk), what)?;
+                self.status_within(5000, what, &cond)
+            },
+            || {},
+        )
     }
 
     /// Waits until `status` satisfies `cond` (5 s at most) and returns it.
@@ -3281,26 +3367,33 @@ fn crash_lock_logoff_and_reboot_recover_without_re_enabling() {
     let send =
         |vk: u16, up: bool| ddalgak::win::inject::send_as_other_program(&[OutKey { vk, up }]) == 1;
     let desktop = ddalgak::win::input_desktop_available();
-    if desktop && send(VK_F13, false) && send(VK_F13, true) {
-        let st = sb.status_until("the rule skipped", |d| {
+    // F13 is an exact trigger: a modifier a person holds keeps it from matching (Step 75).
+    if desktop {
+        let what = "a rule waits while the session is locked";
+        let skipped = sb.tap_until(what, VK_F13, |d| {
             d["activity"]
                 .as_array()
                 .is_some_and(|a| a.iter().any(|e| e["outcome"] == "skipped_secure_desktop"))
         });
-        assert_eq!(
-            st["data"]["engine"]["state"], "running",
-            "nothing fired while locked"
-        );
-        eprintln!("verified with real SendInput: a rule waits while the session is locked");
+        if let Some(st) = skipped.verified(what) {
+            assert_eq!(
+                st["data"]["engine"]["state"], "running",
+                "nothing fired while locked"
+            );
+            eprintln!("verified with real SendInput: {what}");
+        }
     } else {
-        eprintln!("skipped (locked or SendInput refused): a key while locked");
+        eprintln!("skipped (locked): a key while locked");
     }
     assert!(post(hwnd, WM_WTSSESSION_CHANGE, 0x8)); // WTS_SESSION_UNLOCK
     sb.status_until("unlocked", |d| d["session"]["locked"] == false);
-    if desktop && send(VK_F13, false) && send(VK_F13, true) {
-        sb.status_until("paused by the rule", |d| d["engine"]["state"] == "paused");
-        sb.json(&["resume"]);
-        eprintln!("verified with real SendInput: rules run again after the unlock");
+    if desktop {
+        let what = "rules run again after the unlock";
+        let paused = sb.tap_until(what, VK_F13, |d| d["engine"]["state"] == "paused");
+        if paused.verified(what).is_some() {
+            sb.json(&["resume"]);
+            eprintln!("verified with real SendInput: {what}");
+        }
     }
     // A crash: the test kills its own host while the engine is on.
     host.child.kill().unwrap();

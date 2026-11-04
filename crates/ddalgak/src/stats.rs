@@ -19,6 +19,10 @@ pub struct Stats {
     pub own_injected: AtomicU64,
     /// Events injected by other programs.
     pub other_injected: AtomicU64,
+    /// Step 75: events from a device (not injected: `LLKHF_INJECTED` clear), counted only; no
+    /// key is kept. The real-input tests use it to tell an attempt a person typed into apart
+    /// from a failed one.
+    pub physical: AtomicU64,
     /// Signals dropped because the worker queue was full (an event storm).
     pub dropped: AtomicU64,
     /// Callbacks that panicked (the event was passed on).
@@ -95,6 +99,7 @@ impl Stats {
             "consumed": l(&self.consumed),
             "own_injected": l(&self.own_injected),
             "other_injected": l(&self.other_injected),
+            "physical": l(&self.physical),
             "dropped_signals": l(&self.dropped),
             "panics": l(&self.panics),
             "callback_us": {

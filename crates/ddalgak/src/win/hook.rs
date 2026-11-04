@@ -381,7 +381,7 @@ fn handle(raw: &RawKey) -> bool {
             match d.source {
                 Source::Own => st.own_injected.fetch_add(1, Ordering::Relaxed),
                 Source::Other => st.other_injected.fetch_add(1, Ordering::Relaxed),
-                Source::Physical => 0,
+                Source::Physical => st.physical.fetch_add(1, Ordering::Relaxed),
             };
         }
         if d.signal == Some(Signal::Emergency) {

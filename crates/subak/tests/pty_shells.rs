@@ -1407,6 +1407,84 @@ fn the_pane_environment_keeps_the_users_locations_and_secrets_never_leak() {
     );
 }
 
+/// Removes the user environment variable this test sets, even when it fails.
+struct UserVar(&'static str);
+
+impl UserVar {
+    fn reg(args: &[&str]) -> bool {
+        std::process::Command::new("reg")
+            .args(args)
+            .creation_flags(CREATE_NO_WINDOW)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success())
+    }
+
+    fn set(name: &'static str, value: &str) -> Self {
+        assert!(Self::reg(&[
+            "add",
+            r"HKCU\Environment",
+            "/v",
+            name,
+            "/t",
+            "REG_SZ",
+            "/d",
+            value,
+            "/f"
+        ]));
+        Self(name)
+    }
+}
+
+impl Drop for UserVar {
+    fn drop(&mut self) {
+        Self::reg(&["delete", r"HKCU\Environment", "/v", self.0, "/f"]);
+        assert!(
+            !Self::reg(&["query", r"HKCU\Environment", "/v", self.0]),
+            "the test variable was removed again"
+        );
+    }
+}
+
+/// Manual: briefly writes a variable to the user's persistent environment (`HKCU\Environment`,
+/// like `setx`), then removes it. It is not broadcast, so no other program notices. Run with
+/// `cargo test -p subak --test pty_shells -- --ignored --nocapture`.
+#[test]
+#[ignore = "manual: briefly sets a user environment variable in HKCU\\Environment"]
+fn each_new_pane_gets_a_fresh_logon_environment() {
+    let lab = Lab::start("fresh");
+    let dir = Scratch::new("fresh");
+    let probe = |name: &str, out: &Path| {
+        // No quotes inside: cmd.exe parses its own /c line and does not understand the `\"`
+        // escapes of the MSVC rules (docs/PTY_PROCESSES.md §2). The temp path has no spaces.
+        let line = format!("set SUBAK_STEP11_FRESH > {} 2>&1", out.display());
+        let (code, doc) = lab.cli(&["terminal", "new", name, "--", "cmd.exe", "/d", "/c", &line]);
+        assert_eq!(code, 0, "{doc}");
+        wait_until("the probe wrote its file", LONG, || {
+            std::fs::read_to_string(out).is_ok_and(|s| !s.is_empty())
+        });
+        std::fs::read_to_string(out).unwrap()
+    };
+    let before = probe("before", &dir.path("before.txt"));
+    let set = UserVar::set("SUBAK_STEP11_FRESH", "fresh-value-11");
+    let during = probe("during", &dir.path("during.txt"));
+    drop(set);
+    let after = probe("after", &dir.path("after.txt"));
+    assert!(!before.contains("fresh-value-11"), "{before}");
+    assert!(
+        during.contains("SUBAK_STEP11_FRESH=fresh-value-11"),
+        "a variable set after the Host started reaches the next new pane: {during}"
+    );
+    assert!(!after.contains("fresh-value-11"), "{after}");
+    eprintln!(
+        "EVIDENCE fresh env: Host {} started before the variable existed; the pane created while \
+         it was set saw it, the panes before and after did not",
+        lab.host.pid
+    );
+}
+
 #[test]
 fn many_shell_runs_and_failed_launches_do_not_leak_host_handles() {
     const CYCLES: usize = 20;

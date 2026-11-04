@@ -42,7 +42,8 @@ use windows_sys::Win32::System::Threading::{
 #[cfg(test)]
 pub(crate) fn handle_test_lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    LOCK.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// An owned kernel handle, closed exactly once on drop.

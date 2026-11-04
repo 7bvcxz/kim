@@ -55,6 +55,7 @@
 use crate::event::{KeyEvent, KeySet, ModState, Normalizer, RawKey, Source, Transition};
 use crate::hotstring::{self, Translate, Typed};
 use crate::inject::OutCode;
+use crate::modes::{Change, ModeOrigin, ModeState, ModeView};
 use crate::remap::{Output, families};
 use crate::run::{HotstringFire, RunShared};
 use crate::table::{CChord, Compiled, Injected, KeyMatch, On, RemapSpec, Table};
@@ -178,6 +179,17 @@ pub enum Signal {
     MotionEnd {
         binding: u16,
     },
+    /// The mode state changed (Step 72), by the rule `binding` ([`crate::modes::NO_RULE`] when no rule did:
+    /// a released layer, a timeout, a reload, a request). With `switched` the active mode
+    /// changed: the core dropped its remaps and motions, and the worker releases every output it
+    /// holds, then presses again the user's still-held trigger modifiers in `restore` (like
+    /// [`Signal::ReleaseAll`] and [`Signal::Restore`]); armed hold triggers of the old mode end.
+    Mode {
+        binding: u16,
+        view: ModeView,
+        switched: bool,
+        restore: u8,
+    },
 }
 
 /// The context the hook sees at this moment (kept current by the host's watchers).
@@ -211,8 +223,12 @@ pub struct Decision {
     pub signal: Option<Signal>,
     /// Sent after `signal` (a held-back key sent on).
     pub post: Option<Signal>,
+    /// Sent last (Step 72: a mode change this key-up made: a held layer ended, a one-shot mode
+    /// ended).
+    pub last: Option<Signal>,
     pub source: Source,
-    /// Arm the hook thread's one-shot timer: call [`Core::tick`] after this many milliseconds.
+    /// Arm the hook thread's one-shot timer: call [`Core::tick`] and [`Core::mode_tick`] after
+    /// this many milliseconds.
     pub timer: Option<u32>,
 }
 
@@ -223,6 +239,7 @@ impl Decision {
             pre: None,
             signal,
             post: None,
+            last: None,
             source,
             timer: None,
         }
@@ -230,7 +247,11 @@ impl Decision {
 
     /// The signals in the order the worker must get them.
     pub fn signals(&self) -> impl Iterator<Item = Signal> {
-        self.pre.into_iter().chain(self.signal).chain(self.post)
+        self.pre
+            .into_iter()
+            .chain(self.signal)
+            .chain(self.post)
+            .chain(self.last)
     }
 }
 
@@ -352,6 +373,12 @@ pub struct Core {
     typed: u32,
     /// Moves while held (Step 71): the trigger's virtual key and the binding.
     motions: [Option<(u16, u16)>; MOTIONS],
+    /// The mode state (Step 72): the active mode decides which bindings are candidates.
+    modes: ModeState,
+    /// A mode change asked for the hook thread's timer (a mode with a timeout).
+    want_timer: bool,
+    /// The time of the last event (ms, the event clock).
+    now: u32,
 }
 
 const WIN_BITS: u8 = 0x40 | 0x80;
@@ -384,11 +411,126 @@ impl Core {
             key_refs: [None; SLOTS],
             replayed: KeySet::default(),
             hs: hotstring::Buffer::bounded(table_longest(&table)),
+            modes: ModeState::new(&table.modes),
             table,
             runs: None,
             translate: None,
             typed: 0,
             motions: [None; MOTIONS],
+            want_timer: false,
+            now: 0,
+        }
+    }
+
+    /// The mode state (Step 72).
+    pub fn mode_state(&self) -> &ModeState {
+        &self.modes
+    }
+
+    /// The active mode's index in [`Table::modes`].
+    pub fn active_mode(&self) -> u8 {
+        self.modes.active()
+    }
+
+    /// The mode block of `status` for the current state (outside the callback: it allocates).
+    pub fn mode_status(&self) -> crate::modes::ModeStatus {
+        let rule = |b: u16| self.table.binding(usize::from(b)).map(|b| b.rule.clone());
+        self.table.modes.status(&self.modes.view(), &rule)
+    }
+
+    /// The modifier keys a remap released logically that the user still holds (restored when
+    /// remaps are dropped).
+    fn lifted_still_held(&self) -> u8 {
+        let phys = self.norm.mods_physical();
+        let lifted: u8 = self.slots.iter().flatten().fold(0, |a, s| a | s.lift);
+        ModKey::ALL
+            .into_iter()
+            .filter(|m| lifted & m.bit() != 0 && phys.has(*m))
+            .fold(0u8, |a, m| a | m.bit())
+    }
+
+    /// The signal of a mode change. When the active mode changed, everything the old mode held
+    /// ends (`DDALGAK-SEC-005`): pending taps, holds, sequences and dual roles, held remaps and
+    /// buttons, motions, the hotstring buffer.
+    fn mode_signal(&mut self, binding: u16, c: Change) -> Signal {
+        let mut restore = 0;
+        if c.active {
+            self.hs.clear();
+            self.release = None;
+            self.hold = None;
+            self.seq = None;
+            restore = self.lifted_still_held();
+            self.clear_remaps();
+        }
+        self.want_timer = true;
+        Signal::Mode {
+            binding,
+            view: self.modes.view(),
+            switched: c.active,
+            restore,
+        }
+    }
+
+    /// Runs a fired rule: a mode rule changes the mode here and now (Step 72); every other rule
+    /// is a [`Signal::Fire`] for the worker. `None`: a hold found no free layer slot.
+    fn run_rule(&mut self, i: usize, kind: FireKind, vk: u16, now: u32) -> Option<Signal> {
+        let b = u16::try_from(i).unwrap_or(NONE);
+        if !self.table.compiled.get(i).is_some_and(|c| c.mode) {
+            return Some(self.fire(i, kind, now));
+        }
+        if !self.rate.allow(i, now) {
+            return Some(Signal::RateLimited { binding: b });
+        }
+        let action = self.table.mode_action(i)?;
+        let change = self.modes.apply(&self.table.modes, action, vk, b, now)?;
+        Some(self.mode_signal(b, change))
+    }
+
+    /// A mode change asked for outside the keyboard (the CLI, the tray, a rule whose trigger the
+    /// worker timed). `None`: refused (a `hold` needs a held key).
+    pub fn request_mode(
+        &mut self,
+        action: &crate::modes::ModeAction,
+        origin: ModeOrigin,
+        now: u32,
+    ) -> Option<Signal> {
+        let change = self.modes.request(&self.table.modes, action, origin, now)?;
+        let binding = match origin {
+            ModeOrigin::Rule(b) => b,
+            _ => NONE,
+        };
+        Some(self.mode_signal(binding, change))
+    }
+
+    /// The safe reset (a pause, `ddalgak mode reset`): the default mode, nothing held.
+    pub fn reset_mode(&mut self, origin: ModeOrigin) -> Option<Signal> {
+        let c = self.modes.reset(&self.table.modes, origin);
+        c.state.then(|| self.mode_signal(NONE, c))
+    }
+
+    /// The hook thread's timer fired: a mode with a timeout that saw no key for that long
+    /// returns to the default mode.
+    pub fn mode_tick(&mut self, now: u32) -> Option<Signal> {
+        let c = self.modes.tick(&self.table.modes, now);
+        c.state.then(|| self.mode_signal(NONE, c))
+    }
+
+    /// When the hook thread's one-shot timer should fire next: the earliest undecided dual role
+    /// or the end of a timed mode (milliseconds from `now`).
+    pub fn next_timer(&self, now: u32) -> Option<u32> {
+        let tap = self
+            .slots
+            .iter()
+            .flatten()
+            .filter_map(|s| {
+                s.pending
+                    .map(|p| s.spec.tap_ms.saturating_sub(now.wrapping_sub(p)))
+            })
+            .min();
+        let mode = self.modes.due_in(&self.table.modes, now);
+        match (tap, mode) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
         }
     }
 
@@ -410,8 +552,14 @@ impl Core {
     /// Replaces the rules (a reload). Pending taps, holds, sequences and undecided dual roles are
     /// dropped; keys whose down was consumed keep having their up consumed, and remaps that hold
     /// their target keep it until their trigger goes up (their instructions carry the output
-    /// keys, not rule indexes).
-    pub fn set_table(&mut self, table: Table) {
+    /// keys, not rule indexes). The mode state is carried over by mode ID (Step 72): the latched
+    /// mode stays when it still exists, otherwise the default mode is active; held layers end.
+    /// Returns the [`Signal::Mode`] the worker and the host need for the new rules' modes; when the
+    /// active mode changed, everything held is released like on any switch.
+    pub fn set_table(&mut self, table: Table) -> Signal {
+        let old_active = self.table.modes.id(self.modes.active()).to_string();
+        self.modes = self.modes.carry(&self.table.modes, &table.modes, self.now);
+        let switched = table.modes.id(self.modes.active()) != old_active;
         self.rate = Rate::new(table.len(), table.max_runs_per_second);
         self.hs = hotstring::Buffer::bounded(table_longest(&table));
         self.table = table;
@@ -427,6 +575,13 @@ impl Core {
         // The worker stops every motion when it gets the new rules; their trigger-ups stay
         // consumed (their downs were).
         self.motions = [None; MOTIONS];
+        self.mode_signal(
+            NONE,
+            Change {
+                state: true,
+                active: switched,
+            },
+        )
     }
 
     pub fn table(&self) -> &Table {
@@ -462,11 +617,17 @@ impl Core {
         let had =
             self.active_remaps() > 0 || !self.replayed.is_empty() || self.active_motions() > 0;
         self.clear_remaps();
-        if had {
+        let mut out = if had {
             vec![Signal::ReleaseAll]
         } else {
             Vec::new()
+        };
+        // Held layers end too: their key-ups may never reach the hook (Step 72).
+        let c = self.modes.drop_holds(ModeOrigin::KeyReset);
+        if c.state {
+            out.push(self.mode_signal(NONE, c));
         }
+        out
     }
 
     /// Drops pending taps, holds, sequences and remaps (pause, stop, session lock). The worker is
@@ -484,15 +645,16 @@ impl Core {
         if self.active_remaps() > 0 || !self.replayed.is_empty() || self.active_motions() > 0 {
             out.push(Signal::ReleaseAll);
         }
-        let phys = self.norm.mods_physical();
-        let lifted: u8 = self.slots.iter().flatten().fold(0, |a, s| a | s.lift);
-        let restore = ModKey::ALL
-            .into_iter()
-            .filter(|m| lifted & m.bit() != 0 && phys.has(*m))
-            .fold(0u8, |a, m| a | m.bit());
+        let restore = self.lifted_still_held();
         self.clear_remaps();
         if restore != 0 {
             out.push(Signal::Restore { mods: restore });
+        }
+        // Held layers end with the remaps (Step 72); the latched mode stays (a pause resets it
+        // with [`Core::reset_mode`]).
+        let c = self.modes.drop_holds(ModeOrigin::KeyReset);
+        if c.state {
+            out.push(self.mode_signal(NONE, c));
         }
         out
     }
@@ -862,7 +1024,13 @@ impl Core {
 
     /// Decides one event. Never allocates, never blocks.
     pub fn decide(&mut self, raw: &RawKey, mode: Mode, flags: &Flags) -> Decision {
-        let d = self.decide_event(raw, mode, flags);
+        self.now = raw.time_ms;
+        let mut d = self.decide_event(raw, mode, flags);
+        if std::mem::take(&mut self.want_timer)
+            && let Some(ms) = self.next_timer(raw.time_ms)
+        {
+            d.timer = Some(d.timer.map_or(ms, |t| t.min(ms)));
+        }
         if let Some(rs) = &self.runs {
             rs.visible.store(self.mods().bits(), Ordering::SeqCst);
             rs.phys
@@ -904,9 +1072,32 @@ impl Core {
         let vk_i = usize::from(ev.vk & 0xFF);
         match ev.transition {
             // 3. Consumed down, consumed up.
-            Transition::Up => self.up(&ev, vk_i),
+            Transition::Up => {
+                let mut d = self.up(&ev, vk_i);
+                // A layer this key held ends, and a one-shot mode whose key this was ends
+                // (Step 72), after the key's own up was decided in that mode.
+                let mut c = if self.modes.holds_key(ev.vk) {
+                    self.modes.release(ev.vk)
+                } else {
+                    Change::default()
+                };
+                let shot = self.modes.key_up(&self.table.modes, ev.vk, ev.time_ms);
+                c.state |= shot.state;
+                c.active |= shot.active;
+                if c.state {
+                    d.last = Some(self.mode_signal(NONE, c));
+                }
+                d
+            }
             Transition::Repeat => self.repeat(&ev, vk_i),
             Transition::Down => {
+                // A timed mode starts its idle time again; a one-shot mode takes this key as its
+                // one key (Step 72). The key is decided in the mode as it is now.
+                self.modes.key_down(
+                    ev.vk,
+                    ev.modifier.is_some() || ev.altgr_fake_ctrl,
+                    ev.time_ms,
+                );
                 // A key that goes down again was up: an older pairing state is stale (its up was
                 // made where the hook could not see it).
                 self.consumed.remove(ev.vk);
@@ -943,7 +1134,7 @@ impl Core {
             && k == ev.vk
         {
             self.release = None;
-            signal = Some(self.fire(usize::from(b), FireKind::Release, ev.time_ms));
+            signal = self.run_rule(usize::from(b), FireKind::Release, ev.vk, ev.time_ms);
         }
         if let Some((b, k)) = self.hold
             && k == ev.vk
@@ -1047,7 +1238,7 @@ impl Core {
             .get(usize::from(b))
             .filter(|c| c.repeat && c.on == On::Press)
             .map(|_| ())
-            .map(|()| self.fire(usize::from(b), FireKind::Repeat, ev.time_ms));
+            .and_then(|()| self.run_rule(usize::from(b), FireKind::Repeat, ev.vk, ev.time_ms));
         Decision::new(true, signal, ev.source)
     }
 
@@ -1128,7 +1319,10 @@ impl Core {
         let mut skipped: Option<(usize, Skip)> = None;
         let mut seq_start = [0u64; SEQ_WORDS];
         let mut any_seq = false;
-        for (i, c) in self.table.compiled.iter().enumerate() {
+        // Only the bindings that work in the active mode, in its precedence (Step 72).
+        for &bi in self.table.order(self.modes.active()) {
+            let i = usize::from(bi);
+            let c = &self.table.compiled[i];
             if c.len == 0 {
                 continue; // a hotstring binding: matched on typed characters
             }
@@ -1210,6 +1404,13 @@ impl Core {
             return self.motion_down(ev, i);
         }
         match c.on {
+            // A mode rule switches here and now: the next key is decided in the new mode.
+            On::Press if c.mode => match self.run_rule(i, FireKind::Press, ev.vk, ev.time_ms) {
+                // No free layer slot: the key passes unchanged.
+                None => self.pass(ev, None),
+                Some(signal) if c.pass_through => self.pass(ev, Some(signal)),
+                Some(signal) => self.take(ev, i, Some(signal)),
+            },
             On::Press => {
                 let signal = self.fire(i, FireKind::Press, ev.time_ms);
                 if c.pass_through {
@@ -1274,7 +1475,7 @@ impl Core {
             slot.pending = Some(ev.time_ms);
             self.slots[free] = Some(slot);
             let mut d = finish(self, None);
-            d.timer = Some(spec.tap_ms);
+            d.timer = self.next_timer(ev.time_ms);
             return d;
         }
         let op = self.press(&mut slot);
@@ -1299,7 +1500,7 @@ impl Core {
     /// Hotstrings (§3.4): feeds a key that reaches the application unchanged into the bounded
     /// buffer and decides whether it completes an abbreviation. `None`: the key passes as usual.
     fn hotstring(&mut self, ev: &KeyEvent, mode: Mode, flags: &Flags) -> Option<Decision> {
-        if !self.table.has_hotstrings() {
+        if !self.table.has_hotstrings_in(self.modes.active()) {
             return None;
         }
         let translate = self.translate?;
@@ -1346,13 +1547,14 @@ impl Core {
                 return None;
             }
         };
-        let Some(hit) = hotstring::find(&self.table.hotstrings, &self.hs, c) else {
+        let Some(hit) = hotstring::find(self.table.hotstrings_in(self.modes.active()), &self.hs, c)
+        else {
             self.hs.push(c);
             return None;
         };
         self.hs.clear();
         let (b, consumed, erase, retype) = {
-            let (b, spec) = &self.table.hotstrings[hit.index];
+            let (b, spec) = &self.table.hotstrings_in(self.modes.active())[hit.index];
             (
                 *b,
                 spec.consumes(),
@@ -1398,7 +1600,10 @@ impl Core {
         let mut next = [0u64; SEQ_WORDS];
         let mut complete: Option<usize> = None;
         let mut any = false;
-        for (i, c) in self.table.compiled.iter().enumerate() {
+        // In the active mode's precedence (a mode change cancels a pending sequence).
+        for &bi in self.table.order(self.modes.active()) {
+            let i = usize::from(bi);
+            let c = &self.table.compiled[i];
             if !bit(&seq.cand, i) || usize::from(c.len) <= step {
                 continue;
             }
@@ -1413,8 +1618,8 @@ impl Core {
         }
         if let Some(i) = complete {
             self.seq = None;
-            let signal = self.fire(i, FireKind::Sequence, ev.time_ms);
-            return swallow(self, Some(signal));
+            let signal = self.run_rule(i, FireKind::Sequence, ev.vk, ev.time_ms);
+            return swallow(self, signal);
         }
         self.seq = any.then_some(Seq {
             step: seq.step + 1,
@@ -1446,6 +1651,7 @@ mod tests {
             injects: false,
             action: Action::Engine(vec![EngineOp::Pause]),
             hotstring: None,
+            modes: 0,
         }
     }
 
@@ -2045,6 +2251,7 @@ mod tests {
             injects: true,
             action: Action::Remap(remap_spec(to, None, 200)),
             hotstring: None,
+            modes: 0,
         }
     }
 
@@ -2816,6 +3023,7 @@ mod tests {
                 variables: false,
             })),
             hotstring: Some(Arc::new(spec)),
+            modes: 0,
         }
     }
 
@@ -3355,5 +3563,520 @@ mod tests {
         assert_eq!(t.core.active_motions(), MOTIONS);
         let extra = t.ev("F21", false);
         assert!(!extra.consume && extra.signal.is_none());
+    }
+
+    // ---- Step 72: modes and layers -------------------------------------------------------------
+
+    use crate::model::{Mode as ModeDoc, Profile};
+    use crate::modes::{ModeAction, ModeSet};
+
+    /// A mode set from `(id, parent)` pairs; the first is the default mode.
+    fn mode_set(spec: &[(&str, Option<&str>)]) -> ModeSet {
+        let modes = spec
+            .iter()
+            .map(|(id, parent)| {
+                let mut m = ModeDoc::new(*id, id.to_uppercase());
+                m.parent = parent.map(str::to_string);
+                m
+            })
+            .collect();
+        ModeSet::from_profile(&Profile {
+            id: "p".into(),
+            title: "P".into(),
+            description: None,
+            default_mode: spec[0].0.into(),
+            modes,
+            rules: Vec::new(),
+            extra: serde_json::Map::new(),
+        })
+    }
+
+    /// base, nav (layer over base), sym (layer over nav), game (exclusive).
+    fn layers() -> ModeSet {
+        mode_set(&[
+            ("base", None),
+            ("nav", Some("base")),
+            ("sym", Some("nav")),
+            ("game", None),
+        ])
+    }
+
+    fn bit(s: &ModeSet, id: &str) -> u32 {
+        1 << s.index(id).unwrap()
+    }
+
+    fn mode_rule(rule: &str, keys: &str, action: ModeAction) -> Binding {
+        Binding {
+            action: Action::Mode(action),
+            ..binding(rule, keys)
+        }
+    }
+
+    fn scoped(mut b: Binding, mask: u32) -> Binding {
+        b.modes = mask;
+        b
+    }
+
+    impl T {
+        fn with_modes(bindings: Vec<Binding>, modes: ModeSet) -> T {
+            T {
+                core: Core::new(Table::compile_modes(bindings, modes, 20)),
+                mode: Mode::Running,
+                flags: Flags::default(),
+                t: 1000,
+            }
+        }
+
+        fn active(&self) -> String {
+            self.core
+                .table()
+                .modes()
+                .id(self.core.active_mode())
+                .to_string()
+        }
+    }
+
+    /// The mode signal of a decision: (switched, active mode, restore).
+    fn mode_sig(d: &Decision) -> Option<(bool, u8, u8)> {
+        d.signals().find_map(|s| match s {
+            Signal::Mode {
+                switched,
+                view,
+                restore,
+                ..
+            } => Some((switched, view.active, restore)),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn a_held_layer_changes_what_keys_mean_and_releases_its_outputs_on_the_way_out() {
+        let s = layers();
+        let nav = s.index("nav").unwrap();
+        let mut t = T::with_modes(
+            vec![
+                mode_rule("hold-nav", "CapsLock", ModeAction::Hold(nav)),
+                scoped(remap("nav-left", "code:KeyH", "Left"), bit(&s, "nav")),
+            ],
+            s.clone(),
+        );
+        // In Base, H is just H.
+        assert!(!t.ev("code:KeyH", false).consume);
+        assert!(!t.ev("code:KeyH", true).consume);
+        // CapsLock held: Navigation, decided in the callback; the key itself is consumed.
+        let d = t.ev("CapsLock", false);
+        assert!(d.consume);
+        assert_eq!(mode_sig(&d), Some((true, nav, 0)));
+        assert_eq!(t.active(), "nav");
+        // Its auto-repeat is consumed and changes nothing.
+        let r = t.src("CapsLock", false, Source::Physical);
+        assert!(r.consume && mode_sig(&r).is_none());
+        // H is Left while held.
+        let d = t.ev("code:KeyH", false);
+        assert_eq!(op(&d), Some(press(&[], &[], Some(vk("Left")))));
+        assert_eq!(t.core.active_remaps(), 1);
+        // CapsLock goes up while H is still down: Base returns and Left is released at once
+        // (DDALGAK-SEC-005), not when H goes up.
+        let d = t.ev("CapsLock", true);
+        assert!(d.consume, "the trigger's up is consumed with its down");
+        assert_eq!(mode_sig(&d), Some((true, 0, 0)));
+        assert_eq!(t.core.active_remaps(), 0, "the core dropped the held remap");
+        assert_eq!(t.active(), "base");
+        // H's up stays consumed (its down was) and sends nothing more.
+        let d = t.ev("code:KeyH", true);
+        assert!(d.consume);
+        assert!(op(&d).is_none());
+        // H again: Base, passes.
+        assert!(!t.ev("code:KeyH", false).consume);
+    }
+
+    #[test]
+    fn the_nearest_layer_wins_then_its_parents_then_rules_for_every_mode() {
+        let s = layers();
+        let (nav, sym, game) = (
+            s.index("nav").unwrap(),
+            s.index("sym").unwrap(),
+            s.index("game").unwrap(),
+        );
+        let every = binding("every", "F13"); // an engine rule in every mode
+        let mut t = T::with_modes(
+            vec![
+                every,
+                scoped(block("nav-f13", "F13"), bit(&s, "nav")),
+                scoped(block("base-f14", "F14"), bit(&s, "base")),
+                scoped(block("sym-f14", "F14"), bit(&s, "sym")),
+                mode_rule("to-nav", "Ctrl+Shift+F1", ModeAction::Set(nav)),
+                mode_rule("to-sym", "Ctrl+Shift+F2", ModeAction::Set(sym)),
+                mode_rule("to-game", "Ctrl+Shift+F3", ModeAction::Set(game)),
+            ],
+            s.clone(),
+        );
+        let winner = |t: &mut T, key: &str| {
+            let d = t.ev(key, false);
+            t.ev(key, true);
+            match d.signal {
+                Some(Signal::Fire { binding, .. }) => Some(
+                    t.core
+                        .table()
+                        .binding(usize::from(binding))
+                        .unwrap()
+                        .rule
+                        .clone(),
+                ),
+                _ if d.consume => Some("consumed".to_string()),
+                _ => None,
+            }
+        };
+        let switch = |t: &mut T, keys: &[&str]| {
+            let d = t.down(keys);
+            assert!(mode_sig(&d).is_some());
+            t.up(keys);
+        };
+        // Base: the rule for every mode; F14: Base's own block.
+        assert_eq!(winner(&mut t, "F13").as_deref(), Some("every"));
+        assert_eq!(winner(&mut t, "F14").as_deref(), Some("base-f14"));
+        // Navigation (a layer over Base): its own F13 wins; F14 falls back to Base's block.
+        switch(&mut t, &["LCtrl", "LShift", "F1"]);
+        assert_eq!(t.active(), "nav");
+        assert_eq!(winner(&mut t, "F13").as_deref(), Some("nav-f13"));
+        assert_eq!(winner(&mut t, "F14").as_deref(), Some("base-f14"));
+        // Symbols (a layer over Navigation): F13 falls back to Navigation's block.
+        switch(&mut t, &["LCtrl", "LShift", "F2"]);
+        assert_eq!(t.active(), "sym");
+        assert_eq!(winner(&mut t, "F13").as_deref(), Some("nav-f13"));
+        // Gaming (exclusive): only the rule for every mode; F14 reaches the application.
+        switch(&mut t, &["LCtrl", "LShift", "F3"]);
+        assert_eq!(t.active(), "game");
+        assert_eq!(winner(&mut t, "F13").as_deref(), Some("every"));
+        assert_eq!(
+            winner(&mut t, "F14"),
+            None,
+            "unbound keys reach the application"
+        );
+    }
+
+    #[test]
+    fn switching_modes_while_typing_keeps_every_key_paired_and_nothing_held() {
+        // A synthetic typing stream: letters, a remap held across switches, Shift, a toggle key.
+        let s = layers();
+        let nav = s.index("nav").unwrap();
+        let mut t = T::with_modes(
+            vec![
+                mode_rule("toggle-nav", "F13", ModeAction::Toggle(nav)),
+                scoped(remap("nav-j", "J", "Down"), bit(&s, "nav")),
+                scoped(remap("caps", "CapsLock", "LCtrl"), bit(&s, "base")),
+            ],
+            s.clone(),
+        );
+        let mut consumed_downs = Vec::new();
+        let mut type_key = |t: &mut T, k: &str| {
+            let d = t.ev(k, false);
+            if d.consume {
+                consumed_downs.push(k.to_string());
+            }
+            let u = t.ev(k, true);
+            assert_eq!(
+                u.consume, d.consume,
+                "{k}: down and up are consumed together"
+            );
+        };
+        for k in ["H", "E", "J"] {
+            type_key(&mut t, k);
+        }
+        assert!(consumed_downs.is_empty(), "Base: plain typing passes");
+        // Hold CapsLock (Ctrl in Base), then toggle Navigation while it is held.
+        assert!(t.ev("CapsLock", false).consume);
+        assert_eq!(t.core.active_remaps(), 1);
+        let d = t.ev("F13", false);
+        assert_eq!(mode_sig(&d), Some((true, nav, 0)));
+        assert_eq!(t.core.active_remaps(), 0, "Ctrl is released on the switch");
+        t.ev("F13", true);
+        // CapsLock's up: consumed (its down was), nothing pressed again.
+        let d = t.ev("CapsLock", true);
+        assert!(d.consume && op(&d).is_none());
+        // In Navigation J is Down; typing continues with Shift.
+        let d = t.ev("J", false);
+        assert_eq!(op(&d), Some(press(&[], &[], Some(vk("Down")))));
+        t.ev("J", true);
+        t.down(&["LShift", "E"]);
+        t.up(&["LShift", "E"]);
+        // Toggle back while J is held: Down is released, J's up stays consumed.
+        assert!(t.ev("J", false).consume);
+        let d = t.ev("F13", false);
+        assert_eq!(mode_sig(&d), Some((true, 0, 0)));
+        t.ev("F13", true);
+        assert!(t.ev("J", true).consume);
+        assert_eq!(t.core.active_remaps(), 0);
+        for k in ["J", "K"] {
+            assert!(!t.ev(k, false).consume, "{k} types again in Base");
+            assert!(!t.ev(k, true).consume);
+        }
+    }
+
+    #[test]
+    fn every_mode_action_works_on_every_kind_of_permitted_trigger() {
+        // Keyboard accessibility: a mode action can be put on a plain key, a chord, a lock key,
+        // a physical key position, a sequence, a bare modifier tapped alone and a mouse button,
+        // and it fires from that key alone (no pointer needed).
+        let s = layers();
+        let nav = s.index("nav").unwrap();
+        let triggers: [(&str, &[&str]); 6] = [
+            ("F13", &["F13"]),
+            ("Ctrl+Alt+Shift+F14", &["LCtrl", "LAlt", "LShift", "F14"]),
+            ("ScrollLock", &["ScrollLock"]),
+            ("code:KeyM", &["code:KeyM"]),
+            ("CapsLock", &["CapsLock"]),
+            ("Insert", &["Insert"]),
+        ];
+        let actions = [
+            ModeAction::Set(nav),
+            ModeAction::Toggle(nav),
+            ModeAction::Cycle(vec![0, nav].into()),
+            ModeAction::Hold(nav),
+        ];
+        for a in &actions {
+            for (keys, press) in triggers {
+                let mut t = T::with_modes(vec![mode_rule("r", keys, a.clone())], s.clone());
+                let d = t.down(press);
+                assert_eq!(mode_sig(&d).map(|m| m.1), Some(nav), "{keys}: {a:?}");
+                assert_eq!(t.active(), "nav");
+                t.up(press);
+                let back = if a.holds() { "base" } else { "nav" };
+                assert_eq!(t.active(), back, "{keys}: {a:?}");
+            }
+        }
+        // A sequence and a bare modifier tapped alone (on release) switch too.
+        let mut seq = mode_rule("seq", "Ctrl+K M", ModeAction::Set(nav));
+        seq.trigger = Trigger::parse("Ctrl+K M").unwrap();
+        let mut tap = mode_rule("tap", "RAlt", ModeAction::Default);
+        tap.on = On::Release;
+        let mut t = T::with_modes(vec![seq, tap], s.clone());
+        t.down(&["LCtrl", "K"]);
+        t.up(&["LCtrl", "K"]);
+        let d = t.ev("M", false);
+        assert_eq!(mode_sig(&d).map(|m| m.1), Some(nav));
+        t.ev("M", true);
+        assert!(
+            !t.ev("RAlt", false).consume,
+            "a bare modifier keeps working in chords"
+        );
+        let d = t.ev("RAlt", true);
+        assert_eq!(mode_sig(&d).map(|m| m.1), Some(0));
+        // A middle mouse button as the trigger (with the mouse hook, Step 68).
+        let mut t = T::with_modes(
+            vec![mode_rule("mid", "MouseMiddle", ModeAction::Toggle(nav))],
+            s.clone(),
+        );
+        let raw = RawKey::physical(Button::Middle.vk(), 0, false, 2000);
+        let d = t.core.decide(&raw, Mode::Running, &Flags::default());
+        assert_eq!(mode_sig(&d).map(|m| m.1), Some(nav));
+    }
+
+    #[test]
+    fn previous_default_pass_through_and_rate_limits() {
+        let s = layers();
+        let (nav, game) = (s.index("nav").unwrap(), s.index("game").unwrap());
+        let mut home = mode_rule("home", "Escape", ModeAction::Default);
+        home.pass_through = true;
+        let mut t = T::with_modes(
+            vec![
+                mode_rule("to-game", "F15", ModeAction::Set(game)),
+                mode_rule("to-nav", "F16", ModeAction::Set(nav)),
+                mode_rule("back", "F17", ModeAction::Previous),
+                scoped(home, bit(&s, "nav") | bit(&s, "game")),
+            ],
+            s,
+        );
+        t.ev("F15", false);
+        t.ev("F15", true);
+        t.ev("F16", false);
+        t.ev("F16", true);
+        assert_eq!(t.active(), "nav");
+        t.ev("F17", false);
+        t.ev("F17", true);
+        assert_eq!(t.active(), "game");
+        // Escape returns to Base and still reaches the application.
+        let d = t.ev("Escape", false);
+        assert!(!d.consume);
+        assert!(mode_sig(&d).is_some());
+        assert!(!t.ev("Escape", true).consume);
+        assert_eq!(t.active(), "base");
+        // In Base the Escape rule does not apply: nothing fires.
+        let d = t.ev("Escape", false);
+        assert!(mode_sig(&d).is_none() && !d.consume);
+        t.ev("Escape", true);
+        // A storm of switches is rate limited like any rule.
+        let mut limited = 0;
+        for _ in 0..30 {
+            let d = t.ev("F16", false);
+            if matches!(d.signal, Some(Signal::RateLimited { .. })) {
+                limited += 1;
+            }
+            t.ev("F16", true);
+        }
+        assert!(limited >= 10, "{limited}");
+    }
+
+    #[test]
+    fn one_shot_and_timed_modes_run_through_the_core_and_its_timer() {
+        let mut quick = ModeDoc::new("quick", "Quick");
+        quick.one_shot = Some(true);
+        let mut timed = ModeDoc::new("timed", "Timed");
+        timed.timeout_ms = Some(2000);
+        let s = ModeSet::from_profile(&Profile {
+            id: "p".into(),
+            title: "P".into(),
+            description: None,
+            default_mode: "base".into(),
+            modes: vec![ModeDoc::new("base", "Base"), quick, timed],
+            rules: Vec::new(),
+            extra: serde_json::Map::new(),
+        });
+        let mut t = T::with_modes(
+            vec![
+                mode_rule("q", "F13", ModeAction::Set(1)),
+                mode_rule("tm", "F14", ModeAction::Set(2)),
+                scoped(remap("q-a", "A", "F20"), 0b10),
+            ],
+            s,
+        );
+        assert_eq!(t.core.next_timer(t.t), None, "no timer while idle");
+        t.ev("F13", false);
+        t.ev("F13", true);
+        assert_eq!(t.active(), "quick");
+        // A is the one key: remapped in the one-shot mode, then the mode ends with A's up.
+        let d = t.ev("A", false);
+        assert_eq!(op(&d), Some(press(&[], &[], Some(vk("F20")))));
+        let d = t.ev("A", true);
+        assert!(matches!(d.signal, Some(Signal::Remap { .. })));
+        assert!(matches!(d.last, Some(Signal::Mode { .. })));
+        assert_eq!(t.active(), "base");
+        assert!(!t.ev("A", false).consume, "A is A again");
+        t.ev("A", true);
+        // A timed mode asks for the timer and ends after 2 s without a key.
+        let d = t.ev("F14", false);
+        assert_eq!(d.timer, Some(2000));
+        let now = t.t;
+        t.ev("F14", true);
+        assert_eq!(t.active(), "timed");
+        assert!(t.core.mode_tick(now + 1000).is_none());
+        assert_eq!(t.core.next_timer(now + 1000), Some(1000));
+        let s = t.core.mode_tick(now + 2000).unwrap();
+        assert!(matches!(s, Signal::Mode { switched: true, .. }));
+        assert_eq!(t.active(), "base");
+        assert_eq!(t.core.next_timer(now + 2000), None);
+    }
+
+    #[test]
+    fn pause_lock_desktop_switches_reloads_and_requests_never_strand_a_layer() {
+        let s = layers();
+        let (nav, game) = (s.index("nav").unwrap(), s.index("game").unwrap());
+        let rules = vec![
+            mode_rule("hold-nav", "CapsLock", ModeAction::Hold(nav)),
+            mode_rule("to-game", "F15", ModeAction::Set(game)),
+            scoped(remap("nav-l", "L", "Right"), bit(&s, "nav")),
+        ];
+        let mut t = T::with_modes(rules.clone(), s.clone());
+        // A key reset (desktop switch, unlock, elevated window) ends a held layer and its outputs.
+        t.ev("CapsLock", false);
+        t.ev("L", false);
+        let signals = t.core.reset_keys();
+        assert_eq!(signals[0], Signal::ReleaseAll);
+        assert!(matches!(signals[1], Signal::Mode { .. }));
+        assert_eq!(t.active(), "base");
+        t.ev("L", true);
+        t.ev("CapsLock", true);
+        // Pause: cancel ends the layer, the reset returns to the default mode.
+        t.ev("F15", false);
+        t.ev("F15", true);
+        t.ev("CapsLock", false);
+        assert_eq!(t.active(), "nav");
+        let signals = t.core.cancel_pending();
+        assert!(signals.iter().any(|s| matches!(s, Signal::Mode { .. })));
+        assert_eq!(t.active(), "game", "a lock keeps the latched mode");
+        assert!(t.core.reset_mode(ModeOrigin::Pause).is_some());
+        assert_eq!(t.active(), "base", "a pause is the safe reset");
+        assert!(t.core.reset_mode(ModeOrigin::Pause).is_none());
+        t.ev("CapsLock", true);
+        // A reload keeps the latched mode by ID; a reload that deletes it falls back to Base and
+        // releases what the old mode held.
+        t.ev("F15", false);
+        t.ev("F15", true);
+        let s2 = mode_set(&[("base", None), ("game", None), ("nav", Some("base"))]);
+        let sig = t
+            .core
+            .set_table(Table::compile_modes(rules.clone(), s2, 20));
+        assert!(matches!(
+            sig,
+            Signal::Mode {
+                switched: false,
+                ..
+            }
+        ));
+        assert_eq!(t.active(), "game");
+        let s3 = mode_set(&[("base", None), ("nav", Some("base"))]);
+        let sig = t.core.set_table(Table::compile_modes(rules, s3, 20));
+        assert!(matches!(sig, Signal::Mode { switched: true, .. }));
+        assert_eq!(t.active(), "base");
+        // Requests (the CLI, the tray) change the mode exactly like rules; a hold is refused.
+        let sig = t
+            .core
+            .request_mode(&ModeAction::Set(1), ModeOrigin::Cli, 5000);
+        assert!(matches!(
+            sig,
+            Some(Signal::Mode {
+                switched: true,
+                binding: NONE,
+                ..
+            })
+        ));
+        assert!(
+            t.core
+                .request_mode(&ModeAction::Hold(1), ModeOrigin::Cli, 5000)
+                .is_none()
+        );
+        // The emergency chord trips the core; a new engine starts in the default mode.
+        t.down(&["LCtrl", "LAlt", "LShift", "Escape"]);
+        assert!(t.core.tripped());
+        let fresh = Core::new(Table::compile_modes(Vec::new(), layers(), 20));
+        assert_eq!(fresh.active_mode(), 0);
+        assert_eq!(fresh.mode_status().origin, "start");
+    }
+
+    #[test]
+    fn decisions_with_modes_stay_far_below_the_hook_budget() {
+        // 1000 rules over 8 modes (layers and exclusive ones), a key no rule uses, in the
+        // deepest layer: the active mode's list is scanned, nothing else.
+        let s = mode_set(&[
+            ("base", None),
+            ("a", Some("base")),
+            ("b", Some("a")),
+            ("c", Some("b")),
+            ("d", None),
+            ("e", Some("d")),
+            ("f", None),
+            ("g", Some("c")),
+        ]);
+        let bindings: Vec<Binding> = (0..1000)
+            .map(|i| {
+                let keys = format!(
+                    "{}F{}",
+                    ["", "Ctrl+", "Alt+", "Shift+", "Ctrl+Shift+"][i % 5],
+                    13 + (i / 5) % 12
+                );
+                scoped(binding(&format!("r{i}"), &keys), 1 << (i % 8))
+            })
+            .collect();
+        let mut t = T::with_modes(bindings, s);
+        let g = t.core.table().modes().index("g").unwrap();
+        let _ = t.core.request_mode(&ModeAction::Set(g), ModeOrigin::Cli, 0);
+        let start = std::time::Instant::now();
+        for _ in 0..10_000 {
+            t.ev("F1", false);
+            t.ev("F1", true);
+        }
+        let per = start.elapsed() / 20_000;
+        eprintln!("decision with 1000 rules over 8 modes: {per:?}");
+        assert!(per < std::time::Duration::from_micros(200), "{per:?}");
     }
 }

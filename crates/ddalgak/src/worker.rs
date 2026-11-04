@@ -46,6 +46,7 @@
 use crate::core::{RemapOp, Signal};
 use crate::inject::{Backend, Injector, OutCode, OutEvent};
 use crate::launch;
+use crate::modes::{ModeSet, ModeStatus};
 use crate::mouse::{self, HeldMotion};
 use crate::run::{self, Env, HotstringFire, Next, Run, RunShared};
 use crate::stats::Stats;
@@ -123,6 +124,11 @@ pub enum Control {
     Engine { op: EngineOp, rule: String },
     /// The emergency chord fired.
     Emergency,
+    /// A mode rule whose trigger the worker timed (`on: hold`) fired (Step 72): the controller
+    /// asks the hook thread to run its step, so the mode state stays in one place.
+    ModeRequest { binding: u16, generation: u32 },
+    /// The mode changed (Step 72): for `status` and the tray indicator.
+    Mode { generation: u32, status: ModeStatus },
 }
 
 /// The rules the worker runs, with the generation the hook's table has.
@@ -131,7 +137,10 @@ pub struct Rules {
     pub generation: u32,
     pub bindings: Arc<Vec<Binding>>,
     pub profile: String,
+    /// The active mode (activity entries name it); it follows [`Signal::Mode`].
     pub mode: String,
+    /// The profile's modes, to name them (Step 72).
+    pub modes: ModeSet,
 }
 
 /// Messages to the worker.
@@ -765,6 +774,33 @@ fn run(rx: &Receiver<Msg>, control: &Sink, stats: &Stats, ctx: &mut Ctx<'_>) {
                     ctx.stop_motions("cancelled");
                 }
                 Signal::MotionEnd { binding } => ctx.end_motion(generation, binding),
+                Signal::Mode {
+                    binding,
+                    view,
+                    switched,
+                    restore,
+                } => {
+                    // A switch releases everything the old mode held, whatever the rules'
+                    // generation (DDALGAK-SEC-005), and ends the hold triggers armed in it.
+                    if switched {
+                        holds.clear();
+                        ctx.inj.release_all();
+                        ctx.stop_motions("cancelled");
+                        if restore != 0 {
+                            let mut ev = Vec::new();
+                            mod_events(restore, false, false, &mut ev);
+                            ctx.inj.send_mixed(&ev);
+                        }
+                    }
+                    // The rule ran in the mode it was decided in; later entries name the new one.
+                    record(rules.as_ref(), generation, binding, "ok", activity);
+                    if let Some(r) = rules.as_mut().filter(|r| r.generation == generation) {
+                        let names = |b: u16| r.bindings.get(usize::from(b)).map(|b| b.rule.clone());
+                        let status = r.modes.status(&view, &names);
+                        r.mode = status.active.clone();
+                        control(Control::Mode { generation, status });
+                    }
+                }
                 Signal::Restore { mods } => {
                     let mut ev = Vec::new();
                     mod_events(mods, false, false, &mut ev);
@@ -847,6 +883,15 @@ fn fire(
         return false;
     };
     match &b.action {
+        // A mode rule fired by the worker's hold timer (`on: hold`, Step 72): the hook thread runs
+        // the step and records the outcome with its [`Signal::Mode`].
+        Action::Mode(_) => {
+            control(Control::ModeRequest {
+                binding,
+                generation,
+            });
+            return false;
+        }
         Action::Engine(ops) => {
             for op in ops {
                 control(Control::Engine {
@@ -890,6 +935,7 @@ mod tests {
             injects: false,
             action: Action::Engine(vec![op]),
             hotstring: None,
+            modes: 0,
         };
         Rules {
             generation,
@@ -899,6 +945,7 @@ mod tests {
             ]),
             profile: "default".into(),
             mode: "base".into(),
+            modes: ModeSet::single(),
         }
     }
 
@@ -1281,6 +1328,7 @@ mod tests {
             injects: true,
             action,
             hotstring: None,
+            modes: 0,
         };
         Rules {
             generation,
@@ -1304,6 +1352,7 @@ mod tests {
             ]),
             profile: "default".into(),
             mode: "base".into(),
+            modes: ModeSet::single(),
         }
     }
 
@@ -1505,6 +1554,7 @@ mod tests {
                 stop_on_error: true,
             })),
             hotstring: None,
+            modes: 0,
         };
         Rules {
             generation,
@@ -1516,6 +1566,7 @@ mod tests {
             ),
             profile: "default".into(),
             mode: "base".into(),
+            modes: ModeSet::single(),
         }
     }
 
@@ -1684,6 +1735,7 @@ mod tests {
             injects: true,
             action,
             hotstring: None,
+            modes: 0,
         }
     }
 
@@ -1754,6 +1806,7 @@ mod tests {
             ]),
             profile: "default".into(),
             mode: "base".into(),
+            modes: ModeSet::single(),
         }
     }
 

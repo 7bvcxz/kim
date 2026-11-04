@@ -66,6 +66,7 @@ fn binding(rule: &str, keys: &str, injected: Injected, op: EngineOp) -> Binding 
         injects: false,
         action: Action::Engine(vec![op]),
         hotstring: None,
+        modes: 0,
     }
 }
 
@@ -100,6 +101,7 @@ fn engine_with(bindings: Vec<Binding>, lifetime: Duration, observe_only: bool) -
         bindings: Arc::new(bindings.clone()),
         profile: "default".into(),
         mode: "base".into(),
+        modes: ddalgak::modes::ModeSet::single(),
     }));
     shared.set_state(STATE_RUNNING);
     let t = Instant::now();
@@ -372,6 +374,7 @@ fn remap_binding(rule: &str, keys: &str, to: &str, tap: Option<&str>) -> Binding
             tap_ms: 200,
         }),
         hotstring: None,
+        modes: 0,
     }
 }
 
@@ -659,6 +662,7 @@ fn mouse_rules_on_obscure_keys_reach_only_a_simulated_pointer() {
         bindings: Arc::new(bindings.clone()),
         profile: "default".into(),
         mode: "base".into(),
+        modes: ddalgak::modes::ModeSet::single(),
     }));
     shared.set_state(STATE_RUNNING);
     let hook = HookThread::start(

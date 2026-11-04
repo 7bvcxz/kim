@@ -54,7 +54,8 @@
             "max_entries": {"type": "integer", "minimum": 50, "maximum": 10000}
           }
         },
-        "max_runs_per_second": {"description": "Per-rule rate limit; further triggers are dropped with `rate_limited`. Default 20.", "type": "integer", "minimum": 1, "maximum": 100}
+        "max_runs_per_second": {"description": "Per-rule rate limit; further triggers are dropped with `rate_limited`. Default 20.", "type": "integer", "minimum": 1, "maximum": 100},
+        "mode_indicator": {"description": "Step 72: `auto` (default) names the active mode in the tray only when the active profile has more than one mode; `tray` always; `off` never. `ddalgak status` and the editor's header always show it.", "enum": ["auto", "tray", "off"]}
       }
     },
     "profile": {
@@ -70,12 +71,17 @@
       }
     },
     "mode": {
+      "description": "A user-defined mode (DDALGAK_RULE_MODEL §7.3). Without `parent` it is exclusive: only its own rules and the rules without `modes` apply. With `parent` (Step 72, additive) it is a layer: keys without a rule of its own fall back to the rules of its parent, the parent's parent, and so on. The default mode has no parent, `one_shot` or `timeout_ms` (it is where every exit ends; `mode_invalid` otherwise), and parents never form a cycle (`mode_cycle`).",
       "type": "object",
       "required": ["id", "title"],
       "properties": {
         "id": {"$ref": "#/$defs/mode_id"},
         "title": {"$ref": "#/$defs/title"},
-        "color": {"description": "Shown in the mode indicator, always together with the mode's title.", "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"}
+        "color": {"description": "Shown in the mode indicator, always together with the mode's title.", "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"},
+        "icon": {"description": "Step 72: a short badge shown next to the title in the indicator (a letter, a Hangul syllable, a symbol or an emoji); never instead of the title.", "type": "string", "pattern": "^[^\\s\\x00-\\x1F\\x7F]{1,8}$"},
+        "parent": {"description": "Step 72: the mode this one is a layer over.", "$ref": "#/$defs/mode_id"},
+        "one_shot": {"description": "Step 72: when the mode is switched to (set, toggle, cycle), it ends after the next key that is not a modifier, and the mode before it returns.", "type": "boolean"},
+        "timeout_ms": {"description": "Step 72: when the mode is switched to, it ends after this long without a key press, and the default mode returns.", "type": "integer", "minimum": 1000, "maximum": 3600000}
       }
     },
     "trigger_syntax": {

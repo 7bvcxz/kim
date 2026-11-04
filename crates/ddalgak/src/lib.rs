@@ -1,6 +1,12 @@
 //! Ddalgak: a native, Windows-first automation engine (docs/DDALGAK_PHILOSOPHY.md, ADR 0022,
 //! ADR 0024).
 //!
+//! Step 72 adds **user-defined modes and layers** ([`modes`]: exclusive modes and layers over a
+//! parent, set, toggle, cycle, hold, previous and default run inside the hook callback, one-shot
+//! and timed exits, per-mode precedence, every held output released on a switch, the indicator
+//! and menu data; [`mode_edit`]: mode CRUD on the rules document and the editor's Modes page;
+//! ADR 0043).
+//!
 //! Step 71 adds **mouse actions** ([`mouse`]: moves in logical pixels or grid cells and to points
 //! across monitors with per-monitor DPI, normalized absolute `SendInput` moves that never leave
 //! the desktop, the wheel, clicks, holds on the remap ledger, motions while a key is held, a
@@ -36,7 +42,9 @@ pub mod inject;
 pub mod ipc;
 pub mod launch;
 pub mod lifecycle;
+pub mod mode_edit;
 pub mod model;
+pub mod modes;
 pub mod mouse;
 pub mod paths;
 pub mod remap;

@@ -438,7 +438,7 @@ mod client {
                 ),
             ));
         }
-        conn.write_all_bytes(ipc::request(method, dry_run).as_bytes())
+        conn.write_all_bytes(ipc::request(&method, dry_run).as_bytes())
             .map_err(|e| CliError::new(Code::AppUnresponsive, format!("cannot send: {e}")))?;
         let deadline = Instant::now() + Duration::from_millis(ipc::TIMEOUT_MS + 500);
         let line = pipe::read_line(&conn, ipc::MAX_RESPONSE, deadline).map_err(|e| {

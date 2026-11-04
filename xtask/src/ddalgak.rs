@@ -238,6 +238,30 @@ pub fn semantic_errors(doc: &Value) -> Vec<Finding> {
         if !known(&p["default_mode"]) {
             push("unknown_mode", format!("{at_p}.default_mode"));
         }
+        // Step 72: a layer's parent exists, and following parents never comes back to the mode.
+        let parent_of: BTreeMap<&str, &str> = list(&p["modes"])
+            .filter_map(|m| Some((m["id"].as_str()?, m["parent"].as_str()?)))
+            .collect();
+        for (mi, m) in list(&p["modes"]).enumerate() {
+            let Some(parent) = m["parent"].as_str() else {
+                continue;
+            };
+            if !known(&m["parent"]) {
+                push("unknown_mode", format!("{at_p}.modes[{mi}].parent"));
+                continue;
+            }
+            let start = m["id"].as_str().unwrap_or_default();
+            let mut at = Some(parent);
+            // A cycle further up the chain is reported at the modes that lie on it.
+            for _ in 0..=modes.len() {
+                let Some(cur) = at else { break };
+                if cur == start {
+                    push("mode_cycle", format!("{at_p}.modes[{mi}].parent"));
+                    break;
+                }
+                at = parent_of.get(cur).copied();
+            }
+        }
 
         let mut triggers: BTreeMap<String, usize> = BTreeMap::new();
         for (ri, r) in list(&p["rules"]).enumerate() {

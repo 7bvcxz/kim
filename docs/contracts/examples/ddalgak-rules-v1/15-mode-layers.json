@@ -1,0 +1,128 @@
+{
+  "schema": "ddalgak.rules",
+  "schema_version": 1,
+  "hotkey_contract": 1,
+  "revision": 12,
+  "active_profile": "layers",
+  "settings": {"engine_on_start": "off", "mode_indicator": "auto"},
+  "profiles": [
+    {
+      "id": "layers",
+      "title": "Layers",
+      "description": "Step 72: a navigation layer over Base, a symbols layer over it, an exclusive gaming mode, a one-shot mode and a mode that times out.",
+      "default_mode": "base",
+      "modes": [
+        {"id": "base", "title": "Base"},
+        {"id": "nav", "title": "Navigation", "parent": "base", "icon": "N", "color": "#B7A6F5"},
+        {"id": "symbols", "title": "Symbols", "parent": "nav", "icon": "#", "color": "#E8C27A"},
+        {"id": "gaming", "title": "Gaming", "icon": "🎮"},
+        {"id": "accent", "title": "Accent (next key)", "one_shot": true},
+        {"id": "numpad", "title": "Number pad", "parent": "base", "timeout_ms": 10000}
+      ],
+      "rules": [
+        {
+          "id": "hold-nav",
+          "title": "Hold CapsLock for Navigation",
+          "enabled": true,
+          "trigger": {"keys": "CapsLock"},
+          "steps": [{"type": "mode", "op": "hold", "mode": "nav"}]
+        },
+        {
+          "id": "hold-symbols",
+          "title": "Hold Tab for Symbols (over Navigation)",
+          "enabled": true,
+          "modes": ["nav"],
+          "trigger": {"keys": "Tab"},
+          "steps": [{"type": "mode", "op": "hold", "mode": "symbols"}]
+        },
+        {
+          "id": "toggle-gaming",
+          "title": "Ctrl+Alt+Shift+F13 toggles Gaming",
+          "enabled": true,
+          "trigger": {"keys": "Ctrl+Alt+Shift+F13"},
+          "steps": [{"type": "mode", "op": "toggle", "mode": "gaming"}]
+        },
+        {
+          "id": "accent-next",
+          "title": "Ctrl+Alt+Shift+F14: the next key is an accent",
+          "enabled": true,
+          "trigger": {"keys": "Ctrl+Alt+Shift+F14"},
+          "steps": [{"type": "mode", "op": "set", "mode": "accent"}]
+        },
+        {
+          "id": "numpad-on",
+          "title": "Ctrl+Alt+Shift+F15 switches to the number pad for a while",
+          "enabled": true,
+          "trigger": {"keys": "Ctrl+Alt+Shift+F15"},
+          "steps": [{"type": "mode", "op": "set", "mode": "numpad"}]
+        },
+        {
+          "id": "cycle",
+          "title": "Ctrl+Alt+Shift+F16 cycles Base and Gaming",
+          "enabled": true,
+          "trigger": {"keys": "Ctrl+Alt+Shift+F16"},
+          "steps": [{"type": "mode", "op": "cycle", "modes": ["base", "gaming"]}]
+        },
+        {
+          "id": "back",
+          "title": "Ctrl+Alt+Shift+F17 returns to the previous mode",
+          "enabled": true,
+          "trigger": {"keys": "Ctrl+Alt+Shift+F17"},
+          "steps": [{"type": "mode", "op": "previous"}]
+        },
+        {
+          "id": "home",
+          "title": "Escape in Gaming or the number pad returns to Base (and still reaches the app)",
+          "enabled": true,
+          "modes": ["gaming", "numpad"],
+          "trigger": {"keys": "Escape", "pass_through": true},
+          "steps": [{"type": "mode", "op": "default"}]
+        },
+        {
+          "id": "base-f18",
+          "title": "F18 pauses in Base and every layer over it",
+          "enabled": true,
+          "modes": ["base"],
+          "trigger": {"keys": "F18"},
+          "steps": [{"type": "engine", "op": "pause"}]
+        },
+        {
+          "id": "nav-h",
+          "title": "H is Left in Navigation (and in Symbols, which falls back to it)",
+          "enabled": true,
+          "modes": ["nav"],
+          "trigger": {"keys": "code:KeyH"},
+          "steps": [{"type": "remap", "to": "Left"}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T10:00:00Z", "via": "cli"}}
+        },
+        {
+          "id": "symbols-h",
+          "title": "H types a hash in Symbols (the nearest layer wins)",
+          "enabled": true,
+          "modes": ["symbols"],
+          "trigger": {"keys": "code:KeyH"},
+          "steps": [{"type": "type_text", "text": "#"}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T10:00:00Z", "via": "cli"}}
+        },
+        {
+          "id": "accent-e",
+          "title": "E types é in the accent mode",
+          "enabled": true,
+          "modes": ["accent"],
+          "trigger": {"keys": "code:KeyE"},
+          "steps": [{"type": "type_text", "text": "é"}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T10:00:00Z", "via": "cli"}}
+        },
+        {
+          "id": "numpad-j",
+          "title": "J is 1 on the number pad",
+          "enabled": true,
+          "modes": ["numpad"],
+          "trigger": {"keys": "code:KeyJ"},
+          "steps": [{"type": "remap", "to": "Numpad1"}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T10:00:00Z", "via": "cli"}}
+        }
+      ]
+    }
+  ]
+}

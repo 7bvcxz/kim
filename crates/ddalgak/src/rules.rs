@@ -1142,6 +1142,63 @@ mod tests {
     }
 
     #[test]
+    fn mode_rules_compile_with_their_masks_and_combinations_wait_for_step_78() {
+        let l = load(
+            &Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../docs/contracts/examples/ddalgak-rules-v1/15-mode-layers.json"),
+        );
+        assert_eq!((l.errors, l.inactive.len()), (0, 0), "{:?}", l.inactive);
+        assert_eq!(l.modes.len(), 6);
+        let b = |id: &str| l.bindings.iter().find(|b| b.rule == id).unwrap();
+        assert!(matches!(&b("hold-nav").action, Action::Mode(a) if a.holds()));
+        assert!(
+            !b("hold-nav").injects && !b("hold-nav").widen,
+            "modes inject nothing"
+        );
+        assert_eq!(b("hold-symbols").modes, 1 << l.modes.index("nav").unwrap());
+        assert!(matches!(&b("cycle").action, Action::Mode(ModeAction::Cycle(m)) if m.len() == 2));
+        // Rules that need a switch first: hold-symbols, home, nav-h, symbols-h, accent-e, numpad-j.
+        assert_eq!(l.other_modes, 6);
+        // The table ranks the nearest layer first: in Symbols, H types `#`, in Navigation it is
+        // Left; in Base, H is neither.
+        let t = l.table();
+        let first_h = |m: &str| {
+            t.order(l.modes.index(m).unwrap())
+                .iter()
+                .map(|i| t.binding(usize::from(*i)).unwrap().rule.as_str())
+                .find(|r| r.ends_with("-h"))
+        };
+        assert_eq!(first_h("symbols"), Some("symbols-h"));
+        assert_eq!(first_h("nav"), Some("nav-h"));
+        assert_eq!(first_h("base"), None);
+        assert_eq!(
+            first_h("gaming"),
+            None,
+            "an exclusive mode keeps no other mode's rules"
+        );
+        // A mode step with other steps waits for ordered runs; an unknown target is inactive.
+        let l = parse(&doc(json!([
+            { "id": "two", "title": "two", "enabled": true, "trigger": { "keys": "F13" },
+              "steps": [ { "type": "mode", "op": "set", "mode": "nav" },
+                         { "type": "engine", "op": "pause" } ] },
+            { "id": "ghost", "title": "ghost", "enabled": true, "trigger": { "keys": "F14" },
+              "steps": [ { "type": "mode", "op": "set", "mode": "ghost" } ] },
+            { "id": "ok", "title": "ok", "enabled": true, "trigger": { "keys": "F15" },
+              "steps": [ { "type": "mode", "op": "toggle", "mode": "nav" } ] }
+        ])));
+        let codes: Vec<(&str, &str)> = l
+            .inactive
+            .iter()
+            .map(|i| (i.rule.as_str(), i.code))
+            .collect();
+        assert_eq!(
+            codes,
+            [("two", "step_unsupported"), ("ghost", "unknown_mode")]
+        );
+        assert_eq!(l.bindings.len(), 1);
+    }
+
+    #[test]
     fn trigger_options_are_checked() {
         let mut r = engine_rule("tap", "RAlt", "toggle_pause");
         r["trigger"] = json!({ "keys": "RAlt", "on": "release" });

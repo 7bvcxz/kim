@@ -50,6 +50,8 @@ pub enum MenuCmd {
     ResetMode,
     /// Step 73: release every key Ddalgak holds and stale keys Windows still considers pressed.
     ReleaseKeys,
+    /// Step 74: start the rule editor (`ddalgak-editor.exe`, ADR 0049).
+    OpenEditor,
 }
 
 /// Step 73: off after an emergency, a lost hook or an unclean exit: the ring struck through
@@ -403,6 +405,8 @@ impl Tray {
         );
         // Step 73: the way out of a stuck key, also while the engine is off.
         item(4, "Release stuck keys", true);
+        // Step 74: the rule editor, its own process (ADR 0049).
+        item(5, "Open rule editor", true);
         // SAFETY: as above.
         unsafe { AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null()) };
         item(3, "Quit Ddalgak", true);
@@ -431,6 +435,7 @@ impl Tray {
             2 => Some(MenuCmd::TogglePause),
             3 => Some(MenuCmd::Quit),
             4 => Some(MenuCmd::ReleaseKeys),
+            5 => Some(MenuCmd::OpenEditor),
             RESET_MODE_ID => Some(MenuCmd::ResetMode),
             n if n >= MODE_ID => modes
                 .and_then(|(e, _)| e.get(n - MODE_ID))

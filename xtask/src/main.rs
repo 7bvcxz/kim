@@ -269,6 +269,8 @@ fn run_e2e(root: &Path, force: bool, scheduled: bool) -> Result<(), String> {
             "noeul",
             "--package",
             "ddalgak",
+            "--package",
+            "ddalgak-editor",
         ],
     )?;
     // Debug builds carry test hooks that release builds compile out: `kim` accepts a development

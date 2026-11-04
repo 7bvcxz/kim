@@ -17,6 +17,8 @@ workspace = true
 # step66 injects obscure keys and checks the input desktop with the Ddalgak library.
 ddalgak = { path = "../crates/ddalgak" }
 kim = { path = "../crates/kim" }
+# step57 decodes Noeul's quick-saved PNG to check that a redaction left no original pixel.
+png = { version = "0.18.1", default-features = false }
 # step07 validates real --json output with xtask/src/jsonschema.rs (needs regex).
 regex = "1.13.1"
 serde_json = "1.0.154"

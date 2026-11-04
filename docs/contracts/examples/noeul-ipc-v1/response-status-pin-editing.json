@@ -106,11 +106,15 @@
           "objects": 3,
           "kinds": {
             "arrow": 1,
+            "blur": 0,
             "ellipse": 0,
+            "eraser": 0,
             "line": 0,
             "marker": 0,
+            "mosaic": 0,
             "pen": 0,
             "rectangle": 1,
+            "redact": 0,
             "text": 1
           },
           "selected": 3,

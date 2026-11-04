@@ -13,9 +13,11 @@
 //! - Of the remaining rules, those whose steps are all `engine` steps (§5.11), a `remap` (§5.1)
 //!   and `block` (§5.2; Step 68), and since Step 69 a single `type_text` (§5.4) or `send_keys`
 //!   (§5.3) step, with a keys or a hotstring trigger (§3.4), and since Step 70 rules made only of
-//!   `open_program` (§5.5) and `open_url` (§5.6) steps with a keys trigger, become bindings. Every
-//!   other action type, a typing step among other steps and launches mixed with other steps are
-//!   inactive with `step_unsupported` until their Step (71–72, 78).
+//!   `open_program` (§5.5) and `open_url` (§5.6) steps with a keys trigger, and since Step 71
+//!   rules made only of `mouse_move`, `mouse_scroll` and `mouse_click` steps (§5.7–§5.9; a held
+//!   button or a move while held as the only step), become bindings. Every other action type, a
+//!   typing step among other steps, and launches or mouse steps mixed with other steps are
+//!   inactive with `step_unsupported` until their Step (72, 78).
 //! - Modes: there is no mode switching before Step 72, so the profile's `default_mode` is active;
 //!   rules limited to other modes are counted, not run.
 //! - Precedence (§7.1): mode-scoped rules first, then higher `priority`, then file order.
@@ -88,12 +90,13 @@ impl Loaded {
 }
 
 /// The step types this version runs (Step 66: `engine`; Step 68: `remap`, `block`; Step 69:
-/// `send_keys`, `type_text`; Step 70: `open_program`, `open_url`). A rule made of `engine` and
-/// `block` steps is an engine-control rule (a `block` step adds nothing to a rule that consumes
-/// its key anyway); a `remap` is always the rule's only step (schema `holds_trigger`); a typing
-/// step runs alone until ordered multi-step runs (Step 78); launch steps run together, in order,
-/// without other steps.
-pub const RUNNABLE_STEPS: [&str; 7] = [
+/// `send_keys`, `type_text`; Step 70: `open_program`, `open_url`; Step 71: `mouse_move`,
+/// `mouse_scroll`, `mouse_click`). A rule made of `engine` and `block` steps is an engine-control
+/// rule (a `block` step adds nothing to a rule that consumes its key anyway); a `remap`, a held
+/// button and a move while held are always the rule's only step (schema `holds_trigger`); a
+/// typing step runs alone until ordered multi-step runs (Step 78); launch steps run together, in
+/// order, without other steps, and so do mouse steps.
+pub const RUNNABLE_STEPS: [&str; 10] = [
     "engine",
     "remap",
     "block",
@@ -101,14 +104,23 @@ pub const RUNNABLE_STEPS: [&str; 7] = [
     "type_text",
     "open_program",
     "open_url",
+    "mouse_move",
+    "mouse_scroll",
+    "mouse_click",
 ];
 
 const TYPING_ALONE: &str = "a `type_text` or `send_keys` step runs alone in this version; ordered multi-step runs arrive in Step 78";
 const HOTSTRING_STEPS: &str = "a hotstring runs one `type_text` or `send_keys` step in this version; other steps after a hotstring arrive with ordered multi-step runs (Step 78)";
 const LAUNCHES_ALONE: &str = "`open_program` and `open_url` steps run together, in order, in this version; mixed with other steps (delays, keys, modes) they wait for ordered multi-step runs (Step 78)";
 
+const MOUSE_ALONE: &str = "`mouse_move`, `mouse_scroll` and `mouse_click` steps run together, in order, in this version; mixed with other steps (delays, keys, launches, modes) they wait for ordered multi-step runs (Step 78)";
+
 fn is_launch(kind: &str) -> bool {
     matches!(kind, "open_program" | "open_url")
+}
+
+fn is_mouse(kind: &str) -> bool {
+    matches!(kind, "mouse_move" | "mouse_scroll" | "mouse_click")
 }
 
 /// A combination of runnable steps this version does not run yet (`step_unsupported`): the step
@@ -133,6 +145,11 @@ pub fn later_step(rule: &Rule) -> Option<(usize, String)> {
         && let Some(i) = rule.steps.iter().position(|s| !is_launch(s.kind()))
     {
         return Some((i, LAUNCHES_ALONE.into()));
+    }
+    if rule.steps.iter().any(|s| is_mouse(s.kind()))
+        && let Some(i) = rule.steps.iter().position(|s| !is_mouse(s.kind()))
+    {
+        return Some((i, MOUSE_ALONE.into()));
     }
     None
 }
@@ -452,6 +469,9 @@ fn compile(r: &Map<String, Value>) -> Result<(Binding, i64), (&'static str, Stri
     if kinds.iter().any(|k| is_launch(k)) && !kinds.iter().all(|k| is_launch(k)) {
         return Err(("step_unsupported", LAUNCHES_ALONE.into()));
     }
+    if kinds.iter().any(|k| is_mouse(k)) && !kinds.iter().all(|k| is_mouse(k)) {
+        return Err(("step_unsupported", MOUSE_ALONE.into()));
+    }
     if let Some(c) = trigger.single()
         && matches!(c.key, TKey::Modifier(_))
         && on != On::Release
@@ -466,9 +486,30 @@ fn compile(r: &Map<String, Value>) -> Result<(Binding, i64), (&'static str, Stri
     let mut remap = None;
     let mut run = None;
     let mut targets = Vec::new();
+    let mut mouse = Vec::new();
+    let mut held = None;
+    // Steps that last while the trigger is held: the rule's only step, on a single chord pressed
+    // without repeat or pass-through (schema `holds_trigger`; checked again here).
+    let holds_ok =
+        steps.len() == 1 && !trigger.is_sequence() && on == On::Press && !repeat && !pass_through;
     for (i, s) in steps.iter().enumerate() {
         let ty = s.get("type").and_then(Value::as_str).unwrap_or_default();
         match ty {
+            "mouse_move" | "mouse_scroll" | "mouse_click" => {
+                match crate::mouse::compile_step(s)
+                    .map_err(|e| ("step_invalid", format!("step {i}: {e}")))?
+                {
+                    crate::mouse::Compiled::Run(m) => mouse.push(m),
+                    h if holds_ok => held = Some(h),
+                    _ => {
+                        return Err((
+                            "step_invalid",
+                            "a held button or a move while held is the rule's only step, on a single chord pressed without repeat or pass-through"
+                                .into(),
+                        ));
+                    }
+                }
+            }
             "open_program" | "open_url" => targets.push(
                 crate::launch::compile_step(s)
                     .map_err(|e| ("step_invalid", format!("step {i}: {e}")))?,
@@ -523,6 +564,31 @@ fn compile(r: &Map<String, Value>) -> Result<(Binding, i64), (&'static str, Stri
     // Remaps and blocks are wildcards: a plain trigger matches with modifiers held (§3.2).
     let plain = trigger.single().is_some_and(|c| c.mods.is_empty());
     let (action, widen, injects) = match (remap, run) {
+        // Mouse steps inject; they match exactly (no widening, §3.2).
+        _ if !mouse.is_empty() => (
+            Action::Mouse(Arc::new(crate::mouse::MousePlan {
+                steps: mouse,
+                stop_on_error: r.get("on_error").and_then(Value::as_str) != Some("continue"),
+            })),
+            false,
+            true,
+        ),
+        _ if held.is_some() => match held {
+            Some(crate::mouse::Compiled::Hold { button, at }) => (
+                Action::MouseHold {
+                    spec: RemapSpec {
+                        to: Output::button(button),
+                        tap: None,
+                        tap_ms: 200,
+                    },
+                    at,
+                },
+                false,
+                true,
+            ),
+            Some(crate::mouse::Compiled::Motion(m)) => (Action::Motion(m), false, true),
+            _ => return Err(("step_invalid", "not a held mouse step".into())),
+        },
         // Launches inject nothing: they still run while an elevated window has focus (§3).
         _ if !targets.is_empty() => (
             Action::Launch(Arc::new(crate::launch::Plan {
@@ -843,6 +909,113 @@ mod tests {
         );
         assert!(
             l.inactive[0].reason.contains("newer"),
+            "{:?}",
+            l.inactive[0]
+        );
+    }
+
+    #[test]
+    fn mouse_rules_compile_and_mixed_or_misplaced_holds_stay_inactive() {
+        use crate::inject::Button;
+        use crate::mouse::{MotionKind, MouseStep, Unit};
+        let r = |id: &str, keys: &str, steps: Value| {
+            json!({ "id": id, "title": id, "enabled": true, "trigger": { "keys": keys },
+                    "steps": steps,
+                    "consent": { "input-injection": { "granted_at": "2026-11-04T09:00:00Z", "via": "cli" } } })
+        };
+        let mut repeat_hold = r(
+            "repeat-hold",
+            "F20",
+            json!([{"type":"mouse_click","button":"left","op":"hold"}]),
+        );
+        repeat_hold["trigger"]["repeat"] = json!(true);
+        let l = parse(&doc(json!([
+            r(
+                "plan",
+                "F13",
+                json!([{"type":"mouse_move","mode":"absolute","to":{"x":1,"y":2}},
+                       {"type":"mouse_click","button":"left","op":"double_click"}])
+            ),
+            r(
+                "drag",
+                "Ctrl+F14",
+                json!([{"type":"mouse_click","button":"x2","op":"hold"}])
+            ),
+            r(
+                "glide",
+                "F15",
+                json!([{"type":"mouse_move","mode":"relative","dx":1,"dy":0,"while_held":{"speed":600}}])
+            ),
+            r(
+                "cells",
+                "F16",
+                json!([{"type":"mouse_move","mode":"relative","dx":1,"dy":0,"unit":"grid",
+                        "grid":{"columns":8,"rows":8},"while_held":{"repeat_ms":100}}])
+            ),
+            r(
+                "wheel",
+                "F17",
+                json!([{"type":"mouse_scroll","direction":"right","notches":3}])
+            ),
+            r(
+                "mixed",
+                "F18",
+                json!([{"type":"mouse_scroll","direction":"down"},{"type":"engine","op":"pause"}])
+            ),
+            r(
+                "grid-glide",
+                "F19",
+                json!([{"type":"mouse_move","mode":"relative","dx":1,"dy":0,"unit":"grid",
+                        "grid":{"columns":8,"rows":8},"while_held":{"speed":600}}])
+            ),
+            repeat_hold,
+        ])));
+        let active: Vec<&str> = l.bindings.iter().map(|b| b.rule.as_str()).collect();
+        assert_eq!(active, ["plan", "drag", "glide", "cells", "wheel"]);
+        assert!(l.bindings.iter().all(|b| b.injects && !b.widen));
+        let Action::Mouse(p) = &l.bindings[0].action else {
+            panic!("{:?}", l.bindings[0].action)
+        };
+        assert_eq!(p.steps.len(), 2);
+        assert!(p.stop_on_error);
+        assert!(matches!(
+            p.steps[1],
+            MouseStep::Click {
+                button: Button::Left,
+                double: true,
+                at: None
+            }
+        ));
+        let Action::MouseHold { spec, at: None } = &l.bindings[1].action else {
+            panic!("{:?}", l.bindings[1].action)
+        };
+        assert_eq!(spec.to, Output::button(Button::X2));
+        assert!(matches!(
+            l.bindings[2].action,
+            Action::Motion(m) if matches!(m.kind, MotionKind::Continuous { speed: 600, acceleration: 0 })
+        ));
+        assert!(matches!(
+            l.bindings[3].action,
+            Action::Motion(m) if matches!(m.unit, Unit::Grid(_)) && matches!(m.kind, MotionKind::Stepped { repeat_ms: 100, .. })
+        ));
+        // The compiled table knows which bindings hold a button or a motion.
+        let t = crate::table::Table::compile(l.bindings.clone(), 20);
+        assert!(t.remap(1).is_some() && t.remap(2).is_none());
+        let codes: Vec<(&str, &str)> = l
+            .inactive
+            .iter()
+            .map(|i| (i.rule.as_str(), i.code))
+            .collect();
+        assert_eq!(
+            codes,
+            [
+                ("mixed", "step_unsupported"),
+                ("grid-glide", "step_invalid"),
+                ("repeat-hold", "step_invalid"),
+            ]
+        );
+        assert!(
+            l.inactive[0].reason.contains("Step 78"),
             "{:?}",
             l.inactive[0]
         );

@@ -16,9 +16,10 @@
 
 use crate::launch;
 use crate::model::{
-    Action, Delay, Document, EngineOp, EngineStep, EnvVar, Grant, IfRunning, ModeOp, ModeStep,
-    OpenProgram, OpenUrl, Permission, Remap, Rule, RuleEntry, SendKeys, TextMethod, TypeText,
-    WindowState, is_rule_id, new_rule_id,
+    Action, ClickOp, Delay, Direction, Document, EngineOp, EngineStep, EnvVar, Grant, GridSize,
+    IfRunning, ModeOp, ModeStep, MouseClick, MouseMove, MouseScroll, MoveMode, MoveUnit,
+    OpenProgram, OpenUrl, Permission, Point, RelativeTo, Remap, Rule, RuleEntry, SendKeys,
+    TextMethod, TypeText, WhileHeld, WindowState, is_rule_id, new_rule_id,
 };
 use crate::trigger::{self, TriggerError};
 use crate::validate::{self, Problem, Report, Severity};
@@ -236,8 +237,10 @@ fn canonical_step(step: &str, output: bool) -> Result<String, TriggerError> {
     Ok(seq.to_string())
 }
 
-/// The step inputs the CLI offers as flags (`--action <type>` with `--to`, `--keys`, …).
-/// Mouse steps and anything richer are given as JSON (`--step`).
+/// The step inputs the CLI offers as flags (`--action <type>` with `--to`, `--keys`, …; since
+/// Step 71 the mouse flags `--dx`, `--dy`, `--x`, `--y`, `--relative-to`, `--grid`, `--speed`,
+/// `--acceleration`, `--repeat-ms`, `--delay-ms`, `--direction`, `--notches`, `--button`).
+/// Anything richer is given as JSON (`--step`).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StepInputs {
     pub to: Option<String>,
@@ -263,6 +266,123 @@ pub struct StepInputs {
     pub target_mode: Option<String>,
     pub target_modes: Vec<String>,
     pub ms: Option<u32>,
+    /// `mouse_move` by a distance (logical pixels or grid cells).
+    pub dx: Option<i32>,
+    pub dy: Option<i32>,
+    /// `mouse_move` to a point, or `mouse_click` at one.
+    pub x: Option<i32>,
+    pub y: Option<i32>,
+    pub relative_to: Option<String>,
+    /// `--grid COLSxROWS`: dx/dy count cells of this grid.
+    pub grid: Option<String>,
+    pub speed: Option<u32>,
+    pub acceleration: Option<u32>,
+    pub repeat_ms: Option<u32>,
+    pub delay_ms: Option<u32>,
+    pub direction: Option<String>,
+    pub notches: Option<u32>,
+    pub button: Option<String>,
+}
+
+/// The point of `--x`/`--y` (with `--relative-to`), if given.
+fn mouse_point(i: &StepInputs, kind: &str) -> Result<Option<Point>, String> {
+    match (i.x, i.y) {
+        (None, None) => {
+            if i.relative_to.is_some() {
+                return Err(format!(
+                    "`--action {kind}`: --relative-to needs --x and --y"
+                ));
+            }
+            Ok(None)
+        }
+        (Some(x), Some(y)) => Ok(Some(Point {
+            x,
+            y,
+            relative_to: parse("point anchor", &i.relative_to, RelativeTo::parse)?,
+            extra: Map::new(),
+        })),
+        _ => Err(format!("`--action {kind}`: give both --x and --y")),
+    }
+}
+
+/// `--grid 16x9`.
+fn grid_size(g: &str) -> Result<GridSize, String> {
+    let bad = || format!("--grid takes COLUMNSxROWS (2–64 each, like 16x9), not `{g}`");
+    let (c, r) = g.split_once(['x', 'X', '×']).ok_or_else(bad)?;
+    let n = |v: &str| {
+        v.trim()
+            .parse::<u32>()
+            .ok()
+            .filter(|n| (2..=64).contains(n))
+    };
+    Ok(GridSize {
+        columns: n(c).ok_or_else(bad)?,
+        rows: n(r).ok_or_else(bad)?,
+        extra: Map::new(),
+    })
+}
+
+/// `--action mouse_move`: `--dx/--dy` (relative; `--grid`, and `--speed`/`--acceleration` or
+/// `--repeat-ms`/`--delay-ms` while held) or `--x/--y` (absolute, `--relative-to`).
+fn mouse_move(i: &StepInputs) -> Result<Action, String> {
+    let relative = i.dx.is_some() || i.dy.is_some();
+    let held = i.speed.is_some()
+        || i.acceleration.is_some()
+        || i.repeat_ms.is_some()
+        || i.delay_ms.is_some();
+    let to = mouse_point(i, "mouse_move")?;
+    let extra = Map::new;
+    match (relative, to) {
+        (true, Some(_)) => {
+            Err("`--action mouse_move` moves by --dx/--dy or to --x/--y, not both".into())
+        }
+        (false, None) => Err(
+            "`--action mouse_move` needs --dx/--dy (by a distance) or --x/--y (to a point)".into(),
+        ),
+        (false, Some(p)) => {
+            if held || i.grid.is_some() {
+                return Err("--speed, --repeat-ms and --grid are for moves by --dx/--dy".into());
+            }
+            Ok(Action::MouseMove(MouseMove {
+                mode: MoveMode::Absolute,
+                dx: None,
+                dy: None,
+                to: Some(p),
+                unit: None,
+                grid: None,
+                while_held: None,
+                extra: extra(),
+            }))
+        }
+        (true, None) => {
+            if i.speed.is_some() && (i.repeat_ms.is_some() || i.delay_ms.is_some()) {
+                return Err("glide with --speed or step with --repeat-ms, not both".into());
+            }
+            if i.acceleration.is_some() && i.speed.is_none() {
+                return Err("--acceleration goes with --speed".into());
+            }
+            if i.delay_ms.is_some() && i.repeat_ms.is_none() {
+                return Err("--delay-ms goes with --repeat-ms".into());
+            }
+            let grid = i.grid.as_deref().map(grid_size).transpose()?;
+            Ok(Action::MouseMove(MouseMove {
+                mode: MoveMode::Relative,
+                dx: Some(i.dx.unwrap_or(0)),
+                dy: Some(i.dy.unwrap_or(0)),
+                to: None,
+                unit: grid.is_some().then_some(MoveUnit::Grid),
+                grid,
+                while_held: held.then(|| WhileHeld {
+                    speed: i.speed,
+                    acceleration: i.acceleration,
+                    repeat_ms: i.repeat_ms,
+                    delay_ms: i.delay_ms,
+                    extra: extra(),
+                }),
+                extra: extra(),
+            }))
+        }
+    }
 }
 
 fn need<T: Clone>(v: &Option<T>, flag: &str, action: &str) -> Result<T, String> {
@@ -369,11 +489,20 @@ pub fn build_step(kind: &str, i: &StepInputs) -> Result<Action, String> {
             ms: need(&i.ms, "--ms <milliseconds>", kind)?,
             extra: extra(),
         }),
-        "mouse_move" | "mouse_scroll" | "mouse_click" => {
-            return Err(format!(
-                "give `{kind}` steps as JSON: --step '{{\"type\":\"{kind}\",…}}'"
-            ));
-        }
+        "mouse_move" => mouse_move(i)?,
+        "mouse_scroll" => Action::MouseScroll(MouseScroll {
+            direction: parse("scroll direction", &i.direction, Direction::parse)?
+                .ok_or("`--action mouse_scroll` needs --direction up|down|left|right")?,
+            notches: i.notches,
+            extra: extra(),
+        }),
+        "mouse_click" => Action::MouseClick(MouseClick {
+            button: parse("mouse button", &i.button, crate::model::Button::parse)?
+                .ok_or("`--action mouse_click` needs --button left|right|middle|x1|x2")?,
+            op: parse("click op", &i.op, ClickOp::parse)?.filter(|o| *o != ClickOp::Click),
+            at: mouse_point(i, kind)?,
+            extra: extra(),
+        }),
         other => return Err(format!("unknown action type `{other}`")),
     })
 }
@@ -1251,13 +1380,180 @@ mod tests {
         assert!(
             build_step("mouse_click", &StepInputs::default())
                 .unwrap_err()
-                .contains("--step")
+                .contains("--button")
         );
         let s = parse_step(r#"{"type":"send_keys","keys":"ctrl+k ctrl+v"}"#).unwrap();
         assert!(matches!(s, Action::SendKeys(ref k) if k.keys == "Ctrl+K Ctrl+V"));
         let m = parse_step(r#"{"type":"mouse_click","button":"left"}"#).unwrap();
         assert_eq!(m.kind(), "mouse_click");
         assert!(parse_step("{").is_err());
+    }
+
+    #[test]
+    fn mouse_flags_build_canonical_mouse_steps_and_refuse_mixtures() {
+        // Step 71: `--action mouse_move|mouse_scroll|mouse_click` with flags.
+        let step = |kind: &str, i: StepInputs| build_step(kind, &i).map(|a| a.to_value());
+        assert_eq!(
+            step(
+                "mouse_move",
+                StepInputs {
+                    dx: Some(1),
+                    speed: Some(600),
+                    acceleration: Some(3),
+                    ..Default::default()
+                }
+            ),
+            Ok(
+                serde_json::json!({"type":"mouse_move","mode":"relative","dx":1,"dy":0,
+                                  "while_held":{"speed":600,"acceleration":3}})
+            )
+        );
+        assert_eq!(
+            step(
+                "mouse_move",
+                StepInputs {
+                    dx: Some(-1),
+                    grid: Some("16x9".into()),
+                    repeat_ms: Some(150),
+                    delay_ms: Some(400),
+                    ..Default::default()
+                }
+            ),
+            Ok(
+                serde_json::json!({"type":"mouse_move","mode":"relative","dx":-1,"dy":0,
+                                  "unit":"grid","grid":{"columns":16,"rows":9},
+                                  "while_held":{"repeat_ms":150,"delay_ms":400}})
+            )
+        );
+        assert_eq!(
+            step(
+                "mouse_move",
+                StepInputs {
+                    x: Some(-200),
+                    y: Some(300),
+                    relative_to: Some("primary_monitor".into()),
+                    ..Default::default()
+                }
+            ),
+            Ok(serde_json::json!({"type":"mouse_move","mode":"absolute",
+                                  "to":{"x":-200,"y":300,"relative_to":"primary_monitor"}}))
+        );
+        assert_eq!(
+            step(
+                "mouse_scroll",
+                StepInputs {
+                    direction: Some("left".into()),
+                    notches: Some(2),
+                    ..Default::default()
+                }
+            ),
+            Ok(serde_json::json!({"type":"mouse_scroll","direction":"left","notches":2}))
+        );
+        assert_eq!(
+            step(
+                "mouse_click",
+                StepInputs {
+                    button: Some("x2".into()),
+                    op: Some("click".into()),
+                    x: Some(5),
+                    y: Some(6),
+                    ..Default::default()
+                }
+            ),
+            Ok(serde_json::json!({"type":"mouse_click","button":"x2","at":{"x":5,"y":6}})),
+            "the default op is left out"
+        );
+        assert_eq!(
+            step(
+                "mouse_click",
+                StepInputs {
+                    button: Some("left".into()),
+                    op: Some("hold".into()),
+                    ..Default::default()
+                }
+            ),
+            Ok(serde_json::json!({"type":"mouse_click","button":"left","op":"hold"}))
+        );
+        for (kind, bad, says) in [
+            ("mouse_move", StepInputs::default(), "--dx/--dy"),
+            (
+                "mouse_move",
+                StepInputs {
+                    dx: Some(1),
+                    x: Some(1),
+                    y: Some(1),
+                    ..Default::default()
+                },
+                "not both",
+            ),
+            (
+                "mouse_move",
+                StepInputs {
+                    x: Some(1),
+                    ..Default::default()
+                },
+                "both --x and --y",
+            ),
+            (
+                "mouse_move",
+                StepInputs {
+                    dx: Some(1),
+                    speed: Some(100),
+                    repeat_ms: Some(100),
+                    ..Default::default()
+                },
+                "not both",
+            ),
+            (
+                "mouse_move",
+                StepInputs {
+                    dx: Some(1),
+                    acceleration: Some(2),
+                    ..Default::default()
+                },
+                "--speed",
+            ),
+            (
+                "mouse_move",
+                StepInputs {
+                    x: Some(1),
+                    y: Some(1),
+                    grid: Some("4x4".into()),
+                    ..Default::default()
+                },
+                "--dx/--dy",
+            ),
+            (
+                "mouse_move",
+                StepInputs {
+                    dx: Some(1),
+                    grid: Some("1x99".into()),
+                    ..Default::default()
+                },
+                "COLUMNSxROWS",
+            ),
+            ("mouse_scroll", StepInputs::default(), "--direction"),
+            (
+                "mouse_click",
+                StepInputs {
+                    button: Some("x3".into()),
+                    ..Default::default()
+                },
+                "unknown mouse button",
+            ),
+            (
+                "mouse_click",
+                StepInputs {
+                    button: Some("left".into()),
+                    op: Some("down".into()),
+                    ..Default::default()
+                },
+                "unknown click op",
+            ),
+        ] {
+            let e = build_step(kind, &bad).unwrap_err();
+            assert!(e.contains(says), "{kind} {bad:?}: {e}");
+        }
     }
 
     #[test]

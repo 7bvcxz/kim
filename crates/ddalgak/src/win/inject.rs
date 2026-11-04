@@ -13,6 +13,17 @@
 //! - **Mouse buttons** are `MOUSEINPUT` button events. `MouseLeft`/`MouseRight` are the logical
 //!   primary and secondary buttons: with "swap buttons" on, the physical events are swapped
 //!   (DDALGAK_RULE_MODEL §5.9).
+//! - **Pointer moves** (Step 71) are `MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE |
+//!   MOUSEEVENTF_VIRTUALDESK` with normalized coordinates (0–65535 over the virtual desktop,
+//!   computed by [`crate::mouse::Layout::normalize`] from a pixel already clamped onto a monitor),
+//!   so neither the mouse speed nor "enhance pointer precision" changes where the pointer lands.
+//!   A call that moves the pointer runs with the thread in per-monitor DPI awareness (v2), the
+//!   mode the positions were read in ([`super::mouse::DpiScope`]).
+//! - **Wheel notches** (Step 71) are `MOUSEEVENTF_WHEEL` (vertical, positive away from the user)
+//!   or `MOUSEEVENTF_HWHEEL` (horizontal, positive to the right) with the delta in `mouseData`.
+//!
+//! The automated tests build these structures and compare them field by field; they never send
+//! a mouse event (the maintainer uses the pointer of the test machine).
 //!
 //! UIPI makes `SendInput` into a higher-integrity window fail silently (*documented*); injecting
 //! rules are therefore skipped over elevated windows before they run
@@ -23,9 +34,10 @@ use crate::inject::{Backend, Button, OutCode, OutEvent, OutKey};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY,
     KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, KEYEVENTF_UNICODE, MAPVK_VK_TO_VSC_EX, MOUSE_EVENT_FLAGS,
-    MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP,
-    MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP, MOUSEINPUT,
-    MapVirtualKeyW, SendInput,
+    MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_HWHEEL, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
+    MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_RIGHTDOWN,
+    MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_VIRTUALDESK, MOUSEEVENTF_WHEEL, MOUSEEVENTF_XDOWN,
+    MOUSEEVENTF_XUP, MOUSEINPUT, MapVirtualKeyW, SendInput,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetSystemMetrics, SM_SWAPBUTTON, XBUTTON1, XBUTTON2,
@@ -68,7 +80,28 @@ fn key_input(vk: u16, scan: u16, flags: u32, extra: usize) -> INPUT {
     }
 }
 
-fn inputs(events: &[OutEvent], extra: usize) -> Vec<INPUT> {
+fn mouse_input(dx: i32, dy: i32, data: u32, flags: MOUSE_EVENT_FLAGS, extra: usize) -> INPUT {
+    INPUT {
+        r#type: INPUT_MOUSE,
+        Anonymous: INPUT_0 {
+            mi: MOUSEINPUT {
+                dx,
+                dy,
+                mouseData: data,
+                dwFlags: flags,
+                time: 0,
+                dwExtraInfo: extra,
+            },
+        },
+    }
+}
+
+/// The flags of an absolute move over the whole virtual desktop.
+pub const MOVE_FLAGS: MOUSE_EVENT_FLAGS =
+    MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
+
+/// The `INPUT` structures for `events` (pure construction; `SendInput` is a separate step).
+pub fn inputs(events: &[OutEvent], extra: usize) -> Vec<INPUT> {
     // SAFETY: no preconditions; reads one system metric.
     let swapped = events.iter().any(|e| matches!(e.code, OutCode::Button(_)))
         && unsafe { GetSystemMetrics(SM_SWAPBUTTON) } != 0;
@@ -96,20 +129,24 @@ fn inputs(events: &[OutEvent], extra: usize) -> Vec<INPUT> {
                 }
                 OutCode::Button(b) => {
                     let (flags, data) = button_flags(b, e.up, swapped);
-                    INPUT {
-                        r#type: INPUT_MOUSE,
-                        Anonymous: INPUT_0 {
-                            mi: MOUSEINPUT {
-                                dx: 0,
-                                dy: 0,
-                                mouseData: data,
-                                dwFlags: flags,
-                                time: 0,
-                                dwExtraInfo: extra,
-                            },
-                        },
-                    }
+                    mouse_input(0, 0, data, flags, extra)
                 }
+                OutCode::MoveTo { x, y } => {
+                    mouse_input(i32::from(x), i32::from(y), 0, MOVE_FLAGS, extra)
+                }
+                // The signed delta travels in the unsigned `mouseData` (*documented*: "a
+                // negative value indicates that the wheel was rotated backward").
+                OutCode::Wheel { horizontal, delta } => mouse_input(
+                    0,
+                    0,
+                    i32::from(delta).cast_unsigned(),
+                    if horizontal {
+                        MOUSEEVENTF_HWHEEL
+                    } else {
+                        MOUSEEVENTF_WHEEL
+                    },
+                    extra,
+                ),
             }
         })
         .collect()
@@ -120,6 +157,11 @@ fn send(events: &[OutEvent], extra: usize) -> usize {
         return 0;
     }
     let inputs = inputs(events, extra);
+    // A pointer move is computed in physical pixels: send it in the same DPI mode.
+    let _dpi = events
+        .iter()
+        .any(|e| matches!(e.code, OutCode::MoveTo { .. }))
+        .then(super::mouse::DpiScope::per_monitor);
     // SAFETY: `inputs` holds `len` initialized INPUT structures of the size passed.
     let n = unsafe {
         SendInput(
@@ -249,5 +291,126 @@ mod tests {
         assert_eq!((ki.wVk, ki.wScan), (0, 0x23));
         assert_ne!(ki.dwFlags & KEYEVENTF_SCANCODE, 0);
         assert_eq!(ki.dwExtraInfo, OWN_MARKER);
+    }
+
+    /// The `MOUSEINPUT` fields of a built input.
+    fn mi(i: &INPUT) -> MOUSEINPUT {
+        assert_eq!(i.r#type, INPUT_MOUSE);
+        // SAFETY: reading the union field the constructor wrote for a mouse event.
+        unsafe { i.Anonymous.mi }
+    }
+
+    fn norm(m: &MOUSEINPUT) -> (u16, u16) {
+        (
+            u16::try_from(m.dx).expect("0–65535"),
+            u16::try_from(m.dy).expect("0–65535"),
+        )
+    }
+
+    #[test]
+    fn mouse_moves_wheels_and_clicks_become_exactly_these_inputs() {
+        // Pure construction of INPUT structures from the events the mouse actions decide on a
+        // synthetic layout (two monitors, the left one at negative coordinates and 150 %);
+        // nothing is sent: the maintainer uses this machine's pointer.
+        use crate::mouse::{
+            Layout, Monitor, Point, Rect, ScrollDir, click_events, move_event, wheel_events,
+        };
+        let layout = Layout::new(vec![
+            Monitor::new(Rect::sized(-2880, 0, 2880, 1620), 144, false),
+            Monitor::new(Rect::sized(0, 0, 1920, 1080), 96, true),
+        ])
+        .unwrap();
+        let mut events = vec![
+            move_event(&layout, Point::new(-2880, 0)),
+            move_event(&layout, Point::new(1919, 1079)),
+            move_event(&layout, Point::new(-10_000, 5_000)),
+        ];
+        events.extend(click_events(Button::X1, true));
+        events.extend(wheel_events(ScrollDir::Down, 2));
+        events.extend(wheel_events(ScrollDir::Left, 1));
+        let built = inputs(&events, OWN_MARKER);
+        assert_eq!(built.len(), 3 + 4 + 2 + 1);
+        for i in &built {
+            assert_eq!(mi(i).dwExtraInfo, OWN_MARKER, "every event is marked");
+            assert_eq!(mi(i).time, 0);
+        }
+        // Moves: normalized over the virtual desktop (4800 × 1620 from x = −2880), the middle
+        // of the pixel's interval.
+        let m0 = mi(&built[0]);
+        assert_eq!(
+            m0.dwFlags,
+            MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK
+        );
+        assert_eq!(
+            (m0.dx, m0.dy, m0.mouseData),
+            (6, 20, 0),
+            "the top-left pixel"
+        );
+        assert_eq!(layout.denormalize(norm(&m0)), Point::new(-2880, 0));
+        let m1 = mi(&built[1]);
+        assert_eq!(m1.dwFlags, MOVE_FLAGS);
+        assert_eq!(
+            layout.denormalize(norm(&m1)),
+            Point::new(1919, 1079),
+            "the primary monitor's last pixel"
+        );
+        let m2 = mi(&built[2]);
+        assert_eq!(
+            layout.denormalize(norm(&m2)),
+            Point::new(-2880, 1619),
+            "outside every monitor: the nearest pixel, never off the desktop"
+        );
+        // A double click of X1: down, up, down, up with XBUTTON1, no move, no coordinates.
+        let want = [
+            (MOUSEEVENTF_XDOWN, u32::from(XBUTTON1)),
+            (MOUSEEVENTF_XUP, u32::from(XBUTTON1)),
+            (MOUSEEVENTF_XDOWN, u32::from(XBUTTON1)),
+            (MOUSEEVENTF_XUP, u32::from(XBUTTON1)),
+        ];
+        for (i, (flags, data)) in want.into_iter().enumerate() {
+            let m = mi(&built[3 + i]);
+            assert_eq!((m.dwFlags, m.mouseData, m.dx, m.dy), (flags, data, 0, 0));
+        }
+        // Wheel: one event per notch, the delta in mouseData (−120 as its two's complement).
+        for b in &built[7..9] {
+            let m = mi(b);
+            assert_eq!(
+                (m.dwFlags, m.mouseData),
+                (MOUSEEVENTF_WHEEL, (-120i32).cast_unsigned())
+            );
+        }
+        let m = mi(&built[9]);
+        assert_eq!(
+            (m.dwFlags, m.mouseData),
+            (MOUSEEVENTF_HWHEEL, (-120i32).cast_unsigned())
+        );
+        let up = inputs(&wheel_events(ScrollDir::Up, 1), 0);
+        assert_eq!(
+            (mi(&up[0]).dwFlags, mi(&up[0]).mouseData),
+            (MOUSEEVENTF_WHEEL, 120)
+        );
+        let right = inputs(&wheel_events(ScrollDir::Right, 1), 0);
+        assert_eq!(
+            (mi(&right[0]).dwFlags, mi(&right[0]).mouseData),
+            (MOUSEEVENTF_HWHEEL, 120)
+        );
+    }
+
+    #[test]
+    fn every_button_pairs_its_down_with_its_up() {
+        let pairs = [
+            (MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP),
+            (MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP),
+            (MOUSEEVENTF_MIDDLEDOWN, MOUSEEVENTF_MIDDLEUP),
+            (MOUSEEVENTF_XDOWN, MOUSEEVENTF_XUP),
+        ];
+        for b in Button::ALL {
+            for swapped in [false, true] {
+                let (down, data_d) = button_flags(b, false, swapped);
+                let (up, data_u) = button_flags(b, true, swapped);
+                assert_eq!(data_d, data_u, "{b:?}: the same X button down and up");
+                assert!(pairs.contains(&(down, up)), "{b:?} {swapped}");
+            }
+        }
     }
 }

@@ -1,17 +1,18 @@
-# Ddalgak engine (Steps 66–70)
+# Ddalgak engine (Steps 66–71)
 
 Status: **current** (engine implemented in Step 66 for Windows, the rule store and live reload in
 Step 67, §10; remaps, blocks and mouse-button triggers in Step 68, §11; sent keys, typed text,
-paste and hotstrings in Step 69, §12; program and website launches in Step 70, §13; the other
-actions follow in Steps 71–72) · Decisions:
+paste and hotstrings in Step 69, §12; program and website launches in Step 70, §13; mouse moves,
+wheel, clicks and holds in Step 71, §14; modes follow in Step 72) · Decisions:
 [ADR 0022](adr/0022-ddalgak-rule-model-and-safety.md),
 [ADR 0024](adr/0024-ddalgak-windows-input-apis-and-permissions.md),
 [ADR 0028](adr/0028-ddalgak-rule-store-validation-and-reload.md),
 [ADR 0031](adr/0031-ddalgak-remap-execution-and-mouse-hook.md),
 [ADR 0034](adr/0034-ddalgak-typing-runs-hotstrings-and-clipboard.md),
-[ADR 0037](adr/0037-ddalgak-program-and-website-launches.md) · Code: `crates/ddalgak` ·
+[ADR 0037](adr/0037-ddalgak-program-and-website-launches.md),
+[ADR 0040](adr/0040-ddalgak-mouse-actions.md) · Code: `crates/ddalgak` ·
 Requirements: `DDALGAK-FR-001…010`, `DDALGAK-FR-017`, `DDALGAK-FR-020`, `DDALGAK-FR-060`, `DDALGAK-FR-071`,
-`DDALGAK-FR-011`, `DDALGAK-FR-012`, `DDALGAK-FR-013`, `DDALGAK-FR-014`, `DDALGAK-FR-070`,
+`DDALGAK-FR-011`, `DDALGAK-FR-012`, `DDALGAK-FR-013`, `DDALGAK-FR-014`, `DDALGAK-FR-015`, `DDALGAK-FR-070`,
 `DDALGAK-NFR-001`, `DDALGAK-NFR-002`, `DDALGAK-NFR-004`, `DDALGAK-SEC-001…005`,
 `DDALGAK-SEC-007`, `DDALGAK-SEC-008`, `DDALGAK-SEC-010`, `DDALGAK-SEC-011`, `DDALGAK-SEC-013`,
 `DDALGAK-SEC-014`
@@ -26,15 +27,15 @@ the rule format is [DDALGAK_RULE_MODEL](DDALGAK_RULE_MODEL.md); the safety scope
 | Delivered | Not yet (owner Step) |
 | --- | --- |
 | `ddalgak-gui.exe`: the tray app that owns the engine (tray icon with state by shape and text, single instance per user session, hidden window, no editor) | the rule editor and playground windows (74, 76) |
-| The low-level keyboard hook engine: event model, trigger tables, decision core, worker, lifecycle, emergency chord, held-key ledger, rate limit, stepping aside; since Step 68 remaps and blocks, mouse-button triggers with the on-demand mouse hook (§11); since Step 69 sent keys, typed text, paste with clipboard restore and hotstrings (§12); since Step 70 program and website launches on a launch thread (§13) | mouse actions and wheel triggers (71), modes (72), ordered multi-step runs (78) |
+| The low-level keyboard hook engine: event model, trigger tables, decision core, worker, lifecycle, emergency chord, held-key ledger, rate limit, stepping aside; since Step 68 remaps and blocks, mouse-button triggers with the on-demand mouse hook (§11); since Step 69 sent keys, typed text, paste with clipboard restore and hotstrings (§12); since Step 70 program and website launches on a launch thread (§13); since Step 71 mouse moves, wheel, clicks and holds across monitors and DPI (§14) | modes (72), ordered multi-step runs (78), wheel triggers (unassigned, ADR 0040) |
 | Ddalgak's own global shortcuts `engine.toggle` and `engine.pause` from `hotkeys.json`, registered with `RegisterHotKey` | the `ddalgak hotkeys …` commands (81; bind by editing `hotkeys.json` until then) |
-| Rules: the engine runs **engine-control rules** (`engine` steps), since Step 68 **remap** and **block** rules (§11), since Step 69 **`send_keys`**, **`type_text`** and **hotstring** rules (§12), since Step 70 **`open_program`** and **`open_url`** rules (§13), and keeps every other rule inactive with a stated code; since Step 67 the rule store with full validation, CRUD, drafts, history and live reload (§10) | the other action types (71–72, 78) |
+| Rules: the engine runs **engine-control rules** (`engine` steps), since Step 68 **remap** and **block** rules (§11), since Step 69 **`send_keys`**, **`type_text`** and **hotstring** rules (§12), since Step 70 **`open_program`** and **`open_url`** rules (§13), since Step 71 **`mouse_move`**, **`mouse_scroll`** and **`mouse_click`** rules (§14), and keeps every other rule inactive with a stated code; since Step 67 the rule store with full validation, CRUD, drafts, history and live reload (§10) | the other action types (72, 78) |
 | `ddalgak status`, `health`, `engine start|pause|resume|stop`, `pause`, `resume`, `quit`, `startup status|enable|disable`, `capabilities` with `--json` and `--dry-run`; since Step 67 `rule …` and `rules …` | `profile`, `mode`, `test`, `explain` (72, 75, 76, 77, 81) |
 | Opt-in start at sign-in through the user's Run key | — |
 
 **Never broader.** A rule this version does not run is listed in `status` as inactive with its
-code: `step_unsupported` (an action type of a later Step — mouse actions in 71,
-modes in 72, `delay`, a typing step among other steps and launches mixed with other steps in 78 — or an unknown one),
+code: `step_unsupported` (an action type of a later Step — modes in 72, `delay`, a typing
+step among other steps and launches or mouse steps mixed with other steps in 78 — or an unknown one),
 `condition_unsupported` (`when`, Step 77), `rule_unsupported` (an unknown field inside the rule),
 `trigger_invalid`/`trigger_reserved`, `duplicate_rule_id`, `duplicate_trigger` and every other
 error of DDALGAK_RULE_MODEL §8. A file that is not a usable `ddalgak.rules` v1 document is not
@@ -267,12 +268,13 @@ tray icon on your desktop):
 | `crates/ddalgak/src/{text,hotstring,run}.rs` | typed text (encoding, variables, insertion point, previews, the text editor's data model), the hotstring matcher and its bounded buffer, typing runs with their target checks, clipboard handling and fakes (Step 69, §12) |
 | `crates/ddalgak/src/{model,schema,validate,store,edit}.rs` | the rule store (Step 67, §10): typed model, run-time schema, validation, files, operations |
 | `crates/ddalgak/src/launch.rs` | launches (Step 70, §13): path, argument, environment and URL checks, quoting, normalization and redaction, the launch plan and gate, the fake and test-host launchers, the program picker and website field data models |
-| `crates/ddalgak/src/win/{hook,inject,context,host,tray,pipe,instance,startup,watch,typing,launch}.rs` | Windows layer (`watch`: the folder change notifications of §10; `typing`: key translation, the target probe, the clipboard and the local clock of §12; `launch`: `CreateProcessW`, `ShellExecuteExW`, window activation and icon extraction of §13) |
+| `crates/ddalgak/src/mouse.rs`, `mouse/tests.rs` | mouse actions (Step 71, §14): monitor geometry, DPI scaling, clamping and path stops, normalization, the grid, motions, the plan runner, the simulated pointer, previews, summaries, the playground and the Mouse form's data model |
+| `crates/ddalgak/src/win/{hook,inject,context,host,tray,pipe,instance,startup,watch,typing,launch,mouse}.rs` | Windows layer (`watch`: the folder change notifications of §10; `typing`: key translation, the target probe, the clipboard and the local clock of §12; `launch`: `CreateProcessW`, `ShellExecuteExW`, window activation and icon extraction of §13; `mouse`: the monitor layout with DPI, the pointer, the active window's content area and the input window at a point, read in per-monitor DPI mode, §14) |
 | `crates/ddalgak/src/main.rs`, `cli.rs`, `output.rs`, `rule_cmd.rs` | the `ddalgak` CLI (`rule_cmd`: the `rule` and `rules` commands) |
 | `crates/ddalgak/src/bin/ddalgak-gui.rs` | the tray app |
 | `crates/ddalgak/hotkeys.manifest.json` | the built-in hotkey manifest (equal to the contract example) |
 | `crates/ddalgak/tests/{cli,hook_windows,launch_windows}.rs`, `tests/common/marker.rs` | real-binary, real-hook and real-launch tests; the marker program the launch tests build and start hidden |
-| `e2e/tests/step66_ddalgak_engine.rs`, `e2e/tests/step67_ddalgak_rules.rs`, `e2e/tests/step68_ddalgak_remap.rs`, `e2e/tests/step69_ddalgak_typing.rs`, `e2e/tests/step70_ddalgak_launch.rs` | the e2e scenarios (run only through `cargo xtask e2e`) |
+| `e2e/tests/step66_ddalgak_engine.rs`, `e2e/tests/step67_ddalgak_rules.rs`, `e2e/tests/step68_ddalgak_remap.rs`, `e2e/tests/step69_ddalgak_typing.rs`, `e2e/tests/step70_ddalgak_launch.rs`, `e2e/tests/step71_ddalgak_mouse.rs` | the e2e scenarios (run only through `cargo xtask e2e`) |
 
 ## 10. The rule store and live reload (Step 67)
 
@@ -602,3 +604,114 @@ every rule is removed again at the end):
    example.com.
 8. Remove the rules: `ddalgak rule delete l-notepad l-notepad-front l-calc l-site l-admin l-copy --yes`,
    then quit the app.
+
+## 14. Mouse moves, wheel, clicks and holds (Step 71)
+
+Decision: [ADR 0040](adr/0040-ddalgak-mouse-actions.md). Format:
+[DDALGAK_RULE_MODEL §5.7–§5.9](DDALGAK_RULE_MODEL.md).
+
+**What runs.** A rule made of mouse steps moves the pointer by a distance (logical pixels scaled
+by the monitor's display scale, or cells of a virtual grid) or to a point (desktop pixels, the
+primary monitor or the active window's content area), scrolls the wheel up, down, left or right,
+and clicks or double-clicks any of the five buttons, the steps together and in order. A held
+button (`op: hold`) is down exactly as long as its trigger; a move while held glides (speed,
+acceleration) or steps at a chosen repeat rate until the trigger goes up.
+
+**How.**
+
+| Part | What it does |
+| --- | --- |
+| Loader (`rules.rs`, `mouse::compile_step`) | Compiles mouse steps into a plan (`Action::Mouse`), a held button (`Action::MouseHold`: a remap whose target is the button) or a motion (`Action::Motion`); a held step must be the rule's only step on a single chord pressed without repeat or pass-through (`step_invalid`); mouse steps with other step types are `step_unsupported` until Step 78 |
+| Core (hook thread) | A held button goes through the remap slots of §11 (reference counts, lifted chord modifiers, no auto-repeat, every release path). A move while held fires on its trigger's down and keeps a record of the trigger key (at most eight); its up sends `MotionEnd`; cancel, key reset and reload drop the records (`ReleaseAll` to the worker). Auto-repeats of a held trigger are consumed and fire nothing |
+| Worker | A plan runs at once: per step the layout, the pointer and (for `active_window`) the window are read, the target is checked (`skipped_secure_desktop`, `skipped_elevated_target`, `skipped_disabled_field`) and the step's events go out in one `SendInput` call (a move, then a click's down and up, two clicks, or one wheel event per notch). A held button's down is preceded by the move to its point in the same call. Motions are ticked every 10 ms (continuous) or at their step times, only while one exists: the position is read, every due motion adds its share (a diagonal from two keys), the path is clamped onto the desktop, the input window at the new point is checked, one move is sent. Pause, stop, lock, a release-all, the emergency chord, a reload and the worker's end stop every motion (`cancelled`); 60 s held ends one with `timeout` |
+| Geometry (`mouse.rs`) | Physical desktop pixels; logical coordinates scaled by the monitor's DPI (half away from zero); the visible desktop as the union of monitors; absolute targets to the nearest monitor pixel, relative moves stop where their path leaves the desktop; normalized `MOUSEEVENTF_VIRTUALDESK` coordinates at the middle of each pixel's interval; grid cells per monitor; continuous speed with linear acceleration over 1 s, capped at 10 000 px/s, at most 50 ms of distance per tick |
+| Windows (`win::mouse`, `win::inject`) | `EnumDisplayMonitors` + `GetMonitorInfoW` + `GetDpiForMonitor` (effective DPI), `GetCursorPos`, the foreground window's client origin (`GetClientRect`, `ClientToScreen`, `GetDpiForWindow`), the capture window (`GetGUIThreadInfo`) or `WindowFromPoint` and its integrity level — each with the thread in per-monitor DPI awareness v2; `MOUSEINPUT` moves with `MOVE \| ABSOLUTE \| VIRTUALDESK`, `WHEEL`/`HWHEEL` with the delta in `mouseData`, button flags that follow "swap buttons", Ddalgak's marker in `dwExtraInfo` |
+| CLI | `rule add/edit --action mouse_move --dx <n> --dy <n> [--grid CxR] [--speed <px/s> [--acceleration <n>] \| --repeat-ms <ms> [--delay-ms <ms>]]`, `--action mouse_move --x <n> --y <n> [--relative-to …]`, `--action mouse_scroll --direction … [--notches <n>]`, `--action mouse_click --button … [--op click\|double_click\|hold] [--x <n> --y <n>]`, or `--step '<json>'`; titles name directions and numbers |
+| Editor and playground data (`MouseDraft`, `MOUSE_FIELDS`, `screen_map`, `Playground`) | The Step 74 Mouse form (move by / to, scroll, click; once, glide or repeat while held; grid), its summary, problems and Save/Test gating, the small screen map with every monitor and the target, and the Step 76 playground's simulated pointer that runs the same code and never moves the real one |
+| Debug test host | A simulated pointer on a synthetic 1920 × 1080 monitor and the discarding backend: a test host never reads, moves, scrolls or clicks the real pointer |
+
+**Measurements** (Windows 10 Pro 19045, this machine: one 5120 × 1440 monitor at 100 %; numbers
+stay local, ADR 0012):
+
+| What | Method | Result |
+| --- | --- | --- |
+| The input-window check before each step and tick (`GetGUIThreadInfo` or `WindowFromPoint`, the process's integrity level), read-only | `win::mouse::tests::the_pointer_target_is_checked_quickly`, 200 calls | **12 µs** (debug) |
+| A motion tick's own work (two motions, the path check over three monitors, normalization) | `mouse::tests::a_motion_tick_costs_far_below_its_interval`, 20 000 ticks | **0.11 µs** (release), 0.5 µs (debug) |
+| A real key event to the simulated pointer's wheel notches (real hook, worker, plan) | `tests/hook_windows.rs::mouse_rules_on_obscure_keys_reach_only_a_simulated_pointer` | **0.26 ms** |
+| Idle cost | unchanged: mouse actions install no mouse hook and the worker has a motion timer only while a move is held (`worker::tests::every_path_stops_a_motion_and_the_idle_worker_has_no_timer_again`) | §7 |
+
+**Verification** (the shared machine: automated tests never move, scroll or click the real
+pointer; they build the real `INPUT` structures and run everything else against a simulated
+pointer on synthetic monitor layouts):
+
+| Check | Status | Evidence |
+| --- | --- | --- |
+| Logical-to-physical scaling at 100–300 %, normalization landing on every pixel of layouts with negative origins, odd sizes and the widest desktops, clamping onto the union of monitors (gaps, corners, negative coordinates), relative moves stopping where their path leaves the desktop and crossing onto adjacent monitors, points on the primary monitor and in the active window with their own DPI, grid cells per monitor | **tested** (synthetic layouts) | `mouse::tests` |
+| The exact `INPUT` structures: `MOVE \| ABSOLUTE \| VIRTUALDESK` with normalized coordinates (and a target beside every monitor normalized onto the desktop), down/up pairs of every button (swapped too, X buttons with their `mouseData`), double clicks as four events, one `WHEEL`/`HWHEEL` event per notch with ±120, Ddalgak's marker | **tested** (built, never sent) | `win::inject::tests::mouse_moves_wheels_and_clicks_become_exactly_these_inputs`, `…every_button_pairs_its_down_with_its_up` |
+| Speed, acceleration, the 10 000 px/s cap, at most 50 ms of distance per late tick, sub-pixel accumulation, diagonals, stepped repeats after their delay, the 60 s safety timeout | **tested** | `mouse::tests` |
+| Held moves and buttons last exactly as long as their trigger, repeats consumed, shared buttons released by the last holder, chord modifiers lifted and restored, stepping aside (elevated foreground, secure desktop, pause), rate limits under hammering, the motion slot limit; cancel, key reset (desktop switch, unlock, elevated focus) and reload never leave a button or a motion held | **tested** (decision core) | `core::tests` (Step 71 section) |
+| The real worker thread: a plan's exact events; a held button moved to its point, released on cancel, release-all, emergency and stop, never pressed over an elevated window; motions gliding, combining, stopping at the desktop edge and on every stop path, then no timer; stepped repeats; an old table's trigger ignored | **tested** (simulated pointer) | `worker::tests` (Step 71 section) |
+| Partial `SendInput` leaves no button held; secure desktop, elevated window at the point and a missing window refuse a step; `on_error` | **tested** | `mouse::tests::targets_that_refuse_input_stop_the_run_and_nothing_stays_pressed` |
+| The real hook with real injected obscure keys (F13–F15) fires a scroll, a held button and a glide on a simulated pointer; the triggers stay consumed; nothing stays pressed | **tested** once on an unlocked desktop of this machine (reports **skipped** when locked) | `tests/hook_windows.rs::mouse_rules_on_obscure_keys_reach_only_a_simulated_pointer` |
+| CLI: the mouse flags and JSON steps, canonical storage, titles, refusals with nothing written, consent; the real test host loads the rules active without a mouse hook and refuses another program's input | **tested** | `edit::tests::mouse_flags_build_canonical_mouse_steps_and_refuse_mixtures`, `tests/cli.rs::mouse_rules_through_the_cli_and_the_real_test_host` |
+| The monitor layout and the pointer read on this machine (read-only) | **tested** | `win::mouse::tests::the_layout_and_the_pointer_are_read_without_moving_anything` |
+| **Real pointer movement, scrolling and clicks** on real monitors (several monitors, negative coordinates, mixed scaling), whether Windows lands exactly on the normalized pixel, an administrator window under the pointer, a drag with a held button, mouse capture, games and high-frequency input | **not tested**: they move the pointer the maintainer is using (AGENTS.md §5, the Step 71 assignment); the manual script below | — |
+
+**Manual checks for the maintainer** (about twenty minutes; release build, the real tray app;
+every rule is removed again at the end; ideally with two monitors, one of them left of the
+primary and at a different display scale):
+
+1. `cargo build -p ddalgak --release`, start `target\release\ddalgak-gui.exe`, then
+   `target\release\ddalgak engine start`.
+2. Add the rules (each also needs `--allow input-injection`):
+   - `ddalgak rule add --id m-right --trigger Ctrl+Alt+Shift+Right --action mouse_move --dx 1 --dy 0 --speed 600 --acceleration 3`
+   - `ddalgak rule add --id m-left --trigger Ctrl+Alt+Shift+Left --action mouse_move --dx -1 --dy 0 --speed 600 --acceleration 3`
+   - `ddalgak rule add --id m-up --trigger Ctrl+Alt+Shift+Up --action mouse_move --dx 0 --dy -1 --speed 600`
+   - `ddalgak rule add --id m-down --trigger Ctrl+Alt+Shift+Down --action mouse_move --dx 0 --dy 1 --speed 600`
+   - `ddalgak rule add --id m-cell --trigger Ctrl+Shift+F7 --action mouse_move --dx 1 --grid 16x9 --repeat-ms 150`
+   - `ddalgak rule add --id m-nudge --trigger Ctrl+Shift+F8 --repeat --action mouse_move --dx 0 --dy -10`
+   - `ddalgak rule add --id m-centre --trigger Ctrl+Alt+Shift+Home --action mouse_move --x 960 --y 540 --relative-to primary_monitor`
+   - `ddalgak rule add --id m-far --trigger Ctrl+Alt+Shift+End --action mouse_move --x -30000 --y 300`
+   - `ddalgak rule add --id m-wheel --trigger Ctrl+Alt+Shift+PageDown --action mouse_scroll --direction down --notches 3`
+   - `ddalgak rule add --id m-hwheel --trigger Ctrl+Alt+Shift+PageUp --action mouse_scroll --direction right --notches 2`
+   - `ddalgak rule add --id m-click --trigger Ctrl+Alt+Shift+Enter --action mouse_click --button left`
+   - `ddalgak rule add --id m-double --trigger Ctrl+Shift+F9 --action mouse_click --button left --op double_click`
+   - `ddalgak rule add --id m-drag --trigger Ctrl+Alt+Shift+Space --action mouse_click --button left --op hold`
+   - `ddalgak rule add --id m-back --trigger Ctrl+Shift+F10 --action mouse_click --button x1`
+
+   `ddalgak status` lists them active and `mouse hook installed: false`.
+3. **Four directions**: hold Ctrl+Alt+Shift+Right: the pointer glides right and speeds up over
+   about a second; let go: it stops at once. Repeat for Left, Up and Down; hold Up and Right
+   together: a diagonal. Ctrl+Shift+F7 moves one grid cell right, then every 150 ms while held;
+   Ctrl+Shift+F8 nudges 10 px up per key repeat.
+4. **Edges and monitors**: glide right until the pointer reaches the right edge: it stays there
+   (no jump, no wrap). With two monitors, glide from one onto the other (it crosses), and glide
+   down past the shorter monitor's bottom edge (it stops at that edge instead of jumping to the
+   other monitor). Ctrl+Alt+Shift+Home puts the pointer in the middle of a 1920 × 1080 primary
+   monitor (at 150 % scaling: x = 1440, y = 810); Ctrl+Alt+Shift+End puts it on the left edge of
+   the leftmost monitor. Note whether the pointer lands on the exact pixel (an image editor's
+   coordinate display helps).
+5. **Display scaling**: on a monitor at 150 %, a 10 px nudge moves 15 physical pixels; report
+   whether gliding speed looks the same on both monitors.
+6. **Wheel and clicks**: in a long web page, Ctrl+Alt+Shift+PageDown scrolls down three notches;
+   in a wide spreadsheet Ctrl+Alt+Shift+PageUp scrolls right. Ctrl+Alt+Shift+Enter clicks where the
+   pointer is; Ctrl+Shift+F9 double-clicks a word (it is selected); Ctrl+Shift+F10 goes back
+   in a browser.
+7. **Drag**: in Explorer, point at a file, hold Ctrl+Alt+Shift+Space, move the real mouse onto a
+   folder and let go: the file is moved (a plain drag: the held button releases Ctrl, Alt and Shift
+   for the application while it is down, like a remap). Check that Ctrl, Alt and Shift are not
+   stuck afterwards (type letters in Notepad).
+8. **No stuck button**: hold Ctrl+Alt+Shift+Space and, while holding, press the emergency chord
+   Ctrl+Alt+Shift+Escape: the engine turns off and the left button is not stuck (clicking works
+   normally). Turn the engine on again; hold Space again and run `ddalgak pause` from a second
+   terminal; then lock the session (Win+L) while holding it and unlock: the button is up.
+9. **Administrator window**: open an administrator Command Prompt yourself, put the pointer over
+   it and press Ctrl+Alt+Shift+Enter: nothing is clicked and `ddalgak status` shows
+   `skipped_elevated_target`; glide the pointer from a normal window onto it: the glide stops
+   there with the same outcome.
+10. **Games and high-frequency input** (optional): in a game that uses the pointer in menus,
+    report whether gliding and clicks work; in a game that captures the mouse (a 3D camera),
+    report whether gliding turns the camera (it may not: absolute moves, ADR 0040). Hammer
+    Ctrl+Alt+Shift+Enter: beyond 20 presses a second they are `rate_limited`.
+11. Remove the rules: `ddalgak rule delete m-right m-left m-up m-down m-cell m-nudge m-centre m-far m-wheel m-hwheel m-click m-double m-drag m-back --yes`,
+    then quit the app.

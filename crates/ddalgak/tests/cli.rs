@@ -297,10 +297,9 @@ fn rules_doc(on_start: &str) -> Value {
                   "trigger": { "keys": "F19" },
                   "steps": [ { "type": "remap", "to": "F20" } ],
                   "consent": { "input-injection": { "granted_at": "2026-11-04T09:00:00Z", "via": "gui" } } },
-                { "id": "scroll-later", "title": "F18 scrolls (a later Step)", "enabled": true,
+                { "id": "delay-later", "title": "F18 waits (a later Step: ordered runs)", "enabled": true,
                   "trigger": { "keys": "F18" },
-                  "steps": [ { "type": "mouse_scroll", "direction": "down" } ],
-                  "consent": { "input-injection": { "granted_at": "2026-11-04T09:00:00Z", "via": "gui" } } }
+                  "steps": [ { "type": "delay", "ms": 100 } ] }
             ] } ]
     })
 }
@@ -440,7 +439,7 @@ fn the_app_lifecycle_through_the_cli() {
         json!(["pause-key", "off-key", "physical-only", "f19-remap"]),
         "remaps run from Step 68"
     );
-    assert_eq!(d["rules"]["inactive"][0]["rule"], "scroll-later");
+    assert_eq!(d["rules"]["inactive"][0]["rule"], "delay-later");
     assert_eq!(d["rules"]["inactive"][0]["code"], "step_unsupported");
     // Ddalgak's own shortcuts are registered with RegisterHotKey (obscure chords only; never
     // pressed by this test), unless another program owns them.
@@ -2277,6 +2276,290 @@ fn launch_rules_through_the_cli_and_the_real_test_host() {
         verified.push("the double press was dropped".into());
     }
     eprintln!("verified with the real test host: {verified:?}");
+    sb.json(&["quit"]);
+    assert_eq!(host.wait_exit(Duration::from_secs(10)), Some(0));
+}
+
+/// Step 71: mouse rules through the CLI (flags and `--step` JSON), the refusals that write
+/// nothing, and the real test host loading them active without a mouse hook. The test host's
+/// mouse actions see a simulated pointer and inject nothing; the only real input is an obscure
+/// key injected as "another program", which mouse rules refuse (`skipped_injected_input`). No
+/// test moves, scrolls or clicks the real pointer.
+#[test]
+fn mouse_rules_through_the_cli_and_the_real_test_host() {
+    let sb = Sandbox::new("mouse");
+    let add = |id: &str, keys: &str, action: &[&str]| {
+        let mut a = vec!["rule", "add", "--id", id, "--trigger", keys];
+        a.extend_from_slice(action);
+        a.extend_from_slice(&["--allow", "input-injection"]);
+        sb.json(&a)
+    };
+    let ok = |id: &str, keys: &str, action: &[&str]| {
+        let (exit, d) = add(id, keys, action);
+        assert_eq!(exit, 0, "{id}: {d:#}");
+        d
+    };
+    ok(
+        "glide-right",
+        "F13",
+        &[
+            "--action",
+            "mouse_move",
+            "--dx",
+            "1",
+            "--speed",
+            "600",
+            "--acceleration",
+            "3",
+        ],
+    );
+    ok(
+        "cell-left",
+        "F14",
+        &[
+            "--action",
+            "mouse_move",
+            "--dx",
+            "-1",
+            "--grid",
+            "16x9",
+            "--repeat-ms",
+            "150",
+        ],
+    );
+    ok(
+        "centre",
+        "F15",
+        &[
+            "--action",
+            "mouse_move",
+            "--x",
+            "960",
+            "--y",
+            "540",
+            "--relative-to",
+            "primary_monitor",
+        ],
+    );
+    ok(
+        "wheel",
+        "F16",
+        &[
+            "--action",
+            "mouse_scroll",
+            "--direction",
+            "down",
+            "--notches",
+            "3",
+        ],
+    );
+    ok(
+        "drag",
+        "F17",
+        &[
+            "--action",
+            "mouse_click",
+            "--button",
+            "left",
+            "--op",
+            "hold",
+        ],
+    );
+    let d = ok(
+        "back",
+        "F18",
+        &[
+            "--action",
+            "mouse_click",
+            "--button",
+            "x1",
+            "--x",
+            "-200",
+            "--y",
+            "300",
+        ],
+    );
+    assert_eq!(d["data"]["created"], "back", "{d:#}");
+    // Several mouse steps in order, as JSON.
+    ok(
+        "click-twice-there",
+        "F19",
+        &[
+            "--step",
+            r#"{"type":"mouse_move","mode":"absolute","to":{"x":24,"y":24,"relative_to":"active_window"}}"#,
+            "--step",
+            r#"{"type":"mouse_click","button":"right","op":"double_click"}"#,
+        ],
+    );
+    let before = sb.rules_bytes();
+    // Refused, with nothing written: both a distance and a point, no direction while held, a
+    // continuous grid move, a speed beyond the limit, an unknown direction, a held button with
+    // repeat or on a sequence.
+    for (args, code) in [
+        (
+            vec![
+                "--action",
+                "mouse_move",
+                "--dx",
+                "1",
+                "--x",
+                "3",
+                "--y",
+                "4",
+            ],
+            "usage",
+        ),
+        (
+            vec!["--action", "mouse_move", "--dx", "0", "--speed", "600"],
+            "rule_invalid",
+        ),
+        (
+            vec![
+                "--action",
+                "mouse_move",
+                "--dx",
+                "1",
+                "--grid",
+                "16x9",
+                "--speed",
+                "600",
+            ],
+            "rule_invalid",
+        ),
+        (
+            vec!["--action", "mouse_move", "--dx", "1", "--speed", "9000"],
+            "rule_invalid",
+        ),
+        (
+            vec!["--action", "mouse_scroll", "--direction", "sideways"],
+            "usage",
+        ),
+        (
+            vec![
+                "--repeat",
+                "--action",
+                "mouse_click",
+                "--button",
+                "left",
+                "--op",
+                "hold",
+            ],
+            "rule_invalid",
+        ),
+    ] {
+        let (exit, d) = add("refused", "F20", &args);
+        assert_eq!(
+            (exit, d["error"]["code"].as_str()),
+            (2, Some(code)),
+            "{args:?}: {d:#}"
+        );
+    }
+    let (exit, d) = sb.json(&[
+        "rule",
+        "add",
+        "--id",
+        "held-sequence",
+        "--trigger",
+        "F20 F21",
+        "--action",
+        "mouse_click",
+        "--button",
+        "left",
+        "--op",
+        "hold",
+        "--allow",
+        "input-injection",
+    ]);
+    assert_eq!(
+        (exit, d["error"]["code"].as_str()),
+        (2, Some("rule_invalid")),
+        "{d:#}"
+    );
+    assert_eq!(sb.rules_bytes(), before, "refusals write nothing");
+    // As stored: canonical steps and titles that name directions and numbers.
+    let doc: Value = serde_json::from_slice(&sb.rules_bytes()).unwrap();
+    let rules = doc["profiles"][0]["rules"].as_array().unwrap();
+    let rule = |id: &str| rules.iter().find(|r| r["id"] == id).unwrap().clone();
+    assert_eq!(
+        rule("cell-left")["steps"][0],
+        json!({"type":"mouse_move","mode":"relative","dx":-1,"dy":0,"unit":"grid",
+               "grid":{"columns":16,"rows":9},"while_held":{"repeat_ms":150}})
+    );
+    assert_eq!(
+        rule("glide-right")["title"],
+        "Moves the pointer right at 600 px/s while F13 is held"
+    );
+    assert_eq!(rule("wheel")["title"], "F16: scrolls down 3 notches");
+    assert_eq!(
+        rule("click-twice-there")["title"],
+        "F19: moves the pointer to (24, 24) in the active window (+1 more)"
+    );
+    let (_, list) = sb.json(&["rule", "list"]);
+    let states: Vec<(String, String)> = list["data"]["rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| {
+            (
+                r["id"].as_str().unwrap().to_string(),
+                r["state"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    assert!(
+        states.iter().all(|(_, s)| s == "active"),
+        "every mouse rule runs from Step 71: {states:?}"
+    );
+    let (_, check) = sb.json(&["rule", "check"]);
+    assert_eq!(check["data"]["summary"]["errors"], 0, "{check:#}");
+    // The real test host: loaded active, no mouse hook (mouse actions need none), nothing moved.
+    let mut host = sb.host();
+    if elevated() {
+        eprintln!("skipped (elevated): the app refuses to turn its engine on as administrator");
+        sb.json(&["quit"]);
+        return;
+    }
+    let (_, d) = sb.json(&["engine", "start"]);
+    assert_eq!(d["data"]["engine"]["state"], "running", "{d:#}");
+    let (_, st) = sb.json(&["status"]);
+    assert_eq!(st["data"]["rules"]["active"], 7, "{st:#}");
+    assert_eq!(st["data"]["rules"]["inactive"], json!([]));
+    assert_eq!(
+        st["data"]["engine"]["hook"]["mouse_installed"], false,
+        "mouse actions never install the mouse hook (no pointer tracking)"
+    );
+    if ddalgak::win::input_desktop_available()
+        && ddalgak::win::inject::send_as_other_program(&[
+            OutKey {
+                vk: VK_F13,
+                up: false,
+            },
+            OutKey {
+                vk: VK_F13,
+                up: true,
+            },
+        ]) == 2
+    {
+        let until = Instant::now() + Duration::from_secs(5);
+        let outcome = loop {
+            let (_, st) = sb.json(&["status"]);
+            let last = st["data"]["activity"]
+                .as_array()
+                .and_then(|a| a.last().cloned());
+            if let Some(l) = last {
+                break l;
+            }
+            assert!(Instant::now() < until, "no activity: {st:#}");
+            std::thread::sleep(Duration::from_millis(25));
+        };
+        assert_eq!(
+            (outcome["rule"].as_str(), outcome["outcome"].as_str()),
+            (Some("glide-right"), Some("skipped_injected_input")),
+            "mouse rules accept physical keys only"
+        );
+    } else {
+        eprintln!("skipped (locked or SendInput refused): the injected-input check");
+    }
     sb.json(&["quit"]);
     assert_eq!(host.wait_exit(Duration::from_secs(10)), Some(0));
 }

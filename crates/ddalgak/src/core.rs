@@ -40,8 +40,17 @@
 //! publishes the modifier state the application sees and a count of physical key presses
 //! ([`RunShared`]), and consumes the physical release of a modifier a run released logically.
 //!
+//! **Mouse holds** (Step 71, §5.7, §5.9): a held button (`mouse_click` with `op: hold`) is a remap
+//! slot whose target is the button, so it shares the reference counts and every release path. A
+//! move while held (`while_held`) fires on its trigger's down and keeps a small record of the
+//! trigger key; the trigger's up sends [`Signal::MotionEnd`], and every path that releases the
+//! remaps (pause, stop, session lock, a desktop switch, an elevated window taking focus, a key
+//! reset) also ends every motion ([`Signal::ReleaseAll`]). A reload drops the records: the worker
+//! stops every motion when it gets new rules.
+//!
 //! The core keeps only what matching needs (keys down, one pending tap, hold or sequence step,
-//! the active remaps, the bounded hotstring buffer). It records no keys (`DDALGAK-SEC-001`).
+//! the active remaps and motions, the bounded hotstring buffer). It records no keys
+//! (`DDALGAK-SEC-001`).
 
 use crate::event::{KeyEvent, KeySet, ModState, Normalizer, RawKey, Source, Transition};
 use crate::hotstring::{self, Translate, Typed};
@@ -165,6 +174,10 @@ pub enum Signal {
         binding: u16,
         fire: HotstringFire,
     },
+    /// The trigger of a move while held went up (Step 71): that motion stops.
+    MotionEnd {
+        binding: u16,
+    },
 }
 
 /// The context the hook sees at this moment (kept current by the host's watchers).
@@ -225,6 +238,8 @@ const NONE: u16 = u16::MAX;
 const SEQ_WORDS: usize = 16; // 1024 bits ≥ MAX_BINDINGS
 /// Most remaps held at the same time (one per held trigger key).
 pub const SLOTS: usize = 16;
+/// Most moves while held at the same time (Up and Right together move diagonally).
+pub const MOTIONS: usize = 8;
 
 #[derive(Clone, Copy, Debug)]
 struct Seq {
@@ -335,6 +350,8 @@ pub struct Core {
     hs: hotstring::Buffer,
     /// Physical key presses (a number, never which keys).
     typed: u32,
+    /// Moves while held (Step 71): the trigger's virtual key and the binding.
+    motions: [Option<(u16, u16)>; MOTIONS],
 }
 
 const WIN_BITS: u8 = 0x40 | 0x80;
@@ -371,6 +388,7 @@ impl Core {
             runs: None,
             translate: None,
             typed: 0,
+            motions: [None; MOTIONS],
         }
     }
 
@@ -406,6 +424,9 @@ impl Core {
                 *s = None;
             }
         }
+        // The worker stops every motion when it gets the new rules; their trigger-ups stay
+        // consumed (their downs were).
+        self.motions = [None; MOTIONS];
     }
 
     pub fn table(&self) -> &Table {
@@ -422,6 +443,11 @@ impl Core {
         self.slots.iter().flatten().count()
     }
 
+    /// How many moves while held are going on (diagnostics and tests).
+    pub fn active_motions(&self) -> usize {
+        self.motions.iter().flatten().count()
+    }
+
     /// Forgets the key state after input went to another desktop (lock screen, UAC,
     /// Ctrl+Alt+Del), an elevated window took focus or the session came back: key-ups made there
     /// never reached the hook. Keys whose down was consumed keep having their up consumed. Every
@@ -433,7 +459,8 @@ impl Core {
         self.release = None;
         self.hold = None;
         self.seq = None;
-        let had = self.active_remaps() > 0 || !self.replayed.is_empty();
+        let had =
+            self.active_remaps() > 0 || !self.replayed.is_empty() || self.active_motions() > 0;
         self.clear_remaps();
         if had {
             vec![Signal::ReleaseAll]
@@ -454,7 +481,7 @@ impl Core {
         if let Some((binding, _)) = self.hold.take() {
             out.push(Signal::HoldCancelled { binding });
         }
-        if self.active_remaps() > 0 || !self.replayed.is_empty() {
+        if self.active_remaps() > 0 || !self.replayed.is_empty() || self.active_motions() > 0 {
             out.push(Signal::ReleaseAll);
         }
         let phys = self.norm.mods_physical();
@@ -474,6 +501,13 @@ impl Core {
         self.slots = [None; SLOTS];
         self.mod_refs = [0; 8];
         self.key_refs = [None; SLOTS];
+        self.motions = [None; MOTIONS];
+    }
+
+    fn motion_of(&self, vk: u16) -> Option<usize> {
+        self.motions
+            .iter()
+            .position(|m| m.is_some_and(|(k, _)| k == vk))
     }
 
     /// The hook thread's timer fired at `now` (ms, the event clock): an undecided dual role whose
@@ -878,12 +912,18 @@ impl Core {
                 self.consumed.remove(ev.vk);
                 self.replayed.remove(ev.vk);
                 let stale = self.slot_of(ev.vk).and_then(|i| self.slots[i].take());
+                let stale_motion = self
+                    .motion_of(ev.vk)
+                    .and_then(|i| self.motions[i].take())
+                    .map(|(_, binding)| Signal::MotionEnd { binding });
                 let mut d = self.down(&ev, mode, flags);
-                if let Some(s) = stale {
-                    let r = Signal::Remap {
+                let stale = stale
+                    .map(|s| Signal::Remap {
                         binding: s.binding,
                         op: self.release(&s),
-                    };
+                    })
+                    .or(stale_motion);
+                if let Some(r) = stale {
                     if d.pre.is_none() {
                         d.pre = Some(r);
                     } else {
@@ -923,6 +963,11 @@ impl Core {
                 binding: s.binding,
                 op,
             });
+        }
+        if let Some(i) = self.motion_of(ev.vk)
+            && let Some((_, binding)) = self.motions[i].take()
+        {
+            signal = Some(Signal::MotionEnd { binding });
         }
         let mut post = None;
         if self.replayed.remove(ev.vk) {
@@ -1161,6 +1206,9 @@ impl Core {
         if let Some(spec) = c.is_remap.then(|| self.table.remap(i)).flatten() {
             return self.remap_down(ev, i, &c, spec);
         }
+        if c.motion {
+            return self.motion_down(ev, i);
+        }
         match c.on {
             On::Press => {
                 let signal = self.fire(i, FireKind::Press, ev.time_ms);
@@ -1232,6 +1280,20 @@ impl Core {
         let op = self.press(&mut slot);
         self.slots[free] = Some(slot);
         finish(self, Some(Signal::Remap { binding, op }))
+    }
+
+    /// The trigger of a move while held went down (§5.7, Step 71): the rule fires and the core
+    /// remembers the trigger key so its up ends the motion. More motions than [`MOTIONS`]: the
+    /// key passes unchanged.
+    fn motion_down(&mut self, ev: &KeyEvent, i: usize) -> Decision {
+        let Some(free) = self.motions.iter().position(Option::is_none) else {
+            return self.pass(ev, None);
+        };
+        let signal = self.fire(i, FireKind::Press, ev.time_ms);
+        if let Signal::Fire { binding, .. } = signal {
+            self.motions[free] = Some((ev.vk, binding));
+        }
+        self.take(ev, i, Some(signal))
     }
 
     /// Hotstrings (§3.4): feeds a key that reaches the application unchanged into the bounded
@@ -3073,5 +3135,225 @@ mod tests {
                 code: Skip::ElevatedTarget
             })
         );
+    }
+
+    // ---- Step 71: held buttons and moves while held (DDALGAK_RULE_MODEL §5.7, §5.9;
+    // DDALGAK-FR-015, DDALGAK-SEC-005). Decisions only: nothing is injected.
+
+    fn motion(rule: &str, keys: &str, dx: i32, dy: i32) -> Binding {
+        let mut b = binding(rule, keys);
+        b.injects = true;
+        b.action = Action::Motion(crate::mouse::MotionSpec {
+            dx,
+            dy,
+            unit: crate::mouse::Unit::Pixels,
+            kind: crate::mouse::MotionKind::Continuous {
+                speed: 600,
+                acceleration: 0,
+            },
+        });
+        b
+    }
+
+    fn hold(rule: &str, keys: &str, button: Button) -> Binding {
+        let mut b = binding(rule, keys);
+        b.injects = true;
+        b.action = Action::MouseHold {
+            spec: RemapSpec {
+                to: Output::button(button),
+                tap: None,
+                tap_ms: 200,
+            },
+            at: None,
+        };
+        b
+    }
+
+    fn left() -> Option<OutCode> {
+        Some(OutCode::Button(Button::Left))
+    }
+
+    #[test]
+    fn a_move_while_held_lasts_exactly_as_long_as_its_trigger() {
+        let mut t = T::new(vec![
+            motion("up", "Up", 0, -1),
+            motion("right", "Right", 1, 0),
+        ]);
+        let d = t.ev("Up", false);
+        assert!(d.consume, "the trigger never reaches the application");
+        assert_eq!(fired(&d), Some((0, FireKind::Press)));
+        assert_eq!(t.core.active_motions(), 1);
+        // Auto-repeat (a held key, a game's input storm) is consumed and fires nothing: the
+        // motion goes on by itself.
+        for _ in 0..50 {
+            let r = t.ev("Up", false);
+            assert!(r.consume && r.signal.is_none());
+        }
+        // Right while Up is held: two motions, the worker adds them up (a diagonal).
+        assert_eq!(fired(&t.ev("Right", false)), Some((1, FireKind::Press)));
+        assert_eq!(t.core.active_motions(), 2);
+        let u = t.ev("Up", true);
+        assert!(u.consume, "consumed down, consumed up");
+        assert_eq!(u.signal, Some(Signal::MotionEnd { binding: 0 }));
+        assert_eq!(
+            t.ev("Right", true).signal,
+            Some(Signal::MotionEnd { binding: 1 })
+        );
+        assert_eq!(t.core.active_motions(), 0);
+        // Moves while held match exactly: Shift+Up is not Up.
+        let s = t.down(&["LShift", "Up"]);
+        assert!(!s.consume && s.signal.is_none());
+        t.up(&["LShift", "Up"]);
+    }
+
+    #[test]
+    fn a_held_button_is_a_shared_reference_counted_output() {
+        let mut t = T::new(vec![
+            hold("drag", "Space", Button::Left),
+            hold("drag-too", "D", Button::Left),
+            hold("pan", "Ctrl+M", Button::Middle),
+        ]);
+        let d = t.ev("Space", false);
+        assert!(d.consume);
+        assert_eq!(op(&d), Some(press(&[], &[], left())));
+        // Buttons never auto-repeat: a held key's repeats send nothing.
+        for _ in 0..5 {
+            assert_eq!(op(&t.ev("Space", false)), None);
+        }
+        // A second hold of the same button shares it: it goes up when the last one lets go.
+        assert_eq!(op(&t.ev("D", false)), Some(press(&[], &[], None)));
+        assert_eq!(op(&t.ev("Space", true)), Some(release(None, &[], &[])));
+        assert_eq!(op(&t.ev("D", true)), Some(release(left(), &[], &[])));
+        // A chord trigger's modifiers are released while the button is held (a plain middle
+        // drag, not Ctrl+drag) and restored afterwards when still held.
+        t.down(&["LCtrl"]);
+        let m = t.ev("M", false);
+        assert_eq!(
+            op(&m),
+            Some(press(
+                &[ModKey::LCtrl],
+                &[],
+                Some(OutCode::Button(Button::Middle))
+            ))
+        );
+        assert_eq!(
+            op(&t.ev("M", true)),
+            Some(release(
+                Some(OutCode::Button(Button::Middle)),
+                &[],
+                &[ModKey::LCtrl]
+            ))
+        );
+        t.up(&["LCtrl"]);
+        assert_eq!(t.core.active_remaps(), 0);
+    }
+
+    #[test]
+    fn pause_lock_desktop_switches_and_reloads_never_leave_a_button_or_a_motion_held() {
+        // 0: pause, stop or session lock (cancel_pending); 1: a desktop switch, an unlock or an
+        // elevated window taking focus (reset_keys); 2: a reload.
+        for path in 0..3 {
+            let rules = || {
+                vec![
+                    motion("up", "Up", 0, -1),
+                    hold("drag", "Space", Button::Left),
+                ]
+            };
+            let mut t = T::new(rules());
+            t.ev("Up", false);
+            assert_eq!(op(&t.ev("Space", false)), Some(press(&[], &[], left())));
+            let signals = match path {
+                0 => t.core.cancel_pending(),
+                1 => t.core.reset_keys(),
+                _ => {
+                    t.core.set_table(Table::compile(rules(), 20));
+                    Vec::new()
+                }
+            };
+            if path < 2 {
+                assert!(signals.contains(&Signal::ReleaseAll), "{path}: {signals:?}");
+                assert_eq!((t.core.active_motions(), t.core.active_remaps()), (0, 0));
+                // The trigger-ups that come later change nothing more.
+                assert_eq!(t.ev("Up", true).signal, None, "{path}");
+                assert_eq!(op(&t.ev("Space", true)), None, "{path}");
+            } else {
+                // A reload: the worker stops every motion when it gets the new rules; the held
+                // button stays until its trigger goes up and is then released.
+                assert_eq!(t.core.active_motions(), 0);
+                let u = t.ev("Up", true);
+                assert!(u.consume && u.signal.is_none(), "its up stays consumed");
+                assert_eq!(op(&t.ev("Space", true)), Some(release(left(), &[], &[])));
+            }
+        }
+        // Only a motion: a release-all still goes to the worker so it stops.
+        let mut t = T::new(vec![motion("up", "Up", 0, -1)]);
+        t.ev("Up", false);
+        assert_eq!(t.core.reset_keys(), vec![Signal::ReleaseAll]);
+        assert!(t.core.reset_keys().is_empty(), "nothing left to release");
+    }
+
+    #[test]
+    fn mouse_rules_step_aside_and_storms_are_rate_limited() {
+        let mut t = T::new(vec![
+            motion("up", "Up", 0, -1),
+            hold("drag", "Space", Button::Left),
+        ]);
+        t.flags.elevated_foreground = true;
+        for k in ["Up", "Space"] {
+            let d = t.ev(k, false);
+            assert!(!d.consume, "{k} passes unchanged");
+            assert!(matches!(
+                d.signal,
+                Some(Signal::Skipped {
+                    code: Skip::ElevatedTarget,
+                    ..
+                })
+            ));
+            t.ev(k, true);
+        }
+        t.flags.elevated_foreground = false;
+        t.flags.secure_desktop = true;
+        assert!(!t.ev("Up", false).consume);
+        t.ev("Up", true);
+        t.flags.secure_desktop = false;
+        t.mode = Mode::Paused;
+        assert!(matches!(
+            t.ev("Up", false).signal,
+            Some(Signal::Skipped {
+                code: Skip::Paused,
+                ..
+            })
+        ));
+        t.ev("Up", true);
+        t.mode = Mode::Running;
+        assert_eq!(t.core.active_motions(), 0);
+        // Hammering the trigger (a repeated hotkey, high-frequency input): beyond 20 a second the
+        // presses are rate limited, start no motion, and their ups end nothing.
+        let mut limited = 0;
+        for _ in 0..30 {
+            let d = t.ev("Up", false);
+            if matches!(d.signal, Some(Signal::RateLimited { .. })) {
+                limited += 1;
+                assert_eq!(t.core.active_motions(), 0);
+                assert_eq!(t.ev("Up", true).signal, None);
+            } else {
+                assert_eq!(
+                    t.ev("Up", true).signal,
+                    Some(Signal::MotionEnd { binding: 0 })
+                );
+            }
+        }
+        assert!(limited >= 10, "{limited}");
+        // More moves while held than the core keeps: the extra key passes unchanged.
+        let many: Vec<Binding> = (13..=21)
+            .map(|n| motion(&format!("f{n}"), &format!("F{n}"), 1, 0))
+            .collect();
+        let mut t = T::new(many);
+        for n in 13..=20 {
+            assert!(t.ev(&format!("F{n}"), false).consume);
+        }
+        assert_eq!(t.core.active_motions(), MOTIONS);
+        let extra = t.ev("F21", false);
+        assert!(!extra.consume && extra.signal.is_none());
     }
 }

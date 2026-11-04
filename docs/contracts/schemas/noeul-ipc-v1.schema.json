@@ -408,17 +408,17 @@
       }
     },
     "annotation_state": {
-      "description": "The overlay's annotations (Step 56, NOEUL-FR-080/081): the tool, counts, IDs and style only, never the text of a label, a point or a pixel (NOEUL-SEC-008).",
+      "description": "The overlay's annotations (Step 56, NOEUL-FR-080/081; the privacy tools mosaic, blur, eraser and solid redaction since Step 57, NOEUL-FR-082): the tool, counts, IDs and style only, never the text of a label, a point, a pixel or what a redaction covers (NOEUL-SEC-008).",
       "type": "object",
       "required": ["tool", "objects", "kinds", "selected", "undo", "redo", "editing_text", "composing", "color", "width"],
       "additionalProperties": false,
       "properties": {
-        "tool": { "oneOf": [{ "type": "null" }, { "enum": ["rectangle", "ellipse", "line", "arrow", "pen", "marker", "text"] }] },
+        "tool": { "oneOf": [{ "type": "null" }, { "enum": ["rectangle", "ellipse", "line", "arrow", "pen", "marker", "text", "mosaic", "blur", "eraser", "redact"] }] },
         "objects": { "$ref": "#/$defs/u64" },
         "kinds": {
           "description": "How many objects of each kind.",
           "type": "object",
-          "required": ["rectangle", "ellipse", "line", "arrow", "pen", "marker", "text"],
+          "required": ["rectangle", "ellipse", "line", "arrow", "pen", "marker", "text", "mosaic", "blur", "eraser", "redact"],
           "additionalProperties": false,
           "properties": {
             "rectangle": { "$ref": "#/$defs/u64" },
@@ -427,7 +427,11 @@
             "arrow": { "$ref": "#/$defs/u64" },
             "pen": { "$ref": "#/$defs/u64" },
             "marker": { "$ref": "#/$defs/u64" },
-            "text": { "$ref": "#/$defs/u64" }
+            "text": { "$ref": "#/$defs/u64" },
+            "mosaic": { "$ref": "#/$defs/u64" },
+            "blur": { "$ref": "#/$defs/u64" },
+            "eraser": { "$ref": "#/$defs/u64" },
+            "redact": { "description": "Solid redactions (irreversible in every output).", "$ref": "#/$defs/u64" }
           }
         },
         "selected": { "description": "The selected object's ID.", "oneOf": [{ "$ref": "#/$defs/u64" }, { "type": "null" }] },
@@ -435,7 +439,7 @@
         "redo": { "description": "Redo steps available.", "$ref": "#/$defs/u64" },
         "editing_text": { "description": "A label is being edited (every other shortcut is suspended).", "type": "boolean" },
         "composing": { "description": "An input-method composition is shown in the label.", "type": "boolean" },
-        "color": { "enum": ["red", "orange", "yellow", "green", "blue", "purple", "black", "white"] },
+        "color": { "description": "The colour new objects of the current tool get (the redaction tool keeps its own, black by default).", "enum": ["red", "orange", "yellow", "green", "blue", "purple", "black", "white"] },
         "width": { "description": "The line width in logical pixels.", "enum": [1, 2, 3, 4, 6, 8, 12] }
       }
     },
@@ -454,7 +458,7 @@
         "monitors": { "$ref": "#/$defs/u64" },
         "buffer_bytes": { "$ref": "#/$defs/u64" },
         "help": { "type": "boolean" },
-        "focus": { "description": "What has the keyboard focus (Step 51): the canvas or a toolbar button (the annotation buttons since Step 56).", "enum": ["canvas", "pin", "copy", "save", "rectangle", "ellipse", "line", "arrow", "pen", "marker", "text", "color", "width", "undo", "redo", "done", "cancel"] },
+        "focus": { "description": "What has the keyboard focus (Step 51): the canvas or a toolbar button (the annotation buttons since Step 56, the privacy tools since Step 57).", "enum": ["canvas", "pin", "copy", "save", "rectangle", "ellipse", "line", "arrow", "pen", "marker", "text", "mosaic", "blur", "eraser", "redact", "color", "width", "undo", "redo", "done", "cancel"] },
         "pointer": { "description": "Where the overlay's pointer is (Step 52; moved by the mouse or the pointer keys).", "$ref": "#/$defs/point" },
         "detection": {
           "description": "Hover detection (Step 52, NOEUL-FR-040, ADR 0035): rectangles only.",

@@ -418,14 +418,8 @@ fn profile_index(at: &str) -> Option<usize> {
 
 /// The Step that implements each step type this version does not run yet (ADR 0031 moved `delay`
 /// to Step 78, with ordered multi-step runs; `send_keys` and `type_text` run since Step 69,
-/// `open_program` and `open_url` since Step 70).
-pub const LATER_STEPS: &[(&str, &str)] = &[
-    ("delay", "Step 78"),
-    ("mouse_move", "Step 71"),
-    ("mouse_scroll", "Step 71"),
-    ("mouse_click", "Step 71"),
-    ("mode", "Step 72"),
-];
+/// `open_program` and `open_url` since Step 70, the mouse steps since Step 71).
+pub const LATER_STEPS: &[(&str, &str)] = &[("delay", "Step 78"), ("mode", "Step 72")];
 
 fn message(code: &str) -> &'static str {
     match code {

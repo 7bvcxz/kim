@@ -118,11 +118,15 @@
           "objects": 0,
           "kinds": {
             "arrow": 0,
+            "blur": 0,
             "ellipse": 0,
+            "eraser": 0,
             "line": 0,
             "marker": 0,
+            "mosaic": 0,
             "pen": 0,
             "rectangle": 0,
+            "redact": 0,
             "text": 0
           },
           "selected": null,

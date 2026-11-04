@@ -18,8 +18,12 @@
 //! `GetAsyncKeyState` of those keys and the engine's own counters, never from a focused
 //! application. No mouse input is injected; mouse-button remaps are covered by the core tests.
 //!
+//! Step 69 adds a smoke test of the typing-run path (`a_send_keys_run_reaches_send_input_with_an_
+//! obscure_key_only`): a `send_keys` run taps only `F16` through the real `SendInput`; no
+//! character is ever typed and the clipboard is never touched.
+//!
 //! Requirements: `DDALGAK-NFR-001`, `DDALGAK-NFR-002`, `DDALGAK-SEC-004`, `DDALGAK-SEC-005`,
-//! `DDALGAK-FR-002`, `DDALGAK-FR-010`.
+//! `DDALGAK-FR-002`, `DDALGAK-FR-010`, `DDALGAK-FR-011`.
 #![cfg(windows)]
 
 use ddalgak::inject::{Injector, OutKey};
@@ -506,4 +510,66 @@ fn real_remap_block_and_dual_role_with_obscure_keys() {
         assert!(!key_down(vk), "nothing is left pressed ({vk:#x})");
     }
     eprintln!("verified with real SendInput: {verified:?}");
+}
+
+/// Step 69: the typing-run path is wired to the real `SendInput`. A `send_keys` run, fired through
+/// the worker queue exactly as the core fires it, taps `F16` (an obscure key; never a character),
+/// and the observe-only hook sees both events as Ddalgak's own input. The run's target checks use
+/// a fixed editable target here: the real probe would look at the maintainer's focused window.
+#[test]
+fn a_send_keys_run_reaches_send_input_with_an_obscure_key_only() {
+    use ddalgak::core::{FireKind, Signal};
+    let _turn = serial();
+    let mut b = binding("f13-sends-f16", "F13", Injected::Ignore, EngineOp::Pause);
+    b.injects = true;
+    b.action = Action::Keys(Arc::new(ddalgak::run::KeysSpec {
+        chords: vec![Output::parse("F16").unwrap()],
+        step_delay_ms: 0,
+    }));
+    let e = engine(vec![b], Duration::from_secs(10));
+    if !ddalgak::win::input_desktop_available() {
+        eprintln!("skipped (locked): SendInput is refused without an interactive desktop");
+        return;
+    }
+    let before = e.stats.own_injected.load(Ordering::Relaxed);
+    e.worker.queue().signal(
+        1,
+        Signal::Fire {
+            binding: 0,
+            kind: FireKind::Press,
+        },
+    );
+    let t = Instant::now();
+    let outcome = loop {
+        let last = e
+            .worker
+            .activity
+            .lock()
+            .unwrap()
+            .entries()
+            .last()
+            .map(|x| (x.rule.clone(), x.outcome.clone()));
+        if let Some(o) = last {
+            break o;
+        }
+        assert!(t.elapsed() < Duration::from_secs(5), "the run never ended");
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    if outcome.1 == "injection_failed" {
+        eprintln!("skipped (SendInput refused, e.g. an elevated window has focus)");
+        return;
+    }
+    assert_eq!(outcome, ("f13-sends-f16".to_string(), "ok".to_string()));
+    while e.stats.own_injected.load(Ordering::Relaxed) < before + 2 {
+        assert!(
+            t.elapsed() < Duration::from_secs(5),
+            "the hook never saw the run's F16"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(!key_down(VK_F16), "F16 is not left pressed");
+    eprintln!(
+        "send_keys run: F16 tapped through SendInput, seen by the hook as own input in {:?}",
+        t.elapsed()
+    );
 }

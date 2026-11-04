@@ -90,18 +90,19 @@ pub fn snapshot(picture: Rect, scope: &Scope, skip: Option<HWND>) -> Snapshot {
     Snapshot::from_facts(facts, picture)
 }
 
-/// The process that owns `h`.
-fn owner(h: HWND) -> u32 {
+/// The process that owns `h`; `None` when the window is gone (a window destroyed between the
+/// enumeration and this query has no owner — never "process 0").
+fn owner(h: HWND) -> Option<u32> {
     let mut pid = 0u32;
     // SAFETY: a window handle from the enumeration (a stale one makes this fail harmlessly).
-    unsafe { GetWindowThreadProcessId(h, &raw mut pid) };
-    pid
+    let thread = unsafe { GetWindowThreadProcessId(h, &raw mut pid) };
+    (thread != 0).then_some(pid)
 }
 
 /// Geometry and flags of one window (never text).
 fn facts_of(h: HWND, scope: &Scope) -> Option<WindowFacts> {
     if let Scope::Processes(pids) = scope
-        && !pids.contains(&owner(h))
+        && !owner(h).is_some_and(|pid| pids.contains(&pid))
     {
         return None;
     }
@@ -224,10 +225,9 @@ pub fn own_elevated() -> bool {
 
 /// The rights of the process that owns `h`, read from its token (UIPI).
 fn target_rights(h: HWND) -> TargetRights {
-    let pid = owner(h);
-    if pid == 0 {
+    let Some(pid) = owner(h).filter(|pid| *pid != 0) else {
         return TargetRights::Unknown;
-    }
+    };
     // SAFETY: a limited query handle, closed by `Handle`.
     let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
     let Ok(process) = Handle::new(process) else {
@@ -955,6 +955,38 @@ mod tests {
             // SAFETY: our own child windows.
             unsafe { DestroyWindow(k) };
         }
+    }
+
+    /// A window destroyed between the enumeration and the owner query has no owner: it is never
+    /// taken for "process 0" (a stale handle made `GetWindowThreadProcessId` leave the pid at 0,
+    /// so a scope of `[0]` listed it as skipped — this test's sibling failed once that way while
+    /// other tests' windows came and went).
+    #[test]
+    fn windows_that_vanish_during_the_enumeration_belong_to_no_process() {
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let churn = {
+            let stop = std::sync::Arc::clone(&stop);
+            std::thread::spawn(move || {
+                let mut n = 0u32;
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) || n < 50 {
+                    drop(Own::new(Rect::new(X + 3000, Y, 50, 50), 0, false));
+                    n += 1;
+                }
+                n
+            })
+        };
+        for _ in 0..100 {
+            let none = snapshot(PICTURE, &Scope::Processes(vec![0]), None);
+            assert!(none.taken);
+            assert_eq!(
+                (none.len(), none.skipped()),
+                (0, 0),
+                "nothing belongs to process 0"
+            );
+        }
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        let made = churn.join().unwrap();
+        assert!(made >= 50, "windows came and went meanwhile: {made}");
     }
 
     /// Inspection (NOEUL-SEC-007): this file asks UI Automation and the window manager for

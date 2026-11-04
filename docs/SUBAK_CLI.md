@@ -1,7 +1,9 @@
 # Subak CLI reference
 
-Status: **current** (implemented in Step 12; Windows only, Linux with M4) · Decision:
-[ADR 0027](adr/0027-subak-cli-structure-and-headless-control.md) · Contract:
+Status: **current** (implemented in Step 12; `capture`, `history`, `clear-history` and
+`new --history-limit` in Step 13; Windows only, Linux with M4) · Decisions:
+[ADR 0027](adr/0027-subak-cli-structure-and-headless-control.md),
+[ADR 0030](adr/0030-host-terminal-model-scrollback-and-replay.md) · Contract:
 [CLI_CONTRACT.md](CLI_CONTRACT.md) v1, schema
 [subak-cli-v1](contracts/schemas/subak-cli-v1.schema.json) · Requirements: `SUBAK-FR-002`,
 `SUBAK-FR-003`, `SUBAK-FR-004`, `SUBAK-FR-011`…`SUBAK-FR-015`, `SUBAK-FR-060`, `SUBAK-SEC-010`,
@@ -12,7 +14,8 @@ short-lived client of your per-user **Host**, which owns the **Terminals** (name
 each with one window and one pane until Steps 21–22) and their processes. Closing, detaching or
 killing a client never stops anything in the Host. What a Terminal is, its states and what each
 verb does to processes are in [SESSION_MODEL.md](SESSION_MODEL.md); what runs in a pane is in
-[PTY_PROCESSES.md](PTY_PROCESSES.md); the wire protocol is
+[PTY_PROCESSES.md](PTY_PROCESSES.md); what the Host keeps of their output, and how a reattach
+reproduces it, is in [SCROLLBACK.md](SCROLLBACK.md); the wire protocol is
 [IPC_PROTOCOL.md](contracts/IPC_PROTOCOL.md).
 
 Pre-alpha: there is no GUI, no split, no persistence and no recovery yet. No command opens a
@@ -33,7 +36,10 @@ that only your user can open.
 | `subak stop <target>` | destructive | End the processes, keep the Terminal as `stopped` |
 | `subak kill <target>` | destructive | End the processes at once and remove the Terminal |
 | `subak rm <target> [--force]` | destructive | Remove a Terminal that runs nothing |
-| `subak host start\|status\|health\|attach\|stop\|serve` | — | The Host itself ([§3.10](#310-the-host-subak-host-)) |
+| `subak capture [<target>]` (also `capture-pane`) | read | Lines of the screen and history the Host keeps; secrets shown as `***` |
+| `subak history [<target>]` | read | How much output the Host keeps (counters and limits, never content) |
+| `subak clear-history [<target>]` | destructive | Delete the kept history; the screen stays |
+| `subak host start\|status\|health\|attach\|stop\|serve` | — | The Host itself ([§3.11](#311-the-host-subak-host-)) |
 | `subak capabilities` | read | The machine-readable command list (CLI_CONTRACT §9) |
 
 **Structure.** The Terminal verbs are top level and named like tmux's
@@ -82,7 +88,7 @@ The rules of [CLI_CONTRACT.md](CLI_CONTRACT.md) apply to every command:
 ```text
 subak new [<name>] [--cwd <dir>] [--env NAME[=VALUE]]... [--unset-env NAME]...
           [--size <cols>x<rows>] [--remain-on-exit] [--keep-on-failure] [--no-start]
-          [--attach [--read-only]] [--dry-run] [--json]
+          [--history-limit <lines>] [--attach [--read-only]] [--dry-run] [--json]
           [-- <program> [args...] | --command-line <line>]
 ```
 
@@ -101,7 +107,8 @@ terminal right after. Without a name it gets the lowest free number (`1`, `2`, �
 - `--cwd` (absolute; default your profile folder), `--env NAME=VALUE`, `--env NAME` (copies this
   terminal's value, so a token is never typed), `--unset-env NAME`, `--size` (default 120x30),
   `--remain-on-exit` (keep it as `stopped` when its program exits), `--keep-on-failure` (keep a
-  failed start as `failed`).
+  failed start as `failed`), `--history-limit` (history rows the Host keeps for the pane,
+  0–100 000, default 2 000; tmux `history-limit`).
 - `--dry-run` makes every check the real run makes (name, working directory, program on the
   pane's `PATH`, scripts) and reports the resolved `executable`; without a Host it starts none.
 
@@ -150,8 +157,9 @@ so `subak info work >NUL 2>&1 && …` tests for existence (tmux `has-session`).
 subak attach [<target>] [--size <cols>x<rows>] [--read-only] [--dry-run [--json]]
 ```
 
-Connects this terminal to the Terminal's pane: you see its screen (recent output is replayed)
-and your keys go to its program. Without a target it attaches to the Host's only running
+Connects this terminal to the Terminal's pane: you see its screen as it is — also a full-screen
+program — with the earlier lines in this window's scrollback (once; [SCROLLBACK §2](SCROLLBACK.md)),
+then live output, and your keys go to its program. Without a target it attaches to the Host's only running
 Terminal (`ambiguous_target` with the candidates when there are several; `subak host attach` is
 the same). The pane takes this window's size and follows it. `--read-only` watches without
 sending keys or resizing. Keys, signals and what happens to your console are in [§5](#5-attach-and-detach).
@@ -198,12 +206,47 @@ The CLI confirms with the user, then acts on the Terminal **by id**, so a rename
 cannot redirect it. `--dry-run` shows `busy`, the processes and whether it ends processes or
 removes the Terminal ([SESSION_MODEL §4](SESSION_MODEL.md)).
 
-### 3.9 `subak capabilities`
+### 3.9 `subak capture | history | clear-history [<target>]`
+
+```text
+subak capture [<target>] [--start <line>|-] [--end <line>|-] [--history] [--vt] [--join]
+              [--no-redact] [--json]
+subak history [<target>] [--json]
+subak clear-history [<target>] [--yes] [--dry-run] [--json]
+```
+
+The Host keeps every pane's screen and the rows that scrolled off it (its history), in memory
+only ([SCROLLBACK.md](SCROLLBACK.md)). Without a target, inside a pane these commands use that
+pane (`SUBAK_PANE_ID`), else the Host's only Terminal. A `stopped` Terminal can still be read.
+
+- **`capture`** (tmux `capture-pane -p`) prints the screen rows (`--json`: `lines` plus the
+  pane's `screen` and `history` counters). Lines are numbered like tmux: screen rows from 0,
+  history lines from -1 (the newest) down; `--start`/`--end` take a number or `-` (the oldest
+  history line / the last screen row); `--history` is `--start -`. `--vt` keeps colours as escape
+  sequences (`-e`), `--join` joins wrapped rows (`-J`). **Secret-looking values are shown as
+  `***`** (tokens, passwords, keys; [SCROLLBACK §6](SCROLLBACK.md)) and stderr says how many;
+  `--no-redact` shows the exact text. A long range is fetched in several requests.
+- **`history`** reports the counters only: rows and bytes kept, the limits, rows evicted and
+  cleared, and the screen size, alternate screen and cursor. It never prints content.
+- **`clear-history`** (tmux `clear-history`) deletes the Host's copy of the history; the screen,
+  the processes and what other terminals already show stay. It deletes data, so it asks, or needs
+  `--yes` when it cannot ask (`confirmation_required`, exit 7); `--dry-run` shows how much.
+
+```console
+> subak capture build --history | findstr /C:"error"
+> subak history build
+Terminal `build` (t-3633c7e09d6d) — running: 1834 line(s) of history (152.3 KiB) kept in the Host's memory, limit 2000 lines / 4.0 MiB; 0 evicted, 0 cleared, 1834 in total; never written to disk
+screen 120x30, cursor at row 29 column 15
+> subak clear-history build --yes
+cleared 1834 line(s) (152.3 KiB) of history of Terminal `build`; its screen and processes are unchanged
+```
+
+### 3.10 `subak capabilities`
 
 The capabilities document ([CLI_CONTRACT §9](CLI_CONTRACT.md)): every command with usage,
 effect, `dry_run` and `requires_yes`. Cheap, starts nothing.
 
-### 3.10 The Host (`subak host …`)
+### 3.11 The Host (`subak host …`)
 
 `host start` (explicit start; `new` does this on demand), `host status` (pid, protocol, job,
 environment, Terminals, clients with ids), `host health` (identity-checked heartbeat; exit 0 only
@@ -332,6 +375,8 @@ without a console window, and branch on the exit code or `error.code`, never on 
 | Wait for a program to finish | poll `subak info job --json` until `state` is `stopped` (with `--remain-on-exit`), then read `last_exit.exit_code` |
 | Feed input non-interactively | pipe bytes into `subak attach job`; the end of input detaches |
 | Record output | `subak attach job --read-only > job.log`, later `subak detach job` |
+| Read what a pane shows, or its whole history | `subak capture job --json` → `data.lines`; `subak capture job --history --json` (redacted; `--no-redact` only with the user's consent) |
+| Read the output of a finished program | create it with `--remain-on-exit`, wait for `stopped`, then `subak capture job --history --json` |
 | Make sure nobody is watching | `subak detach job --json` |
 | Stop work, with the user's consent | `subak stop job --yes --json` (only after the user confirmed in your UI; CLI_CONTRACT §9.6) |
 | Remove everything and the Host | `subak host stop --kill-terminals --yes --json` (destructive) |
@@ -354,6 +399,9 @@ says what `--yes` would confirm. Nothing an agent runs this way opens a window o
 | `tmux lsc` | `subak status` (clients with ids) |
 | `tmux rename -t work api` | `subak rename work api` |
 | `tmux kill-session -t work` | `subak kill work` |
+| `tmux capture-pane -p [-S -] [-e] [-J] -t work` | `subak capture work [--history] [--vt] [--join]` |
+| `tmux clear-history -t work` | `subak clear-history work --yes` |
+| `set -g history-limit 5000` | `subak new work --history-limit 5000` (per Terminal) |
 | `tmux start` | `subak host start` (rarely needed) |
 
 The full matrix with status and evidence is [TMUX_COMPATIBILITY.md](TMUX_COMPATIBILITY.md).
@@ -375,13 +423,13 @@ scenario `e2e/tests/step12_subak_cli.rs`):
 | `console_attach_restores_the_console_on_every_exit_path_it_survives` | §5 table |
 | `cmd_and_windows_powershell_keep_working_after_an_attach_ends_or_is_killed` | §5, killed clients under cmd.exe and PowerShell 5.1 |
 | `the_cli_schema_embeds_the_ipc_and_capabilities_definitions_unchanged` | `subak-cli-v1` shares the IPC and capabilities definitions verbatim |
+| `scrollback_replay.rs` (Step 13) | `capture`, `history`, `clear-history` and `--history-limit` against real panes; reattach coherence, concurrency, resize, eviction, resync, idle cost, redaction ([SCROLLBACK §8](SCROLLBACK.md)) |
 
 ## 10. Not implemented yet
 
-- `pane.send_keys` / `subak send-keys` and `pane.capture` / `subak capture` (Steps 13 and 24); the
-  CLI writes input only through an attach.
-- Reattach shows recent **raw** output, not a screen snapshot, and a client that falls far behind
-  is disconnected rather than resynchronized (Step 13); `attach` does not reconnect by itself.
+- `pane.send_keys` / `subak send-keys` (Step 24); the CLI writes input only through an attach.
+  `attach` does not reconnect by itself.
+- Persisted history (Steps 29+, opt-in) and search in history (GUI, Steps 16–25).
 - Rebinding the detach key (Steps 17 and 23), `new -A`, `attach -d`, format strings (`-F`,
   Step 25), windows and panes (Steps 21–22).
 - Persistence and recovery (Steps 29–30): Terminals end with their Host.

@@ -1,6 +1,8 @@
 //! Step 13 — scrollback and terminal replay on real Windows ConPTY (docs/SCROLLBACK.md,
 //! ADR 0030). `SUBAK-FR-001`, `SUBAK-FR-004`, `SUBAK-FR-012`, `SUBAK-FR-015`, `SUBAK-FR-042`,
-//! `SUBAK-SEC-010`, `SUBAK-SEC-011`, `KIM-SEC-013`, `KIM-NFR-001`.
+//! `SUBAK-SEC-010`, `SUBAK-SEC-011`, `KIM-SEC-013`, `KIM-NFR-001`; `SUBAK-FR-060` for the tmux
+//! rows `capture-pane` (`-e`, `-J`, `-S`, `-E`), `clear-history` and `history-limit`
+//! (docs/TMUX_COMPATIBILITY.md).
 //!
 //! Real `subak.exe` Hosts on private endpoints, real `cmd.exe` panes and a small full-screen
 //! test program (this test binary, started in a pane, see [`tui_helper`]). Every viewer is a raw

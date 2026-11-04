@@ -1,9 +1,10 @@
 # Subak session model
 
-Status: **current** (implemented in Step 10, pane programs and environment in Step 11, CLI verbs and detaching other clients in Step 12; Windows only) · Decisions:
+Status: **current** (implemented in Step 10, pane programs and environment in Step 11, CLI verbs and detaching other clients in Step 12, pane screens and history in Step 13; Windows only) · Decisions:
 [ADR 0020](adr/0020-terminal-session-lifecycle.md), [ADR 0007](adr/0007-object-identity-and-naming.md),
 [ADR 0003](adr/0003-subak-host-process-model.md), [ADR 0004](adr/0004-pty-and-process-ownership.md),
-[ADR 0009](adr/0009-gui-clients-and-keyboard-dispatch.md), [ADR 0027](adr/0027-subak-cli-structure-and-headless-control.md) · Requirements: `SUBAK-FR-002`,
+[ADR 0009](adr/0009-gui-clients-and-keyboard-dispatch.md), [ADR 0027](adr/0027-subak-cli-structure-and-headless-control.md),
+[ADR 0030](adr/0030-host-terminal-model-scrollback-and-replay.md) · Requirements: `SUBAK-FR-002`,
 `SUBAK-FR-003`, `SUBAK-FR-010`…`SUBAK-FR-016`, `SUBAK-SEC-001`
 
 This document states what a Terminal is inside the Host, which states it goes through, how it is
@@ -21,7 +22,7 @@ Panes, and each Pane runs one root process with its descendants:
 | --- | --- | --- | --- |
 | Terminal | `t-` + 12 lowercase hex | unique per Host (§3) | ≥ 1 Window; `remain_on_exit`; its lifecycle state |
 | Window | `w-` + 12 hex, index from 0 | automatic: the program's file name (`cmd`) | ≥ 1 Pane; layout; active pane |
-| Pane | `p-` + 12 hex, index from 0 | — | one pseudo console (ConPTY), one kill-on-close job, an output ring, a data stream id; its program, environment and I-O: [PTY_PROCESSES](PTY_PROCESSES.md) |
+| Pane | `p-` + 12 hex, index from 0 | — | one pseudo console (ConPTY), one kill-on-close job, a terminal model with its screen and bounded history (Step 13, [SCROLLBACK](SCROLLBACK.md)), a data stream id; its program, environment and I-O: [PTY_PROCESSES](PTY_PROCESSES.md) |
 
 - **Until Steps 21–22 every Terminal has exactly one Window with exactly one Pane.** The model,
   the ids and the targets already have the three levels, so nothing changes for clients when
@@ -196,7 +197,15 @@ call all of them; `mcp` clients may only list and inspect until Step 37; `hook` 
 client of a Terminal, window or pane, or one client by the id `host.status` lists — and nothing
 else; each detached client learns it from the `pane.detached` event before its output stops.
 
-The CLI (`subak new|ls|info|status|attach|detach|rename|stop|kill|rm`, [SUBAK_CLI.md](SUBAK_CLI.md),
+**Screens and history (Step 13, [SCROLLBACK.md](SCROLLBACK.md)).** Each pane's output feeds a
+terminal model with a bounded history (`terminal.create` `history_limit`, default 2 000 rows, and
+4 MiB). An attach reproduces it (a snapshot at a `seq`, then live output from that `seq`), so a
+client that attaches late sees what one attached from the start sees. The model and its history
+belong to the pane: they stay while the Terminal is `stopped` (`pane.capture` still works on it)
+and go when the Terminal is removed or the Host exits. Nothing of it is ever persisted yet.
+`pane.capture` and `pane.clear_history` read and clear it (`cli` and `gui` clients only).
+
+The CLI (`subak new|ls|info|status|attach|detach|rename|stop|kill|rm|capture|history|clear-history`, [SUBAK_CLI.md](SUBAK_CLI.md),
 ADR 0027; `subak terminal <verb>` is the deprecated Step 10 spelling) maps onto these methods. Only
 `new` starts a Host on demand (with no Terminal of its own, ADR 0019 §5; `--no-start` forbids it);
 `ls` and `status` without a Host report none and start nothing.
@@ -213,8 +222,10 @@ ADR 0027; `subak terminal <verb>` is the deprecated Step 10 spelling) maps onto 
   silently ignored. Environment overrides (`env`) exist since Step 11
   ([PTY_PROCESSES §3](PTY_PROCESSES.md)).
 - **More windows and panes** (Steps 21–22), the GUI's tabs and session manager (Steps 16–18), and
-  `pane.capture` / `pane.send_keys` (Steps 13 and 24; Step 12 writes input only through an
-  attach).
+  `pane.send_keys` (Step 24; Step 12 writes input only through an attach). `pane.capture` exists
+  since Step 13.
+- **Persisted history** (Steps 29+): opt-in and off by default when it comes
+  ([SCROLLBACK §6](SCROLLBACK.md)).
 
 ## 7. Evidence
 
@@ -233,3 +244,4 @@ Automated, on real Windows 10 Pro 19045 with real `subak.exe` Hosts on private e
 | `exits_restarts_and_reconnects_leave_no_stale_state` | exit removes, `remain_on_exit` keeps, reconnects see one state, `host stop` needs `--kill-terminals`, a new Host starts clean |
 | `subak_cli.rs::a_user_creates_attaches_detaches_lists_renames_and_kills_with_the_cli_only` (Step 12) | `subak detach <terminal>` and `--client <id>` end attachments only: the shell keeps running, the Terminal stays `running` with 0 clients, the other client stays attached |
 | `subak_cli.rs::client_exit_during_attach_leaves_host_work_running` (Step 12) | a killed CLI client and one whose reader vanished leave `ping` running in the Host |
+| `scrollback_replay.rs` (Step 13) | reattach reproduces history and screen (shell output, scrolling, `more`, a full-screen program), concurrent attaches lose or repeat nothing, resize, eviction, a stalled client resynced, idle cost, access and redaction ([SCROLLBACK §8](SCROLLBACK.md)) |

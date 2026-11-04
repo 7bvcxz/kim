@@ -177,19 +177,24 @@ side, each with a background `ping` (§10).
 ## 7. Backpressure and memory
 
 - **Output.** One reader thread per pane drains ConPTY continuously (a full pipe would block the
-  pane's programs) and never waits for a client: each chunk goes to the 64 KiB replay ring and,
-  as one data frame, to every attached client's send queue. A read also takes whatever is already
+  pane's programs) and never waits for a client: each chunk goes to the pane's terminal model (Step 13,
+  [SCROLLBACK](SCROLLBACK.md); until Step 12 a 64 KiB raw replay ring) and, as one data frame,
+  to every attached client's send queue. A read also takes whatever is already
   waiting in the pipe, so a backlog becomes one larger chunk. Frames are shared (`Arc`) by all
   clients of the pane, so several slow clients hold one copy of the output.
 - **Send queue per connection:** bounded by **16 MiB, counting each frame's bytes plus 64**
-  (IPC_PROTOCOL §1). The writer thread sends runs of small frames in one write. A client that
-  falls that far behind is disconnected (`ipc.lagging_clients_dropped`); the pane and the other
-  clients are never slowed. (Until Step 11 the queue was also limited to 4096 frames; ConPTY on
-  Windows 10 delivers ~83-byte chunks at full speed, so that limit dropped a client after about
-  0.35 s of lag. Step 13 replaces the disconnect with a resync.)
+  (IPC_PROTOCOL §1). The writer thread sends runs of small frames in one write. Output for a client
+  that falls that far behind is skipped: its queued output is dropped, and once it has caught up
+  it gets `pane.resync` and a fresh snapshot (Step 13, [SCROLLBACK §5](SCROLLBACK.md);
+  `ipc.lagging_resyncs`, `ipc.output_frames_skipped`); until Step 12 it was disconnected. A
+  control message that does not fit still disconnects (`ipc.lagging_clients_dropped`). The pane
+  and the other clients are never slowed. (Until Step 11 the queue was also limited to 4096
+  frames; ConPTY on Windows 10 delivers ~83-byte chunks at full speed, so that limit dropped a
+  client after about 0.35 s of lag.)
   Measured: 20 MiB typed through ConPTY reached a reading client in 21–26 s (0.8–0.9 MiB/s; the
   inbox conhost is the bottleneck: 1.0 MiB/s in-process without any client) as ~253 000 frames of
-  ~83 bytes; two attached clients that never read were dropped; the Host's peak private memory
+  ~83 bytes; two attached clients that never read were dropped (Step 11) — since Step 13 they
+  stay connected and are resynced (0.85 MiB/s, peak +26 MiB); the Host's peak private memory
   grew by 21 MiB; `host.health` answered within 2 ms throughout.
 - **Input** is written to the pane synchronously by the connection that sent it, so a client that
   types faster than the pane accepts waits on its own connection; nothing is buffered in the

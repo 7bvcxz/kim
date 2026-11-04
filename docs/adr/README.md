@@ -13,7 +13,7 @@ the requirements it serves. ADRs are immutable once **Accepted**; a later ADR ma
 | [0005](0005-local-ipc.md) | Local IPC transport, security and versioning | Accepted (prototype in Step 08; implemented in Step 09, see 0019) |
 | [0006](0006-state-and-configuration-storage.md) | State and configuration storage | Accepted |
 | [0007](0007-object-identity-and-naming.md) | Object identity, naming and targets | Accepted (implemented for Terminals in Step 10, see 0020) |
-| [0008](0008-attach-replay-and-backpressure.md) | Attach, replay and backpressure | Accepted (send queue refined in Step 11, see 0025; refined in Step 13) |
+| [0008](0008-attach-replay-and-backpressure.md) | Attach, replay and backpressure | Accepted (send queue refined in Step 11, see 0025; implemented and refined in Step 13, see 0030) |
 | [0009](0009-gui-clients-and-keyboard-dispatch.md) | GUI clients and keyboard dispatch | Accepted (toolkit chosen in Step 04; bindings follow ADR 0017; tab close refined by 0020) |
 | [0010](0010-claude-code-integration.md) | Claude Code status integration | Accepted (§1 pane variables implemented in Step 11; refined in Step 27) |
 | [0011](0011-portability-boundary.md) | Portability boundary for Linux | Accepted (Pty and ProcessTree form one trait since Step 11, see 0025) |
@@ -29,11 +29,12 @@ the requirements it serves. ADRs are immutable once **Accepted**; a later ADR ma
 | [0022](0022-ddalgak-rule-model-and-safety.md) | Ddalgak: declarative rules, a tray-app engine and safety by construction | Accepted (implemented from Steps 66–83; process model refined by 0024) |
 | [0023](0023-noeul-app-foundation.md) | Noeul app foundation: plain Win32, GDI capture on demand, one instance per user session | Accepted (Step 49; overlay measured in Step 50, see 0026; pin engine in Step 53, see 0029; capture APIs in Step 58) |
 | [0024](0024-ddalgak-windows-input-apis-and-permissions.md) | Ddalgak engine: Windows input APIs, threads, IPC and permissions | Accepted (implemented in Step 66) |
-| [0025](0025-pane-programs-environment-and-backpressure.md) | Pane programs, their environment, and backpressure | Accepted (verbatim command lines added in Step 12, see 0027) |
+| [0025](0025-pane-programs-environment-and-backpressure.md) | Pane programs, their environment, and backpressure | Accepted (verbatim command lines added in Step 12, see 0027; lagging clients resynced since Step 13, see 0030) |
 | [0026](0026-noeul-capture-overlay.md) | Noeul capture overlay: one GDI freeze, a back-buffered Win32 window, a selection handed to its output | Accepted (Step 50) |
 | [0027](0027-subak-cli-structure-and-headless-control.md) | Subak CLI structure, detach from outside, verbatim command lines and console restore | Accepted |
 | [0028](0028-ddalgak-rule-store-validation-and-reload.md) | Ddalgak rule store: run-time schema per rule, locked atomic writes, drafts and live reload | Accepted (Step 67) |
 | [0029](0029-noeul-pin-engine.md) | Noeul floating pin engine: one creation path, retained layered windows, focus hand-back, pins in memory only | Accepted (Step 53) |
+| [0030](0030-host-terminal-model-scrollback-and-replay.md) | The Host's terminal model, scrollback and replay | Accepted (Step 13) |
 
 "Accepted (validated in Step N)" means the decision is made, but the named Step must confirm it
 on real Windows; if validation fails, that Step writes a superseding ADR.

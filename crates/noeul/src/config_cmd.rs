@@ -19,7 +19,8 @@ use serde_json::{Value, json};
 #[derive(Debug, Args)]
 pub struct SetArgs {
     /// The setting: general.tray_icon, capture.keyboard_help, capture.quick_save_folder,
-    /// capture.detection (window, element, off), capture.magnifier (on, off),
+    /// capture.detection (window, element, off), capture.magnifier (on, off), capture.pointer
+    /// (on, off: the mouse pointer in the pictures F1 and the capture keys take),
     /// gestures.double_click (pin, copy, save, none), gestures.middle_click (pin, copy, none),
     /// gestures.preset (noeul, snipaste), pins.border and pins.shadow (on, off), paste.paths
     /// (on, off: a copied path to an image file pins the file) or paste.file_cards (on, off:

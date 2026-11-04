@@ -1,0 +1,10 @@
+{
+  "type": "request",
+  "id": 4,
+  "method": "capture",
+  "params": {
+    "window": "active",
+    "pin": true,
+    "dry_run": false
+  }
+}

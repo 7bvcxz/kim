@@ -49,6 +49,13 @@ closes, Shift+Esc destroys, Space edits the pin's annotations (Enter keeps them,
 pin as it was), right-click (or Shift+F10) opens the pin's menu. `noeul pin
 list/hide/show/close/set` and `noeul pin group list/switch` reach them from scripts. Pins live in
 memory only and do not survive a restart.
+`noeul capture --monitor 2 --pin` and `noeul capture --window active --pin` capture a whole monitor
+or the window that has the focus without the overlay (also the keys capture.monitor and
+capture.window, which have no default key: `noeul hotkeys set capture.window Ctrl+Alt+F1`);
+--pointer draws the mouse pointer in (`noeul config set capture.pointer on` for the keys and F1).
+Every capture is in device pixels; the result also gives the logical size on its monitor, and
+says so when it spans monitors of different scales, comes from an HDR monitor (converted to SDR
+by Windows), or shows a window that protects itself from capture (it stays black or absent).
 Not in this build (labeled planned): animated GIF pins (a pin of an animated GIF shows its first
 frame and says so), settings window (61), capture to a file or the clipboard from the command
 line (62).
@@ -119,8 +126,9 @@ enum Command {
     Run(StartArgs),
     /// End the instance: release its hotkeys and close its pins
     Quit(QuitArgs),
-    /// Ask the running instance to capture a region and pin it, or to open (or cancel) the
-    /// region selection overlay as F1 does
+    /// Ask the running instance to capture a region, a whole monitor or the active window and
+    /// pin it in place (optionally with the pointer), or to open (or cancel) the region
+    /// selection overlay as F1 does
     Capture(CaptureArgs),
     /// Pins of the running instance: `noeul pin --clipboard` pins what the clipboard holds (as
     /// F3 does), `noeul pin <file>` an image file; the subcommands list, hide, show, close,
@@ -163,19 +171,30 @@ pub struct QuitArgs {
 }
 
 #[derive(Debug, Args)]
+#[command(group = clap::ArgGroup::new("target").args(["region", "monitor", "window"]))]
 pub struct CaptureArgs {
     /// The region in device pixels of the virtual desktop: x,y,width,height
     #[arg(
         long,
         value_name = "X,Y,W,H",
         allow_hyphen_values = true,
-        required_unless_present_any = ["interactive", "cancel"],
-        conflicts_with_all = ["interactive", "cancel"]
+        required_unless_present_any = ["interactive", "cancel", "monitor", "window"],
+        conflicts_with_all = ["interactive", "cancel", "monitor", "window"]
     )]
     pub region: Option<String>,
-    /// Pin the captured region (required with --region in this build; --output and --clipboard
-    /// are planned)
-    #[arg(long, requires = "region")]
+    /// A whole monitor: its number in the order `noeul status` lists them (1 is the leftmost),
+    /// `primary`, or `pointer` (the one under the pointer); captured at its native resolution
+    #[arg(long, value_name = "N", conflicts_with_all = ["interactive", "cancel", "window"])]
+    pub monitor: Option<String>,
+    /// The window that has the keyboard focus (`active`), cut from the screen as you see it
+    #[arg(long, value_name = "active", value_parser = ["active"], conflicts_with_all = ["interactive", "cancel"])]
+    pub window: Option<String>,
+    /// Draw the mouse pointer into the picture
+    #[arg(long, requires = "target")]
+    pub pointer: bool,
+    /// Pin the capture in place at 100 % (required with --region, --monitor and --window in
+    /// this build; --output and --clipboard are planned)
+    #[arg(long, requires = "target")]
     pub pin: bool,
     /// Open the region selection overlay on the user's desktop, as F1 does (a visible window;
     /// the user selects, Enter pins, Esc cancels)

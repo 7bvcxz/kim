@@ -171,6 +171,8 @@ lifecycle). `subak` also uses `io`, `internal`, `permission_denied`, `usage`, `t
 from the CLI, `F3` image paste; [ADR 0023](adr/0023-noeul-app-foundation.md). Step 50's
 `noeul capture --interactive`/`--cancel` and IPC `capture.region`/`capture.cancel` add no code:
 a request while an overlay is open succeeds with `opened: false` ([ADR 0026](adr/0026-noeul-capture-overlay.md));
+Step 58's `noeul capture --monitor`/`--window active` add `monitor_not_found` and
+`window_not_found` ([ADR 0050](adr/0050-noeul-displays-and-capture-backends.md));
 [NOEUL_REQUIREMENTS §7](NOEUL_REQUIREMENTS.md#7-planned-cli-error-codes)). `noeul` also uses
 `io`, `internal`, `permission_denied`, `usage`, `protocol_error`, `unsupported_platform`,
 `timeout`, `busy`, `confirmation_required`, `cancelled` and the `hotkeys` codes below with the
@@ -183,6 +185,8 @@ this document with its exit code.
 | `noeul_not_running` | 3 | The command needs the running Noeul (pins, capture, quit), and none runs; start it or pass `--start`. |
 | `pin_not_found` | 3 | No open pin with this ID, or no closed pin to reopen. |
 | `nothing_to_pin` | 3 | The clipboard or file holds nothing Noeul can pin: it is empty, holds no supported content (or not the kind asked for with `--as`), holds content its program marked private, or the file is missing, a folder or not a picture (Step 55). |
+| `monitor_not_found` | 3 | `noeul capture --monitor <n>` names a monitor that is not attached now (`noeul status` lists them, 1 is the leftmost; Step 58). |
+| `window_not_found` | 3 | `noeul capture --window active` (or the `capture.window` key) found no window to capture: none has the keyboard focus, the desktop has it, or the window is minimized, hidden by Windows or off every monitor (Step 58). |
 | `noeul_identity_mismatch` | 4 | The endpoint is served by a process that is not `noeul.exe` of this user (a pipe squatter, or a process that cannot be verified). Nothing was sent to it. |
 | `image_invalid` | 4 | The image is malformed or exceeds the size limits (128 MiB of data, 32767 pixels a side, 40 million pixels; Step 55). |
 | `config_invalid` | 4 | `config.toml` is not valid TOML, or `noeul config set` or `reset` cannot edit its layout in place without changing other keys; nothing was written (Step 51). |

@@ -11,7 +11,15 @@
 //! secure, disconnected, non-interactive and display-less sessions fail with
 //! `desktop_unavailable`: Noeul never reaches into another session or desktop, and never invents
 //! a picture where the OS provides none (NOEUL-SEC-003).
+//!
+//! Since Step 58 (ADR 0050) a monitor also says how it is turned and whether it shows HDR, a
+//! capture can have the mouse pointer drawn into it ([`CaptureBackend::capture_with_pointer`],
+//! NOEUL-FR-016), and the parts of a picture that no monitor shows are opaque black
+//! ([`crate::displays::fill_gaps`]). GDI stays the only backend: the comparison with DXGI Desktop
+//! Duplication, Windows.Graphics.Capture and `PrintWindow`, and what each does with protected
+//! windows, HDR and colour profiles, is in ADR 0050.
 
+pub use crate::displays::PointerOutcome;
 use crate::error::{Code, NoeulError};
 use crate::frame::{Frame, FrameError, Ledger, Rect};
 use serde_json::{Value, json};
@@ -89,6 +97,13 @@ pub struct Monitor {
     /// The work area: the monitor without the taskbar and docked app bars (`rcWork`). Pins are
     /// placed and brought back inside it (Step 53, ADR 0029).
     pub work: Rect,
+    /// How the monitor is turned, in degrees clockwise (0, 90, 180, 270; Step 58). `rect` is
+    /// already the turned size, and GDI delivers the picture upright, so nothing in Noeul turns
+    /// pixels; it is reported so a turned layout can be recognised (ADR 0050).
+    pub rotation: u32,
+    /// Whether the monitor shows HDR (Windows "advanced colour"); `None` when unknown. A capture
+    /// of an HDR monitor is converted to SDR by Windows and says so (NOEUL-FR-092, Step 58).
+    pub hdr: Option<bool>,
 }
 
 /// The DPI of a 100 % monitor.
@@ -102,7 +117,22 @@ impl Monitor {
             primary,
             dpi: BASE_DPI,
             work: rect,
+            rotation: 0,
+            hdr: None,
         }
+    }
+
+    /// The same monitor turned by `degrees` clockwise (`rect` must already be the turned size).
+    #[must_use]
+    pub const fn with_rotation(mut self, degrees: u32) -> Monitor {
+        self.rotation = degrees;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_hdr(mut self, hdr: Option<bool>) -> Monitor {
+        self.hdr = hdr;
+        self
     }
 
     /// The same monitor with a work area (e.g. without a taskbar at its bottom).
@@ -157,7 +187,7 @@ impl Desktop {
             "virtual_rect": self.virtual_rect.map(|r| r.to_json()),
             "monitors": self.monitors.iter().map(|m| json!({
                 "rect": m.rect.to_json(), "primary": m.primary, "dpi": m.dpi,
-                "work": m.work.to_json(),
+                "work": m.work.to_json(), "rotation": m.rotation, "hdr": m.hdr,
             })).collect::<Vec<_>>(),
         })
     }
@@ -252,8 +282,24 @@ pub trait CaptureBackend: Send + Sync {
     /// The current desktop state and monitor geometry.
     fn desktop(&self) -> Desktop;
 
-    /// A picture of `region` of the virtual desktop, after checking the desktop again.
+    /// A picture of `region` of the virtual desktop, after checking the desktop again. Parts no
+    /// monitor shows are opaque black.
     fn capture(&self, ledger: &Arc<Ledger>, region: Rect) -> Result<Frame, CaptureError>;
+
+    /// The same picture with the mouse pointer drawn where it is now (NOEUL-FR-016, Step 58).
+    /// A backend that cannot read the pointer captures without it and says so.
+    fn capture_with_pointer(
+        &self,
+        ledger: &Arc<Ledger>,
+        region: Rect,
+    ) -> Result<(Frame, PointerOutcome), CaptureError> {
+        self.capture(ledger, region)
+            .map(|f| (f, PointerOutcome::Unavailable))
+    }
+
+    /// The displays changed (the instance's debounced display-change handling, Step 58): a
+    /// backend that keeps anything about them reads it again. GDI keeps nothing.
+    fn refresh(&self) {}
 }
 
 /// Checks `region` against `desktop` the way every backend must before capturing.
@@ -304,15 +350,30 @@ pub fn system() -> Box<dyn CaptureBackend> {
 }
 
 /// A made-up desktop that "captures" a generated test pattern: synthetic monitor layouts
-/// (several monitors, mixed DPI, negative coordinates) for headless tests, and the debug-build
-/// test hook of `noeul run` (ADR 0026), which places it far off-screen so nothing Noeul draws
-/// from it is visible. It never reads the real screen.
+/// (several monitors, mixed DPI, negative coordinates, turned monitors, gaps) for headless tests,
+/// and the debug-build test hook of `noeul run` (ADR 0026), which places it far off-screen so
+/// nothing Noeul draws from it is visible. It never reads the real screen. Its pointer is a
+/// position a test sets and a fixed sprite ([`crate::displays::POINTER_SPRITE`]). Since Step 58
+/// the test hook can also read its layout from a file and read it again on every display change
+/// ([`Synthetic::with_layout_file`]), so tests attach, remove, rescale and turn monitors of a
+/// running instance without touching the real displays.
 #[derive(Debug)]
 pub struct Synthetic {
     monitors: std::sync::Mutex<Vec<Monitor>>,
     state: std::sync::Mutex<DesktopState>,
     captures: std::sync::atomic::AtomicU64,
+    pointer: std::sync::Mutex<Option<(i32, i32)>>,
+    layout_file: Option<std::path::PathBuf>,
+    /// The real virtual desktop: a layout file that would touch it is refused.
+    avoid: Option<Rect>,
 }
+
+/// How far from [`OFF_SCREEN`] a layout file may reach (device pixels, each side): every
+/// synthetic monitor lies between -29 000 and -11 000 on both axes, far from real monitors.
+pub const LAYOUT_SPAN: i64 = 9_000;
+
+/// A synthetic layout: monitors and the pointer.
+pub type Layout = (Vec<Monitor>, Option<(i32, i32)>);
 
 impl Synthetic {
     pub fn new(monitors: Vec<Monitor>) -> Synthetic {
@@ -320,7 +381,121 @@ impl Synthetic {
             monitors: std::sync::Mutex::new(monitors),
             state: std::sync::Mutex::new(DesktopState::Available),
             captures: std::sync::atomic::AtomicU64::new(0),
+            pointer: std::sync::Mutex::new(None),
+            layout_file: None,
+            avoid: None,
         }
+    }
+
+    /// The off-screen test desktop whose layout comes from `path` (the debug-build test hook's
+    /// `NOEUL_DEV_SYNTHETIC_LAYOUT`): read now and on every [`CaptureBackend::refresh`]. A file
+    /// that is missing or invalid, or whose monitors would touch `avoid` (the real virtual
+    /// desktop), leaves the layout as it was.
+    pub fn with_layout_file(path: std::path::PathBuf, avoid: Option<Rect>) -> Synthetic {
+        let mut s = Synthetic::off_screen();
+        s.layout_file = Some(path);
+        s.avoid = avoid;
+        s.reload();
+        s
+    }
+
+    /// Reads the layout file again (see [`Synthetic::with_layout_file`]); whether it applied.
+    pub fn reload(&self) -> bool {
+        let Some(path) = &self.layout_file else {
+            return false;
+        };
+        let Some(layout) = std::fs::read(path)
+            .ok()
+            .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+            .and_then(|v| Synthetic::parse_layout(&v).ok())
+        else {
+            return false;
+        };
+        if let Some(real) = self.avoid
+            && layout.0.iter().any(|m| m.rect.intersects(&real))
+        {
+            return false;
+        }
+        self.set_monitors(layout.0);
+        self.set_pointer(layout.1);
+        true
+    }
+
+    /// A layout document: `{"monitors": [{"x", "y", "width", "height", "primary", "dpi",
+    /// "rotation", "hdr", "work": {"x", "y", "width", "height"}}], "pointer": {"x", "y"} | null}`,
+    /// every rectangle relative to [`OFF_SCREEN`] and within [`LAYOUT_SPAN`] of it on each side.
+    pub fn parse_layout(v: &Value) -> Result<Layout, String> {
+        let (ox, oy) = (i64::from(OFF_SCREEN.0), i64::from(OFF_SCREEN.1));
+        let place = |r: &Value, what: &str| -> Result<Rect, String> {
+            let n = |k: &str| {
+                r.get(k)
+                    .and_then(Value::as_i64)
+                    .ok_or_else(|| format!("{what}: `{k}` must be a whole number"))
+            };
+            let (x, y, w, h) = (n("x")?, n("y")?, n("width")?, n("height")?);
+            let fits = |p: i64, len: i64| {
+                len >= 1 && p >= -LAYOUT_SPAN && p.saturating_add(len) <= LAYOUT_SPAN
+            };
+            if !fits(x, w) || !fits(y, h) {
+                return Err(format!("{what} lies too far from the off-screen origin"));
+            }
+            let int = |v: i64| i32::try_from(v).map_err(|_| format!("{what} is out of range"));
+            let side = |v: i64| u32::try_from(v).map_err(|_| format!("{what} is out of range"));
+            Ok(Rect::new(int(ox + x)?, int(oy + y)?, side(w)?, side(h)?))
+        };
+        let mut monitors = Vec::new();
+        for (i, m) in v["monitors"]
+            .as_array()
+            .ok_or("`monitors` must be a list")?
+            .iter()
+            .enumerate()
+        {
+            let what = format!("monitor {}", i + 1);
+            let rect = place(m, &what)?;
+            let work = match m.get("work") {
+                None | Some(Value::Null) => rect,
+                Some(w) => place(w, &what)?,
+            };
+            let dpi = m.get("dpi").and_then(Value::as_u64).unwrap_or(96);
+            let rotation = m.get("rotation").and_then(Value::as_u64).unwrap_or(0);
+            if !(96..=960).contains(&dpi) || ![0, 90, 180, 270].contains(&rotation) {
+                return Err(format!("{what}: dpi 96–960, rotation 0, 90, 180 or 270"));
+            }
+            monitors.push(Monitor {
+                rect,
+                primary: m.get("primary").and_then(Value::as_bool).unwrap_or(false),
+                dpi: u32::try_from(dpi).unwrap_or(BASE_DPI),
+                work,
+                rotation: u32::try_from(rotation).unwrap_or(0),
+                hdr: m.get("hdr").and_then(Value::as_bool),
+            });
+        }
+        let pointer = match v.get("pointer") {
+            None | Some(Value::Null) => None,
+            Some(p) => {
+                let r = place(
+                    &json!({"x": p["x"], "y": p["y"], "width": 1, "height": 1}),
+                    "the pointer",
+                )?;
+                Some((r.x, r.y))
+            }
+        };
+        Ok((monitors, pointer))
+    }
+
+    /// Where the synthetic pointer's hotspot is (`None`: hidden).
+    pub fn set_pointer(&self, at: Option<(i32, i32)>) {
+        *self
+            .pointer
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = at;
+    }
+
+    pub fn pointer(&self) -> Option<(i32, i32)> {
+        *self
+            .pointer
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// Two monitors far off-screen: a primary 640×400 at 100 % with a 32-pixel taskbar at its
@@ -407,7 +582,8 @@ impl CaptureBackend for Synthetic {
     }
 
     fn capture(&self, ledger: &Arc<Ledger>, region: Rect) -> Result<Frame, CaptureError> {
-        check_region(&self.desktop(), region)?;
+        let desktop = self.desktop();
+        check_region(&desktop, region)?;
         let mut pixels = Vec::with_capacity(region.bgra_bytes() as usize);
         for y in 0..region.height {
             let ay = region.y + i32::try_from(y).unwrap_or(i32::MAX);
@@ -418,7 +594,26 @@ impl CaptureBackend for Synthetic {
         }
         self.captures
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Ok(Frame::new(ledger, region, pixels)?)
+        let mut frame = Frame::new(ledger, region, pixels)?;
+        crate::displays::fill_gaps(&mut frame, &desktop.monitors);
+        Ok(frame)
+    }
+
+    fn capture_with_pointer(
+        &self,
+        ledger: &Arc<Ledger>,
+        region: Rect,
+    ) -> Result<(Frame, PointerOutcome), CaptureError> {
+        let mut frame = self.capture(ledger, region)?;
+        let outcome = match self.pointer() {
+            Some(at) => crate::displays::draw_pointer_sprite(&mut frame, at),
+            None => PointerOutcome::Hidden,
+        };
+        Ok((frame, outcome))
+    }
+
+    fn refresh(&self) {
+        self.reload();
     }
 }
 
@@ -433,6 +628,18 @@ impl CaptureBackend for Arc<Synthetic> {
 
     fn capture(&self, ledger: &Arc<Ledger>, region: Rect) -> Result<Frame, CaptureError> {
         Synthetic::capture(self, ledger, region)
+    }
+
+    fn capture_with_pointer(
+        &self,
+        ledger: &Arc<Ledger>,
+        region: Rect,
+    ) -> Result<(Frame, PointerOutcome), CaptureError> {
+        Synthetic::capture_with_pointer(self, ledger, region)
+    }
+
+    fn refresh(&self) {
+        Synthetic::reload(self);
     }
 }
 

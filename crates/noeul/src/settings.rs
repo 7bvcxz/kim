@@ -24,6 +24,12 @@
 //! - `[capture] magnifier`: whether the magnifier shows when the overlay opens, `"on"`
 //!   (default) or `"off"`; `M` toggles it during a capture.
 //!
+//! Since Step 58 (NOEUL-FR-016, ADR 0050):
+//!
+//! - `[capture] pointer`: whether the mouse pointer is drawn into the pictures the user takes
+//!   with the keys — the frozen picture of `F1` and the `capture.monitor` / `capture.window`
+//!   captures — `"off"` (default) or `"on"`. The CLI asks for it per command (`--pointer`).
+//!
 //! Since Step 54 (UX spec §10, ADR 0044):
 //!
 //! - `[pins] border`: the one-pixel `border.subtle` outline around every pin, `"on"` (default) or
@@ -168,6 +174,8 @@ pub struct Settings {
     pub detection: DetectMode,
     /// Whether the overlay shows the magnifier when it opens (NOEUL-FR-041).
     pub magnifier: bool,
+    /// Whether key-started captures include the mouse pointer (NOEUL-FR-016, Step 58).
+    pub pointer: bool,
     /// The outline and shadow around pins (`[pins] border`, `[pins] shadow`; UX spec §10).
     pub pin_look: Look,
     /// What a paste takes (`[paste] paths`, `[paste] file_cards`; Step 55).
@@ -184,6 +192,7 @@ impl Default for Settings {
             preset: Preset::Noeul,
             detection: DetectMode::Window,
             magnifier: true,
+            pointer: false,
             pin_look: Look::default(),
             paste: crate::paste::Options::default(),
         }
@@ -230,6 +239,7 @@ impl Loaded {
             "quick_save_folder": s.quick_save_folder.as_ref().map(|p| p.display().to_string()),
             "detection": s.detection.as_str(),
             "magnifier": if s.magnifier { "on" } else { "off" },
+            "pointer": if s.pointer { "on" } else { "off" },
             "pins": {
                 "border": if s.pin_look.border { "on" } else { "off" },
                 "shadow": if s.pin_look.shadow { "on" } else { "off" },
@@ -316,6 +326,12 @@ const KEYS: &[Key] = &[
         default: "\"on\"",
     },
     Key {
+        section: "capture",
+        name: "pointer",
+        takes: "\"on\" or \"off\"",
+        default: "\"off\"",
+    },
+    Key {
         section: "gestures",
         name: "double_click",
         takes: "\"pin\", \"copy\", \"save\" or \"none\"",
@@ -388,12 +404,17 @@ fn apply(settings: &mut Settings, section: &str, name: &str, v: &toml::Value) ->
         ("capture", "detection") => {
             settings.detection = s.and_then(DetectMode::parse).ok_or(())?;
         }
-        ("capture", "magnifier") => {
-            settings.magnifier = match s {
+        ("capture", "magnifier" | "pointer") => {
+            let on = match s {
                 Some("on") => true,
                 Some("off") => false,
                 _ => return Err(()),
             };
+            if name == "magnifier" {
+                settings.magnifier = on;
+            } else {
+                settings.pointer = on;
+            }
         }
         ("gestures", "double_click") => {
             settings.gestures.double_click = s.and_then(GestureAction::parse).ok_or(())?;

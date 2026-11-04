@@ -23,6 +23,7 @@
         "io", "internal", "permission_denied", "usage", "protocol_error", "busy", "timeout",
         "unsupported_platform", "confirmation_required", "cancelled",
         "noeul_incompatible", "pin_not_found", "nothing_to_pin", "image_invalid",
+        "monitor_not_found", "window_not_found",
         "desktop_unavailable", "clipboard_unavailable", "noeul_unresponsive",
         "hotkeys_invalid", "hotkeys_from_newer_version"
       ]
@@ -141,12 +142,15 @@
       }
     },
     "params": {
-      "description": "Parameters of every method (absent flags are false). capture: region and pin (required); capture.region and capture.cancel: dry_run only; pin.create: source (region with region, clipboard with an optional at and as, or file with path and an optional at; Step 55); pin.hide, pin.show, pin.close and pin.set: id, group or all; pin.show: on_screen; pin.set: at (one pin), zoom, opacity, rotation, mirrored, rotate, flip, thumbnail, click_through, move_to_group (Step 54); group.switch: group; quit: force.",
+      "description": "Parameters of every method (absent flags are false). capture: exactly one of region, monitor or window (monitor and window since Step 58), pin (required) and pointer; capture.region and capture.cancel: dry_run only; pin.create: source (region with region, clipboard with an optional at and as, or file with path and an optional at; Step 55); pin.hide, pin.show, pin.close and pin.set: id, group or all; pin.show: on_screen; pin.set: at (one pin), zoom, opacity, rotation, mirrored, rotate, flip, thumbnail, click_through, move_to_group (Step 54); group.switch: group; quit: force.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
         "dry_run": { "type": "boolean" },
         "region": { "$ref": "#/$defs/rect" },
+        "monitor": { "description": "capture: a whole monitor — the primary one, the one under the pointer, or the n-th in the order `status` lists them (Step 58, NOEUL-FR-017).", "oneOf": [{ "enum": ["primary", "pointer"] }, { "type": "integer", "minimum": 1, "maximum": 64 }] },
+        "window": { "description": "capture: the window that has the keyboard focus, as the user sees it on screen (Step 58, NOEUL-FR-017).", "const": "active" },
+        "pointer": { "description": "capture: draw the mouse pointer into the picture (Step 58, NOEUL-FR-016).", "type": "boolean" },
         "pin": { "type": "boolean" },
         "id": { "$ref": "#/$defs/pin_id" },
         "all": { "type": "boolean" },
@@ -220,13 +224,15 @@
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["rect", "primary", "dpi", "work"],
+            "required": ["rect", "primary", "dpi", "work", "rotation", "hdr"],
             "additionalProperties": false,
             "properties": {
               "rect": { "$ref": "#/$defs/rect" },
               "primary": { "type": "boolean" },
               "dpi": { "description": "Effective DPI (96 = 100 %); every rectangle is in device pixels (Step 50).", "type": "integer", "minimum": 1 },
-              "work": { "description": "The work area: the monitor without the taskbar and docked bars; pins are placed inside it (Step 53).", "$ref": "#/$defs/rect" }
+              "work": { "description": "The work area: the monitor without the taskbar and docked bars; pins are placed inside it (Step 53).", "$ref": "#/$defs/rect" },
+              "rotation": { "description": "How the monitor is turned, degrees clockwise; rect is already the turned size (Step 58).", "enum": [0, 90, 180, 270] },
+              "hdr": { "description": "Advanced colour (HDR, or wide colour enforced) is on; null when unknown. Windows converts captures of such a monitor to SDR (Step 58, NOEUL-FR-092).", "type": ["boolean", "null"] }
             }
           }
         }
@@ -282,7 +288,7 @@
     },
     "settings_state": {
       "type": "object",
-      "required": ["path", "state", "tray_icon", "keyboard_help", "quick_save_folder", "detection", "magnifier", "pins", "paste", "gestures", "problems"],
+      "required": ["path", "state", "tray_icon", "keyboard_help", "quick_save_folder", "detection", "magnifier", "pointer", "pins", "paste", "gestures", "problems"],
       "additionalProperties": false,
       "properties": {
         "path": { "type": "string", "minLength": 1 },
@@ -292,6 +298,7 @@
         "quick_save_folder": { "description": "`[capture] quick_save_folder` (Step 51); null: the Pictures folder + Noeul.", "type": ["string", "null"] },
         "detection": { "description": "`[capture] detection` (Step 52, NOEUL-FR-040): what the overlay detects under the pointer when it opens.", "enum": ["window", "element", "off"] },
         "magnifier": { "description": "`[capture] magnifier` (Step 52, NOEUL-FR-041): whether the overlay shows the magnifier when it opens.", "enum": ["on", "off"] },
+        "pointer": { "description": "`[capture] pointer` (Step 58, NOEUL-FR-016): whether the mouse pointer is drawn into the pictures F1, capture.monitor and capture.window take.", "enum": ["on", "off"] },
         "pins": {
           "description": "`[pins]` (Step 54, UX spec §10): the outline and the shadow around every pin.",
           "type": "object",
@@ -329,7 +336,7 @@
     "status_result": {
       "description": "`status`. Also the `data` of `noeul status --json` while Noeul runs.",
       "type": "object",
-      "required": ["running", "instance", "desktop", "capture_backend", "pins", "captures", "memory", "hotkeys", "tray", "settings", "last_action"],
+      "required": ["running", "instance", "desktop", "capture_backend", "pins", "captures", "memory", "displays", "hotkeys", "tray", "settings", "last_action"],
       "additionalProperties": false,
       "properties": {
         "running": { "const": true },
@@ -392,6 +399,17 @@
             "peak_bytes": { "$ref": "#/$defs/u64" }
           }
         },
+        "displays": {
+          "description": "Display notifications (WM_DISPLAYCHANGE, work-area changes, WM_DPICHANGED) received, and how often the instance looked at the displays: once per quiet period of 250 ms, at most 1 s after the first (Step 58, ADR 0050).",
+          "type": "object",
+          "required": ["changes", "handled", "pending"],
+          "additionalProperties": false,
+          "properties": {
+            "changes": { "$ref": "#/$defs/u64" },
+            "handled": { "$ref": "#/$defs/u64" },
+            "pending": { "type": "boolean" }
+          }
+        },
         "hotkeys": { "$ref": "#/$defs/hotkeys_state" },
         "tray": {
           "type": "object",
@@ -449,14 +467,102 @@
       }
     },
     "capture_result": {
+      "description": "`capture`: a region, a monitor or the active window, captured without the overlay and pinned in place (monitor, window, pointer, mapping and warnings since Step 58, ADR 0050). Geometry and states only: never pixels, a window title or a program name.",
       "type": "object",
-      "required": ["dry_run", "region", "pin", "desktop"],
+      "required": ["dry_run", "target", "region", "monitor", "mapping", "window", "pointer", "pin", "desktop", "warnings"],
       "additionalProperties": false,
       "properties": {
         "dry_run": { "type": "boolean" },
-        "region": { "$ref": "#/$defs/rect" },
+        "target": { "enum": ["region", "monitor", "window"] },
+        "region": { "description": "What was (or would be) captured, in device pixels of the virtual desktop.", "$ref": "#/$defs/rect" },
+        "monitor": {
+          "description": "The monitor that holds the region's centre (the reference of `mapping`).",
+          "oneOf": [
+            {
+              "type": "object",
+              "required": ["number", "rect", "work", "primary", "dpi", "scale_percent", "rotation", "hdr"],
+              "additionalProperties": false,
+              "properties": {
+                "number": { "description": "1-based, in the order `status` lists the monitors.", "type": "integer", "minimum": 1 },
+                "rect": { "$ref": "#/$defs/rect" },
+                "work": { "$ref": "#/$defs/rect" },
+                "primary": { "type": "boolean" },
+                "dpi": { "type": "integer", "minimum": 1 },
+                "scale_percent": { "type": "integer", "minimum": 100 },
+                "rotation": { "enum": [0, 90, 180, 270] },
+                "hdr": { "type": ["boolean", "null"] }
+              }
+            },
+            { "type": "null" }
+          ]
+        },
+        "mapping": {
+          "description": "The region in the logical pixels of that monitor, relative to its top-left corner (each edge rounded on its own), how many monitors it touches and whether their scales differ (the picture keeps every monitor's device pixels).",
+          "oneOf": [
+            {
+              "type": "object",
+              "required": ["monitor", "dpi", "scale_percent", "logical", "spans", "mixed_dpi"],
+              "additionalProperties": false,
+              "properties": {
+                "monitor": { "type": "integer", "minimum": 1 },
+                "dpi": { "type": "integer", "minimum": 1 },
+                "scale_percent": { "type": "integer", "minimum": 100 },
+                "logical": {
+                  "type": "object",
+                  "required": ["x", "y", "width", "height"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "x": { "type": "integer" },
+                    "y": { "type": "integer" },
+                    "width": { "type": "integer", "minimum": 0 },
+                    "height": { "type": "integer", "minimum": 0 }
+                  }
+                },
+                "spans": { "type": "integer", "minimum": 0 },
+                "mixed_dpi": { "type": "boolean" }
+              }
+            },
+            { "type": "null" }
+          ]
+        },
+        "window": {
+          "description": "target window: its visible frame (DWM extended frame bounds) and capture affinity; `region` is the part of it on the monitors.",
+          "oneOf": [
+            {
+              "type": "object",
+              "required": ["rect", "affinity"],
+              "additionalProperties": false,
+              "properties": {
+                "rect": { "$ref": "#/$defs/rect" },
+                "affinity": { "enum": ["none", "monitor", "excluded"] }
+              }
+            },
+            { "type": "null" }
+          ]
+        },
+        "pointer": {
+          "description": "null unless the pointer was asked for; then whether it was drawn, where its image lies, or why not.",
+          "oneOf": [
+            {
+              "type": "object",
+              "required": ["drawn", "rect", "reason"],
+              "additionalProperties": false,
+              "properties": {
+                "drawn": { "type": "boolean" },
+                "rect": { "oneOf": [{ "$ref": "#/$defs/rect" }, { "type": "null" }] },
+                "reason": { "enum": ["hidden", "outside", "unavailable", "dry_run", null] }
+              }
+            },
+            { "type": "null" }
+          ]
+        },
         "pin": { "oneOf": [{ "$ref": "#/$defs/pin_ref" }, { "type": "null" }] },
-        "desktop": { "const": "available" }
+        "desktop": { "const": "available" },
+        "warnings": {
+          "description": "Honest limits of this capture: monitors of different scales, HDR converted to SDR, a window that protects itself or lies partly off the monitors, a pointer not in the picture.",
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
       }
     },
     "annotation_state": {

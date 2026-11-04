@@ -56,6 +56,7 @@ a recorded justification.
 | 40 | #60 Step 55 – Noeul clipboard paste for every format | `step55_noeul_clipboard.rs` (2 tests): paste commands are discoverable headlessly; the user pastes every source off screen without touching the clipboard | 10 |
 | 41 | #19 Step 19 – Subak terminal search, clipboard and links (merged; issue open for the maintainer's visible-window, real-clipboard and real-browser checks, `SUBAK_GUI.md` §12.9) | `step19_search_clipboard.rs` (2 tests): a later window searches output kept by the Host; paste, copy, links and save output ask first and stay local | 11 |
 | 42 | #79 Step 74 – Ddalgak visual rule editor (`ddalgak-editor`) (merged; issue open for the maintainer's visible usability script, `DDALGAK_GUI_JOURNEYS.md` §8) | `step74_ddalgak_editor.rs` (2 tests): the editor binary answers help and version without a window; the editor saves through the store and shows active only after the engine reload | 12 |
+| 43 | #63 Step 58 – Noeul multi-monitor, high-DPI and colour accuracy (merged; issue open for the maintainer's physical multi-monitor matrix, `NOEUL_UX_SPEC.md` §4.13) | `step58_noeul_displays.rs` (2 tests): monitor and window capture are discoverable headlessly; monitors attach, detach and rescale under a running Noeul | 13 |
 
 ## E2E runs
 

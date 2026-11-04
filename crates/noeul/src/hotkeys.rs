@@ -2,7 +2,7 @@
 //! ADR 0017, ADR 0021 §5, NOEUL-FR-100, NOEUL-FR-114, NOEUL-SEC-012).
 //!
 //! - **Manifest.** The final manifest of every Noeul action is the contract example
-//!   `docs/contracts/examples/kim-hotkey-manifest-v1/noeul.json` (80 actions). A build ships only
+//!   `docs/contracts/examples/kim-hotkey-manifest-v1/noeul.json` (85 actions). A build ships only
 //!   the actions it implements, under the same IDs and defaults (NOEUL-FR-114); this build's
 //!   subset is [`MANIFEST_JSON`] (`hotkeys.manifest.json`, shipped next to `capabilities.json`). A
 //!   test keeps it equal to the final manifest filtered by [`IMPLEMENTED`].
@@ -42,6 +42,9 @@
 //! (no default) — and the first global actions without defaults, `pins.clickable` and
 //! `pins.toggle-hidden` (the user binds them; HOTKEY_CONTRACT §7.5). Step 55 added
 //! `pin.copy-text` (`Ctrl+Shift+C`): a text, HTML, colour or file card's text to the clipboard.
+//! Step 58 added the global actions `capture.monitor` and `capture.window` (no default keys,
+//! HOTKEY_CONTRACT §7.5): the monitor under the pointer, or the active window, captured without
+//! the overlay and pinned in place.
 
 use crate::paths::Paths;
 use kim_hotkeys::check::{Conflict, Severity, ToolState, analyze};
@@ -65,6 +68,8 @@ pub const IMPLEMENTED: &[&str] = &[
     "paste.float",
     "pins.clickable",
     "pins.toggle-hidden",
+    "capture.monitor",
+    "capture.window",
     "capture.pin",
     "capture.copy",
     "capture.save",

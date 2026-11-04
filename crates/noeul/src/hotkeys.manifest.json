@@ -15,6 +15,8 @@
     { "id": "paste.float", "title": "Pin the clipboard", "scopes": ["global", "app"], "defaults": ["F3"] },
     { "id": "pins.clickable", "title": "Make every pin clickable again (after click-through)", "scopes": ["global", "app"], "defaults": [] },
     { "id": "pins.toggle-hidden", "title": "Hide all pins, or show them again", "scopes": ["global", "app"], "defaults": [] },
+    { "id": "capture.monitor", "title": "Capture the monitor under the pointer and pin it", "scopes": ["global", "app"], "defaults": [] },
+    { "id": "capture.window", "title": "Capture the active window and pin it", "scopes": ["global", "app"], "defaults": [] },
     { "id": "capture.pin", "title": "Pin the selection (keyboard twin of double-click inside)", "context": "capture-overlay", "defaults": ["Enter"] },
     { "id": "capture.copy", "title": "Copy the selection", "context": "capture-overlay", "defaults": ["Ctrl+C"] },
     { "id": "capture.save", "title": "Save the selection", "context": "capture-overlay", "defaults": ["Ctrl+S"] },

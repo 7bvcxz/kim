@@ -17,10 +17,17 @@
 //! | `net` | the connection: connect or start, read frames, write frames | Windows |
 //! | `window` | the Win32 window: paint, keyboard, IME, mouse, clipboard, DPI, test hooks | Windows |
 
+// Portable modules: compiled and unit-tested on every target; until the Linux window (M4,
+// ADR 0011) only the Windows window uses them.
+#[cfg_attr(not(windows), allow(dead_code))]
 mod keys;
+#[cfg_attr(not(windows), allow(dead_code))]
 mod layout;
+#[cfg_attr(not(windows), allow(dead_code))]
 mod model;
+#[cfg_attr(not(windows), allow(dead_code))]
 mod prefs;
+#[cfg_attr(not(windows), allow(dead_code))]
 mod screens;
 
 #[cfg(windows)]

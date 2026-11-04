@@ -646,16 +646,20 @@ function Invoke-Verify {
     if ($st) { Note "clients attached now: $($st.clients.attached)" }
     $n = Get-MarkerCount $Terminal $state.marker
     Check ($n -ge [int]$state.marker_count_recorded -and $n -gt 0) "the conversation is still on the pane's screen (marker $($state.marker): $n occurrences)"
+    # The follow-up answer (`<marker>-again`) can only appear after the reattach.
+    $again = Get-MarkerCount $Terminal "$($state.marker)-again"
+    Note "the follow-up answer $($state.marker)-again is on the screen $again time(s) before the reattach"
     $state | Add-Member -NotePropertyName verified_at -NotePropertyValue (Stamp) -Force
     $state | Add-Member -NotePropertyName marker_count_verified -NotePropertyValue $n -Force
+    $state | Add-Member -NotePropertyName again_count_verified -NotePropertyValue $again -Force
     Save-State $state
     $sc = "powershell -NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
     Write-Host @"
 
 Next:
   1. Open a NEW Windows Terminal window and run:  subak --endpoint $($script:ep) attach $Terminal
-  2. Check that the conversation is still shown, then ask Claude Code:
-       What code did I ask you to remember? Reply with only the code.
+  2. Check that the conversation is still shown, then ask Claude Code (do not type the code):
+       What code did I ask you to remember? Reply with only that code followed by -again
   3. When it answered (stay attached or press Ctrl+B d), from any console run:
        $sc -Phase Finish -Endpoint $($script:ep)        (add -Cleanup to stop the Host afterwards)
 "@
@@ -665,8 +669,12 @@ function Invoke-Finish {
     $state = Read-State
     Step "Finish: the reattached client talked to the same Claude Code process"
     $null = Test-Recorded $state 'after reattaching,'
+    # A full-screen program may clear and repaint the screen (and history) when the new window
+    # resizes the pane, so the check is a token only the answer after the reattach contains.
+    $again = Get-MarkerCount $Terminal "$($state.marker)-again"
+    Check ($again -gt [int]$state.again_count_verified) "Claude Code answered the follow-up after the reattach, remembering the code ($($state.marker)-again: $($state.again_count_verified) -> $again occurrences)"
     $n = Get-MarkerCount $Terminal $state.marker
-    Check ($n -gt [int]$state.marker_count_verified) "Claude Code answered again after the reattach (marker $($state.marker): $($state.marker_count_verified) -> $n occurrences)"
+    Note "marker $($state.marker): $($state.marker_count_verified) occurrences at Verify, $n now"
     Note "finished at $(Stamp); Host $($state.host.pid), shell $($state.shell.pid), Claude Code $((@($state.claude) | ForEach-Object { $_.pid }) -join ', ')"
     if ($Cleanup) {
         Step 'Cleanup: stop the private Host (this ends that Claude Code session)'

@@ -44,7 +44,7 @@ then closed at once.
 | No command | `%ComSpec%` of the Host (normally `C:\Windows\system32\cmd.exe`), no arguments |
 | Command Prompt | `-- cmd.exe /d` (or `cmd`); `/d` skips `AutoRun`, without it cmd runs the user's `AutoRun` as usual |
 | Windows PowerShell 5.1 | `-- powershell` resolves to `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`; `-NoLogo`, `-NoProfile` are the user's choice |
-| PowerShell 7 | `-- pwsh`, found wherever the user installed it on `PATH` (MSI, zip, or the Store's App Execution Alias in `%LOCALAPPDATA%\Microsoft\WindowsApps`). **Subak never installs it.** When it is missing, `spawn_failed` (`not_found`) says so and names `powershell` as the inbox alternative; `terminal new --dry-run -- pwsh` detects it without starting anything |
+| PowerShell 7 | `-- pwsh`, found wherever the user installed it on `PATH` (MSI, zip, or the Store's App Execution Alias in `%LOCALAPPDATA%\Microsoft\WindowsApps`). **Subak never installs it.** When it is missing, `spawn_failed` (`not_found`) says so and names `powershell` as the inbox alternative; `subak new --dry-run -- pwsh` detects it without starting anything |
 | Any program | `-- <program> [args…]`: each argument is one word |
 
 **Resolution** (`win::launch::resolve`; the Host does it itself, ADR 0025 §1):

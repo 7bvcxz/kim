@@ -109,7 +109,7 @@ Grouped by the manual page section that documents them. `set-window-option` and
 | Grant other users access | `server-access` | *Rationale:* the Host is per-user by design; IPC is restricted to the same user (SUBAK-SEC-010) | unsupported | — | — |
 | Show the message log | `show-messages` (`showmsgs`) | Host message log, local only | planned | 25 | — |
 | Run commands from a file | `source-file` (`source`) | Parse a tmux-syntax file (§17) | planned | 25 | — |
-| Start the server | `start-server` (`start`) | The Host starts on demand (SUBAK-FR-002); explicit start verb TBD. *Partial:* `subak terminal new` starts it on demand and `subak host start` explicitly | partial | 10 | `crates/subak/tests/session_lifecycle.rs::exits_restarts_and_reconnects_leave_no_stale_state` (2026-11-04) |
+| Start the server | `start-server` (`start`) | The Host starts on demand (SUBAK-FR-002); explicit start verb TBD. *Partial:* `subak new` starts it on demand and `subak host start` explicitly | partial | 10 | `crates/subak/tests/session_lifecycle.rs::exits_restarts_and_reconnects_leave_no_stale_state` (2026-11-04) |
 | Suspend a client | `suspend-client` (`suspendc`) | *Rationale:* no SIGTSTP or job control on Windows; minimizing the GUI is the analogue | unsupported | — | — |
 | Switch a client to another session | `switch-client` (`switchc`) | Show another Terminal in the current client; `-T` (key table) is part of Step 23 | planned | 25 | — |
 
@@ -462,7 +462,7 @@ command (`send-keys -X <command>`) documented in tmux 3.8 is named in this table
 | Alert actions | `activity-action`, `bell-action`, `silence-action` | Same; GUI tab indicators | planned | 25 | — |
 | Paste detection by timing | `assume-paste-time` | *Rationale:* the GUI knows when the user pastes; no timing heuristic needed | unsupported | — | — |
 | First window index | `base-index` | Same | planned | 21 | — |
-| Shell and command for new panes | `default-shell`, `default-command` | Profile shell and command (SUBAK-FR-011). *Partial:* the default is `%ComSpec%`; any program with its arguments via `terminal new -- <program> [args…]`, resolved on the pane's `PATH` (cmd, `powershell`, `pwsh` if installed) | partial | 11 | `crates/subak/tests/pty_shells.rs::powershell_and_cmd_run_interactively_in_independent_trees_under_the_host` (2026-11-04) |
+| Shell and command for new panes | `default-shell`, `default-command` | Profile shell and command (SUBAK-FR-011). *Partial:* the default is `%ComSpec%`; any program with its arguments via `subak new -- <program> [args…]`, resolved on the pane's `PATH` (cmd, `powershell`, `pwsh` if installed) | partial | 11 | `crates/subak/tests/pty_shells.rs::powershell_and_cmd_run_interactively_in_independent_trees_under_the_host` (2026-11-04) |
 | Size of detached sessions | `default-size` | Same | planned | 10 | — |
 | Destroy a session with no clients | `destroy-unattached` | Opt-in option, off by default | planned | 25 | — |
 | Behaviour when the session is destroyed | `detach-on-destroy` | What the client shows next (GUI: close the tab or switch) | planned | 25 | — |
@@ -784,7 +784,7 @@ a family is scheduled in detail.
 | Command aliases | `command-alias[N] name=value` | Same | planned | 25 | — |
 | Format arguments | `-F` on `display-message`, `list-*`, `new-*`, `set-option` | Same | planned | 25 | — |
 | Placeholders in prompts | `%%`, `%1`…`%9`, `%%%` | Same | planned | 24 | — |
-| Shell for commands | `/bin/sh -c` (or `default-shell`) | Profile shell (PowerShell, cmd, Git Bash, WSL); quoting differs. *Differs:* `terminal new` runs the program with its arguments directly, never through a shell; scripts need their interpreter named (Step 11, [PTY_PROCESSES §2](PTY_PROCESSES.md)) | planned | 25 | — |
+| Shell for commands | `/bin/sh -c` (or `default-shell`) | Profile shell (PowerShell, cmd, Git Bash, WSL); quoting differs. *Differs:* `subak new` runs the program with its arguments directly, never through a shell; scripts need their interpreter named (Step 11, [PTY_PROCESSES §2](PTY_PROCESSES.md)) | planned | 25 | — |
 
 ## 19. Control mode
 

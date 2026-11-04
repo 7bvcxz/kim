@@ -1359,7 +1359,18 @@ fn console_attach_restores_the_console_on_every_exit_path_it_survives() {
     let mut con = OuterConsole::new(100, 30);
     // A process that keeps the console alive and never reads its input.
     let keeper = con.start("cmd.exe /d /c ping -n 900 127.0.0.1 >NUL", 0);
-    let before = probe(keeper, "modes").expect("baseline");
+    // cmd changes the console mode while it starts (measured: ENABLE_MOUSE_INPUT goes off and
+    // on again); the baseline is taken once its ping runs and the mode is settled.
+    until("the keeper's ping", LONG, || {
+        processes()
+            .iter()
+            .any(|(_, parent, exe)| *parent == keeper && exe.eq_ignore_ascii_case("PING.EXE"))
+    });
+    let mut before = probe(keeper, "modes").expect("baseline");
+    until("a settled console mode", LONG, || {
+        let again = probe(keeper, "modes").unwrap();
+        std::mem::replace(&mut before, again) == again
+    });
     eprintln!("EVIDENCE tty-baseline: {before:?}");
     assert_eq!(before.input & COOKED, COOKED, "a new console is cooked");
     let attach = format!("\"{}\" attach work --endpoint {ep}", subak());

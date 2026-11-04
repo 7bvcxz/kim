@@ -263,7 +263,8 @@ fn run_e2e(root: &Path, force: bool) -> Result<(), String> {
     // Debug builds carry test hooks that release builds compile out: `kim` accepts a development
     // catalog key (KIM_DEV_TRUSTED_KEY); `ddalgak-gui` has the test host (no tray icon,
     // observe-only hook); `noeul` runs its overlay on an off-screen synthetic desktop
-    // (NOEUL_DEV_SYNTHETIC_DESKTOP, ADR 0026). Some scenarios need them.
+    // (NOEUL_DEV_SYNTHETIC_DESKTOP, ADR 0026); `subak-gui` has its off-screen test window
+    // (`--test-offscreen`, ADR 0039) next to a debug `subak`. Some scenarios need them.
     cargo(
         root,
         &[
@@ -274,6 +275,8 @@ fn run_e2e(root: &Path, force: bool) -> Result<(), String> {
             "ddalgak",
             "--package",
             "noeul",
+            "--package",
+            "subak",
         ],
     )?;
     let bin_dir = root.join("target").join("release");

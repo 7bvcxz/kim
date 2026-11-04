@@ -158,6 +158,7 @@ specified in [HOTKEY_CONTRACT.md](HOTKEY_CONTRACT.md) ([ADR 0017](adr/0017-unive
 | SUBAK-FR-034 | Every GUI shortcut is rebindable, and a shadowed key (e.g. `Ctrl+W`) can be passed through to the program. | P1 | M2 | T, M |
 | SUBAK-FR-035 | Split panes and switch windows in the GUI. | P1 | M2 | M |
 | SUBAK-FR-036 | **Faithful terminal emulation.** The Host and every client view interpret pane output with one shared model: the xterm subset of escape sequences, cursor operations, the alternate screen, scroll regions, UTF-8 with East Asian wide characters, Korean, emoji and combining marks, 16/256/24-bit colour, OSC 8 hyperlinks, mouse reporting, bracketed paste, focus events and resize; checked by conformance fixtures and by real ConPTY output rendered against golden screens ([TERMINAL_EMULATOR](TERMINAL_EMULATOR.md)). | P0 | M2 | T, M |
+| SUBAK-FR-037 | **The Subak window.** A native window (`subak-gui`, no Electron, browser or GPU stack) shows one existing Terminal's pane live through the Host's IPC as an interactive client: it starts a Host on demand without starting a shell, never creates, ends or duplicates a Terminal by opening or closing, handles keyboard, IME (Korean composition drawn inline), focus, per-monitor DPI, minimize and maximize, shows clear loading, empty, chooser, error and disconnected states, reconnects without starting a Host, and keeps its display preferences and placement in its own file ([SUBAK_GUI](SUBAK_GUI.md)). | P0 | M2 | T, M |
 
 ### 4.4 Persistence, restore and Claude resume
 
@@ -206,6 +207,7 @@ specified in [HOTKEY_CONTRACT.md](HOTKEY_CONTRACT.md) ([ADR 0017](adr/0017-unive
 | ID | Requirement | Pri | MS | Verify |
 | --- | --- | --- | --- | --- |
 | SUBAK-NFR-001 | **Terminal view cost.** A client view keeps up with ConPTY output while drawing, draws only rows that changed, adds no timer, thread or GPU context while idle (0 CPU over 60 s with no output), and its keyboard path adds well under one frame (16 ms) to the program's own echo; measured by the documented benchmark harness ([TERMINAL_EMULATOR §7](TERMINAL_EMULATOR.md)). | P1 | M2 | T, M |
+| SUBAK-NFR-002 | **Window cost.** The Subak window idles at 0 CPU (no timer while connected and quiet) and within the same order of memory as the terminal view alone (a few MiB private, measured against the Step 15 renderer probe), and never holds a GPU context ([SUBAK_GUI §7](SUBAK_GUI.md)). | P1 | M2 | T, M |
 
 ## 5. Data privacy and safety policies
 

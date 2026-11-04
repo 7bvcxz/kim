@@ -9,9 +9,29 @@ authors.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+# The library holds everything; both binaries are thin `main`s over it. It is not an API for
+# other packages (KIM-FR-001: no tool depends on another tool's crate).
+[lib]
+path = "src/lib.rs"
+doctest = false
+
 [[bin]]
 name = "subak"
 path = "src/main.rs"
+
+# The Subak window (Step 16, ADR 0039): a GUI-subsystem client of the Host, plain Win32 with the
+# `subak-term` CPU renderer. It lives in this package so it shares the client SDK (pipe, identity
+# checks, IPC v1, start on demand) and so `subak-gui.exe` is built next to `subak.exe`, which it
+# starts on demand. The Host and the CLI never call into it.
+[[bin]]
+name = "subak-gui"
+path = "src/bin/subak-gui.rs"
+
+[features]
+# The test hooks of `subak-gui` (off-screen placement, the WM_COPYDATA test commands) exist in
+# debug builds; this feature also compiles them into a release build, only to measure a release
+# build off-screen (docs/SUBAK_GUI.md §7). Shipped builds never enable it.
+test-hooks = []
 
 [lints]
 workspace = true
@@ -23,50 +43,69 @@ serde_json = "1.0.154"
 # so a Hangul or accented name typed as composed or decomposed text is the same name.
 unicode-normalization = "0.1.25"
 # The terminal model of every pane (ADR 0030): parser, screen, scrollback, snapshot and capture,
-# shared with Subak's client views (ADR 0036). Built without its `render` feature.
-subak-term = { path = "../subak-term", default-features = false }
+# shared with Subak's client views (ADR 0036), and (feature `render`) the CPU renderer that
+# `subak-gui` draws with. The Host never calls the renderer, so the linker leaves it out of
+# `subak.exe` (ADR 0039).
+subak-term = { path = "../subak-term", features = ["render"] }
+# The key syntax of the Kim hotkey contract (docs/HOTKEY_CONTRACT.md): `subak-gui` declares its
+# window shortcuts in that syntax and checks them against the reserved keys (ADR 0039).
+kim-hotkeys = { version = "0.0.1", path = "../kim-hotkeys" }
 
 [target."cfg(windows)".dependencies]
 # The Host and its clients: pseudo console, job objects, named pipes and peer identity, detached
 # spawn with the user's logon environment (CreateEnvironmentBlock), the start mutex, the Host's
-# own memory counters for host.stats (ProcessStatus).
+# own memory counters for host.stats (ProcessStatus). `subak-gui` (ADR 0039): its window, GDI
+# presentation, per-monitor DPI, IME, keyboard state, the clipboard (DataExchange, Memory, Ole),
+# High Contrast detection (Accessibility) and the dark title bar (Dwm).
 windows-sys = { version = "0.61.2", features = [
     "Win32_Foundation",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Gdi",
     "Win32_Security",
     "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
     "Win32_System_Console",
+    "Win32_System_DataExchange",
     "Win32_System_Environment",
     "Win32_System_IO",
     "Win32_System_JobObjects",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
     "Win32_System_Pipes",
     "Win32_System_ProcessStatus",
     "Win32_System_RemoteDesktop",
     "Win32_System_Threading",
+    "Win32_UI_Accessibility",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_Ime",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
 ] }
 
 [dev-dependencies]
 # tests/cli.rs validates `subak --json` output with xtask/src/jsonschema.rs (test-only).
 regex = "1.13.1"
-# tests/terminal_render.rs renders real ConPTY output headlessly with the client view and the
-# CPU renderer (ADR 0036); dev-dependency features are not unified into the `subak` binary.
-subak-term = { path = "../subak-term", features = ["render"] }
 
 [target."cfg(windows)".dev-dependencies]
 # tests/conpty_host.rs drives the real Host: hidden consoles, job objects, window-close messages.
 # tests/host_ipc.rs speaks raw IPC v1 (overlapped pipe I/O), squats a pipe name, suspends a Host
 # and lowers a token's integrity level. The unit tests of win::quote_arg compare against the OS
-# parser CommandLineToArgvW (UI_Shell).
+# parser CommandLineToArgvW (UI_Shell). tests/gui_window.rs drives `subak-gui`'s off-screen
+# window with its own messages (WM_CHAR, WM_COPYDATA test commands) and samples its CPU time and
+# memory (ProcessStatus).
 windows-sys = { version = "0.61.2", features = [
     "Win32_Foundation",
     "Win32_Security",
     "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
     "Win32_System_Console",
+    "Win32_System_DataExchange",
     "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_IO",
     "Win32_System_JobObjects",
     "Win32_System_Pipes",
+    "Win32_System_ProcessStatus",
     "Win32_System_Threading",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",

@@ -22,7 +22,8 @@ pub const GUI_CRATES: &[&str] = &[
 /// Noeul and Ddalgak, whose windows are plain Win32 (ADR 0023: no framework, a 20 MB idle
 /// budget; ADR 0024: the Ddalgak tray app has no editor before Step 74, which must keep the
 /// `ddalgak` CLI free of GUI crates), and `subak-term`, the terminal core the Host links (ADR 0036:
-/// its renderer draws on the CPU and needs no GUI framework either).
+/// its renderer draws on the CPU and needs no GUI framework either). `subak` also builds the
+/// Subak window `subak-gui`, which is plain Win32 (ADR 0039).
 pub const HEADLESS: &[&str] = &[
     "ddalgak",
     "kim",

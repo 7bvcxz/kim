@@ -88,3 +88,7 @@ Bindings are configurable per profile.
   running and stays in the session manager). `Ctrl+W` / "Close Terminal" stays a kill. The Host
   enforces "confirms when busy": `terminal.kill` of a busy Terminal is refused (`busy`) unless the
   GUI sends `force`, which it may only after the user confirmed.
+- 2026-11-04 (Step 16): `subak-gui.exe` exists as a pure client of one Terminal
+  ([ADR 0039](0039-subak-window-plain-win32-client.md)). Close, Alt+F4 and a crash are detaches
+  (tested with pids). Its dispatch implements stages 1, 3 and 4 before `TranslateMessage`; the
+  prefix (stage 2) and the tab shortcuts arrive in Steps 17 and 23.

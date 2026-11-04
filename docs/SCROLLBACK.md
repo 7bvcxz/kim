@@ -80,7 +80,10 @@ with their alternate screen.
 - The Host resizes the **model first**, then the pseudo console, as a terminal does. Rows above
   the cursor that no longer fit move into the history; the screen is cut or padded without reflow;
   the scroll region becomes the whole screen. ConPTY then repaints the screen at the new size, and
-  every attached client receives that repaint as live output.
+  every attached client receives that repaint as live output. An attach or `pane.resize` at the
+  pane's current size is no change (since Step 16): neither the model nor the pseudo console is
+  resized, so no repaint follows the snapshot (`a_same_size_reattach_gets_no_repaint_and_a_new_size_still_resizes`:
+  0 bytes after an 80×24 reattach, 301 repaint bytes before the fix).
 - **History rows re-wrap** at the width of the client they are replayed to: a 100-column row
   from before a resize to 80 columns wraps into two rows in a new 80-column client and joins back
   with `capture --join` (measured, §8). On Windows 10, ConPTY ends long lines with explicit line
@@ -172,7 +175,9 @@ where echo was not disabled, keys printed by mistake). The rules:
    URL passwords, and the lines of a `-----BEGIN … PRIVATE KEY-----` block. `redacted` counts the
    hidden values, and the CLI says so on stderr. The rules are heuristic: a secret in a form they
    do not know, or one split over two rows, stays visible. `--no-redact` / `redact: false` shows
-   the exact text and is the caller's explicit choice.
+   the exact text and is the caller's explicit choice. The same detector redacts every command
+   a client is shown (CLI_CONTRACT §10; since Step 16, after e2e run 2 found a `ghp_…` token
+   shown verbatim in a pane's `command_line`).
 6. **Not redacted:** what an attached client sees (attach is the terminal itself, as before
    Step 13), including the title the program set. Pane titles are therefore not reported in any
    JSON document (cmd.exe puts whole command lines into its title).

@@ -141,3 +141,10 @@ into the GUI — two divergent emulators, which this Step's assignment forbids.
 
 `SUBAK-FR-004`, `SUBAK-FR-013`, `SUBAK-FR-031`, `SUBAK-FR-036`, `SUBAK-NFR-001`,
 `SUBAK-SEC-013`, `KIM-NFR-001`, `KIM-NFR-002`, `KIM-NFR-011`, `KIM-NFR-012`, `KIM-NFR-013`.
+
+## Notes
+
+- 2026-11-04 (Step 16): the `subak` package now builds `subak-term` with `render`, because
+  `subak-gui` lives in the same package ([ADR 0039](0039-subak-window-plain-win32-client.md)).
+  The Host never calls the renderer and the linker leaves it out: the release `subak.exe` imports
+  no GDI, window or IME function. Decision 4 is followed: the window is plain Win32.

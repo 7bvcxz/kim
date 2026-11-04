@@ -454,6 +454,13 @@ Secrets never appear in JSON output, human output, diagnostics or stored state (
   and lose their value: `?token=***&v=2`.
 - Redaction is deliberately over-eager; hiding a harmless value is acceptable. The real value is
   still used internally (e.g. to download), it is only never shown or stored.
+- Subak has **one** secret detector (`crates/subak/src/redact.rs`) for captured output and for
+  every command it shows (a pane's `program`, `args` and verbatim `command_line` in `new`,
+  `info`, `ls`, `status`, `host status`, dry runs, events and error details): secret-looking
+  `name=value` pairs and options, `Bearer` credentials, token shapes (`ghp_…`, `github_pat_…`,
+  `sk-…`, `xoxb-…`, `AKIA…`, JSON Web Tokens and the others of
+  [SCROLLBACK §6](SCROLLBACK.md)) and URL passwords become `***`. Until Step 16 commands used a
+  weaker rule set that missed token shapes (found by e2e run 2).
 - Tools MUST NOT print environment variable values, request headers or file contents that may
   hold secrets; proxy URLs from `HTTPS_PROXY`/`HTTP_PROXY` are redacted like any other URL.
 - Subak's environment overrides (`subak new --env NAME=VALUE`, `--env NAME`, IPC

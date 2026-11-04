@@ -36,7 +36,7 @@ use crate::proto::{
     self, ClientKind, ErrorCode, FLAG_INPUT, FLAG_SNAPSHOT, Frame, IpcError, Refusal, Request,
 };
 use crate::pty::{self, EnvOverrides, Pty};
-use crate::redact::Redactor;
+use crate::redact::{self, Redactor};
 use crate::screen::{self, HistoryRange, Limits, Pos, Screen};
 use crate::session::{self, Command, EndCause, LastExit, Level, Registry, Spec, Transition};
 use crate::win::pipe::{self, Listener, Pipe};
@@ -702,6 +702,20 @@ fn flag(params: &Value, name: &str) -> Result<bool, IpcError> {
             name,
             format!("{name} must be true or false"),
         )),
+    }
+}
+
+/// Resizes the pane's terminal model to `size` and says whether its pseudo console must follow:
+/// not when the model already has that size (a reattach or resize at the same size would make
+/// ConPTY repaint the whole screen for nothing).
+fn resize_model(st: &mut State, pane_id: &str, (c, r): (u16, u16)) -> bool {
+    match st.out.get_mut(pane_id) {
+        Some(o) if o.screen.size() == (c, r) => false,
+        Some(o) => {
+            o.screen.resize(c, r);
+            true
+        }
+        None => true,
     }
 }
 
@@ -1546,8 +1560,8 @@ impl Host {
         let live = st.live(p);
         let running = t.state.is_live() && live.running;
         let pid = p.pid.or_else(|| t.last_exit.as_ref().and_then(|e| e.pid));
-        let line = std::iter::once(p.command.program.clone())
-            .chain(session::redact_args(&p.command.args))
+        let line = std::iter::once(redact::program(&p.command.program))
+            .chain(redact::args(&p.command.args))
             .collect::<Vec<_>>()
             .join(" ");
         json!({
@@ -1783,7 +1797,7 @@ impl Host {
                 }
             },
         };
-        let rt = {
+        let (rt, resize) = {
             let mut st = self.lock();
             let rt = match self.attach_target(&st, &p["target"]) {
                 Ok(rt) => rt,
@@ -1791,14 +1805,12 @@ impl Host {
             };
             // The model takes the new size first, as a terminal does before it tells its PTY;
             // output still formatted for the old size is repainted by ConPTY after the resize.
-            if let Some((c, r)) = size
-                && let Some(o) = st.out.get_mut(&rt.pane_id)
-            {
-                o.screen.resize(c, r);
-            }
-            rt
+            // The same size is no change: no model resize, and no PTY resize (ConPTY would
+            // repaint the whole screen after the snapshot for nothing).
+            let resize = size.filter(|s| resize_model(&mut st, &rt.pane_id, *s));
+            (rt, resize)
         };
-        if let Some((c, r)) = size
+        if let Some((c, r)) = resize
             && let Err(e) = rt.pty.resize(c, r)
         {
             return Reply::Now(Err(IpcError::new(
@@ -2237,7 +2249,7 @@ impl Host {
     fn resize(&self, conn: u64, params: &Value) -> Result<Value, IpcError> {
         let (c, r) = size_param(params, "cols")?
             .ok_or_else(|| IpcError::param("cols", "cols and rows are required"))?;
-        let rt = {
+        let (rt, changed) = {
             let mut st = self.lock();
             if st.rt.is_empty() {
                 return Err(IpcError::new(
@@ -2290,15 +2302,15 @@ impl Host {
                 .rt_of_stream(stream)
                 .cloned()
                 .ok_or_else(|| IpcError::new(ErrorCode::InvalidState, "the pane has ended"))?;
-            // The model first, as a terminal does (see `attach`).
-            if let Some(o) = st.out.get_mut(&rt.pane_id) {
-                o.screen.resize(c, r);
-            }
-            rt
+            // The model first, as a terminal does (see `attach`); the same size changes nothing.
+            let changed = resize_model(&mut st, &rt.pane_id, (c, r));
+            (rt, changed)
         };
-        rt.pty
-            .resize(c, r)
-            .map_err(|e| IpcError::new(ErrorCode::InternalError, format!("resize failed: {e}")))?;
+        if changed {
+            rt.pty.resize(c, r).map_err(|e| {
+                IpcError::new(ErrorCode::InternalError, format!("resize failed: {e}"))
+            })?;
+        }
         if let Some(t) = self.lock().reg.get_mut(&rt.terminal_id) {
             t.active_pane_mut().size = (c, r);
         }
@@ -2476,8 +2488,8 @@ impl Host {
             .map_err(|e| spawn_failed(&e, &command.program, false, None))?;
             return Ok(json!({"dry_run": true, "would_create": {
                 "name": name,
-                "command": {"program": command.program, "args": session::redact_args(&command.args)},
-                "command_line": raw_line.as_deref().map(session::redact_line),
+                "command": {"program": redact::program(&command.program), "args": redact::args(&command.args)},
+                "command_line": raw_line.as_deref().map(redact::command_line),
                 "executable": executable.display().to_string(),
                 "cwd": cwd,
                 "env": session::env_json(&env.names()),
@@ -2542,7 +2554,7 @@ impl Host {
                 && session::busy(&pane.command.program, live.processes);
             let plan = json!({
                 "terminal_id": t.id, "name": t.name.display, "state": t.state.as_str(),
-                "pane_id": pane.id, "pid": pane.pid, "program": pane.command.program,
+                "pane_id": pane.id, "pid": pane.pid, "program": redact::program(&pane.command.program),
                 "processes": live.processes, "busy": busy,
                 "ends_processes": t.state.is_live() && !(op == Op::Remove && !force),
                 "removes_terminal": op != Op::Stop,

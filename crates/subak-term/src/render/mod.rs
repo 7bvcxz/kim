@@ -392,6 +392,13 @@ impl Renderer {
         self.configure();
     }
 
+    /// Changes the terminal text size in logical pixels (the user's zoom, Step 16): glyphs are
+    /// rasterized again at the new size and the next frame is drawn in full.
+    pub fn set_font_size(&mut self, size: f32) {
+        self.opts.font_size = size;
+        self.configure();
+    }
+
     /// The window gained or lost focus (the cursor becomes hollow when it has none).
     pub fn set_focused(&mut self, focused: bool) {
         if self.focused != focused {

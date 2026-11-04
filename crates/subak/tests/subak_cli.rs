@@ -1108,6 +1108,81 @@ fn verbatim_command_lines_reach_cmd_exe_exactly_as_written() {
     eprintln!("EVIDENCE rawline: cmd.exe got {line:?} verbatim and wrote {lines:?}");
 }
 
+/// The e2e run 2 finding (Step 13 scenario, fixed in Step 16): a token in a command line was
+/// shown verbatim by `new` and `info` while `capture` hid it, because commands had a weaker rule
+/// set. Every place that shows a command now uses the capture's detector (`redact.rs`).
+#[test]
+fn secrets_in_commands_are_hidden_everywhere_a_command_is_shown() {
+    let e = Ep::new("cmdsecret");
+    let ep = e.ep.as_str();
+    let gh = "ghp_e2e13e2e13e2e13e2e13e2e13e2e13e2e13e2e13";
+    let sk = format!("sk-ant-api03-{}", "Q".repeat(40));
+    let line = format!(r#"cmd.exe /d /c "echo {gh}& echo password=x""#);
+    let leaks = |doc: &Value, what: &str| {
+        let s = doc.to_string();
+        assert!(
+            !s.contains("e2e13e2e13") && !s.contains("QQQQQQQQ") && !s.contains("password=x"),
+            "{what} shows a secret: {s}"
+        );
+    };
+    // The exact e2e case: `new` and `info` with the verbatim command line.
+    let (code, created) = sub(
+        ep,
+        &["new", "sec", "--remain-on-exit", "--command-line", &line],
+    );
+    assert_eq!(code, 0, "{created}");
+    let p = &created["data"]["terminal"]["windows"][0]["panes"][0];
+    assert_eq!(
+        p["command_line"],
+        r#"cmd.exe /d /c "echo ghp_***& echo password=***""#
+    );
+    assert_eq!(p["command"]["args"][2], "echo ghp_***& echo password=***");
+    leaks(&created, "new");
+    let (_, info) = sub(ep, &["info", "sec"]);
+    leaks(&info, "info");
+    let p = &info["data"]["terminal"]["windows"][0]["panes"][0];
+    assert_eq!(p["command"]["args"][2], "echo ghp_***& echo password=***");
+    // Word-by-word commands, a dry run, and the lists.
+    let (code, doc) = sub(
+        ep,
+        &[
+            "new",
+            "words",
+            "--",
+            "cmd.exe",
+            "/d",
+            "/k",
+            "rem",
+            &sk,
+            "--token",
+            "abc123",
+            "-H",
+            "Authorization: Bearer abcdefghijkl",
+        ],
+    );
+    assert_eq!(code, 0, "{doc}");
+    leaks(&doc, "new (words)");
+    assert!(!doc.to_string().contains("abcdefghijkl"), "{doc}");
+    let args = &doc["data"]["terminal"]["windows"][0]["panes"][0]["command"]["args"];
+    assert_eq!(args[3], "sk-***");
+    assert_eq!(args[5], "***");
+    assert_eq!(args[7], "Authorization: Bearer ***");
+    let (code, dry) = sub(ep, &["new", "--dry-run", "--command-line", &line]);
+    assert_eq!(code, 0, "{dry}");
+    leaks(&dry, "new --dry-run");
+    for args in [&["ls"][..], &["status"], &["host", "status"]] {
+        let (code, doc) = sub(ep, args);
+        assert_eq!(code, 0, "{args:?}: {doc}");
+        leaks(&doc, &args.join(" "));
+    }
+    // The capture hides the same token the same way (one detector).
+    wait_state(ep, "sec", "stopped");
+    let (code, cap) = sub(ep, &["capture", "sec"]);
+    assert_eq!(code, 0, "{cap}");
+    assert!(cap.to_string().contains("ghp_***"), "{cap}");
+    leaks(&cap, "capture");
+}
+
 // ---------------------------------------------------------------------------------------------
 // TTY attach inside an outer pseudo console, and what the console looks like afterwards.
 

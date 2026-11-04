@@ -208,7 +208,7 @@
     "json_schema_version": 1,
     "schema": "kim.capabilities",
     "schema_version": 1,
-    "summary": "Pre-alpha: per-user Host with IPC v1 and named Terminals (new, ls, attach, detach, rename, stop, kill, rm, capture, history), one pane each; no GUI, splits or recovery yet",
+    "summary": "Pre-alpha: per-user Host with IPC v1, named Terminals (new, ls, attach, detach, rename, stop, kill, rm, capture, history) and the window subak-gui; no tabs, splits or recovery yet",
     "tool": "subak",
     "version": "0.0.1"
   },

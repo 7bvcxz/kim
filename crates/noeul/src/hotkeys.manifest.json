@@ -29,9 +29,14 @@
     { "id": "selection.shrink-left", "title": "Shrink from the right edge one pixel", "context": "capture-overlay", "defaults": [{ "keys": "Shift+Left", "repeat": true }] },
     { "id": "selection.shrink-right", "title": "Shrink from the left edge one pixel", "context": "capture-overlay", "defaults": [{ "keys": "Shift+Right", "repeat": true }] },
     { "id": "pin.close", "title": "Close the pin (can be reopened)", "context": "pin", "defaults": ["Escape", "Ctrl+W"] },
+    { "id": "pin.destroy", "title": "Destroy the pin (cannot be reopened)", "context": "pin", "defaults": ["Shift+Escape"], "destructive": true },
+    { "id": "pin.zoom-in", "title": "Zoom in", "context": "pin", "defaults": ["Plus", "NumpadAdd"] },
+    { "id": "pin.zoom-out", "title": "Zoom out", "context": "pin", "defaults": ["Minus", "NumpadSubtract"] },
+    { "id": "pin.zoom-reset", "title": "Back to 100 % and fully opaque", "context": "pin", "defaults": ["0", "Numpad0"] },
     { "id": "pin.move-up", "title": "Move the pin up one pixel", "context": "pin", "defaults": [{ "keys": "Up", "repeat": true }] },
     { "id": "pin.move-down", "title": "Move the pin down one pixel", "context": "pin", "defaults": [{ "keys": "Down", "repeat": true }] },
     { "id": "pin.move-left", "title": "Move the pin left one pixel", "context": "pin", "defaults": [{ "keys": "Left", "repeat": true }] },
-    { "id": "pin.move-right", "title": "Move the pin right one pixel", "context": "pin", "defaults": [{ "keys": "Right", "repeat": true }] }
+    { "id": "pin.move-right", "title": "Move the pin right one pixel", "context": "pin", "defaults": [{ "keys": "Right", "repeat": true }] },
+    { "id": "pin.hide", "title": "Hide the pin (show it again from the tray)", "context": "pin", "defaults": ["H"] }
   ]
 }

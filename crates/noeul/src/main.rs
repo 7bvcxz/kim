@@ -1,4 +1,5 @@
-//! `noeul` — Noeul's CLI and resident instance (pre-alpha, Steps 49–50; ADR 0023, ADR 0026).
+//! `noeul` — Noeul's CLI and resident instance (pre-alpha, Steps 49, 50 and 53; ADR 0023,
+//! ADR 0026, ADR 0029).
 //!
 //! Follows docs/CLI_CONTRACT.md: results on stdout, diagnostics on stderr, exactly one JSON
 //! document with `--json`, documented exit codes and registered error codes, `--dry-run` for every
@@ -22,9 +23,13 @@ use std::process::ExitCode;
 const AFTER_HELP: &str = "\
 While Noeul runs, F1 opens the region selection overlay (drag a rectangle, Enter pins it, Esc
 cancels; `noeul capture --interactive` does the same) and F3 pins the clipboard image.
+Pins float on top: drag to move, wheel or Plus/Minus to zoom, 0 or middle-click for 100 %,
+H hides, Esc closes, Shift+Esc destroys, right-click (or Shift+F10) opens the pin's menu;
+`noeul pin list/hide/show/close` reach them from scripts. Pins live in memory only and do not
+survive a restart.
 Not in this build (labeled planned): double-click to pin and the toolbar (Step 51), copy and
-save (51), window detection and the magnifier (52), annotation (56), settings window (61),
-capture to a file or the clipboard and `noeul pin <file>` (62).
+save (51), window detection and the magnifier (52), pin transforms, opacity and click-through
+(54), annotation (56), settings window (61), capture to a file and `noeul pin <file>` (62).
 
 Exit codes: 0 ok · 1 failure (I/O, permission) · 2 usage · 3 not found (not running, no pin)
             4 integrity (protocol, identity) · 5 incompatible or unsupported platform
@@ -42,7 +47,9 @@ Exit codes: 0 ok · 1 failure (I/O, permission) · 2 usage · 3 not found (not r
     long_about = "Noeul pins pictures to the desktop as floating windows. This pre-alpha build \
         has the resident instance (`noeul start`), its optional tray icon, F1 to select a region \
         over a frozen picture of every monitor and pin it with Enter, F3 to pin the clipboard \
-        image, and pins of a screen region requested from the command line.\n\n\
+        image, pins of a screen region or the clipboard requested from the command line, and \
+        the floating pin engine: always-on-top pins that move, zoom, hide, show and close \
+        independently, each with its own context menu.\n\n\
         Noeul never captures on its own, never watches the clipboard, writes no picture to disk, \
         uses no network, installs no hook or service, and never captures a locked, secure or \
         other user's desktop.",
@@ -90,9 +97,9 @@ enum Command {
     /// Ask the running instance to capture a region and pin it, or to open (or cancel) the
     /// region selection overlay as F1 does
     Capture(CaptureArgs),
-    /// Pins of the running instance
-    #[command(subcommand)]
-    Pin(PinCommand),
+    /// Pins of the running instance: `noeul pin --clipboard` pins the clipboard image; the
+    /// subcommands list, hide, show, close and reopen pins
+    Pin(PinArgs),
     /// Noeul's keyboard shortcuts: list, change, disable, reset, check conflicts (never
     /// registers a hotkey or opens a window)
     #[command(subcommand)]
@@ -159,14 +166,79 @@ pub struct CaptureArgs {
     pub dry_run: bool,
 }
 
+#[derive(Debug, Args)]
+#[command(args_conflicts_with_subcommands = true)]
+pub struct PinArgs {
+    #[command(subcommand)]
+    command: Option<PinCommand>,
+    #[command(flatten)]
+    pub create: PinCreateArgs,
+}
+
+#[derive(Debug, Args)]
+pub struct PinCreateArgs {
+    /// Read the clipboard once and pin its image, as F3 does (without taking focus; inside the
+    /// work area of the monitor, zoomed out when larger)
+    #[arg(long)]
+    pub clipboard: bool,
+    /// Where the picture's top-left corner goes: x,y in device pixels (default: the pointer)
+    #[arg(
+        long,
+        value_name = "X,Y",
+        allow_hyphen_values = true,
+        requires = "clipboard"
+    )]
+    pub at: Option<String>,
+    /// Start Noeul first when it is not running
+    #[arg(long, requires = "clipboard")]
+    pub start: bool,
+    /// Check the desktop; read nothing and pin nothing
+    #[arg(long, requires = "clipboard")]
+    pub dry_run: bool,
+}
+
 #[derive(Debug, Subcommand)]
 enum PinCommand {
-    /// The open pins (IDs and geometry, never pixels)
+    /// The open pins (IDs, geometry, zoom, visibility; never pixels)
     List,
+    /// Hide a pin (or --all) without closing it; `noeul pin show` brings it back
+    Hide(PinHideArgs),
+    /// Show hidden pins again; --on-screen also moves pins no monitor shows onto one
+    Show(PinShowArgs),
     /// Close a pin (or --all); only the last closed one can be reopened
     Close(PinCloseArgs),
     /// Reopen the last closed pin
     Reopen(DryRun),
+}
+
+#[derive(Debug, Args)]
+pub struct PinHideArgs {
+    /// The pin ID, e.g. pin-1
+    #[arg(required_unless_present = "all", conflicts_with = "all")]
+    pub id: Option<String>,
+    /// Every pin
+    #[arg(long)]
+    pub all: bool,
+    /// Show what would change; change nothing
+    #[arg(long)]
+    pub dry_run: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct PinShowArgs {
+    /// The pin ID, e.g. pin-1
+    #[arg(required_unless_present = "all", conflicts_with = "all")]
+    pub id: Option<String>,
+    /// Every pin
+    #[arg(long)]
+    pub all: bool,
+    /// Also move pins that no monitor shows (after a monitor was removed) into the nearest
+    /// monitor's work area ("Bring pins on screen")
+    #[arg(long)]
+    pub on_screen: bool,
+    /// Show what would change; change nothing
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 #[derive(Debug, Args)]
@@ -299,9 +371,14 @@ fn main() -> ExitCode {
         Command::Run(a) => instance::run(&ctx, a),
         Command::Quit(a) => instance::quit(&ctx, a),
         Command::Capture(a) => instance::capture(&ctx, a),
-        Command::Pin(PinCommand::List) => instance::pin_list(&ctx),
-        Command::Pin(PinCommand::Close(a)) => instance::pin_close(&ctx, a),
-        Command::Pin(PinCommand::Reopen(a)) => instance::pin_reopen(&ctx, a.dry_run),
+        Command::Pin(p) => match &p.command {
+            None => instance::pin_create(&ctx, &p.create),
+            Some(PinCommand::List) => instance::pin_list(&ctx),
+            Some(PinCommand::Hide(a)) => instance::pin_hide(&ctx, a),
+            Some(PinCommand::Show(a)) => instance::pin_show(&ctx, a),
+            Some(PinCommand::Close(a)) => instance::pin_close(&ctx, a),
+            Some(PinCommand::Reopen(a)) => instance::pin_reopen(&ctx, a.dry_run),
+        },
         Command::Hotkeys(c) => hotkeys_cmd::run(c, &ctx),
         Command::Config(ConfigCommand::Show) => instance::config_show(),
         Command::Capabilities => Ok(capabilities()),
@@ -319,9 +396,14 @@ fn command_name(c: &Command) -> &'static str {
         Command::Run(_) => "run",
         Command::Quit(_) => "quit",
         Command::Capture(_) => "capture",
-        Command::Pin(PinCommand::List) => "pin.list",
-        Command::Pin(PinCommand::Close(_)) => "pin.close",
-        Command::Pin(PinCommand::Reopen(_)) => "pin.reopen",
+        Command::Pin(p) => match p.command {
+            None => "pin",
+            Some(PinCommand::List) => "pin.list",
+            Some(PinCommand::Hide(_)) => "pin.hide",
+            Some(PinCommand::Show(_)) => "pin.show",
+            Some(PinCommand::Close(_)) => "pin.close",
+            Some(PinCommand::Reopen(_)) => "pin.reopen",
+        },
         Command::Hotkeys(c) => hotkeys_cmd::command_name(c),
         Command::Config(ConfigCommand::Show) => "config.show",
         Command::Capabilities => "capabilities",
@@ -491,9 +573,17 @@ mod tests {
                 } else {
                     format!("{prefix}.{}", sub.get_name())
                 };
+                // A command with subcommands is runnable on its own too when it has options of
+                // its own (`noeul pin --clipboard`).
+                let own = sub
+                    .get_arguments()
+                    .any(|a| a.get_long().is_some_and(|l| l != "help"));
                 if sub.get_subcommands().next().is_none() {
                     out.insert(name);
                 } else {
+                    if own {
+                        out.insert(name.clone());
+                    }
                     walk(sub, &name, out);
                 }
             }

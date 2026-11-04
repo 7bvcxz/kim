@@ -911,9 +911,7 @@ mod tests {
         assert!(add(&mut doc, n).unwrap().consent_needed.is_empty());
         // A dual role cannot also pass the original key through (schema, ADR 0031): the CLI's
         // review of the change refuses it.
-        let report = |d: &Document| {
-            crate::validate::check(&d.to_value(), &crate::validate::Context::default())
-        };
+        let report = |d: &Document| check(&d.to_value(), &Context::default());
         let before = report(&doc);
         let mut tried = doc.clone();
         let mut n = new_rule("F15", vec![step("LCtrl", Some("Escape"))]);
@@ -936,7 +934,7 @@ mod tests {
         );
         let l = crate::rules::from_store(&crate::store::interpret(
             doc.to_text().as_bytes(),
-            &crate::validate::Context::default(),
+            &Context::default(),
             crate::store::MIGRATIONS,
         ));
         let active: Vec<String> = l.bindings.iter().map(|b| b.trigger.to_string()).collect();

@@ -97,7 +97,7 @@ them, and the signature covers them like everything else.
     { "kind": "gui", "command": "noeul", "summary": "Starts Noeul in the notification area", "status": "planned" },
     { "kind": "cli", "command": "noeul status --json", "summary": "Reports whether Noeul runs", "status": "planned" }
   ],
-  "links": [ { "kind": "docs", "title": "Noeul design (Step 48)", "url": "https://github.com/hellomouv/kim/issues/53" } ],
+  "links": [ { "kind": "docs", "title": "Noeul philosophy (Step 48)", "url": "https://github.com/hellomouv/kim/blob/main/docs/NOEUL_PHILOSOPHY.md" } ],
   "shortcuts": {
     "manifest": "hotkeys.manifest.json", "backend": "register",
     "actions": [ { "action": "capture.region", "title": "Capture a region", "scope": "global", "keys": ["F1"] } ]
@@ -116,7 +116,7 @@ them, and the signature covers them like everything else.
 | `entry_points[]` | ≤ 32. `kind`: `gui`, `cli` or `mcp` (a `cli` entry point is headless by the [CLI contract](CLI_CONTRACT.md): it never opens a window). `command` and `summary`: 1–200 characters. `status`: `available` or `planned`. **A tool without releases may only declare `planned` entry points**: nothing can run what nobody can download. |
 | `links[]` | ≤ 16. `kind`: `docs`, `mcp`, `shortcuts`, `source`, …; `title` 1–80 characters; `url` `https://` only. Kim Manager shows them as text and starts no browser. |
 | `shortcuts` | A summary of the tool's hotkey manifest ([HOTKEY_CONTRACT §3.4](HOTKEY_CONTRACT.md)). `manifest` is the manifest's file name in the package (`hotkeys.manifest.json`); `backend` is `focus`, `register` or `hook` (§4.2); `actions[]` (≤ 64) lists the `global` and `app` actions with their default `keys` in canonical key syntax (§5, checked by Kim; an empty list for an unbound action), `scope` `global`, `app` or `context:<id>`, and `bindable: false` for keys the contract fixes. For the bundled catalog a test keeps the summary equal to the contract's manifest examples. |
-| `permissions[]` | ≤ 32, unique `id`s: what the tool does that matters for security. Known ids: `global-hotkeys` (registers system-wide shortcuts), `keyboard-hook` (installs a low-level keyboard hook), `screen-capture`, `clipboard`, `input-injection` (injects keyboard and mouse input), `launch-programs`, `window-control`, `autostart`, `network`. `detail` (1–200 characters) says when and how; `opt_in: true` marks a capability the tool uses only after the user turned it on. Unknown ids are allowed and shown with their `detail`. |
+| `permissions[]` | ≤ 32, unique `id`s: what the tool does that matters for security. Known ids: `global-hotkeys` (registers system-wide shortcuts), `keyboard-hook` (installs a low-level keyboard hook), `mouse-hook` (installs a low-level mouse hook; Step 68), `screen-capture`, `clipboard`, `input-injection` (injects keyboard and mouse input), `launch-programs`, `window-control`, `autostart`, `network`. `detail` (1–200 characters) says when and how; `opt_in: true` marks a capability the tool uses only after the user turned it on. Unknown ids are allowed and shown with their `detail`. |
 
 What a catalog **cannot** declare, because Kim decides it (and shows it next to the metadata):
 

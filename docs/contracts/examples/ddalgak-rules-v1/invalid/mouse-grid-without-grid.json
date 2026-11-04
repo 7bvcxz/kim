@@ -1,0 +1,44 @@
+{
+  "schema": "ddalgak.rules",
+  "schema_version": 1,
+  "hotkey_contract": 1,
+  "active_profile": "default",
+  "profiles": [
+    {
+      "id": "default",
+      "title": "Default",
+      "default_mode": "base",
+      "modes": [
+        {
+          "id": "base",
+          "title": "Base"
+        }
+      ],
+      "rules": [
+        {
+          "id": "cells",
+          "title": "Grid unit without a grid",
+          "enabled": true,
+          "trigger": {
+            "keys": "F13"
+          },
+          "steps": [
+            {
+              "type": "mouse_move",
+              "mode": "relative",
+              "dx": 1,
+              "dy": 0,
+              "unit": "grid"
+            }
+          ],
+          "consent": {
+            "input-injection": {
+              "granted_at": "2026-11-04T09:00:00Z",
+              "via": "gui"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

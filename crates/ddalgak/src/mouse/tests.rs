@@ -696,6 +696,29 @@ fn previews_fit_the_playground_contract_and_match_its_examples() {
         preview(&centre, &one, at, None).unwrap(),
         json!({"to":{"x":960,"y":540},"clamped":false})
     );
+    // 14-mouse-navigation--cell-up-repeats: the published example is what the code computes.
+    let example: Value = serde_json::from_str(include_str!(
+        "../../../../docs/contracts/examples/ddalgak-simulation-v1/14-mouse-navigation--cell-up-repeats.json"
+    ))
+    .unwrap();
+    let nav = fixture("14-mouse-navigation.json");
+    let cell_up = nav["profiles"][0]["rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == "cell-up")
+        .unwrap()["steps"][0]
+        .clone();
+    let cell_up = compile_step(&cell_up).unwrap();
+    let effect = &example["effects"][0];
+    assert_eq!(
+        preview(&cell_up, &one, Point::new(130, 400), None).unwrap(),
+        effect["preview"]
+    );
+    assert_eq!(
+        format!("{}.", summary(&cell_up, "Shift+I")),
+        effect["summary"].as_str().unwrap()
+    );
     let steps = [
         json!({"type":"mouse_move","mode":"relative","dx":-9999,"dy":5}),
         json!({"type":"mouse_move","mode":"relative","dx":1,"dy":0,"unit":"grid","grid":{"columns":16,"rows":9},"while_held":{"repeat_ms":120}}),

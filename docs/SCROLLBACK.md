@@ -8,8 +8,10 @@ Status: **current** (implemented in Step 13; Windows only) · Decision:
 
 This document says what the Host keeps of every pane's output, how a client that attaches later
 gets a coherent screen, how slow clients are handled, what the CLI can read and clear, and the
-privacy rules for terminal output. The code is `crates/subak/src/screen.rs` (the terminal model,
-portable), `crates/subak/src/redact.rs` (capture redaction) and `crates/subak/src/host.rs`
+privacy rules for terminal output. The code is `crates/subak-term/src/screen.rs` (the terminal
+model, portable; moved out of `subak` in Step 15 so client views run the same model —
+[TERMINAL_EMULATOR](TERMINAL_EMULATOR.md), ADR 0036), `crates/subak/src/redact.rs` (capture
+redaction) and `crates/subak/src/host.rs`
 (locking, snapshots, resync, the IPC methods); the wire format is in
 [IPC_PROTOCOL §1 and §4](contracts/IPC_PROTOCOL.md); the commands are in
 [SUBAK_CLI §3](SUBAK_CLI.md).
@@ -21,10 +23,10 @@ a VT parser and screen emulator that keeps what a terminal attached to the pane 
 
 | Part | What it holds | Bound |
 | --- | --- | --- |
-| Primary screen | `cols × rows` cells: character, colours (default, 256-colour index, truecolour), attributes (bold, dim, italic, underline, double underline, blink, inverse, hidden, strike, overline), wide-character halves, combining marks | 16 bytes per cell (120×30: ~58 KB) |
+| Primary screen | `cols × rows` cells: character, colours (default, 256-colour index, truecolour), attributes (bold, dim, italic, underline, double underline, blink, inverse, hidden, strike, overline), wide-character halves, combining marks, OSC 8 hyperlinks (since Step 15), soft wraps | 16 bytes per cell (120×30: ~58 KB), plus rare per-column marks and links |
 | Alternate screen | the same, while a full-screen program uses it (47/1047/1049) | freed when the program leaves it |
-| History (scrollback) | rows that scrolled off the top of the primary screen while the scroll region was the whole screen, as compact text with the SGR sequences they need | `history_limit` rows (default **2 000**, 0–100 000) **and 4 MiB** per pane, each row counting 32 bytes more |
-| State | cursor (and a pending wrap), scroll region, origin mode, autowrap, insert and newline modes, cursor keys and keypad modes, reverse video, cursor visibility and shape, every other DEC private mode as last set (mouse modes, bracketed paste, focus events…), DEC line drawing and the G0/G1 shift, tab stops, the cursor saved by DECSC/1049, the window title, and the bytes of an escape sequence or UTF-8 character still incomplete | small |
+| History (scrollback) | rows that scrolled off the top of the primary screen while the scroll region was the whole screen, as compact text with the SGR (and, since Step 15, OSC 8) sequences they need | `history_limit` rows (default **2 000**, 0–100 000) **and 4 MiB** per pane, each row counting 32 bytes more |
+| State | cursor (and a pending wrap), scroll region, origin mode, autowrap, insert and newline modes, cursor keys and keypad modes, reverse video, cursor visibility and shape, the mouse tracking and encoding modes (one of each at a time, since Step 15), every other DEC private mode as last set (bracketed paste, focus events…), the active hyperlink, DEC line drawing and the G0/G1 shift, tab stops, the cursor saved by DECSC/1049, the window title, and the bytes of an escape sequence or UTF-8 character still incomplete | small |
 
 **Eviction is deterministic:** when a new history row would exceed either limit, the oldest rows
 are dropped first, one by one, until both limits hold. Nothing else is ever dropped, and the
@@ -32,8 +34,9 @@ screens are never evicted. A limit of 0 keeps no history (rows are counted as ev
 
 **Not kept:** the raw byte stream (since Step 13 there is no raw replay ring), what scrolls off a
 partial scroll region or the alternate screen (as in xterm and tmux), clipboard requests
-(OSC 52), hyperlinks (OSC 8), device reports and queries (the attached terminal answers them,
-never the Host).
+(OSC 52), device reports and queries (the attached terminal answers them, never the Host; a
+client view answers them only when it owns the pane's size, [TERMINAL_EMULATOR §3.4](TERMINAL_EMULATOR.md)).
+Hyperlinks (OSC 8) are kept since Step 15; `capture --vt` includes them, plain `capture` does not.
 
 ## 2. Attach: snapshot, then live output
 
@@ -185,9 +188,10 @@ where echo was not disabled, keys printed by mistake). The rules:
 - **Character widths** come from the model's own table (Hangul, CJK, fullwidth forms, emoji,
   combining marks). A character conhost measures differently (some emoji, ambiguous-width
   symbols) shifts the rest of its row in the model until ConPTY next positions the cursor.
-- **ConPTY on Windows 10** passes neither the alternate screen switch nor mouse modes through;
-  what it repaints is what is replayed. Soft wraps arrive as hard line breaks there (build 26100
-  sends them as soft wraps).
+- **ConPTY on Windows 10** passes neither the alternate screen switch, mouse modes nor OSC 8
+  hyperlinks through (measured in Step 15); what it repaints is what is replayed. Soft wraps
+  arrive as hard line breaks there (build 26100 sends them as soft wraps, and since Step 15 the
+  snapshot reproduces them on the client).
 - **History rows** are rows, not logical lines, so a long line counts as several rows against
   `history_limit` (as in tmux).
 - **Viewers of another size** see the pane at the pane's size (§3); there is no per-client size.
@@ -203,7 +207,8 @@ where echo was not disabled, keys printed by mistake). The rules:
 ## 8. Evidence
 
 Automated, on real Windows 10 Pro 19045 with real `subak.exe` Hosts on private endpoints
-(`crates/subak/tests/scrollback_replay.rs`; the model's unit tests in `crates/subak/src/screen.rs`
+(`crates/subak/tests/scrollback_replay.rs`; the model's unit tests in `crates/subak-term/src/screen.rs`
+and, since Step 15, its conformance fixtures in `crates/subak-term/tests/conformance.rs`
 and the redaction rules in `crates/subak/src/redact.rs`; the e2e scenario
 `e2e/tests/step13_scrollback_replay.rs`). Every viewer is a raw IPC client feeding a client-side
 copy of the model, checking each frame's `seq`.

@@ -64,7 +64,7 @@ colors are rendered exactly; the palette only maps the 16 indexed colors.
 | Mono family | Cascadia Mono → Consolas → D2Coding (if installed) → **Malgun Gothic** → Segoe UI Emoji → Segoe UI Symbol |
 | Sizes | caption 11 · body 12 · emphasis 13 · title 15 · terminal 13 (user-adjustable) |
 | Weights | regular 400 · semibold 600 (titles, active tab) |
-| Line height | UI 1.35 · terminal 1.2 (cell height = ceil(size × 1.2) at the device scale) |
+| Line height | UI 1.35 · terminal 1.2 (cell height = ceil(size × 1.2) at the device scale, or the font's ascent + descent when larger: 17 px for Cascadia Mono at 100 %, [TERMINAL_EMULATOR §5.4](TERMINAL_EMULATOR.md)) |
 
 ### 2.4 Space, radius, size
 

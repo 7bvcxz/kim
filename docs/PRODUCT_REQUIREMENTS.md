@@ -157,6 +157,7 @@ specified in [HOTKEY_CONTRACT.md](HOTKEY_CONTRACT.md) ([ADR 0017](adr/0017-unive
 | SUBAK-FR-033 | Default keys: `Ctrl+T` new, `Ctrl+W` close (= delete, confirmed when busy), `Ctrl+Tab` / `Ctrl+Shift+Tab` next/previous tab, `Ctrl+B` prefix with the basic table `c n p 0-9 % " arrows x & z d , $` and `Ctrl+B Ctrl+B` for a literal `Ctrl+B`. | P0 | M2 | T, M |
 | SUBAK-FR-034 | Every GUI shortcut is rebindable, and a shadowed key (e.g. `Ctrl+W`) can be passed through to the program. | P1 | M2 | T, M |
 | SUBAK-FR-035 | Split panes and switch windows in the GUI. | P1 | M2 | M |
+| SUBAK-FR-036 | **Faithful terminal emulation.** The Host and every client view interpret pane output with one shared model: the xterm subset of escape sequences, cursor operations, the alternate screen, scroll regions, UTF-8 with East Asian wide characters, Korean, emoji and combining marks, 16/256/24-bit colour, OSC 8 hyperlinks, mouse reporting, bracketed paste, focus events and resize; checked by conformance fixtures and by real ConPTY output rendered against golden screens ([TERMINAL_EMULATOR](TERMINAL_EMULATOR.md)). | P0 | M2 | T, M |
 
 ### 4.4 Persistence, restore and Claude resume
 
@@ -198,6 +199,13 @@ specified in [HOTKEY_CONTRACT.md](HOTKEY_CONTRACT.md) ([ADR 0017](adr/0017-unive
 | SUBAK-SEC-010 | Client–Host IPC is local and restricted to the same user; no network listener by default. | P0 | M2 | T, I |
 | SUBAK-SEC-011 | Persisted state and scrollback are stored with user-only permissions; variables marked secret are not persisted. | P0 | M2 | T, I |
 | SUBAK-SEC-012 | Remote/agent input injection is limited to the same user through the local IPC; any remote control requires explicit enablement. | P0 | M2 | T, I |
+| SUBAK-SEC-013 | **Terminal output never makes a client act on its own.** Hyperlinks open only on an explicit user action that shows the target; clipboard writes from programs (OSC 52) are not honoured without opt-in and never replayed; device reports are answered by one client only, bounded; pasted text loses control characters so it cannot end a bracketed paste or inject escape sequences. | P0 | M2 | T, I |
+
+### 4.8 Non-functional
+
+| ID | Requirement | Pri | MS | Verify |
+| --- | --- | --- | --- | --- |
+| SUBAK-NFR-001 | **Terminal view cost.** A client view keeps up with ConPTY output while drawing, draws only rows that changed, adds no timer, thread or GPU context while idle (0 CPU over 60 s with no output), and its keyboard path adds well under one frame (16 ms) to the program's own echo; measured by the documented benchmark harness ([TERMINAL_EMULATOR §7](TERMINAL_EMULATOR.md)). | P1 | M2 | T, M |
 
 ## 5. Data privacy and safety policies
 

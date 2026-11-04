@@ -31,6 +31,15 @@ use subak_term::render::{RenderOptions, Renderer, Rgb, Theme};
 use subak_term::screen::{CellWidth, Color};
 use subak_term::{Key, Mods, MouseAction, MouseButton, MouseEvent, MouseOutcome, TermView};
 
+/// Writes an `EVIDENCE` line straight to stderr (the test harness does not capture it), so CI
+/// logs show what was measured on the runner's Windows build too.
+macro_rules! evidence {
+    ($($t:tt)*) => {{
+        let mut e = std::io::stderr().lock();
+        let _ = writeln!(e, $($t)*);
+    }};
+}
+
 const SNAPSHOT: u8 = 1;
 const INPUT: u8 = 2;
 
@@ -228,7 +237,7 @@ impl Client {
             std::fs::create_dir_all(&dir).unwrap();
             let path = dir.join(format!("{shot}.bmp"));
             std::fs::write(&path, self.renderer.frame().to_bmp()).unwrap();
-            eprintln!("EVIDENCE screenshot {}", path.display());
+            evidence!("EVIDENCE screenshot {}", path.display());
         }
     }
 
@@ -444,11 +453,12 @@ fn cmd_renders_korean_wide_glyphs_and_follows_a_resize() {
     let row = c.row_of("wide-marker");
     let col = c.col_of(row, "한글");
     assert!(c.ink(col, row) > 0 && c.ink(col + 1, row) > 0);
-    eprintln!(
+    evidence!(
         "EVIDENCE cmd: Korean echoed through ConPTY as wide cells at column {col}, rendered with \
          Malgun Gothic in both cells; view == Host model at 80x24 and after a resize to 60x20 \
          (frame {w}x{hpx}, cell {}x{})",
-        m.width, m.height
+        m.width,
+        m.height
     );
 }
 
@@ -526,7 +536,7 @@ fn powershell_prompt_colours_korean_and_progress() {
         "the progress area has its own background ({attrs:?})"
     );
     c.wait_for("progress-done", LONG);
-    eprintln!(
+    evidence!(
         "EVIDENCE powershell: Write-Host Green arrived as {fg:?} and was drawn in the theme green; \
          Korean output in two cells; Write-Progress drew its bar on row {prow} with background \
          {bg:?} ({attrs:?})"
@@ -597,7 +607,7 @@ fn full_screen_program_and_more_render() {
     assert!(c.ink(0, 23) > 0);
     c.type_text("q");
     let _ = std::fs::remove_dir_all(&dir);
-    eprintln!(
+    evidence!(
         "EVIDENCE tui+more: alternate screen with colours, box drawing, Korean and status bar \
          rendered at the program's positions; `more` prompt on the last row; view == Host model"
     );
@@ -613,7 +623,7 @@ fn claude_version_renders_when_installed() {
         .output()
         .is_ok_and(|o| o.status.success());
     if !found {
-        eprintln!("EVIDENCE claude: not installed on this machine; smoke test skipped");
+        evidence!("EVIDENCE claude: not installed on this machine; smoke test skipped");
         return;
     }
     let h = host("claude");
@@ -635,7 +645,7 @@ fn claude_version_renders_when_installed() {
     );
     assert_eq!(t, host_screen(ep, "cv"));
     c.render("claude-version");
-    eprintln!("EVIDENCE claude: `claude --version` rendered: {line}");
+    evidence!("EVIDENCE claude: `claude --version` rendered: {line}");
 }
 
 /// Keyboard latency through the real pipeline, measured in the client view: a key event in the
@@ -668,7 +678,7 @@ fn keyboard_latency_through_the_host_and_conpty() {
     c.send(&bytes);
     samples.sort_by(f64::total_cmp);
     let p = |q: f64| samples[((samples.len() - 1) as f64 * q).round() as usize];
-    eprintln!(
+    evidence!(
         "EVIDENCE latency: key in the view to echoed frame through Host + ConPTY + cmd, 40 keys: \
          p50 {:.1} ms, p95 {:.1} ms, max {:.1} ms",
         p(0.5),
@@ -731,9 +741,14 @@ fn conpty_passthrough_of_mouse_paste_focus_and_hyperlinks() {
     c.send(&paste);
     c.type_text("\r");
     c.wait_for("PROBE-GOT-", LONG);
-    eprintln!(
+    evidence!(
         "EVIDENCE passthrough: mouse tracking {:?} encoding {:?}, focus events {}, bracketed \
          paste {}, OSC 8 link {:?}; the view sent {:?} for a click",
-        m.mouse, m.mouse_encoding, m.focus_events, m.bracketed_paste, link, mouse
+        m.mouse,
+        m.mouse_encoding,
+        m.focus_events,
+        m.bracketed_paste,
+        link,
+        mouse
     );
 }

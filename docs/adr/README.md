@@ -37,6 +37,7 @@ the requirements it serves. ADRs are immutable once **Accepted**; a later ADR ma
 | [0030](0030-host-terminal-model-scrollback-and-replay.md) | The Host's terminal model, scrollback and replay | Accepted (Step 13) |
 | [0031](0031-ddalgak-remap-execution-and-mouse-hook.md) | Ddalgak remaps: decided in the hook, sent by the worker, a mouse hook only on demand | Accepted (Step 68; catalog disclosure of `mouse-hook` pending) |
 | [0032](0032-noeul-double-click-pin-and-outputs.md) | Noeul double-click to pin: press counting, the toolbar, separate outputs and gesture settings | Accepted (Step 51) |
+| [0036](0036-terminal-emulation-and-rendering-path.md) | Terminal emulation core and rendering path: one in-house model for Host and views, a CPU cell-grid renderer with GDI glyphs, inbox ConPTY kept | Accepted (Step 15) |
 
 "Accepted (validated in Step N)" means the decision is made, but the named Step must confirm it
 on real Windows; if validation fails, that Step writes a superseding ADR.

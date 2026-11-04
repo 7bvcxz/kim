@@ -607,6 +607,7 @@ impl Screen {
     }
 
     /// Sets the history bounds; lines beyond them are evicted at once.
+    #[cfg(test)]
     pub fn set_limits(&mut self, limits: Limits) {
         self.history.limits = limits;
         self.history.evict();

@@ -88,6 +88,9 @@ fn help_is_honest_about_the_prototype_status() {
         "stop",
         "kill",
         "rm",
+        "capture",
+        "history",
+        "clear-history",
         "host start",
         "host status",
         "host health",
@@ -153,6 +156,9 @@ fn capabilities_are_honest_and_follow_the_contract() {
             "stop",
             "kill",
             "rm",
+            "capture",
+            "history",
+            "clear-history",
             "host.start",
             "host.status",
             "host.health",
@@ -165,7 +171,7 @@ fn capabilities_are_honest_and_follow_the_contract() {
     for c in data["commands"].as_array().unwrap() {
         let destructive = matches!(
             c["name"].as_str().unwrap(),
-            "stop" | "kill" | "rm" | "host.stop"
+            "stop" | "kill" | "rm" | "clear-history" | "host.stop"
         );
         assert_eq!(c["effect"] == "destructive", destructive, "{c}");
         assert_eq!(c["requires_yes"] == true, destructive, "{c}");

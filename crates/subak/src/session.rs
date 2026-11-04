@@ -11,6 +11,7 @@
 
 use crate::proto::{ErrorCode, IpcError};
 use crate::pty::EnvNames;
+use crate::screen::HistoryInfo;
 use serde_json::{Value, json};
 use std::collections::HashSet;
 use unicode_normalization::UnicodeNormalization;
@@ -440,6 +441,8 @@ pub struct Pane {
     pub stream: u32,
     /// The root process while it runs.
     pub pid: Option<u32>,
+    /// History rows its terminal model keeps (Step 13, tmux `history-limit`).
+    pub history_limit: usize,
 }
 
 /// One internal window of a Terminal.
@@ -498,6 +501,8 @@ pub struct Live {
     pub clients: usize,
     /// Output bytes produced so far.
     pub output_bytes: u64,
+    /// Its history, while the Host keeps its screen (Step 13).
+    pub history: Option<HistoryInfo>,
 }
 
 /// Which level of the hierarchy a target names.
@@ -548,6 +553,8 @@ pub struct Spec {
     pub env: EnvNames,
     pub size: (u16, u16),
     pub remain_on_exit: bool,
+    /// History rows the pane keeps.
+    pub history_limit: usize,
 }
 
 impl Registry {
@@ -645,6 +652,7 @@ impl Registry {
                     size: spec.size,
                     stream: self.next_stream,
                     pid: None,
+                    history_limit: spec.history_limit,
                 }],
                 active_pane: 0,
             }],
@@ -842,6 +850,16 @@ pub fn env_json(e: &EnvNames) -> Value {
     json!({"set": e.set, "unset": e.unset})
 }
 
+/// A pane's history counters (Step 13, docs/SCROLLBACK.md): numbers only, never content.
+pub fn history_json(h: &HistoryInfo) -> Value {
+    json!({
+        "lines": h.lines, "bytes": h.bytes,
+        "limit_lines": h.limit_lines, "limit_bytes": h.limit_bytes,
+        "evicted_lines": h.evicted_lines, "cleared_lines": h.cleared_lines,
+        "total_lines": h.total_lines, "persisted": false,
+    })
+}
+
 /// The `Terminal` object of IPC v1 (docs/SESSION_MODEL.md §5): the stored shape of
 /// docs/contracts/STATE_SCHEMA.md plus volatile fields. `live` reports a pane's processes.
 pub fn terminal_json(t: &Terminal, live: &dyn Fn(&Pane) -> Live) -> Value {
@@ -875,6 +893,7 @@ pub fn terminal_json(t: &Terminal, live: &dyn Fn(&Pane) -> Live) -> Value {
                         "size": {"cols": p.size.0, "rows": p.size.1},
                         "clients": l.clients,
                         "output_bytes": l.output_bytes,
+                        "history": l.history.as_ref().map(history_json),
                     })
                 })
                 .collect();
@@ -962,6 +981,7 @@ mod tests {
             env: EnvNames::default(),
             size: (120, 30),
             remain_on_exit: false,
+            history_limit: crate::screen::DEFAULT_HISTORY_LINES,
         }
     }
 
@@ -1279,6 +1299,7 @@ mod tests {
             processes: 2,
             clients: 1,
             output_bytes: 10,
+            history: None,
         };
         let j = terminal_json(&r.terminals[i], &live);
         crate::proto::assert_ipc_def("terminal", &j);

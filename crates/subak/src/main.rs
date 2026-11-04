@@ -7,8 +7,10 @@
 //! with one window and one pane in its own pseudo console and job, and the tmux-familiar verbs
 //! `subak new|ls|info|status|attach|detach|rename|stop|kill|rm` manage them headlessly. The Host
 //! serves an identity-checked named pipe, starts on demand under a start lock, and exits after an
-//! idle grace period. There is no GUI, split, persistence or recovery yet. Nothing starts by
-//! itself, and no command opens a window.
+//! idle grace period. Since Step 13 (ADR 0030, docs/SCROLLBACK.md) the Host models each pane's
+//! terminal with a bounded scrollback, so an attach reproduces the screen, and
+//! `subak capture|history|clear-history` read and clear it. There is no GUI, split, persistence
+//! or recovery yet. Nothing starts by itself, and no command opens a window.
 
 // Portable modules: compiled and unit-tested on every target, but until the Linux Host (M4,
 // ADR 0011) only the Windows Host and clients use most of them.
@@ -20,10 +22,9 @@ mod output;
 mod proto;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod pty;
-// Wired into the Host in the next commit of Step 13.
-#[allow(dead_code)]
+#[cfg_attr(not(windows), allow(dead_code))]
 mod redact;
-#[allow(dead_code)]
+#[cfg_attr(not(windows), allow(dead_code))]
 mod screen;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod session;
@@ -58,7 +59,7 @@ USAGE:
     subak [--help | --version]
     subak new     [<name>] [--cwd <dir>] [--env NAME[=VALUE]]... [--unset-env NAME]...
                   [--size <cols>x<rows>] [--remain-on-exit] [--keep-on-failure] [--no-start]
-                  [--attach [--read-only]] [--dry-run] [--json]
+                  [--history-limit <lines>] [--attach [--read-only]] [--dry-run] [--json]
                   [-- <program> [args...] | --command-line <line>]
     subak ls      [--json]                                   (also: subak list)
     subak status  [--json]
@@ -69,6 +70,10 @@ USAGE:
     subak stop    <target> [--yes] [--dry-run] [--json]
     subak kill    <target> [--yes] [--dry-run] [--json]
     subak rm      <target> [--force] [--yes] [--dry-run] [--json]
+    subak capture [<target>] [--start <line>|-] [--end <line>|-] [--history] [--vt] [--join]
+                  [--no-redact] [--json]                     (also: subak capture-pane)
+    subak history [<target>] [--json]
+    subak clear-history [<target>] [--yes] [--dry-run] [--json]
     subak host start  [--shell <command> | --no-shell] [--idle-exit <secs>] [--dry-run] [--json]
     subak host status [--json]
     subak host health [--json]
@@ -118,6 +123,23 @@ TERMINALS (Windows only; docs/SUBAK_CLI.md, docs/SESSION_MODEL.md):
     kill and rm remove it. A Terminal whose program exits by itself is removed, unless it was
     created with --remain-on-exit (then `stopped`). Until Step 29 nothing is saved: Terminals
     end with their Host, and stopped ones vanish when the Host exits.
+
+SCROLLBACK (docs/SCROLLBACK.md):
+    The Host keeps each pane's screen and the rows that scrolled off its top (its history), in
+    its own memory only: up to --history-limit rows (default 2000, 0 keeps none) and 4 MiB per
+    pane, the oldest dropped first. Nothing is written to disk or logged. It is gone when the
+    Terminal is removed or the Host exits; a stopped Terminal keeps it for `capture`.
+    An attach repaints the screen (also a full-screen program on the alternate screen) and puts
+    the history into this terminal's scrollback, then streams live output.
+    capture  The screen as text, or a range: lines count from 0 on the screen and from -1 (the
+             newest history line) down; `-` is the oldest history line (--start) or the last
+             screen row (--end); --history = --start -. --vt keeps colours, --join joins
+             wrapped rows. Secret-looking values (tokens, passwords, keys) are shown as ***
+             unless --no-redact. Inside a pane, no target means that pane.
+    history  How many lines and bytes are kept, the limits, evictions, and the screen; never
+             the content.
+    clear-history  Delete the kept history (the screen stays); asks, or needs --yes. Copies a
+             terminal already shows in its own scrollback are not touched.
 
 ATTACH (docs/SUBAK_CLI.md §5):
     Ctrl+B d        Detach (Ctrl+B Ctrl+B sends one Ctrl+B to the program). Fixed in the CLI
@@ -171,6 +193,11 @@ OPTIONS:
     --command-line <l> A verbatim command line for a new Terminal (instead of -- <program>).
     --remain-on-exit   Keep a new Terminal as `stopped` when its program exits by itself.
     --keep-on-failure  Keep a Terminal whose program could not start, as `failed`.
+    --history-limit <n> new: history rows the Host keeps for the pane (0..100000, default 2000).
+    --start/--end <l>  capture: first/last line (a number, negative for history, or -).
+    --history          capture: from the oldest history line.
+    --vt / --join      capture: keep escape sequences / join wrapped rows.
+    --no-redact        capture: show secret-looking values instead of ***.
     --no-start         new: never start a Host; fail with `host_not_running` instead.
     --attach           new: attach to the new Terminal at once.
     --read-only        attach: watch without sending keys.
@@ -183,7 +210,8 @@ OPTIONS:
     --no-input         Never ask; fail with `confirmation_required` instead (also KIM_NO_INPUT).
     -q, --quiet / -v, --verbose   Less / more diagnostics on stderr.
 
-Pre-alpha: no GUI, windows/panes splits, persistence or recovery yet (docs/PRODUCT_REQUIREMENTS.md).
+Pre-alpha: no GUI, windows/panes splits, persistence or recovery yet (docs/PRODUCT_REQUIREMENTS.md);
+history is never persisted.
 No command opens a window, installs anything or uses the network; no Windows service exists.
 ";
 
@@ -235,8 +263,8 @@ fn main() -> ExitCode {
                 out,
                 "subak {} — pre-alpha (CLI contract v1, IPC protocol v1)\n\
                  Commands: new, ls, info, status, attach, detach, rename, stop, kill, rm \
-                 (named Terminals in the Host); host start|status|health|attach|stop|serve; \
-                 capabilities.\n\
+                 (named Terminals in the Host); capture, history, clear-history (scrollback); \
+                 host start|status|health|attach|stop|serve; capabilities.\n\
                  No GUI, splits, persistence or recovery yet.\n",
                 env!("CARGO_PKG_VERSION")
             );
@@ -313,6 +341,9 @@ fn run_host(cmd: Cmd, a: &Args) -> Result<Value, CliError> {
         Cmd::Attach => terminal::attach(a, &endpoint),
         Cmd::Detach => terminal::detach(a, &endpoint),
         Cmd::Stop | Cmd::Kill | Cmd::Rm => terminal::end(a, &endpoint, cmd),
+        Cmd::Capture => terminal::capture(a, &endpoint),
+        Cmd::History => terminal::history(a, &endpoint),
+        Cmd::ClearHistory => terminal::clear_history(a, &endpoint),
         Cmd::Help | Cmd::Version | Cmd::Capabilities => {
             Err(CliError::new(Code::Internal, "not a host command"))
         }
@@ -462,6 +493,18 @@ fn client_row(c: &Value) -> String {
             String::new()
         }
     )
+}
+
+/// Bytes as people read them.
+fn bytes_text(v: &Value) -> String {
+    let n = v.as_u64().unwrap_or(0);
+    if n >= 1 << 20 {
+        format!("{:.1} MiB", n as f64 / f64::from(1u32 << 20))
+    } else if n >= 1 << 10 {
+        format!("{:.1} KiB", n as f64 / 1024.0)
+    } else {
+        format!("{n} bytes")
+    }
 }
 
 /// The notice an attach prints when it ends (stderr).
@@ -821,6 +864,53 @@ fn human(cmd: Cmd, d: &Value, a: &Args) {
                 )
             }
         }
+        Cmd::Capture => {
+            for l in d["lines"].as_array().map_or(&[][..], Vec::as_slice) {
+                let _ = writeln!(out, "{}", text(l));
+            }
+            if !a.quiet && d["redacted"].as_u64().unwrap_or(0) > 0 {
+                eprintln!(
+                    "subak: {} secret-looking value(s) shown as *** (--no-redact shows them)",
+                    d["redacted"]
+                );
+            }
+            Ok(())
+        }
+        Cmd::History => {
+            let h = &d["history"];
+            writeln!(
+                out,
+                "Terminal `{}` ({}) — {}: {} line(s) of history ({}) kept in the Host's memory, \
+                 limit {} lines / {}; {} evicted, {} cleared, {} in total; never written to \
+                 disk\nscreen {}x{}{}, cursor at row {} column {}",
+                text(&d["name"]),
+                text(&d["terminal_id"]),
+                text(&d["state"]),
+                h["lines"],
+                bytes_text(&h["bytes"]),
+                h["limit_lines"],
+                bytes_text(&h["limit_bytes"]),
+                h["evicted_lines"],
+                h["cleared_lines"],
+                h["total_lines"],
+                d["screen"]["size"]["cols"],
+                d["screen"]["size"]["rows"],
+                if d["screen"]["alternate"] == true {
+                    " (a full-screen program is on the alternate screen)"
+                } else {
+                    ""
+                },
+                d["screen"]["cursor"]["y"],
+                d["screen"]["cursor"]["x"],
+            )
+        }
+        Cmd::ClearHistory => writeln!(
+            out,
+            "cleared {} line(s) ({}) of history of Terminal `{}`; its screen and processes are unchanged",
+            d["cleared_lines"],
+            bytes_text(&d["cleared_bytes"]),
+            text(&d["name"]),
+        ),
         Cmd::Help | Cmd::Version | Cmd::Capabilities => Ok(()),
     };
 }

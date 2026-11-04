@@ -362,6 +362,9 @@ pub struct Raw {
     /// them here, so the next call continues the same frame instead of reading the rest of it
     /// as a new header (CI saw "bad frame length" and "frame kind 92" from exactly that).
     pending: std::cell::RefCell<Vec<u8>>,
+    /// `(stream, seq, flags)` of the last data frame returned (Step 13 checks seq and the
+    /// snapshot flag).
+    pub last_data: std::cell::Cell<Option<(u32, u64, u8)>>,
 }
 
 impl Raw {
@@ -387,6 +390,7 @@ impl Raw {
                 return Ok(Self {
                     h,
                     pending: std::cell::RefCell::new(Vec::new()),
+                    last_data: std::cell::Cell::new(None),
                 });
             }
             // SAFETY: thread-local read.
@@ -539,7 +543,12 @@ impl Raw {
                 ipc_valid(&v);
                 Got::Control(v)
             }
-            2 => Got::Data(body[13..].to_vec()),
+            2 => {
+                let stream = u32::from_le_bytes(body[..4].try_into().unwrap());
+                let seq = u64::from_le_bytes(body[4..12].try_into().unwrap());
+                self.last_data.set(Some((stream, seq, body[12])));
+                Got::Data(body[13..].to_vec())
+            }
             k => panic!("the Host sent frame kind {k}"),
         })
     }

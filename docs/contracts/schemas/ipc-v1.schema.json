@@ -138,6 +138,7 @@
         {"$ref": "#/$defs/event_terminal_removed"},
         {"$ref": "#/$defs/event_pane_exited"},
         {"$ref": "#/$defs/event_pane_detached"},
+        {"$ref": "#/$defs/event_pane_resync"},
         {"$ref": "#/$defs/event_host_stopping"},
         {"$ref": "#/$defs/event_other"}
       ]
@@ -159,6 +160,7 @@
               "terminal.removed",
               "pane.exited",
               "pane.detached",
+              "pane.resync",
               "host.stopping"
             ]
           }
@@ -226,6 +228,16 @@
         "data": {"$ref": "#/$defs/data_pane_detached"}
       }
     },
+    "event_pane_resync": {
+      "type": "object",
+      "required": ["type", "seq", "event", "data"],
+      "properties": {
+        "type": {"const": "event"},
+        "seq": {"$ref": "#/$defs/u64"},
+        "event": {"const": "pane.resync"},
+        "data": {"$ref": "#/$defs/data_pane_resync"}
+      }
+    },
     "event_host_stopping": {
       "type": "object",
       "required": ["type", "seq", "event", "data"],
@@ -278,6 +290,18 @@
         "terminal_id": {"$ref": "#/$defs/terminal_id"},
         "pid": {"type": "integer", "minimum": 1},
         "exit_code": {"type": ["integer", "null"], "minimum": 0}
+      }
+    },
+    "data_pane_resync": {
+      "description": "Step 13: this connection fell behind on the pane's output, which the Host dropped instead of waiting; a snapshot data frame at `seq` follows, then live output from `seq`. The client discards what it buffered.",
+      "type": "object",
+      "required": ["pane_id", "terminal_id", "stream_id", "seq"],
+      "additionalProperties": false,
+      "properties": {
+        "pane_id": {"$ref": "#/$defs/pane_id"},
+        "terminal_id": {"$ref": "#/$defs/terminal_id"},
+        "stream_id": {"type": "integer", "minimum": 1},
+        "seq": {"$ref": "#/$defs/u64"}
       }
     },
     "data_pane_detached": {
@@ -383,7 +407,27 @@
         "processes": {"type": "integer", "minimum": 0},
         "size": {"$ref": "#/$defs/size"},
         "clients": {"type": "integer", "minimum": 0},
-        "output_bytes": {"type": "integer", "minimum": 0}
+        "output_bytes": {"type": "integer", "minimum": 0},
+        "history": {
+          "description": "Step 13: the pane's history counters while the Host keeps its screen (also for a stopped Terminal); null before it started. Hosts before Step 13 omit it.",
+          "anyOf": [{"type": "null"}, {"$ref": "#/$defs/history"}]
+        }
+      }
+    },
+    "history": {
+      "description": "Step 13 (docs/SCROLLBACK.md): numbers about a pane's history, never its content. Lines are rows that scrolled off the top of the primary screen; the oldest are evicted first once either limit is reached.",
+      "type": "object",
+      "required": ["lines", "bytes", "limit_lines", "limit_bytes", "evicted_lines", "cleared_lines", "total_lines", "persisted"],
+      "additionalProperties": false,
+      "properties": {
+        "lines": {"$ref": "#/$defs/u64"},
+        "bytes": {"$ref": "#/$defs/u64"},
+        "limit_lines": {"type": "integer", "minimum": 0, "maximum": 100000},
+        "limit_bytes": {"$ref": "#/$defs/u64"},
+        "evicted_lines": {"$ref": "#/$defs/u64"},
+        "cleared_lines": {"$ref": "#/$defs/u64"},
+        "total_lines": {"$ref": "#/$defs/u64"},
+        "persisted": {"const": false}
       }
     },
     "window": {
@@ -579,7 +623,8 @@
                 "env": {"$ref": "#/$defs/env_names"},
                 "size": {"$ref": "#/$defs/size"},
                 "remain_on_exit": {"type": "boolean"},
-                "keep_on_failure": {"type": "boolean"}
+                "keep_on_failure": {"type": "boolean"},
+                "history_limit": {"description": "Step 13.", "type": "integer", "minimum": 0, "maximum": 100000}
               }
             }
           }
@@ -674,7 +719,111 @@
             "size": {"$ref": "#/$defs/size"}
           }
         },
-        "replay_bytes": {"$ref": "#/$defs/u64"}
+        "replay_bytes": {"description": "Bytes of the snapshot (Step 13; raw replay before).", "$ref": "#/$defs/u64"},
+        "snapshot": {
+          "description": "Step 13: the snapshot data frames that follow (flag snapshot, all at `seq`): the pane's history (up to history_lines), screens, modes and cursor as VT bytes for a terminal of `size`.",
+          "type": "object",
+          "required": ["bytes", "frames", "history_lines", "alternate", "size"],
+          "additionalProperties": false,
+          "properties": {
+            "bytes": {"$ref": "#/$defs/u64"},
+            "frames": {"$ref": "#/$defs/u64"},
+            "history_lines": {"$ref": "#/$defs/u64"},
+            "alternate": {"type": "boolean"},
+            "size": {"$ref": "#/$defs/size"}
+          }
+        }
+      }
+    },
+    "screen_info": {
+      "description": "Step 13: the pane's screen as the Host's terminal model has it.",
+      "type": "object",
+      "required": ["size", "alternate", "cursor"],
+      "additionalProperties": false,
+      "properties": {
+        "size": {"$ref": "#/$defs/size"},
+        "alternate": {"type": "boolean"},
+        "cursor": {
+          "type": "object",
+          "required": ["x", "y", "visible"],
+          "additionalProperties": false,
+          "properties": {
+            "x": {"type": "integer", "minimum": 0},
+            "y": {"type": "integer", "minimum": 0},
+            "visible": {"type": "boolean"}
+          }
+        }
+      }
+    },
+    "result_pane_capture": {
+      "description": "Step 13: pane.capture. Line numbers: screen rows from 0, history lines from -1 (newest) down; start and end are those captured (null when the range was empty). Lines are redacted unless redact is false; redacted counts hidden values. truncated: older lines were left out to fit one message; capture again with an earlier end.",
+      "type": "object",
+      "required": ["terminal_id", "pane_id", "format", "join", "redact", "redacted", "start", "end", "truncated", "lines", "screen", "history"],
+      "additionalProperties": false,
+      "properties": {
+        "terminal_id": {"$ref": "#/$defs/terminal_id"},
+        "pane_id": {"$ref": "#/$defs/pane_id"},
+        "format": {"enum": ["text", "vt"]},
+        "join": {"type": "boolean"},
+        "redact": {"type": "boolean"},
+        "redacted": {"$ref": "#/$defs/u64"},
+        "start": {"type": ["integer", "null"]},
+        "end": {"type": ["integer", "null"]},
+        "truncated": {"type": "boolean"},
+        "lines": {"type": "array", "items": {"type": "string"}},
+        "screen": {"$ref": "#/$defs/screen_info"},
+        "history": {"$ref": "#/$defs/history"}
+      }
+    },
+    "result_pane_clear_history": {
+      "description": "Step 13: pane.clear_history. Only the Host's copy is cleared; the screen stays.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["terminal_id", "pane_id", "cleared_lines", "cleared_bytes", "history"],
+          "additionalProperties": false,
+          "properties": {
+            "terminal_id": {"$ref": "#/$defs/terminal_id"},
+            "pane_id": {"$ref": "#/$defs/pane_id"},
+            "cleared_lines": {"$ref": "#/$defs/u64"},
+            "cleared_bytes": {"$ref": "#/$defs/u64"},
+            "history": {"$ref": "#/$defs/history"}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["dry_run", "would_clear"],
+          "additionalProperties": false,
+          "properties": {
+            "dry_run": {"const": true},
+            "would_clear": {
+              "type": "object",
+              "required": ["terminal_id", "pane_id", "lines", "bytes"],
+              "additionalProperties": false,
+              "properties": {
+                "terminal_id": {"$ref": "#/$defs/terminal_id"},
+                "pane_id": {"$ref": "#/$defs/pane_id"},
+                "lines": {"$ref": "#/$defs/u64"},
+                "bytes": {"$ref": "#/$defs/u64"}
+              }
+            }
+          }
+        }
+      ]
+    },
+    "scrollback": {
+      "description": "Step 13: host.status scrollback: what the Host keeps of terminal output (in its memory only; never on disk).",
+      "type": "object",
+      "required": ["panes", "lines", "bytes", "memory_bytes", "default_limit_lines", "limit_bytes_per_pane", "persisted"],
+      "additionalProperties": false,
+      "properties": {
+        "panes": {"$ref": "#/$defs/u64"},
+        "lines": {"$ref": "#/$defs/u64"},
+        "bytes": {"$ref": "#/$defs/u64"},
+        "memory_bytes": {"$ref": "#/$defs/u64"},
+        "default_limit_lines": {"$ref": "#/$defs/u64"},
+        "limit_bytes_per_pane": {"$ref": "#/$defs/u64"},
+        "persisted": {"const": false}
       }
     },
     "client_attachment": {

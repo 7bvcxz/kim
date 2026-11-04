@@ -166,6 +166,7 @@ fn plan_without_host(a: &Args, params: &Value) -> Result<Value, CliError> {
                 || json!({"cols": crate::host::DEFAULT_SIZE.0, "rows": crate::host::DEFAULT_SIZE.1}),
                 |s| Value::Object(s.clone())),
             "remain_on_exit": a.remain_on_exit, "keep_on_failure": a.keep_on_failure,
+            "history_limit": a.history_limit.unwrap_or(crate::screen::DEFAULT_HISTORY_LINES as u64),
         }}),
     )
 }
@@ -186,6 +187,7 @@ pub fn new(a: &Args, endpoint: &str) -> Result<Value, CliError> {
         "size": size_json(a),
         "remain_on_exit": a.remain_on_exit,
         "keep_on_failure": a.keep_on_failure,
+        "history_limit": a.history_limit,
     });
     if a.dry_run {
         let mut p = params;
@@ -311,6 +313,131 @@ pub fn detach(a: &Args, endpoint: &str) -> Result<Value, CliError> {
         &json!({"target": target, "client_id": a.client, "dry_run": a.dry_run}),
     )?;
     r["host"] = json!({"pid": s.host_pid});
+    Ok(r)
+}
+
+/// The pane `capture`, `history` and `clear-history` mean: the named target; inside a pane
+/// without one, that pane (`SUBAK_PANE_ID`, ADR 0010 §1, like tmux's current pane); else none
+/// (the Host's only Terminal).
+fn screen_target(a: &Args) -> Value {
+    match a.positional.first() {
+        Some(t) => json!(t),
+        None => match std::env::var("SUBAK_PANE_ID") {
+            Ok(id) if session::is_id(&id, 'p') => json!(id),
+            _ => Value::Null,
+        },
+    }
+}
+
+fn line_json(l: Option<crate::cli::Line>) -> Value {
+    match l {
+        None => Value::Null,
+        Some(crate::cli::Line::Edge) => json!("-"),
+        Some(crate::cli::Line::Number(n)) => json!(n),
+    }
+}
+
+/// Most `pane.capture` requests one `capture` makes to collect a long history.
+const CAPTURE_PAGES: usize = 64;
+
+/// `capture [<target>]` (tmux `capture-pane -p`): the screen, or a range of history and screen
+/// lines, as text (or with `--vt` escape sequences); secret-looking values are hidden unless
+/// `--no-redact`. A long range is collected in several requests (each answer is one message).
+pub fn capture(a: &Args, endpoint: &str) -> Result<Value, CliError> {
+    let mut s = require(endpoint)?;
+    let start = if a.history {
+        json!("-")
+    } else {
+        line_json(a.start)
+    };
+    let mut params = json!({
+        "target": screen_target(a),
+        "start": start,
+        "end": line_json(a.end),
+        "format": if a.vt { "vt" } else { "text" },
+        "join": a.join,
+        "redact": !a.no_redact,
+    });
+    let mut r = s.request("pane.capture", &params)?;
+    // Later pages name the pane by id, so they read the same pane.
+    params["target"] = r["pane_id"].clone();
+    let mut lines: Vec<Value> = r["lines"].as_array().cloned().unwrap_or_default();
+    let mut redacted = r["redacted"].as_u64().unwrap_or(0);
+    let mut requests = 1;
+    let end = r["end"].clone();
+    while r["truncated"] == true && requests < CAPTURE_PAGES {
+        let Some(first) = r["start"].as_i64() else {
+            break;
+        };
+        params["end"] = json!(first - 1);
+        r = s.request("pane.capture", &params)?;
+        requests += 1;
+        redacted += r["redacted"].as_u64().unwrap_or(0);
+        let mut page = r["lines"].as_array().cloned().unwrap_or_default();
+        page.extend(lines);
+        lines = page;
+    }
+    let name =
+        s.request("terminal.info", &json!({"target": r["terminal_id"]}))?["terminal"]["name"]
+            .clone();
+    r["lines"] = Value::Array(lines);
+    r["end"] = end;
+    r["redacted"] = json!(redacted);
+    r["name"] = name;
+    r["requests"] = json!(requests);
+    Ok(r)
+}
+
+/// `history [<target>]`: what the Host keeps of a Terminal's output — counters, limits and the
+/// screen, never content (docs/SCROLLBACK.md).
+pub fn history(a: &Args, endpoint: &str) -> Result<Value, CliError> {
+    let mut s = require(endpoint)?;
+    // An empty range (0 to -1) returns the counters and the screen without any line.
+    let r = s.request(
+        "pane.capture",
+        &json!({"target": screen_target(a), "start": 0, "end": -1}),
+    )?;
+    let t = s.request("terminal.info", &json!({"target": r["terminal_id"]}))?["terminal"].clone();
+    Ok(json!({
+        "terminal_id": r["terminal_id"], "name": t["name"], "state": t["state"],
+        "pane_id": r["pane_id"], "history": r["history"], "screen": r["screen"],
+    }))
+}
+
+/// `clear-history [<target>]` (tmux `clear-history`): deletes the history the Host keeps for a
+/// pane; the screen stays. It deletes data, so it asks first (or needs `--yes`).
+pub fn clear_history(a: &Args, endpoint: &str) -> Result<Value, CliError> {
+    let mut s = require(endpoint)?;
+    let plan = s.request(
+        "pane.clear_history",
+        &json!({"target": screen_target(a), "dry_run": true}),
+    )?;
+    let mut would = plan["would_clear"].clone();
+    let name =
+        s.request("terminal.info", &json!({"target": would["terminal_id"]}))?["terminal"]["name"]
+            .clone();
+    would["name"] = name.clone();
+    if a.dry_run {
+        return Ok(json!({"dry_run": true, "would_clear": would}));
+    }
+    let shown = name.as_str().unwrap_or("?");
+    let lines = would["lines"].as_u64().unwrap_or(0);
+    if lines > 0 {
+        confirm(
+            a,
+            &format!(
+                "Delete the {lines} line(s) of history the Host keeps for Terminal `{shown}`?"
+            ),
+            &format!("clearing deletes {lines} line(s) of history of Terminal `{shown}`"),
+            "re-run with --yes, or with --dry-run to see what would be cleared",
+        )?;
+    }
+    // The pane the user confirmed, by id.
+    let mut r = s.request(
+        "pane.clear_history",
+        &json!({"target": would["pane_id"], "dry_run": false}),
+    )?;
+    r["name"] = name;
     Ok(r)
 }
 

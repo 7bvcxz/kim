@@ -848,6 +848,112 @@ fn concurrent_commands_share_one_host_and_never_duplicate_a_name() {
     assert_eq!(code, 3);
 }
 
+/// IPC `client.detach` (ADR 0027 §3) with raw clients: every message the Host sends is valid
+/// ipc-v1 (the raw client validates it), results match `result_client_detach`, the detached
+/// connection is told with `pane.detached`, and nothing but attachments changes.
+#[test]
+fn client_detach_over_ipc_ends_only_attachments_and_tells_the_detached_client() {
+    let e = Ep::new("ipcdetach");
+    let ep = e.ep.as_str();
+    let (code, created) = sub(ep, &["new", "work", "--", "cmd.exe", "/d"]);
+    assert_eq!(code, 0, "{created}");
+    let shell = Proc::open(pane_pid(&created));
+    // A GUI-like client that subscribed to `panes`, and a read-only viewer that did not.
+    let gui = Raw::handshake(ep, "gui");
+    assert_eq!(
+        gui.request(1, "events.subscribe", &json!({"topics": ["panes"]}))["ok"],
+        true
+    );
+    let r = gui.request(
+        2,
+        "pane.attach",
+        &json!({"target": "work", "interactive": true}),
+    );
+    ipc_def("result_pane_attach", &r["result"]);
+    let stream = r["result"]["stream_id"].clone();
+    let viewer = Raw::handshake(ep, "cli");
+    let r = viewer.request(
+        1,
+        "pane.attach",
+        &json!({"target": "work", "interactive": false}),
+    );
+    assert_eq!(r["ok"], true, "{r}");
+
+    let ctl = Raw::handshake(ep, "cli");
+    let r = ctl.request(
+        1,
+        "client.detach",
+        &json!({"target": "work", "dry_run": true}),
+    );
+    ipc_def("result_client_detach", &r["result"]);
+    assert_eq!(
+        r["result"]["would_detach"].as_array().unwrap().len(),
+        2,
+        "{r}"
+    );
+    let st = ctl.request(2, "host.status", &json!({}));
+    let clients = st["result"]["clients"]["list"].as_array().unwrap().clone();
+    let ids: Vec<u64> = clients.iter().map(|c| c["id"].as_u64().unwrap()).collect();
+    assert!(
+        ids.windows(2).all(|w| w[0] < w[1]),
+        "ordered by id: {ids:?}"
+    );
+    let viewer_id = clients
+        .iter()
+        .find(|c| c["attached"] == true && c["interactive"] == false)
+        .unwrap()["id"]
+        .clone();
+    // One client by id: only the viewer goes.
+    let r = ctl.request(3, "client.detach", &json!({"client_id": viewer_id}));
+    ipc_def("result_client_detach", &r["result"]);
+    let gone = r["result"]["detached"].as_array().unwrap();
+    assert_eq!(gone.len(), 1);
+    assert_eq!(gone[0]["client"]["id"], viewer_id);
+    assert!(r["result"]["terminal"].is_null());
+    // Every client of the Terminal: the GUI client goes and is told so, before its output stops.
+    let r = ctl.request(4, "client.detach", &json!({"target": "work"}));
+    ipc_def("result_client_detach", &r["result"]);
+    assert_eq!(r["result"]["detached"].as_array().unwrap().len(), 1);
+    assert_eq!(r["result"]["terminal"]["name"], "work");
+    let end = Instant::now() + LONG;
+    let event = loop {
+        match gui.next_control(end.saturating_duration_since(Instant::now())) {
+            Got::Control(m) if m["event"] == "pane.detached" => break m,
+            Got::Control(_) => {}
+            other => panic!("no pane.detached: {other:?}"),
+        }
+    };
+    assert_eq!(event["data"]["stream_id"], stream);
+    assert_eq!(event["data"]["by"]["kind"], "cli");
+    // Nothing else changed: both connections are still served, the shell runs.
+    assert_eq!(gui.request(9, "host.health", &json!({}))["ok"], true);
+    assert_eq!(viewer.request(9, "host.health", &json!({}))["ok"], true);
+    let st = ctl.request(5, "host.status", &json!({}));
+    assert_eq!(st["result"]["clients"]["attached"], 0);
+    assert!(shell.alive());
+    let info = ctl.request(6, "terminal.info", &json!({"target": "work"}));
+    assert_eq!(info["result"]["terminal"]["state"], "running");
+    // Refusals: nothing named, bad ids, unknown targets, and MCP without the Step 37 grant.
+    for (id, params, code) in [
+        (7, json!({}), "invalid_params"),
+        (8, json!({"client_id": 0}), "invalid_params"),
+        (10, json!({"client_id": "1"}), "invalid_params"),
+        (11, json!({"client_id": 999_999}), "target_not_found"),
+        (12, json!({"target": "nope"}), "target_not_found"),
+        (
+            13,
+            json!({"target": "work", "dry_run": "yes"}),
+            "invalid_params",
+        ),
+    ] {
+        let r = ctl.request(id, "client.detach", &params);
+        assert_eq!(error_code(&r), code, "{params}");
+    }
+    let mcp = Raw::handshake(ep, "mcp");
+    let r = mcp.request(1, "client.detach", &json!({"target": "work"}));
+    assert_eq!(error_code(&r), "unauthorized");
+}
+
 // ---------------------------------------------------------------------------------------------
 // The verbatim command line (ADR 0027 §4) against cmd.exe's real parsing.
 

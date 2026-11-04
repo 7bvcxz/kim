@@ -1,9 +1,9 @@
 # Subak session model
 
-Status: **current** (implemented in Step 10, pane programs and environment in Step 11; Windows only) · Decisions:
+Status: **current** (implemented in Step 10, pane programs and environment in Step 11, CLI verbs and detaching other clients in Step 12; Windows only) · Decisions:
 [ADR 0020](adr/0020-terminal-session-lifecycle.md), [ADR 0007](adr/0007-object-identity-and-naming.md),
 [ADR 0003](adr/0003-subak-host-process-model.md), [ADR 0004](adr/0004-pty-and-process-ownership.md),
-[ADR 0009](adr/0009-gui-clients-and-keyboard-dispatch.md) · Requirements: `SUBAK-FR-002`,
+[ADR 0009](adr/0009-gui-clients-and-keyboard-dispatch.md), [ADR 0027](adr/0027-subak-cli-structure-and-headless-control.md) · Requirements: `SUBAK-FR-002`,
 `SUBAK-FR-003`, `SUBAK-FR-010`…`SUBAK-FR-016`, `SUBAK-SEC-001`
 
 This document states what a Terminal is inside the Host, which states it goes through, how it is
@@ -123,14 +123,15 @@ command or IPC method: "close" in a UI is always one of the rows below.
 
 | Action | CLI / IPC | Processes | Stored Terminal | Consent |
 | --- | --- | --- | --- | --- |
-| Detach a client | `Ctrl+B d`, end of piped input / `pane.detach` | untouched | untouched | none |
-| A client disconnects or crashes; a console window running `subak terminal attach` is closed | — | untouched | untouched | none |
+| Detach a client | `Ctrl+B d`, Ctrl+Break, end of piped input / `pane.detach` | untouched | untouched | none |
+| Detach other clients (from another terminal or a script; Step 12) | `subak detach <terminal>`, `subak detach --client <id>` / `client.detach` | untouched | untouched | none (it ends nothing) |
+| A client disconnects or crashes; a console window running `subak attach` is closed | — | untouched | untouched | none |
 | Close a GUI window, quit the GUI, a GUI crash (Steps 16–18) | detach | untouched | untouched | none |
 | Close a GUI **tab** with its × or "Hide tab" (Steps 16–18) | detach of that tab's panes | untouched | untouched; still listed in the session manager | none |
-| **Stop**: end the processes, keep the Terminal | `subak terminal stop` / `terminal.stop` | graceful, then a guarded force (below) | kept as `stopped` | CLI: ask or `--yes` while it runs. Host: `force` when busy |
-| **Kill**: end the Terminal | `subak terminal kill` / `terminal.kill`; GUI `Ctrl+W` "Close Terminal" | ended at once (`TerminateJobObject`) | removed | CLI: ask or `--yes`, always. Host: `force` when busy |
-| **Remove** a Terminal that runs nothing | `subak terminal rm` / `terminal.remove` | none (a running one is refused: `invalid_state`) | removed | CLI: ask or `--yes` (it deletes the record) |
-| Remove a running Terminal | `subak terminal rm --force` / `terminal.remove` with `force` | as kill | removed | as kill |
+| **Stop**: end the processes, keep the Terminal | `subak stop` / `terminal.stop` | graceful, then a guarded force (below) | kept as `stopped` | CLI: ask or `--yes` while it runs. Host: `force` when busy |
+| **Kill**: end the Terminal | `subak kill` / `terminal.kill`; GUI `Ctrl+W` "Close Terminal" | ended at once (`TerminateJobObject`) | removed | CLI: ask or `--yes`, always. Host: `force` when busy |
+| **Remove** a Terminal that runs nothing | `subak rm` / `terminal.remove` | none (a running one is refused: `invalid_state`) | removed | CLI: ask or `--yes` (it deletes the record) |
+| Remove a running Terminal | `subak rm --force` / `terminal.remove` with `force` | as kill | removed | as kill |
 | Stop the Host | `subak host stop` / `host.stop` | every live Terminal ends as `host_stopped` | gone with the Host (until Step 29) | refused with live Terminals unless `--kill-terminals` (`terminals_running`), then ask or `--yes`; IPC `kill_terminals` |
 | The program exits by itself | — | already ended; leftovers in its job are ended | removed, or `stopped` with `remain_on_exit` | — |
 
@@ -163,8 +164,9 @@ command or IPC method: "close" in a UI is always one of the rows below.
 ## 5. Discovery and IPC operations
 
 `terminal.list {detail: "summary" | "full"}`, `terminal.info {target}`, `terminal.create {name?,
-command?, cwd?, env?, size?, remain_on_exit?, keep_on_failure?, dry_run?}` (`env` since Step 11;
-what runs in a pane and with which environment is in [PTY_PROCESSES.md](PTY_PROCESSES.md)),
+command? | command_line?, cwd?, env?, size?, remain_on_exit?, keep_on_failure?, dry_run?}` (`env`
+since Step 11, `command_line` since Step 12; what runs in a pane and with which environment is in
+[PTY_PROCESSES.md](PTY_PROCESSES.md)),
 `terminal.rename {target,
 name, dry_run?}`, `terminal.stop | terminal.kill {target, force, dry_run}` and
 `terminal.remove {target, force?, dry_run}` are part of IPC v1 (an additive change; their shapes and
@@ -190,9 +192,14 @@ call all of them; `mcp` clients may only list and inspect until Step 37; `hook` 
   once and its Terminal removed (`reason: host_stopping`); nothing outlives the Host, because every
   pane job is kill-on-close.
 
-The CLI (`subak terminal new|list|info|rename|attach|stop|kill|rm`, CLI_CONTRACT §6) maps onto
-these methods. Only `terminal new` starts a Host on demand (with no Terminal of its own,
-ADR 0019 §5); `terminal list` without a Host lists nothing and starts nothing.
+`client.detach {target?, client_id?, dry_run?}` (Step 12) ends other clients' attachments — every
+client of a Terminal, window or pane, or one client by the id `host.status` lists — and nothing
+else; each detached client learns it from the `pane.detached` event before its output stops.
+
+The CLI (`subak new|ls|info|status|attach|detach|rename|stop|kill|rm`, [SUBAK_CLI.md](SUBAK_CLI.md),
+ADR 0027; `subak terminal <verb>` is the deprecated Step 10 spelling) maps onto these methods. Only
+`new` starts a Host on demand (with no Terminal of its own, ADR 0019 §5; `--no-start` forbids it);
+`ls` and `status` without a Host report none and start nothing.
 
 ## 6. Not implemented yet (and where it goes)
 
@@ -206,7 +213,8 @@ ADR 0019 §5); `terminal list` without a Host lists nothing and starts nothing.
   silently ignored. Environment overrides (`env`) exist since Step 11
   ([PTY_PROCESSES §3](PTY_PROCESSES.md)).
 - **More windows and panes** (Steps 21–22), the GUI's tabs and session manager (Steps 16–18), and
-  `pane.send_keys` / `pane.capture` (Steps 12–13).
+  `pane.capture` / `pane.send_keys` (Steps 13 and 24; Step 12 writes input only through an
+  attach).
 
 ## 7. Evidence
 
@@ -223,3 +231,5 @@ Automated, on real Windows 10 Pro 19045 with real `subak.exe` Hosts on private e
 | `stop_kill_and_rm_have_distinct_explicit_guarded_meanings` | the busy guard, CLI consent, `rm` refusing a running Terminal, stop keeps / kill removes, the stop–kill race |
 | `detach_disconnect_and_client_crash_never_stop_a_terminal` | GUI-style attach and disconnect, explicit detach, `Ctrl+B d`, a killed client, reconnect with replay: zero lifecycle events |
 | `exits_restarts_and_reconnects_leave_no_stale_state` | exit removes, `remain_on_exit` keeps, reconnects see one state, `host stop` needs `--kill-terminals`, a new Host starts clean |
+| `subak_cli.rs::a_user_creates_attaches_detaches_lists_renames_and_kills_with_the_cli_only` (Step 12) | `subak detach <terminal>` and `--client <id>` end attachments only: the shell keeps running, the Terminal stays `running` with 0 clients, the other client stays attached |
+| `subak_cli.rs::client_exit_during_attach_leaves_host_work_running` (Step 12) | a killed CLI client and one whose reader vanished leave `ping` running in the Host |

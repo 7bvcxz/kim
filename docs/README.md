@@ -27,8 +27,9 @@ did.
 | Document | Status | Purpose |
 | --- | --- | --- |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | current | Components, Host internals, object model, lifecycles, close/kill semantics, restart behavior, telemetry |
-| [adr/README.md](adr/README.md) | current | Architecture decision records (ADR 0001–0025) |
-| [SESSION_MODEL.md](SESSION_MODEL.md) | current (implemented, Step 10) | Terminal → Window → Pane model, the Terminal state machine, naming and target rules, what detach/stop/kill/rm/host stop do to processes, consent and the busy rule, concurrency guarantees, evidence |
+| [adr/README.md](adr/README.md) | current | Architecture decision records (ADR 0001–0027) |
+| [SESSION_MODEL.md](SESSION_MODEL.md) | current (implemented, Step 10; CLI verbs and `detach` from Step 12) | Terminal → Window → Pane model, the Terminal state machine, naming and target rules, what detach/stop/kill/rm/host stop do to processes, consent and the busy rule, concurrency guarantees, evidence |
+| [SUBAK_CLI.md](SUBAK_CLI.md) | current (implemented, Step 12) | Subak CLI reference: `new`, `ls`, `status`, `info`, `attach`, `detach`, `rename`, `stop`, `kill`, `rm`, `host …`; output, exit codes and consent; attach keys, Ctrl+C/Ctrl+Break and console restore with measurements; verbatim command lines for cmd.exe; agent and headless recipes; tmux mapping |
 | [PTY_PROCESSES.md](PTY_PROCESSES.md) | current (implemented, Step 11) | What runs in a pane: program resolution and quoting, PowerShell/cmd/pwsh, working directory, the three environment layers and secrets, size/Unicode/Ctrl+C, exit status, process-tree containment, backpressure and memory, the platform-neutral PTY interface, errors, evidence |
 | [CONPTY_PROOF.md](CONPTY_PROOF.md) | current (Step 08 prototype) | Windows ConPTY + detached Host proof: what "detached" means, evidence with process ids, OS limitations and power states, manual procedures (Windows Terminal, sleep, logoff pending) |
 | [CLI_CONTRACT.md](CLI_CONTRACT.md) | current (contract v1) | Cross-tool CLI contract: names, help, streams, `--json` envelope, exit codes, error-code registry, dry-run/confirmation, versioning, capabilities and tool-to-tool invocation, secret redaction |
@@ -38,7 +39,7 @@ did.
 | [RELEASE_POLICY.md](RELEASE_POLICY.md) | current | Consent rules (incl. disclosure of permissions and dependencies, running background utilities), install transaction, channels, signing keys, publishing checklist |
 | [DESIGN_SYSTEM.md](DESIGN_SYSTEM.md) | current | Kim visual language: tokens, components, keyboard, high-DPI, contrast, Korean/Unicode, reduced motion |
 | [RISK_REGISTER.md](RISK_REGISTER.md) | current | ConPTY, job objects, IPC, GUI, SSH, tmux, recovery and Claude risks with owner steps |
-| [contracts/IPC_PROTOCOL.md](contracts/IPC_PROTOCOL.md) | current (implemented v1, Steps 09–10) | Subak IPC v1: framing and limits, handshake with mutual identity checks, version negotiation, methods and authorization by client kind, Terminal methods and events, error codes, Host lifetime and start on demand, manual cross-user checks |
+| [contracts/IPC_PROTOCOL.md](contracts/IPC_PROTOCOL.md) | current (implemented v1, Steps 09–12) | Subak IPC v1: framing and limits, handshake with mutual identity checks, version negotiation, methods and authorization by client kind, Terminal methods and events, error codes, Host lifetime and start on demand, manual cross-user checks |
 | [contracts/STATE_SCHEMA.md](contracts/STATE_SCHEMA.md) | draft contract | `state.json` v1 and `config.toml` v1 |
 | [TMUX_COMPATIBILITY.md](TMUX_COMPATIBILITY.md) | current (inventory) | tmux command/key/option parity matrix with status and evidence |
 | [TABBY_FEATURE_MATRIX.md](TABBY_FEATURE_MATRIX.md) | current (inventory) | Tabby feature parity matrix with status and evidence |
@@ -48,9 +49,9 @@ enforces declared contrast pairs). GUI toolkit evidence: [`research/gui-eval/`](
 
 Contract schemas live in `contracts/schemas/`, with valid and invalid examples in
 `contracts/examples/`; `cargo xtask schema-check` (also run by `cargo test`) validates them.
-The CLI schemas (`cli-envelope-v1`, `kim-cli-v1`, `tool-capabilities-v1`) are additionally
-checked against the real `kim` and `subak` binaries by their integration tests; the
-`kim-cli-v1` examples are golden files generated from real runs. `noeul-ipc-v1` (Noeul's own
+The CLI schemas (`cli-envelope-v1`, `kim-cli-v1`, `subak-cli-v1`, `tool-capabilities-v1`) are
+additionally checked against the real `kim` and `subak` binaries by their integration tests; the
+`kim-cli-v1` and `subak-cli-v1` examples are golden files generated from real runs. `noeul-ipc-v1` (Noeul's own
 IPC between its CLI and the running instance, [ADR 0023](adr/0023-noeul-app-foundation.md)) is
 checked against every message `crates/noeul` builds, and its CLI output against `cli-envelope-v1`,
 `tool-capabilities-v1` and `hotkeys-cli-v1`, by the `noeul` tests. The hotkey schemas
@@ -70,7 +71,6 @@ cross-reference checks of [DDALGAK_RULE_MODEL §8](DDALGAK_RULE_MODEL.md) on the
 
 | Document | Status | Planned by | Purpose |
 | --- | --- | --- | --- |
-| `SUBAK_CLI.md` | planned | Step 12 | Subak CLI reference |
 | `MILESTONE_A_VALIDATION.md` | planned | Step 14 | Persistent sessions validation evidence |
 | `MILESTONE_B_VALIDATION.md` | planned | Step 20 | GUI journey validation evidence |
 | `RECOVERY.md` | planned | Steps 29–31 | Persistence, cold recovery and Claude resume procedures |

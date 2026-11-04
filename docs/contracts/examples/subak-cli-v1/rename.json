@@ -1,0 +1,12 @@
+{
+  "command": "rename",
+  "data": {
+    "changed": true,
+    "name": "build",
+    "previous_name": "work",
+    "terminal_id": "t-000000000001"
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

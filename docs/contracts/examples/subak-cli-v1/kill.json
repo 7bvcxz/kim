@@ -1,0 +1,23 @@
+{
+  "command": "kill",
+  "data": {
+    "affected": [
+      {
+        "exit_code": 1,
+        "forced": true,
+        "job_processes_left": 0,
+        "pane_id": "p-000000000001",
+        "pid": 4242,
+        "processes_in_job": 1,
+        "terminal_id": "t-000000000002"
+      }
+    ],
+    "name": "build",
+    "removed": true,
+    "terminal": null,
+    "terminal_id": "t-000000000002"
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

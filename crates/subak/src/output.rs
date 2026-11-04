@@ -247,6 +247,41 @@ mod tests {
         }
     }
 
+    /// docs/contracts/schemas/subak-cli-v1.schema.json lists exactly these codes, each in the
+    /// exit class of `Code::exit_code` (Step 12).
+    #[test]
+    fn the_cli_schema_registers_every_code_with_its_exit_class() {
+        let schema: Value = serde_json::from_slice(
+            &std::fs::read(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../docs/contracts/schemas/subak-cli-v1.schema.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let listed: Vec<&str> = schema["$defs"]["error_code"]["enum"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c.as_str().unwrap())
+            .collect();
+        let mut ours: Vec<&str> = Code::ALL.iter().map(|c| c.as_str()).collect();
+        let mut sorted = listed.clone();
+        sorted.sort_unstable();
+        ours.sort_unstable();
+        assert_eq!(sorted, ours, "subak-cli-v1 error_code enum");
+        for class in schema["$defs"]["error"]["oneOf"].as_array().unwrap() {
+            let exit = class["properties"]["exit_code"]["const"].as_u64().unwrap();
+            for c in class["properties"]["code"]["enum"].as_array().unwrap() {
+                let code = Code::ALL
+                    .iter()
+                    .find(|k| k.as_str() == c.as_str().unwrap())
+                    .unwrap();
+                assert_eq!(u64::from(code.exit_code()), exit, "{c}");
+            }
+        }
+    }
+
     #[test]
     fn envelopes_have_the_contract_shape() {
         let ok: Value =

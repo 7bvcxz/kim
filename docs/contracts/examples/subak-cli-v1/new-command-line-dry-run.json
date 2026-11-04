@@ -1,0 +1,36 @@
+{
+  "command": "new",
+  "data": {
+    "dry_run": true,
+    "would_create": {
+      "command": {
+        "args": [
+          "/d",
+          "/s",
+          "/c",
+          "echo a",
+          "b & echo --token=***"
+        ],
+        "program": "cmd.exe"
+      },
+      "command_line": "cmd.exe /d /s /c \"echo \"a  b\" & echo --token=***\"",
+      "cwd": "C:\\Windows",
+      "env": {
+        "set": [],
+        "unset": []
+      },
+      "executable": "C:\\Windows\\system32\\cmd.exe",
+      "keep_on_failure": false,
+      "name": "raw",
+      "remain_on_exit": false,
+      "size": {
+        "cols": 120,
+        "rows": 30
+      }
+    },
+    "would_start_host": false
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

@@ -1,0 +1,12 @@
+{
+  "ok": true,
+  "command": "detach",
+  "schema_version": 1,
+  "data": {
+    "detached": [],
+    "terminal": { "id": "t-000000000001", "name": "work" },
+    "host": { "pid": 4242 },
+    "stopped": true
+  },
+  "warnings": []
+}

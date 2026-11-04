@@ -1,0 +1,16 @@
+{
+  "command": "new",
+  "error": {
+    "code": "name_conflict",
+    "details": [
+      "ipc error code: name_conflict",
+      "existing: t-000000000001",
+      "name: work"
+    ],
+    "exit_code": 7,
+    "hint": null,
+    "message": "the Host refused the request: a Terminal named `work` already exists (names ignore case)"
+  },
+  "ok": false,
+  "schema_version": 1
+}

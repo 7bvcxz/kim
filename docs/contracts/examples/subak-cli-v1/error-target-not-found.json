@@ -1,0 +1,14 @@
+{
+  "command": "info",
+  "error": {
+    "code": "target_not_found",
+    "details": [
+      "ipc error code: target_not_found"
+    ],
+    "exit_code": 3,
+    "hint": null,
+    "message": "the Host refused the request: no Terminal, window or pane matches `nope`"
+  },
+  "ok": false,
+  "schema_version": 1
+}

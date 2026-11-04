@@ -414,7 +414,7 @@ fn the_indicator_is_off_where_not_needed_and_never_color_only() {
     );
     assert_eq!(tooltip(State::Off, Some(&nav)), "Ddalgak: engine off");
     assert_eq!(tooltip(State::Running, Some(&single)), "Ddalgak: engine on");
-    let mut long = nav.clone();
+    let mut long = nav;
     long.label = "x".repeat(200);
     assert_eq!(tooltip(State::Running, Some(&long)).chars().count(), 127);
     let m = menu(&s, &s.status(&st.view(), &|_| None));

@@ -313,7 +313,7 @@ pub fn copy(
     // Unknown fields of the source mode come along (a newer Ddalgak may have written them).
     let p = &mut doc.profiles[pi];
     if let Some(m) = p.modes.iter_mut().find(|m| m.id == copy_id) {
-        m.extra = src.extra.clone();
+        m.extra = src.extra;
     }
     if with_rules {
         let (alone, _) = scoped(p, id);
@@ -408,7 +408,7 @@ pub fn delete(
     }
     let (alone, shared) = scoped(p, id);
     if (!alone.is_empty() || !shared.is_empty()) && !delete_rules {
-        let mut users = alone.clone();
+        let mut users = alone;
         users.extend(shared.iter().cloned());
         return Err(EditError::ModeInUse {
             message: format!(

@@ -462,6 +462,7 @@ mod client {
     }
 
     /// One request to the running app, after verifying who serves the pipe.
+    #[allow(clippy::needless_pass_by_value)] // callers build the request in place
     pub fn call(endpoint: &str, method: Method, dry_run: bool) -> Result<(Value, Peer), CliError> {
         let started = Instant::now();
         let conn = pipe::connect(endpoint, Duration::from_secs(2)).map_err(|e| {

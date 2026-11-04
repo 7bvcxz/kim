@@ -252,7 +252,7 @@ impl Host {
             let bindings = self.loaded.bindings.clone();
             self.worker.queue().send(Msg::Rules(Rules {
                 generation: self.generation,
-                bindings: Arc::new(bindings.clone()),
+                bindings: Arc::new(bindings),
                 profile: self.loaded.profile.clone(),
                 mode: self.loaded.mode.clone(),
                 modes: self.loaded.modes.clone(),
@@ -522,17 +522,6 @@ impl Host {
         if !self.state().has_hook() {
             return Err(refusal(Refusal::EngineOff));
         }
-        let req = match &cmd {
-            ModeCmd::Set(m) => ModeRequest::Set {
-                mode: m.clone(),
-                origin,
-            },
-            ModeCmd::Toggle(m) => ModeRequest::Toggle {
-                mode: m.clone(),
-                origin,
-            },
-            ModeCmd::Reset => ModeRequest::Reset { origin },
-        };
         if let ModeCmd::Set(m) | ModeCmd::Toggle(m) = &cmd
             && self.loaded.modes.index(m).is_none()
         {
@@ -544,10 +533,10 @@ impl Host {
                 ),
             ));
         }
-        let op = match cmd {
-            ModeCmd::Set(_) => "set",
-            ModeCmd::Toggle(_) => "toggle",
-            ModeCmd::Reset => "reset",
+        let (req, op) = match cmd {
+            ModeCmd::Set(mode) => (ModeRequest::Set { mode, origin }, "set"),
+            ModeCmd::Toggle(mode) => (ModeRequest::Toggle { mode, origin }, "toggle"),
+            ModeCmd::Reset => (ModeRequest::Reset { origin }, "reset"),
         };
         if dry_run {
             let (st, _) = self.mode_now();
@@ -722,7 +711,7 @@ impl Host {
             // The mode changed: the tray shows it (views of older rules are ignored).
             Control::Mode { generation, status } => {
                 if generation == self.generation && self.state().has_hook() {
-                    self.set_mode(Some(status));
+                    self.set_mode(Some(*status));
                 }
                 return;
             }

@@ -128,7 +128,10 @@ pub enum Control {
     /// asks the hook thread to run its step, so the mode state stays in one place.
     ModeRequest { binding: u16, generation: u32 },
     /// The mode changed (Step 72): for `status` and the tray indicator.
-    Mode { generation: u32, status: ModeStatus },
+    Mode {
+        generation: u32,
+        status: Box<ModeStatus>,
+    },
 }
 
 /// The rules the worker runs, with the generation the hook's table has.
@@ -798,7 +801,10 @@ fn run(rx: &Receiver<Msg>, control: &Sink, stats: &Stats, ctx: &mut Ctx<'_>) {
                         let names = |b: u16| r.bindings.get(usize::from(b)).map(|b| b.rule.clone());
                         let status = r.modes.status(&view, &names);
                         r.mode = status.active.clone();
-                        control(Control::Mode { generation, status });
+                        control(Control::Mode {
+                            generation,
+                            status: Box::new(status),
+                        });
                     }
                 }
                 Signal::Restore { mods } => {

@@ -3865,7 +3865,7 @@ mod tests {
         // A middle mouse button as the trigger (with the mouse hook, Step 68).
         let mut t = T::with_modes(
             vec![mode_rule("mid", "MouseMiddle", ModeAction::Toggle(nav))],
-            s.clone(),
+            s,
         );
         let raw = RawKey::physical(Button::Middle.vk(), 0, false, 2000);
         let d = t.core.decide(&raw, Mode::Running, &Flags::default());
@@ -3976,7 +3976,7 @@ mod tests {
             mode_rule("to-game", "F15", ModeAction::Set(game)),
             scoped(remap("nav-l", "L", "Right"), bit(&s, "nav")),
         ];
-        let mut t = T::with_modes(rules.clone(), s.clone());
+        let mut t = T::with_modes(rules.clone(), s);
         // A key reset (desktop switch, unlock, elevated window) ends a held layer and its outputs.
         t.ev("CapsLock", false);
         t.ev("L", false);

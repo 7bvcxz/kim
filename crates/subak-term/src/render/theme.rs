@@ -66,25 +66,45 @@ const KIM_DARK: [&str; 20] = [
     "#A9C8FF", "#DCC4FF", "#A2E6EA", "#F5F4FA",
 ];
 
+/// The `kim-light` terminal tokens (Step 20, docs/DESIGN_SYSTEM.md §2.2), in the order of
+/// [`KIM_DARK`], then its two search tokens (checked against design/tokens.json by a test).
+const KIM_LIGHT: [&str; 20] = [
+    "#24232E", "#F7F6FA", "#5F49C4", "#D6CDF6", "#24232E", "#B4283B", "#23703E", "#7D5700",
+    "#235BB8", "#8A35B0", "#0E6C75", "#66637A", "#5E5B72", "#C53A4C", "#2D7F49", "#8A6100",
+    "#2F69C8", "#9A45C0", "#137A84", "#14131B",
+];
+const KIM_LIGHT_SEARCH: [&str; 2] = ["#F6E3B0", "#6B4A00"];
+
 impl Theme {
-    /// The default theme (`kim-dark`, docs/DESIGN_SYSTEM.md §2.2).
-    pub fn kim_dark() -> Self {
-        let c = |i: usize| Rgb::hex(KIM_DARK[i]).unwrap_or(Rgb(0, 0, 0));
+    fn from_tokens(name: &str, colors: &[&str; 20], search: &[&str; 2]) -> Self {
+        let c = |i: usize| Rgb::hex(colors[i]).unwrap_or(Rgb(0, 0, 0));
         let mut ansi = [Rgb(0, 0, 0); 16];
         for (i, a) in ansi.iter_mut().enumerate() {
             *a = c(4 + i);
         }
         Self {
-            name: "kim-dark".into(),
+            name: name.into(),
             foreground: c(0),
             background: c(1),
             cursor: c(2),
             selection: c(3),
-            search_match: Rgb::hex(KIM_DARK_SEARCH[0]).unwrap_or(Rgb(0, 0, 0)),
-            search_current: Rgb::hex(KIM_DARK_SEARCH[1]).unwrap_or(Rgb(0, 0, 0)),
+            search_match: Rgb::hex(search[0]).unwrap_or(Rgb(0, 0, 0)),
+            search_current: Rgb::hex(search[1]).unwrap_or(Rgb(0, 0, 0)),
             search_current_text: c(1),
             ansi,
         }
+    }
+
+    /// The default theme (`kim-dark`, docs/DESIGN_SYSTEM.md §2.2).
+    pub fn kim_dark() -> Self {
+        Self::from_tokens("kim-dark", &KIM_DARK, &KIM_DARK_SEARCH)
+    }
+
+    /// The light theme (`kim-light`, Step 20): a near-white surface with the same roles; every
+    /// ANSI foreground stays readable on it (≥ 4.5:1, so "white" is a mid grey and "bright
+    /// white" the darkest ink, docs/DESIGN_SYSTEM.md §2.2).
+    pub fn kim_light() -> Self {
+        Self::from_tokens("kim-light", &KIM_LIGHT, &KIM_LIGHT_SEARCH)
     }
 
     /// A Windows contrast theme (docs/DESIGN_SYSTEM.md §4.3): the system's window, text and
@@ -137,17 +157,31 @@ mod tests {
 
     #[test]
     fn kim_dark_matches_the_design_tokens() {
+        matches_tokens(&Theme::kim_dark());
+    }
+
+    #[test]
+    fn kim_light_matches_the_design_tokens() {
+        let t = Theme::kim_light();
+        matches_tokens(&t);
+        assert_eq!(t.name, "kim-light");
+        assert_ne!(t.background, Theme::kim_dark().background);
+    }
+
+    fn matches_tokens(t: &Theme) {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../design/tokens.json");
         let doc: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
-        let colors = &doc["themes"]["kim-dark"]["color"];
+        let colors = &doc["themes"][t.name.as_str()]["color"];
         let get = |name: &str| -> Rgb {
             let v = find(colors, name).unwrap_or_else(|| {
-                panic!("token {name} not found in tokens.json themes.kim-dark.color");
+                panic!(
+                    "token {name} not found in tokens.json themes.{}.color",
+                    t.name
+                );
             });
             Rgb::hex(&v).unwrap()
         };
-        let t = Theme::kim_dark();
         assert_eq!(t.foreground, get("terminal.foreground"));
         assert_eq!(t.background, get("terminal.background"));
         assert_eq!(t.cursor, get("terminal.cursor"));

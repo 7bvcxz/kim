@@ -39,6 +39,28 @@ pub const MONO_FAMILY: [&str; 6] = [
     "Segoe UI Symbol",
 ];
 
+/// The font chain for a user's terminal font (Step 20, `appearance.font_family`): `family` first
+/// (when it is not empty), then the design system's [`MONO_FAMILY`] without it, so a family that
+/// lacks Korean, emoji or box drawing still falls back per character.
+pub fn font_chain(family: &str) -> Vec<&str> {
+    let family = family.trim();
+    let mut out: Vec<&str> = Vec::with_capacity(MONO_FAMILY.len() + 1);
+    if !family.is_empty() {
+        out.push(family);
+    }
+    out.extend(
+        MONO_FAMILY
+            .iter()
+            .copied()
+            .filter(|f| !f.eq_ignore_ascii_case(family)),
+    );
+    out
+}
+
+/// The cell heights a view accepts, as multiples of the text size (`line-height.terminal` is
+/// 1.2; Step 20 makes it a setting).
+pub const LINE_HEIGHT_RANGE: (f32, f32) = (1.0, 2.0);
+
 /// Sizes and choices the renderer draws with.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RenderOptions {
@@ -301,10 +323,33 @@ impl Renderer {
         Ok(Self::new(Box::new(raster), theme, opts))
     }
 
+    /// A renderer drawing with the system's fonts in the chain `families` (Step 20: the user's
+    /// `appearance.font_family` first, see [`font_chain`]). Families that are not installed are
+    /// skipped; it fails only when none of them is.
+    #[cfg(windows)]
+    pub fn with_font_chain(
+        theme: Theme,
+        opts: RenderOptions,
+        families: &[&str],
+    ) -> Result<Self, String> {
+        let raster = gdi::GdiRasterizer::new(families)?;
+        Ok(Self::new(Box::new(raster), theme, opts))
+    }
+
     /// System fonts are rasterized through GDI on Windows only; other platforms are not
     /// supported yet (`KIM-NFR-011`).
     #[cfg(not(windows))]
     pub fn with_system_fonts(_theme: Theme, _opts: RenderOptions) -> Result<Self, String> {
+        Err("unsupported_platform: the system-font rasterizer exists for Windows only".into())
+    }
+
+    /// See the Windows version; other platforms are not supported yet (`KIM-NFR-011`).
+    #[cfg(not(windows))]
+    pub fn with_font_chain(
+        _theme: Theme,
+        _opts: RenderOptions,
+        _families: &[&str],
+    ) -> Result<Self, String> {
         Err("unsupported_platform: the system-font rasterizer exists for Windows only".into())
     }
 
@@ -401,6 +446,20 @@ impl Renderer {
     pub fn set_font_size(&mut self, size: f32) {
         self.opts.font_size = size;
         self.configure();
+    }
+
+    /// Changes the sizes and choices of [`RenderOptions`] other than the scale (Step 20: the
+    /// user's text size, line height, padding and bold-as-bright). Nothing happens when they are
+    /// the same; otherwise glyphs are rasterized again and the next frame is drawn in full.
+    pub fn set_options(&mut self, opts: RenderOptions) {
+        let opts = RenderOptions {
+            scale: self.opts.scale,
+            ..opts
+        };
+        if opts != self.opts {
+            self.opts = opts;
+            self.configure();
+        }
     }
 
     /// The window gained or lost focus (the cursor becomes hollow when it has none).

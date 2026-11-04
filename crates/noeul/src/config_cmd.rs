@@ -20,8 +20,10 @@ use serde_json::{Value, json};
 pub struct SetArgs {
     /// The setting: general.tray_icon, capture.keyboard_help, capture.quick_save_folder,
     /// capture.detection (window, element, off), capture.magnifier (on, off),
-    /// gestures.double_click (pin, copy, save, none), gestures.middle_click (pin, copy, none) or
-    /// gestures.preset (noeul, snipaste)
+    /// gestures.double_click (pin, copy, save, none), gestures.middle_click (pin, copy, none),
+    /// gestures.preset (noeul, snipaste), pins.border and pins.shadow (on, off), paste.paths
+    /// (on, off: a copied path to an image file pins the file) or paste.file_cards (on, off:
+    /// copied non-image files become a card of their names)
     pub key: String,
     /// The new value
     #[arg(allow_hyphen_values = true)]
@@ -33,7 +35,8 @@ pub struct SetArgs {
 
 #[derive(Debug, Args)]
 pub struct ResetArgs {
-    /// Reset only this section: general, capture or gestures (default: every setting)
+    /// Reset only this section: general, capture, gestures, pins or paste (default: every
+    /// setting)
     pub section: Option<String>,
     /// Confirm without asking
     #[arg(long, short)]

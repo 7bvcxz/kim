@@ -25,8 +25,14 @@ const AFTER_HELP: &str = "\
 While Noeul runs, F1 opens the region selection overlay: drag a rectangle, then double-click
 inside it to pin it at once (also Enter, the toolbar's Pin button or a middle-click). Ctrl+C or
 Copy copies it, Ctrl+S or Save saves it where you choose, Ctrl+Shift+S quick-saves it, Esc or
-right-click outside cancels; `noeul capture --interactive` opens the same overlay. F3 pins the
-clipboard image. The double-click can copy, save or do nothing instead
+right-click outside cancels; `noeul capture --interactive` opens the same overlay. F3 pins what
+the clipboard holds: an image, image files copied in Explorer (or one copied path), a colour value
+(#RGB, #RRGGBB, rgb(...), three numbers) as a swatch, HTML or text as a card (Noeul's own
+renderer: no script, nothing downloaded; images become placeholders); Ctrl+Shift+C copies a card's
+text back, and the pin's menu offers 'Pin clipboard as' the other kinds. Content marked private
+(password managers) is never pinned. Image files dropped on a pin are pinned too; `noeul pin
+<file>` and `noeul pin --clipboard [--as text]` do the same from scripts. The double-click can copy,
+save or do nothing instead
 (`noeul config set gestures.double_click copy`), and `noeul config set gestures.preset snipaste`
 switches to Snipaste-style gestures (double-click and Enter copy, Ctrl+T pins).
 Annotate before you pin, copy or save: the toolbar's rectangle, ellipse, line, arrow, pen,
@@ -45,7 +51,7 @@ list/hide/show/close/set` and `noeul pin group list/switch` reach them from scri
 memory only and do not survive a restart.
 Not in this build (labeled planned): animated GIF pins (a pin of an animated GIF shows its first
 frame and says so), settings window (61), capture to a file or the clipboard from the command
-line and `noeul pin <file>` (62).
+line (62).
 
 Exit codes: 0 ok · 1 failure (I/O, permission) · 2 usage · 3 not found (not running, no pin)
             4 integrity (protocol, identity) · 5 incompatible or unsupported platform
@@ -63,8 +69,9 @@ Exit codes: 0 ok · 1 failure (I/O, permission) · 2 usage · 3 not found (not r
     long_about = "Noeul pins pictures to the desktop as floating windows. This pre-alpha build \
         has the resident instance (`noeul start`), its optional tray icon, F1 to select a region \
         over a frozen picture of every monitor and pin it with a double-click inside it (or \
-        Enter), copy it or save it, F3 to pin the clipboard image, pins of a screen region or \
-        the clipboard requested from the command line, and the floating pin engine: \
+        Enter), copy it or save it, F3 to pin what the clipboard holds (an image, image files, \
+        a colour, HTML or text as a card), image files dropped on a pin, pins of a screen region, \
+        the clipboard or a file requested from the command line, and the floating pin engine: \
         always-on-top pins that move, zoom, resize, rotate, flip, fade, shrink to thumbnails, let \
         clicks through, hide, show, group and close independently, each with its own context \
         menu.\n\n\

@@ -9,11 +9,11 @@
     "rule": {
       "consent": {
         "input-injection": {
-          "granted_at": "2026-11-04T04:34:07Z",
+          "granted_at": "2026-11-04T04:41:00Z",
           "via": "cli"
         }
       },
-      "created_at": "2026-11-04T04:34:07Z",
+      "created_at": "2026-11-04T04:41:00Z",
       "enabled": true,
       "id": "caps",
       "steps": [
@@ -22,11 +22,11 @@
           "type": "remap"
         }
       ],
-      "title": "CapsLock: acts as LCtrl",
+      "title": "CapsLock acts as Left Ctrl",
       "trigger": {
         "keys": "CapsLock"
       },
-      "updated_at": "2026-11-04T04:34:07Z"
+      "updated_at": "2026-11-04T04:41:00Z"
     },
     "source": "saved",
     "state": "active"

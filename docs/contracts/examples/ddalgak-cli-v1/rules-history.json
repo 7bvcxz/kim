@@ -10,100 +10,100 @@
     "revision": 14,
     "snapshots": [
       {
-        "at": "2026-11-04T04:34:08Z",
+        "at": "2026-11-04T04:41:02Z",
         "command": "rules.draft.apply",
-        "name": "20261104T043408Z-r14.json",
+        "name": "20261104T044102Z-r14.json",
         "origin": "cli",
         "revision": 14
       },
       {
-        "at": "2026-11-04T04:34:08Z",
+        "at": "2026-11-04T04:41:01Z",
         "command": "rule.revoke",
-        "name": "20261104T043408Z-r13.json",
+        "name": "20261104T044101Z-r13.json",
         "origin": "cli",
         "revision": 13
       },
       {
-        "at": "2026-11-04T04:34:08Z",
+        "at": "2026-11-04T04:41:01Z",
         "command": "rule.delete",
-        "name": "20261104T043408Z-r12.json",
+        "name": "20261104T044101Z-r12.json",
         "origin": "cli",
         "revision": 12
       },
       {
-        "at": "2026-11-04T04:34:08Z",
+        "at": "2026-11-04T04:41:01Z",
         "command": "rule.move",
-        "name": "20261104T043408Z-r11.json",
+        "name": "20261104T044101Z-r11.json",
         "origin": "cli",
         "revision": 11
       },
       {
-        "at": "2026-11-04T04:34:07Z",
+        "at": "2026-11-04T04:41:01Z",
         "command": "rule.enable",
-        "name": "20261104T043407Z-r10.json",
+        "name": "20261104T044101Z-r10.json",
         "origin": "cli",
         "revision": 10
       },
       {
-        "at": "2026-11-04T04:34:07Z",
+        "at": "2026-11-04T04:41:01Z",
         "command": "rule.edit",
-        "name": "20261104T043407Z-r9.json",
+        "name": "20261104T044101Z-r9.json",
         "origin": "cli",
         "revision": 9
       },
       {
-        "at": "2026-11-04T04:34:07Z",
+        "at": "2026-11-04T04:41:01Z",
         "command": "rule.duplicate",
-        "name": "20261104T043407Z-r8.json",
+        "name": "20261104T044101Z-r8.json",
         "origin": "cli",
         "revision": 8
       },
       {
-        "at": "2026-11-04T04:34:07Z",
+        "at": "2026-11-04T04:41:01Z",
         "command": "rule.edit",
-        "name": "20261104T043407Z-r7.json",
+        "name": "20261104T044101Z-r7.json",
         "origin": "cli",
         "revision": 7
       },
       {
-        "at": "2026-11-04T04:34:07Z",
+        "at": "2026-11-04T04:41:01Z",
         "command": "rule.edit",
-        "name": "20261104T043407Z-r6.json",
+        "name": "20261104T044101Z-r6.json",
         "origin": "cli",
         "revision": 6
       },
       {
-        "at": "2026-11-04T04:34:07Z",
+        "at": "2026-11-04T04:41:01Z",
         "command": "rule.edit",
-        "name": "20261104T043407Z-r5.json",
+        "name": "20261104T044101Z-r5.json",
         "origin": "cli",
         "revision": 5
       },
       {
-        "at": "2026-11-04T04:34:07Z",
+        "at": "2026-11-04T04:41:00Z",
         "command": "rule.enable",
-        "name": "20261104T043407Z-r4.json",
+        "name": "20261104T044100Z-r4.json",
         "origin": "cli",
         "revision": 4
       },
       {
-        "at": "2026-11-04T04:34:07Z",
+        "at": "2026-11-04T04:41:00Z",
         "command": "rule.add",
-        "name": "20261104T043407Z-r3.json",
+        "name": "20261104T044100Z-r3.json",
         "origin": "cli",
         "revision": 3
       },
       {
-        "at": "2026-11-04T04:34:07Z",
+        "at": "2026-11-04T04:40:59Z",
         "command": "rule.add",
-        "name": "20261104T043407Z-r2.json",
+        "name": "20261104T044059Z-r2.json",
         "origin": "cli",
         "revision": 2
       },
       {
-        "at": "2026-11-04T04:34:06Z",
+        "at": "2026-11-04T04:40:59Z",
         "command": "rule.add",
-        "name": "20261104T043406Z-r1.json",
+        "name": "20261104T044059Z-r1.json",
         "origin": "cli",
         "revision": 1
       }

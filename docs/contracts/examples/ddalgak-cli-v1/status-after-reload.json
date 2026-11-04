@@ -5,9 +5,9 @@
     "app": {
       "elevated": false,
       "launched_by": "user",
-      "pid": 87884,
+      "pid": 49996,
       "running": true,
-      "started_at": "2026-11-04T04:34:06Z",
+      "started_at": "2026-11-04T04:40:59Z",
       "test_mode": true,
       "tray": false,
       "uptime_s": 0,
@@ -38,7 +38,7 @@
         "new-key"
       ],
       "active_set": {
-        "loaded_at": "2026-11-04T04:34:07Z",
+        "loaded_at": "2026-11-04T04:40:59Z",
         "revision": 2
       },
       "disabled": 0,
@@ -48,7 +48,7 @@
       "in_sync": true,
       "inactive": [],
       "last_reload": {
-        "at": "2026-11-04T04:34:07Z",
+        "at": "2026-11-04T04:40:59Z",
         "code": null,
         "origin": "watcher",
         "outcome": "applied",

@@ -293,7 +293,7 @@
       "allOf": [
         {"pattern": "(?i)^([a-z]:\\\\|%(programfiles|programfiles\\(x86\\)|localappdata|appdata|userprofile|systemroot)%\\\\)[^<>\"|?*\\x00-\\x1f]+\\.exe$"},
         {
-          "description": "command interpreters and script hosts are not programs for open_program (DDALGAK_RULE_MODEL §5.4)",
+          "description": "command interpreters and script hosts are not programs for open_program (DDALGAK_RULE_MODEL §5.5)",
           "not": {"pattern": "(?i)(^|\\\\)(cmd|powershell|powershell_ise|pwsh|wscript|cscript|mshta|rundll32|regsvr32|wsl|bash|conhost)\\.exe$"}
         }
       ]

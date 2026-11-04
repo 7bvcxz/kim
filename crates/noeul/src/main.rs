@@ -38,7 +38,7 @@ Exit codes: 0 ok · 1 failure (I/O, permission) · 2 usage · 3 not found (not r
     name = "noeul",
     bin_name = "noeul",
     version,
-    about = "Noeul — small native screenshot and floating-pin tool (pre-alpha foundation)",
+    about = "Noeul — small native screenshot and floating-pin tool (pre-alpha)",
     long_about = "Noeul pins pictures to the desktop as floating windows. This pre-alpha build \
         has the resident instance (`noeul start`), its optional tray icon, F1 to select a region \
         over a frozen picture of every monitor and pin it with Enter, F3 to pin the clipboard \

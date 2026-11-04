@@ -1,6 +1,7 @@
 //! Noeul (노을): a small native screenshot and floating-pin tool for Windows (pre-alpha:
-//! Step 49 foundation, Step 50 region-selection overlay). See docs/NOEUL_PHILOSOPHY.md, docs/NOEUL_REQUIREMENTS.md and
-//! docs/adr/0023-noeul-app-foundation.md.
+//! Step 49 foundation, Step 50 region selection overlay). See docs/NOEUL_PHILOSOPHY.md,
+//! docs/NOEUL_REQUIREMENTS.md, docs/adr/0023-noeul-app-foundation.md and
+//! docs/adr/0026-noeul-capture-overlay.md.
 //!
 //! Modules, from the bottom up:
 //!

@@ -1,6 +1,6 @@
 # Noeul UX specification
 
-Status: **current** (specification; Step 49 implemented the app foundation, [ADR 0023](adr/0023-noeul-app-foundation.md), not the overlay) · Step 48 ·
+Status: **current** (specification; Step 49 implemented the app foundation, [ADR 0023](adr/0023-noeul-app-foundation.md); Step 50 the `F1` selection overlay with `Enter` to pin, [ADR 0026](adr/0026-noeul-capture-overlay.md), see §4.5) · Step 48 ·
 Philosophy: [NOEUL_PHILOSOPHY](NOEUL_PHILOSOPHY.md) · Requirements: [NOEUL_REQUIREMENTS](NOEUL_REQUIREMENTS.md) ·
 Parity: [NOEUL_SNIPASTE_MATRIX](NOEUL_SNIPASTE_MATRIX.md) · Shortcuts: [HOTKEY_CONTRACT §13.3](HOTKEY_CONTRACT.md) ·
 Decision: [ADR 0021](adr/0021-noeul-product-definition.md)
@@ -318,6 +318,43 @@ available):
 10. Measure capture and pin latency with Noeul's debug metric and record them (NOEUL-NFR-003,
     NOEUL-NFR-004).
 
+### 4.5 Step 50: manual check of the real `F1` overlay
+
+Step 50 ships the overlay of §4.1 up to `Selected`, `Moving` and `Resizing`, with `Enter`
+(`capture.pin`) as its output; the double-click gesture, toolbar, menu, copy and save follow in
+Step 51, detection and the magnifier in Step 52 ([ADR 0026](adr/0026-noeul-capture-overlay.md)).
+Automated tests cover the state machine, geometry, DPI math and the composed pixels with synthetic
+layouts, a real but off-screen, never-activated overlay window fed with its own window messages,
+the trigger on an obscure chord, `taken` reporting and rapid triggers. They never register `F1`,
+never show an overlay on the visible desktop and never synthesize input, so these steps need the
+maintainer, on the real desktop with a physical mouse and keyboard (record the Windows build, the
+monitors and their scales, and the date in the Step report and the matrix Evidence column):
+
+1. `cargo build --release -p noeul`, then `target\release\noeul.exe start` (default profile).
+   `noeul status` lists `capture.region F1: registered` (if another program owns `F1` it says
+   `taken`; then `noeul hotkeys set capture.region Shift+F1` and use that key below).
+2. Press `F1`: within about a tenth of a second every monitor shows its frozen picture, dimmed;
+   the pointer is a crosshair even before it moves; a size readout follows the pointer; the
+   keyboard help box sits at the top of the monitor under the pointer.
+3. Drag a rectangle (also starting the drag after resting the pointer for a few seconds): the
+   rectangle is undimmed with a lilac border, and the readout shows `W × H  at X, Y` in device
+   pixels. Hold `Shift` while dragging: a square.
+4. Drag inside the rectangle to move it; drag a corner and an edge handle to resize; press the
+   arrows, `Ctrl`+arrows and `Shift`+arrows; `Ctrl+A` (the monitor, again all monitors).
+5. `Esc`: the overlay disappears; nothing was pinned; `noeul status --json` shows
+   `memory.bytes` 0.
+6. Copy some text in Notepad. `F1`, select, `Enter`: a pin of exactly that rectangle appears at
+   the same place and has focus (`Esc` closes it). Paste in Notepad: the earlier text comes out.
+7. `F1`, then press `F1` repeatedly and hold it down: still one overlay; `noeul status --json`
+   counts `captures.ignored`.
+8. `F1`, right-click without a selection: cancelled. `F1`, select, right-click outside: the
+   selection is cleared. `F1`, then `Alt+Tab` to another program: cancelled.
+9. On a monitor at 150 %, and with two monitors where available: the readout is in device
+   pixels and a selection across the seam pins with exact pixels.
+10. Lock the session (`Win+L`), press `F1`, unlock: no overlay appeared and nothing was captured.
+11. After about twenty captures, `noeul status --json` → `captures.first_frame` gives p50/p95 of
+    the first frame on this machine (NOEUL-NFR-003); `noeul quit --yes` ends it.
+
 ## 5. Toolbar, menus and the tray
 
 - **Toolbar order** (tab order): Pin · Copy · Save · tools (N3) · Undo · Redo · Cancel. Pin is the
@@ -364,6 +401,12 @@ default will be added (HOTKEY_CONTRACT §7.5).
 | `selection.full` | `Ctrl+A` | `color.copy` | `C` |
 | `selection.last` | `R` | `color.format-next` | `Shift+C` |
 | `history.previous` | `Comma` | `history.next` | `Period` |
+
+Shipped since Step 50 ([ADR 0026](adr/0026-noeul-capture-overlay.md)): `capture.pin`,
+`capture.cancel`, `selection.full`, `selection.last` and the `selection.move-*`, `-grow-*` and
+`-shrink-*` keys (one device pixel per press, no acceleration yet). The overlay also leaves on
+`Escape` as the reserved `nav.cancel` when no overlay binding uses it, so it never traps the user.
+The other keys of this context arrive with Steps 51 and 52.
 
 **Context `annotate`** (while a drawing tool is active, in the overlay or on a pin; it is inside
 the other contexts, so its keys win there):
@@ -447,6 +490,7 @@ when a capture starts.
 | Settings | `%APPDATA%\mouv\noeul\config.toml` | on change | — |
 | Shortcuts | `%APPDATA%\mouv\noeul\hotkeys.json` (+ `.bak`) | on change; only the user's changes | — |
 | Frozen picture, selection, annotations | memory | while the overlay is open | freed when it closes |
+| UI state ("first-run keyboard help seen") | `%LOCALAPPDATA%\mouv\noeul\ui-state.json` | once, after the first capture finished from the overlay | no picture, no content |
 | Pins, closed pins (for reopen) | memory | while open; reopen memory default 1 | freed at quit |
 | Capture history | memory (20 captures) | after a successful capture | disk: **off** |
 | History on disk, auto-save | `%LOCALAPPDATA%\mouv\noeul\history\` or the chosen folder | only after the user turned it on | **off** |

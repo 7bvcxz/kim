@@ -1,0 +1,11 @@
+{
+  "type": "response",
+  "id": 16,
+  "result": {
+    "dry_run": false,
+    "hidden": [
+      "pin-1"
+    ],
+    "pixels": "AAAA"
+  }
+}

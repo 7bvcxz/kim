@@ -1,0 +1,35 @@
+{
+  "command": "rule.check",
+  "data": {
+    "file": "loaded",
+    "ok": false,
+    "problems": [
+      {
+        "code": "duplicate_trigger",
+        "severity": "error",
+        "profile": "default",
+        "rule": "off-key",
+        "at": "profiles[0].rules[1].trigger",
+        "message": "m",
+        "with": {
+          "rule": "on-key"
+        },
+        "offers": [
+          {
+            "kind": "replace_other_rule"
+          }
+        ]
+      }
+    ],
+    "revision": 4,
+    "source": "saved",
+    "summary": {
+      "errors": 1,
+      "infos": 1,
+      "warnings": 0
+    }
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

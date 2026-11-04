@@ -10,6 +10,7 @@ pub mod instance;
 pub mod pipe;
 pub mod startup;
 pub mod tray;
+pub mod watch;
 
 use std::ffi::{OsStr, c_void};
 use std::io;

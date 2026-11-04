@@ -1,57 +1,29 @@
-//! Reading `rules.json` for the engine (DDALGAK_RULE_MODEL §2, §9).
+//! The engine's view of `rules.json` (docs/DDALGAK_RULE_MODEL.md §2, §7, §9;
+//! `DDALGAK-FR-006`, `DDALGAK-FR-009`, `DDALGAK-FR-017`, `DDALGAK-FR-021`).
 //!
-//! **Scope (Step 66).** This is the engine's *read-only runtime loader*, not the rule store:
-//! Step 67 implements the full schema and semantic validation, CRUD, history and atomic writes,
-//! and replaces the checks here with its own. Until then this loader is deliberately
-//! conservative ("never broader", §9): it runs only what this version fully understands and keeps
-//! everything else inactive with a stated reason.
+//! The file is read and checked by the rule store ([`crate::store`], [`crate::validate`]); this
+//! module turns the result into what the engine runs and what `status` shows:
 //!
-//! - A missing file is one empty profile `default` with mode `base`.
-//! - A file that is not JSON, is not a `ddalgak.rules` document, or names a missing profile is
-//!   **not loaded** (`rules_invalid`); a newer `schema_version` is not run either
-//!   (`rules_from_newer_version`). The engine cannot be turned on with such a file, and a running
-//!   engine keeps its previous rules (`DDALGAK-FR-006`).
-//! - Of the active profile's enabled rules, those whose steps are all `engine` steps
-//!   (DDALGAK_RULE_MODEL §5.11, `DDALGAK-FR-017`) become bindings. Every other action type is
-//!   inactive with `step_unsupported` until the Step that implements it (68–72); rules with
-//!   `when` are inactive with `condition_unsupported` (Step 77); unknown fields inside a rule make
-//!   it `rule_unsupported`.
-//! - Modes: Step 66 has no mode switching (Step 72), so the profile's `default_mode` is always
-//!   active; rules limited to other modes are counted, not run.
-//! - Precedence (§7.1): mode-scoped rules first, then higher `priority`, then file order. Two
-//!   rules with the same trigger, modes and priority: the later one is `duplicate_trigger`.
+//! - A file that is not usable (not JSON, not `ddalgak.rules`, a schema violation outside the
+//!   rules, an unknown active profile or default mode) is **not loaded** (`rules_invalid`); a
+//!   newer `schema_version` is not run either (`rules_from_newer_version`). The engine cannot be
+//!   turned on with it, and a running engine keeps its previous rules.
+//! - Of the active profile's enabled rules, every rule with an error or an `*_unsupported` info
+//!   is **inactive** with that code; the others keep working.
+//! - Of the remaining rules, those whose steps are all `engine` steps (§5.11) become bindings.
+//!   Every other action type is inactive with `step_unsupported` until its Step (68–72).
+//! - Modes: there is no mode switching before Step 72, so the profile's `default_mode` is active;
+//!   rules limited to other modes are counted, not run.
+//! - Precedence (§7.1): mode-scoped rules first, then higher `priority`, then file order.
 
+use crate::store::{self, MIGRATIONS};
 use crate::table::{Action, Binding, EngineOp, Injected, On};
 use crate::trigger::{TKey, Trigger};
+use crate::validate::Context;
 use serde_json::{Map, Value, json};
 use std::path::Path;
 
-/// What the file looked like.
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub enum FileState {
-    Missing,
-    Loaded,
-    /// Not loaded: why.
-    Invalid(String),
-    /// Written by a newer Ddalgak; not loaded.
-    NewerVersion(u64),
-}
-
-impl FileState {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            FileState::Missing => "missing",
-            FileState::Loaded => "loaded",
-            FileState::Invalid(_) => "invalid",
-            FileState::NewerVersion(_) => "newer_version",
-        }
-    }
-
-    /// Whether the engine may run with this file.
-    pub fn usable(&self) -> bool {
-        matches!(self, FileState::Missing | FileState::Loaded)
-    }
-}
+pub use crate::store::FileState;
 
 /// An enabled rule that does not run, with the code of DDALGAK_RULE_MODEL §8.
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -78,13 +50,18 @@ pub struct Loaded {
     pub other_modes: usize,
     /// Rules in the active profile.
     pub total: usize,
+    /// A hash of the file's bytes: a reload applies only real changes.
+    pub hash: u64,
+    /// Errors and warnings in the whole document (every profile).
+    pub errors: usize,
+    pub warnings: usize,
 }
 
 impl Loaded {
-    fn empty(state: FileState) -> Loaded {
+    fn empty(state: FileState, revision: Option<u64>, hash: u64) -> Loaded {
         Loaded {
             state,
-            revision: None,
+            revision,
             profile: "default".into(),
             mode: "base".into(),
             engine_on_start: false,
@@ -94,25 +71,27 @@ impl Loaded {
             disabled: 0,
             other_modes: 0,
             total: 0,
+            hash,
+            errors: 0,
+            warnings: 0,
         }
     }
 }
 
 /// Reads and interprets the rules file.
 pub fn load(path: &Path) -> Loaded {
-    match std::fs::read(path) {
-        Ok(bytes) => parse(&bytes),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Loaded::empty(FileState::Missing),
-        Err(e) => Loaded::empty(FileState::Invalid(format!("cannot read the file: {e}"))),
-    }
+    load_with(path, &Context::default())
 }
 
-fn is_rule_id(s: &str) -> bool {
-    let b = s.as_bytes();
-    (2..=48).contains(&b.len())
-        && b[0].is_ascii_lowercase()
-        && b.iter()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == b'-')
+/// Reads and interprets the rules file with what the checks know beyond it (Ddalgak's own
+/// shortcuts).
+pub fn load_with(path: &Path, ctx: &Context) -> Loaded {
+    from_store(&store::read_path(path, ctx, MIGRATIONS))
+}
+
+/// Interprets the bytes of a rules file.
+pub fn parse(bytes: &[u8]) -> Loaded {
+    from_store(&store::interpret(bytes, &Context::default(), MIGRATIONS))
 }
 
 const RULE_FIELDS: &[&str] = &[
@@ -138,20 +117,6 @@ const TRIGGER_FIELDS: &[&str] = &[
     "pass_through",
     "injected",
 ];
-/// Step types of rules document v1 that later Steps implement.
-const LATER_STEPS: &[(&str, &str)] = &[
-    ("remap", "Step 68"),
-    ("block", "Step 68"),
-    ("send_keys", "Step 68"),
-    ("type_text", "Step 69"),
-    ("open_program", "Step 70"),
-    ("open_url", "Step 70"),
-    ("mouse_move", "Step 71"),
-    ("mouse_scroll", "Step 71"),
-    ("mouse_click", "Step 71"),
-    ("mode", "Step 72"),
-    ("delay", "Step 68"),
-];
 
 struct Candidate {
     binding: Binding,
@@ -160,17 +125,91 @@ struct Candidate {
     order: usize,
 }
 
+/// The engine's interpretation of a checked document.
+pub fn from_store(l: &store::Loaded) -> Loaded {
+    let (Some(doc), true) = (&l.doc, l.state.usable()) else {
+        return Loaded::empty(l.state.clone(), l.revision, l.hash);
+    };
+    let settings = doc.settings.as_ref();
+    let pi = doc
+        .profile_index(&doc.active_profile)
+        .expect("a usable document has its active profile");
+    let profile = &doc.profiles[pi];
+    let mode = profile.default_mode.clone();
+    let mut out = Loaded {
+        state: l.state.clone(),
+        revision: doc.revision.or(l.revision),
+        profile: profile.id.clone(),
+        mode: mode.clone(),
+        engine_on_start: settings.and_then(|s| s.engine_on_start) == Some(crate::model::OnOff::On),
+        max_runs_per_second: settings
+            .and_then(|s| s.max_runs_per_second)
+            .map_or(20, |n| n.clamp(1, 100)),
+        total: profile.rules.len(),
+        errors: l.report.count(crate::validate::Severity::Error),
+        warnings: l.report.count(crate::validate::Severity::Warning),
+        ..Loaded::empty(l.state.clone(), l.revision, l.hash)
+    };
+    let mut candidates: Vec<Candidate> = Vec::new();
+    for (ri, entry) in profile.rules.iter().enumerate() {
+        let id = entry.id().unwrap_or_default().to_string();
+        if entry.enabled() != Some(true) {
+            out.disabled += 1;
+            continue;
+        }
+        if let Some(p) = l.report.inactive((pi, ri)) {
+            out.inactive.push(Inactive {
+                rule: id,
+                code: p.code,
+                reason: p.message.clone(),
+            });
+            continue;
+        }
+        let Some(rule) = entry.rule() else {
+            continue; // a raw rule always has a schema problem (above)
+        };
+        if let Some(m) = &rule.modes
+            && !m.contains(&mode)
+        {
+            out.other_modes += 1;
+            continue;
+        }
+        let Some(map) = rule.to_value().as_object().cloned() else {
+            continue;
+        };
+        match compile(&map) {
+            Ok((binding, priority)) => candidates.push(Candidate {
+                binding,
+                scoped: rule.modes.is_some(),
+                priority,
+                order: ri,
+            }),
+            Err((code, reason)) => out.inactive.push(Inactive {
+                rule: id,
+                code,
+                reason,
+            }),
+        }
+    }
+    candidates.sort_by(|a, b| {
+        b.scoped
+            .cmp(&a.scoped)
+            .then(b.priority.cmp(&a.priority))
+            .then(a.order.cmp(&b.order))
+    });
+    out.bindings = candidates.into_iter().map(|c| c.binding).collect();
+    out
+}
+
 fn unknown_field(o: &Map<String, Value>, known: &[&str]) -> Option<String> {
     o.keys().find(|k| !known.contains(&k.as_str())).cloned()
 }
 
-/// Interprets one rule; `Err` makes it inactive.
-fn rule(r: &Map<String, Value>) -> Result<(Binding, i64), (&'static str, String)> {
+/// Compiles one checked rule into a binding; `Err` keeps it inactive. The validation already
+/// refused everything below; these checks are the last line of defense ("never broader").
+fn compile(r: &Map<String, Value>) -> Result<(Binding, i64), (&'static str, String)> {
     if let Some(f) = unknown_field(r, RULE_FIELDS) {
-        return Err((
-            "rule_unsupported",
-            format!("unknown field `{f}` (a newer Ddalgak may restrict the rule with it)"),
-        ));
+        return Err(("rule_unsupported", format!("unknown field `{f}`")));
     }
     if r.contains_key("when") {
         return Err((
@@ -178,13 +217,7 @@ fn rule(r: &Map<String, Value>) -> Result<(Binding, i64), (&'static str, String)
             "app and window conditions are evaluated from Step 77".into(),
         ));
     }
-    let priority = match r.get("priority") {
-        None => 0,
-        Some(p) => p
-            .as_i64()
-            .filter(|p| (-1000..=1000).contains(p))
-            .ok_or(("rule_invalid", "`priority` must be -1000…1000".to_string()))?,
-    };
+    let priority = r.get("priority").and_then(Value::as_i64).unwrap_or(0);
     let t = r
         .get("trigger")
         .and_then(Value::as_object)
@@ -197,48 +230,31 @@ fn rule(r: &Map<String, Value>) -> Result<(Binding, i64), (&'static str, String)
         .and_then(Value::as_str)
         .ok_or(("trigger_invalid", "`trigger.keys` is required".to_string()))?;
     let trigger = Trigger::parse(keys).map_err(|e| (e.code(), e.to_string()))?;
-    let text = |k: &'static str| t.get(k).map(move |v| v.as_str().ok_or(k));
-    let flag = |k: &'static str| t.get(k).map(move |v| v.as_bool().ok_or(k));
     let bad = |k: &str| {
         (
             "trigger_invalid",
             format!("`trigger.{k}` has a wrong type or value"),
         )
     };
-    let on = match text("on").transpose().map_err(bad)? {
+    let on = match t.get("on").and_then(Value::as_str) {
         None | Some("press") => On::Press,
         Some("release") => On::Release,
         Some("hold") => {
-            let ms = match t.get("hold_ms") {
-                None => 500,
-                Some(v) => v
-                    .as_u64()
-                    .filter(|ms| (200..=5000).contains(ms))
-                    .ok_or_else(|| bad("hold_ms"))?,
-            };
+            let ms = t.get("hold_ms").and_then(Value::as_u64).unwrap_or(500);
             On::Hold(u32::try_from(ms).unwrap_or(500))
         }
         Some(_) => return Err(bad("on")),
     };
-    if t.contains_key("hold_ms") && !matches!(on, On::Hold(_)) {
-        return Err(bad("hold_ms"));
-    }
-    let repeat = flag("repeat").transpose().map_err(bad)?.unwrap_or(false);
-    let pass_through = flag("pass_through")
-        .transpose()
-        .map_err(bad)?
+    let repeat = t.get("repeat").and_then(Value::as_bool).unwrap_or(false);
+    let pass_through = t
+        .get("pass_through")
+        .and_then(Value::as_bool)
         .unwrap_or(false);
-    let injected = match text("injected").transpose().map_err(bad)? {
+    let injected = match t.get("injected").and_then(Value::as_str) {
         None | Some("ignore") => Injected::Ignore,
         Some("accept") => Injected::Accept,
         Some(_) => return Err(bad("injected")),
     };
-    if repeat && on != On::Press {
-        return Err(bad("repeat"));
-    }
-    if trigger.is_sequence() && on != On::Press {
-        return Err(("trigger_invalid", "sequences fire on press only".into()));
-    }
     if let Some(c) = trigger.single()
         && matches!(c.key, TKey::Modifier(_))
         && on != On::Release
@@ -251,41 +267,22 @@ fn rule(r: &Map<String, Value>) -> Result<(Binding, i64), (&'static str, String)
     let steps = r
         .get("steps")
         .and_then(Value::as_array)
-        .filter(|s| (1..=32).contains(&s.len()))
         .ok_or(("step_invalid", "`steps` must hold 1–32 steps".to_string()))?;
     let mut ops = Vec::new();
     for (i, s) in steps.iter().enumerate() {
-        let s = s
-            .as_object()
-            .ok_or(("step_invalid", format!("step {i} is not an object")))?;
-        let ty = s
-            .get("type")
-            .and_then(Value::as_str)
-            .ok_or(("step_invalid", format!("step {i} has no `type`")))?;
-        if ty == "engine" {
-            if let Some(f) = unknown_field(s, &["type", "op"]) {
-                return Err((
-                    "rule_unsupported",
-                    format!("unknown field `{f}` in step {i}"),
-                ));
-            }
-            let op = s
-                .get("op")
-                .and_then(Value::as_str)
-                .and_then(EngineOp::parse)
-                .ok_or(("step_invalid", format!("step {i}: unknown engine `op`")))?;
-            ops.push(op);
-        } else if let Some((_, step)) = LATER_STEPS.iter().find(|(t, _)| *t == ty) {
+        let ty = s.get("type").and_then(Value::as_str).unwrap_or_default();
+        if ty != "engine" {
             return Err((
                 "step_unsupported",
-                format!("`{ty}` steps are not implemented in this version yet ({step})"),
-            ));
-        } else {
-            return Err((
-                "step_unsupported",
-                format!("unknown step type `{ty}` (written by a newer Ddalgak?)"),
+                format!("`{ty}` steps are not implemented in this version yet"),
             ));
         }
+        let op = s
+            .get("op")
+            .and_then(Value::as_str)
+            .and_then(EngineOp::parse)
+            .ok_or(("step_invalid", format!("step {i}: unknown engine `op`")))?;
+        ops.push(op);
     }
     Ok((
         Binding {
@@ -303,154 +300,11 @@ fn rule(r: &Map<String, Value>) -> Result<(Binding, i64), (&'static str, String)
     ))
 }
 
-/// Interprets the bytes of a rules file.
-pub fn parse(bytes: &[u8]) -> Loaded {
-    let invalid = |why: String| Loaded::empty(FileState::Invalid(why));
-    let doc: Value = match serde_json::from_slice(bytes) {
-        Ok(v) => v,
-        Err(e) => return invalid(format!("not valid JSON: {e}")),
-    };
-    let Some(doc) = doc.as_object() else {
-        return invalid("the document is not a JSON object".into());
-    };
-    if doc.get("schema").and_then(Value::as_str) != Some("ddalgak.rules") {
-        return invalid("`schema` is not `ddalgak.rules`".into());
-    }
-    match doc.get("schema_version").and_then(Value::as_u64) {
-        Some(1) => {}
-        Some(v) if v > 1 => return Loaded::empty(FileState::NewerVersion(v)),
-        _ => return invalid("`schema_version` must be 1".into()),
-    }
-    let settings = doc.get("settings").and_then(Value::as_object);
-    let engine_on_start = settings
-        .and_then(|s| s.get("engine_on_start"))
-        .and_then(Value::as_str)
-        == Some("on");
-    let max_runs = settings
-        .and_then(|s| s.get("max_runs_per_second"))
-        .and_then(Value::as_u64)
-        .map_or(20, |n| n.clamp(1, 100));
-    let Some(profiles) = doc.get("profiles").and_then(Value::as_array) else {
-        return invalid("`profiles` is missing".into());
-    };
-    let active = doc
-        .get("active_profile")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let Some(profile) = profiles
-        .iter()
-        .filter_map(Value::as_object)
-        .find(|p| p.get("id").and_then(Value::as_str) == Some(active))
-    else {
-        return invalid(format!(
-            "`active_profile` `{active}` is not a profile of the file (unknown_profile)"
-        ));
-    };
-    let mode = profile
-        .get("default_mode")
-        .and_then(Value::as_str)
-        .unwrap_or("base")
-        .to_string();
-    let rules = profile
-        .get("rules")
-        .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or_default();
-    let mut out = Loaded {
-        state: FileState::Loaded,
-        revision: doc.get("revision").and_then(Value::as_u64),
-        profile: active.to_string(),
-        mode: mode.clone(),
-        engine_on_start,
-        max_runs_per_second: u32::try_from(max_runs).unwrap_or(20),
-        total: rules.len(),
-        ..Loaded::empty(FileState::Loaded)
-    };
-    let mut ids = std::collections::BTreeSet::new();
-    let mut candidates: Vec<Candidate> = Vec::new();
-    for (order, r) in rules.iter().enumerate() {
-        let Some(r) = r.as_object() else {
-            return invalid(format!("rule {order} is not an object"));
-        };
-        let id = r.get("id").and_then(Value::as_str).unwrap_or_default();
-        if !is_rule_id(id) {
-            return invalid(format!("rule {order} has no valid `id`"));
-        }
-        let Some(enabled) = r.get("enabled").and_then(Value::as_bool) else {
-            return invalid(format!("rule `{id}` has no `enabled`"));
-        };
-        if !ids.insert(id.to_string()) {
-            out.inactive.push(Inactive {
-                rule: id.into(),
-                code: "duplicate_rule_id",
-                reason: "the ID is used by an earlier rule".into(),
-            });
-            continue;
-        }
-        if !enabled {
-            out.disabled += 1;
-            continue;
-        }
-        let modes: Option<Vec<&str>> = r
-            .get("modes")
-            .and_then(Value::as_array)
-            .map(|m| m.iter().filter_map(Value::as_str).collect());
-        if let Some(m) = &modes
-            && !m.contains(&mode.as_str())
-        {
-            out.other_modes += 1;
-            continue;
-        }
-        match rule(r) {
-            Ok((binding, priority)) => candidates.push(Candidate {
-                binding,
-                scoped: modes.is_some(),
-                priority,
-                order,
-            }),
-            Err((code, reason)) => out.inactive.push(Inactive {
-                rule: id.into(),
-                code,
-                reason,
-            }),
-        }
-    }
-    // Duplicate triggers (same keys, scope and priority): the later rule is inactive.
-    let mut kept: Vec<Candidate> = Vec::new();
-    for c in candidates {
-        if kept.iter().any(|k| {
-            k.binding.trigger == c.binding.trigger
-                && k.scoped == c.scoped
-                && k.priority == c.priority
-        }) {
-            out.inactive.push(Inactive {
-                rule: c.binding.rule.clone(),
-                code: "duplicate_trigger",
-                reason: format!("an earlier rule has the trigger `{}`", c.binding.trigger),
-            });
-            continue;
-        }
-        kept.push(c);
-    }
-    kept.sort_by(|a, b| {
-        b.scoped
-            .cmp(&a.scoped)
-            .then(b.priority.cmp(&a.priority))
-            .then(a.order.cmp(&b.order))
-    });
-    out.bindings = kept.into_iter().map(|c| c.binding).collect();
-    out
-}
-
 /// `rules` in status output: counts, codes and rule IDs (never rule content).
 pub fn to_json(l: &Loaded) -> Value {
     json!({
         "file": l.state.as_str(),
-        "problem": match &l.state {
-            FileState::Invalid(why) => Some(why.clone()),
-            FileState::NewerVersion(v) => Some(format!("schema_version {v} is newer than this Ddalgak")),
-            _ => None,
-        },
+        "problem": l.state.problem(),
         "revision": l.revision,
         "engine_on_start": if l.engine_on_start { "on" } else { "off" },
         "total": l.total,
@@ -460,6 +314,56 @@ pub fn to_json(l: &Loaded) -> Value {
         "other_modes": l.other_modes,
         "inactive": l.inactive.iter().map(|i| json!({ "rule": i.rule, "code": i.code, "reason": i.reason })).collect::<Vec<_>>(),
     })
+}
+
+/// How one rule stands with this file and this version (`rule list`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RuleState {
+    pub profile: String,
+    pub id: String,
+    pub position: usize,
+    /// `active`, `disabled`, `inactive`, `other_mode` or `other_profile`.
+    pub state: &'static str,
+    pub code: Option<&'static str>,
+    pub reason: Option<String>,
+}
+
+/// The state of every rule of a usable document, in document order.
+pub fn rule_states(l: &store::Loaded) -> Vec<RuleState> {
+    let Some(doc) = &l.doc else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for (pi, p) in doc.profiles.iter().enumerate() {
+        let active_profile = p.id == doc.active_profile;
+        for (ri, e) in p.rules.iter().enumerate() {
+            let problem = l.report.inactive((pi, ri));
+            let (state, code, reason) = if e.enabled() != Some(true) {
+                ("disabled", None, None)
+            } else if let Some(pr) = problem {
+                ("inactive", Some(pr.code), Some(pr.message.clone()))
+            } else if !active_profile {
+                ("other_profile", None, None)
+            } else if e
+                .rule()
+                .and_then(|r| r.modes.as_ref())
+                .is_some_and(|m| !m.contains(&p.default_mode))
+            {
+                ("other_mode", None, None)
+            } else {
+                ("active", None, None)
+            };
+            out.push(RuleState {
+                profile: p.id.clone(),
+                id: e.id().unwrap_or_default().to_string(),
+                position: ri,
+                state,
+                code,
+                reason,
+            });
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -499,11 +403,23 @@ mod tests {
         assert!(!parse(b"[]").state.usable());
         let newer = json!({"schema": "ddalgak.rules", "schema_version": 2}).to_string();
         assert_eq!(parse(newer.as_bytes()).state, FileState::NewerVersion(2));
-        let wrong = json!({"schema": "ddalgak.rules", "schema_version": 1, "active_profile": "x",
-            "profiles": [{"id": "default", "rules": []}]})
+        let wrong = json!({"schema": "ddalgak.rules", "schema_version": 1, "hotkey_contract": 1,
+            "active_profile": "x",
+            "profiles": [{"id": "default", "title": "D", "default_mode": "base",
+                          "modes": [{"id": "base", "title": "B"}], "rules": []}]})
         .to_string();
         let l = parse(wrong.as_bytes());
-        assert!(matches!(&l.state, FileState::Invalid(w) if w.contains("unknown_profile")));
+        assert!(
+            matches!(&l.state, FileState::Invalid(w) if w.contains("active_profile")),
+            "{:?}",
+            l.state
+        );
+        // A schema violation outside the rules (no modes) is a whole-file problem.
+        let no_modes = json!({"schema": "ddalgak.rules", "schema_version": 1, "hotkey_contract": 1,
+            "active_profile": "default",
+            "profiles": [{"id": "default", "title": "D", "default_mode": "base", "modes": [], "rules": []}]})
+        .to_string();
+        assert!(!parse(no_modes.as_bytes()).state.usable());
     }
 
     #[test]
@@ -526,7 +442,7 @@ mod tests {
               "steps": [ { "type": "engine", "op": "pause" } ] },
             { "id": "nav-only", "title": "n", "enabled": true, "modes": ["nav"], "trigger": { "keys": "F18" },
               "steps": [ { "type": "engine", "op": "pause" } ] },
-            engine_rule("dup", "Ctrl+Alt+Shift+F13", "pause"),
+            engine_rule("dup", "Ctrl+Alt+Shift+F13", "toggle_pause"),
             engine_rule("pause-key", "F19", "pause")
         ])));
         assert_eq!(l.state, FileState::Loaded);
@@ -555,8 +471,8 @@ mod tests {
                 ("cond", "condition_unsupported"),
                 ("newer-field", "rule_unsupported"),
                 ("reserved", "trigger_reserved"),
-                ("pause-key", "duplicate_rule_id"),
                 ("dup", "duplicate_trigger"),
+                ("pause-key", "duplicate_rule_id"),
             ]
         );
         assert!(l.inactive[0].reason.contains("Step 68"));
@@ -623,10 +539,75 @@ mod tests {
                 p.display(),
                 l.state
             );
+            assert_eq!(l.errors, 0, "{}", p.display());
             for b in &l.bindings {
                 assert!(b.is_engine_control(), "{}: {}", p.display(), b.rule);
             }
         }
         assert!(seen >= 10);
+    }
+
+    #[test]
+    fn rule_states_name_every_rule() {
+        let mut nav = engine_rule("nav-only", "F18", "pause");
+        nav["modes"] = json!(["nav"]);
+        let mut off = engine_rule("off", "F17", "pause");
+        off["enabled"] = json!(false);
+        let bytes = doc(json!([
+            engine_rule("ra", "F13", "pause"),
+            nav,
+            off,
+            engine_rule("rb", "F13", "pause")
+        ]));
+        let l = store::interpret(&bytes, &Context::default(), MIGRATIONS);
+        let states = rule_states(&l);
+        let s: Vec<(&str, &str)> = states.iter().map(|r| (r.id.as_str(), r.state)).collect();
+        assert_eq!(
+            s,
+            [
+                ("ra", "active"),
+                ("nav-only", "other_mode"),
+                ("off", "disabled"),
+                ("rb", "inactive")
+            ]
+        );
+    }
+
+    #[test]
+    fn loading_and_validating_1000_rules_is_fast_enough() {
+        // 1000 distinct triggers (two-chord sequences over F13–F24 with modifiers), as a large
+        // but sensible file would have.
+        let rules: Vec<Value> = (0..1000)
+            .map(|i| {
+                let keys = format!(
+                    "{}F{} F{}",
+                    [
+                        "",
+                        "Ctrl+",
+                        "Alt+",
+                        "Shift+",
+                        "Ctrl+Shift+",
+                        "Ctrl+Alt+",
+                        "Alt+Shift+"
+                    ][i % 7],
+                    13 + (i / 7) % 12,
+                    13 + (i / 84) % 12
+                );
+                engine_rule(&format!("r-{i}"), &keys, "pause")
+            })
+            .collect();
+        let bytes = doc(Value::Array(rules));
+        let t = std::time::Instant::now();
+        let l = parse(&bytes);
+        let took = t.elapsed();
+        assert_eq!(l.total, 1000);
+        eprintln!(
+            "load + validate 1000 rules: {} ms ({} active)",
+            took.as_millis(),
+            l.bindings.len()
+        );
+        // DDALGAK-NFR-004 (< 100 ms with the hook) is measured on release builds; a debug build
+        // is several times slower.
+        assert!(took < std::time::Duration::from_secs(20), "{took:?}");
     }
 }

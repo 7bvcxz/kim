@@ -1,0 +1,12 @@
+{
+  "command": "rule.disable",
+  "error": {
+    "code": "busy",
+    "details": [],
+    "exit_code": 7,
+    "hint": "another `ddalgak rule …` command or the editor is saving; try again",
+    "message": "another Ddalgak is changing the rules (waited 300 ms for C:\\Users\\you\\AppData\\Local\\Temp\\ddalgak-cli-concurrent\\Roaming\\mouv\\ddalgak\\rules.json.lock)"
+  },
+  "ok": false,
+  "schema_version": 1
+}

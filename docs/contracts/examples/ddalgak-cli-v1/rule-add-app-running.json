@@ -1,0 +1,29 @@
+{
+  "command": "rule.add",
+  "data": {
+    "app": {
+      "active_revision": 2,
+      "in_sync": true,
+      "outcome": "unchanged",
+      "running": true
+    },
+    "backup": "rules.json.bak",
+    "changed": true,
+    "created": "new-key",
+    "dry_run": false,
+    "notes": [],
+    "problems": [],
+    "revision": {
+      "from": 1,
+      "to": 2
+    },
+    "rules": [
+      "new-key"
+    ],
+    "snapshot": "20261104T032116Z-r2.json",
+    "target": "saved"
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

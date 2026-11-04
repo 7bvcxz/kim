@@ -28,6 +28,9 @@ pub enum Method {
     Engine(crate::lifecycle::Request),
     /// End the tray app (engine off first, held keys released).
     Quit,
+    /// Read `rules.json` again now and apply it if it is valid (Step 67; the app also reloads on
+    /// file-change notifications).
+    RulesReload,
 }
 
 impl Method {
@@ -37,6 +40,7 @@ impl Method {
             Method::Health => "health".into(),
             Method::Engine(r) => format!("engine.{}", r.as_str()),
             Method::Quit => "app.quit".into(),
+            Method::RulesReload => "rules.reload".into(),
         }
     }
 
@@ -45,6 +49,7 @@ impl Method {
             "status" => Method::Status,
             "health" => Method::Health,
             "app.quit" => Method::Quit,
+            "rules.reload" => Method::RulesReload,
             other => {
                 let r = crate::lifecycle::Request::parse(other.strip_prefix("engine.")?)?;
                 if r == crate::lifecycle::Request::Emergency {
@@ -137,6 +142,7 @@ mod tests {
             Method::Status,
             Method::Health,
             Method::Quit,
+            Method::RulesReload,
             Method::Engine(Request::Start),
             Method::Engine(Request::Pause),
             Method::Engine(Request::Resume),

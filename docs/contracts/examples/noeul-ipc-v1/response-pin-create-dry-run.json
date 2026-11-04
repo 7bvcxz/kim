@@ -1,0 +1,9 @@
+{
+  "type": "response",
+  "id": 10,
+  "result": {
+    "dry_run": true,
+    "source": "region",
+    "pin": null
+  }
+}

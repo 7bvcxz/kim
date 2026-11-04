@@ -21,13 +21,23 @@
     "rules": {
       "active": 0,
       "active_rules": [],
+      "active_set": null,
       "disabled": 0,
+      "draft": null,
       "engine_on_start": "off",
       "file": "missing",
+      "in_sync": null,
       "inactive": [],
+      "last_reload": null,
       "other_modes": 0,
       "problem": null,
-      "revision": null,
+      "revision": 0,
+      "saved": {
+        "file": "missing",
+        "interrupted_save": false,
+        "problem": null,
+        "revision": 0
+      },
       "total": 0
     },
     "shortcuts": {

@@ -1,0 +1,374 @@
+{
+  "command": "rules.history",
+  "data": {
+    "backup": {
+      "exists": true,
+      "revision": 13,
+      "usable": true
+    },
+    "file": "loaded",
+    "revision": 14,
+    "snapshots": [
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      },
+      {
+        "at": "2026-11-04T03:21:18Z",
+        "command": "rules.draft.apply",
+        "name": "20261104T032118Z-r14.json",
+        "origin": "cli",
+        "revision": 14
+      }
+    ]
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

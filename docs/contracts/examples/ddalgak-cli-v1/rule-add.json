@@ -1,0 +1,26 @@
+{
+  "command": "rule.add",
+  "data": {
+    "app": {
+      "running": false
+    },
+    "backup": null,
+    "changed": true,
+    "created": "r-f3d1eca0-ff1b-4e86-8ad3-2a4f8ccf8e40",
+    "dry_run": false,
+    "notes": [],
+    "problems": [],
+    "revision": {
+      "from": 0,
+      "to": 1
+    },
+    "rules": [
+      "r-f3d1eca0-ff1b-4e86-8ad3-2a4f8ccf8e40"
+    ],
+    "snapshot": "20261104T032116Z-r1.json",
+    "target": "saved"
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

@@ -134,3 +134,12 @@ discloses Ddalgak's permissions (`keyboard-hook`, `input-injection`, `launch-pro
 `DDALGAK-FR-001…076`, `DDALGAK-NFR-001…010`, `DDALGAK-SEC-001…014`, `KIM-FR-001`, `KIM-FR-012`,
 `KIM-FR-013`, `KIM-FR-040…046`, `KIM-NFR-020…022`, `KIM-SEC-001`, `KIM-SEC-004`, `KIM-SEC-006`,
 `KIM-SEC-013`, `KIM-SEC-020…023`.
+
+## Notes
+
+- 2026-11-04 (Step 67): §10 is implemented and refined by
+  [ADR 0028](0028-ddalgak-rule-store-validation-and-reload.md): Ddalgak applies the published
+  `ddalgak-rules-v1` schema at run time with the `schema-check` validator, the document outside
+  its rules decides whether the file loads and each rule is checked on its own; its port of the
+  reference cross-references is compared with `xtask/src/ddalgak.rs` on every fixture. `ddalgak`
+  therefore depends on `regex` and `sha2` at run time.

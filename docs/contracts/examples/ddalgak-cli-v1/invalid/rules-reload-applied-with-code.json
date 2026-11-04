@@ -1,0 +1,39 @@
+{
+  "command": "rules.reload",
+  "data": {
+    "active_rules": [
+      "base-pause",
+      "base-off"
+    ],
+    "active_set": {
+      "loaded_at": "2026-11-04T03:21:16Z",
+      "revision": 2
+    },
+    "code": "rules_invalid",
+    "dry_run": false,
+    "engine": {
+      "hook": {
+        "installed": true,
+        "observe_only": true
+      },
+      "last_change": {
+        "origin": "cli",
+        "request": "start"
+      },
+      "off_reason": null,
+      "state": "running"
+    },
+    "in_sync": true,
+    "outcome": "unchanged",
+    "reason": null,
+    "saved": {
+      "file": "loaded",
+      "interrupted_save": false,
+      "problem": null,
+      "revision": 2
+    }
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

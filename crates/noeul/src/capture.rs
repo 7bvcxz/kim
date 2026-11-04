@@ -86,6 +86,9 @@ pub struct Monitor {
     /// Effective DPI (96 = 100 %, 144 = 150 %). Noeul is per-monitor DPI aware (v2), so every
     /// rectangle is in device pixels and this only scales Noeul's own drawing (NOEUL-FR-090).
     pub dpi: u32,
+    /// The work area: the monitor without the taskbar and docked app bars (`rcWork`). Pins are
+    /// placed and brought back inside it (Step 53, ADR 0029).
+    pub work: Rect,
 }
 
 /// The DPI of a 100 % monitor.
@@ -98,7 +101,15 @@ impl Monitor {
             rect,
             primary,
             dpi: BASE_DPI,
+            work: rect,
         }
+    }
+
+    /// The same monitor with a work area (e.g. without a taskbar at its bottom).
+    #[must_use]
+    pub const fn with_work(mut self, work: Rect) -> Monitor {
+        self.work = work;
+        self
     }
 
     #[must_use]
@@ -146,8 +157,38 @@ impl Desktop {
             "virtual_rect": self.virtual_rect.map(|r| r.to_json()),
             "monitors": self.monitors.iter().map(|m| json!({
                 "rect": m.rect.to_json(), "primary": m.primary, "dpi": m.dpi,
+                "work": m.work.to_json(),
             })).collect::<Vec<_>>(),
         })
+    }
+
+    /// The monitor that contains the point, else the one nearest to it (`None` without a
+    /// monitor).
+    pub fn monitor_near(&self, x: i32, y: i32) -> Option<&Monitor> {
+        let dist = |m: &Monitor| {
+            let r = m.rect;
+            let dx = if i64::from(x) < i64::from(r.x) {
+                i64::from(r.x) - i64::from(x)
+            } else if i64::from(x) >= r.right() {
+                i64::from(x) - r.right() + 1
+            } else {
+                0
+            };
+            let dy = if i64::from(y) < i64::from(r.y) {
+                i64::from(r.y) - i64::from(y)
+            } else if i64::from(y) >= r.bottom() {
+                i64::from(y) - r.bottom() + 1
+            } else {
+                0
+            };
+            dx * dx + dy * dy
+        };
+        self.monitors.iter().min_by_key(|m| dist(m))
+    }
+
+    /// Whether any part of `r` lies on a monitor.
+    pub fn shows(&self, r: Rect) -> bool {
+        self.monitors.iter().any(|m| m.rect.intersects(&r))
     }
 }
 
@@ -268,7 +309,7 @@ pub fn system() -> Box<dyn CaptureBackend> {
 /// from it is visible. It never reads the real screen.
 #[derive(Debug)]
 pub struct Synthetic {
-    monitors: Vec<Monitor>,
+    monitors: std::sync::Mutex<Vec<Monitor>>,
     state: std::sync::Mutex<DesktopState>,
     captures: std::sync::atomic::AtomicU64,
 }
@@ -276,18 +317,18 @@ pub struct Synthetic {
 impl Synthetic {
     pub fn new(monitors: Vec<Monitor>) -> Synthetic {
         Synthetic {
-            monitors,
+            monitors: std::sync::Mutex::new(monitors),
             state: std::sync::Mutex::new(DesktopState::Available),
             captures: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
-    /// Two monitors far off-screen: a primary 640×400 at 100 % and a 480×300 one at 150 % to its
-    /// right (the debug-build test hook, ADR 0026).
+    /// Two monitors far off-screen: a primary 640×400 at 100 % with a 32-pixel taskbar at its
+    /// bottom, and a 480×300 one at 150 % to its right (the debug-build test hook, ADR 0026).
     pub fn off_screen() -> Synthetic {
         let (x, y) = OFF_SCREEN;
         Synthetic::new(vec![
-            Monitor::new(Rect::new(x, y, 640, 400), true),
+            Monitor::new(Rect::new(x, y, 640, 400), true).with_work(Rect::new(x, y, 640, 368)),
             Monitor::new(Rect::new(x + 640, y, 480, 300), false).with_dpi(144),
         ])
     }
@@ -298,6 +339,15 @@ impl Synthetic {
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = s;
+    }
+
+    /// Changes the monitor layout, as attaching, removing or rearranging monitors does (the
+    /// runtime then reports a display change to the core).
+    pub fn set_monitors(&self, monitors: Vec<Monitor>) {
+        *self
+            .monitors
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = monitors;
     }
 
     /// How many pictures were taken.
@@ -324,7 +374,12 @@ impl CaptureBackend for Synthetic {
             .state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if state != DesktopState::Available || self.monitors.is_empty() {
+        let monitors = self
+            .monitors
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        if state != DesktopState::Available || monitors.is_empty() {
             return Desktop {
                 state: if state == DesktopState::Available {
                     DesktopState::NoDisplay
@@ -335,20 +390,10 @@ impl CaptureBackend for Synthetic {
                 monitors: Vec::new(),
             };
         }
-        let x0 = self.monitors.iter().map(|m| m.rect.x).min().unwrap_or(0);
-        let y0 = self.monitors.iter().map(|m| m.rect.y).min().unwrap_or(0);
-        let x1 = self
-            .monitors
-            .iter()
-            .map(|m| m.rect.right())
-            .max()
-            .unwrap_or(0);
-        let y1 = self
-            .monitors
-            .iter()
-            .map(|m| m.rect.bottom())
-            .max()
-            .unwrap_or(0);
+        let x0 = monitors.iter().map(|m| m.rect.x).min().unwrap_or(0);
+        let y0 = monitors.iter().map(|m| m.rect.y).min().unwrap_or(0);
+        let x1 = monitors.iter().map(|m| m.rect.right()).max().unwrap_or(0);
+        let y1 = monitors.iter().map(|m| m.rect.bottom()).max().unwrap_or(0);
         Desktop {
             state,
             virtual_rect: Some(Rect::new(
@@ -357,7 +402,7 @@ impl CaptureBackend for Synthetic {
                 u32::try_from(x1 - i64::from(x0)).unwrap_or(0),
                 u32::try_from(y1 - i64::from(y0)).unwrap_or(0),
             )),
-            monitors: self.monitors.clone(),
+            monitors,
         }
     }
 

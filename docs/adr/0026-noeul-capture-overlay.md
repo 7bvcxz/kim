@@ -217,3 +217,11 @@ Against the budgets:
 `NOEUL-FR-090`, `NOEUL-FR-100`, `NOEUL-FR-112`, `NOEUL-FR-114`, `NOEUL-NFR-001`…`NOEUL-NFR-003`,
 `NOEUL-NFR-012`, `NOEUL-NFR-014`, `NOEUL-SEC-001`, `NOEUL-SEC-003`, `NOEUL-SEC-005`,
 `NOEUL-SEC-008`, `NOEUL-SEC-012`, `NOEUL-SEC-013`, `KIM-SEC-020`.
+
+## Notes
+
+- 2026-11-04 (Step 53): §8 said the test hook's pins "never stay on top"; until Step 53 they were
+  still topmost (far off-screen, so nothing showed). Since [ADR 0029](0029-noeul-pin-engine.md)
+  they are created not topmost and `WS_EX_NOACTIVATE`, and a pin's context menu is never opened
+  under the hook. §5's `capture.pin` now goes through `App::pin_selection`, the engine's entry
+  point that Step 51's double-click also uses.

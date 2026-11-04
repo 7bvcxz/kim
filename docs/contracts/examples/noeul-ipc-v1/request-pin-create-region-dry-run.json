@@ -1,0 +1,15 @@
+{
+  "type": "request",
+  "id": 10,
+  "method": "pin.create",
+  "params": {
+    "source": "region",
+    "region": {
+      "x": 0,
+      "y": 0,
+      "width": 640,
+      "height": 360
+    },
+    "dry_run": true
+  }
+}

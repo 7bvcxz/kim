@@ -1,7 +1,7 @@
 //! Noeul (노을): a small native screenshot and floating-pin tool for Windows (pre-alpha:
-//! Step 49 foundation, Step 50 region selection overlay). See docs/NOEUL_PHILOSOPHY.md,
-//! docs/NOEUL_REQUIREMENTS.md, docs/adr/0023-noeul-app-foundation.md and
-//! docs/adr/0026-noeul-capture-overlay.md.
+//! Step 49 foundation, Step 50 region selection overlay, Step 53 floating pin engine). See
+//! docs/NOEUL_PHILOSOPHY.md, docs/NOEUL_REQUIREMENTS.md, docs/adr/0023-noeul-app-foundation.md,
+//! docs/adr/0026-noeul-capture-overlay.md and docs/adr/0029-noeul-pin-engine.md.
 //!
 //! Modules, from the bottom up:
 //!
@@ -11,7 +11,8 @@
 //! | [`capture`] | The OS capture boundary: desktop state, monitors, `CaptureBackend` |
 //! | [`selection`] | Capture sessions: one at a time, the frozen picture, [`selection::CaptureSelection`] |
 //! | [`overlay`] | The region-selection overlay: state machine, geometry, DPI math, pixels |
-//! | [`pins`] | Pins: stable IDs, close/reopen/destroy lifecycle, the window trait |
+//! | [`pins`] | The pin engine's model: stable IDs, placement, zoom, hide/show, close/reopen/destroy, the window trait |
+//! | [`zoom`] | Pin zoom levels, sizes, fitting and the premultiplying scaler |
 //! | [`annotation`] | **Placeholder**: annotation is Step 56 |
 //! | [`settings`], [`paths`] | `config.toml` and the stable per-user folders |
 //! | [`hotkeys`] | The shipped manifest subset, global registration, pin keys |
@@ -35,6 +36,7 @@ pub mod selection;
 pub mod settings;
 pub mod tray;
 pub mod util;
+pub mod zoom;
 
 #[cfg(windows)]
 #[allow(unsafe_code)]

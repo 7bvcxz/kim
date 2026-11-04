@@ -1,0 +1,11 @@
+{
+  "command": "rules.backup",
+  "data": {
+    "dry_run": false,
+    "revision": 14,
+    "snapshot": "20261104T032118Z-r14-backup.json"
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

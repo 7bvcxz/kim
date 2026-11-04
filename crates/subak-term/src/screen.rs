@@ -1,6 +1,8 @@
-//! The Host's model of one pane's terminal (Step 13, ADR 0030, docs/SCROLLBACK.md): a VT parser
-//! and screen emulator fed with every byte the pane writes, a bounded scrollback, the snapshot
-//! that reproduces the pane on a newly attached client, and capture for `pane.capture`.
+//! The model of one pane's terminal (Step 13, ADR 0030, docs/SCROLLBACK.md; shared with client
+//! views since Step 15, ADR 0036, docs/TERMINAL_EMULATOR.md): a VT parser and screen emulator fed
+//! with every byte the pane writes, a bounded scrollback, the snapshot that reproduces the pane on
+//! a newly attached client, and capture for `pane.capture`. The Host and every client view run
+//! this same code, so they agree on what each byte means.
 //!
 //! Portable: no OS calls, no allocation per byte in the common case, and nothing runs unless
 //! output arrives (the pane's reader thread calls [`Screen::feed`]).
@@ -10,11 +12,13 @@
 //! marks, C0 controls, cursor movement and addressing, erase and insert/delete of characters and
 //! lines, scroll regions (DECSTBM) and origin mode, scrolling (`SU`/`SD`, index, reverse index),
 //! SGR colours (16, 256, truecolour) and attributes, the alternate screen (47/1047/1048/1049),
-//! DEC private modes (cursor keys, autowrap, cursor visibility, reverse video; every other mode is
-//! remembered and replayed as it was set: mouse, bracketed paste, focus events…), the keypad
-//! mode, DEC line drawing, tab stops, the saved cursor, the window title (OSC 0/2) and the
-//! cursor shape (DECSCUSR). Device reports and queries are ignored: a terminal attached to the
-//! pane answers them, never the Host.
+//! DEC private modes (cursor keys, autowrap, cursor visibility, reverse video, the mouse tracking
+//! and encoding modes; every other mode is remembered and replayed as it was set: bracketed
+//! paste, focus events, synchronized output…), the keypad mode, DEC line drawing, tab stops, the
+//! saved cursor, the window title (OSC 0/2), OSC 8 hyperlinks and the cursor shape (DECSCUSR).
+//! Device reports and queries are ignored by default: a terminal attached to the pane answers
+//! them, never the Host. A client view that *is* the terminal turns
+//! [`Screen::set_answer_reports`] on and sends [`Screen::take_replies`] back to the pane.
 //!
 //! **Scrollback.** A row that scrolls off the top of the primary screen while the scroll region
 //! is the whole screen goes to the history (as xterm and tmux do), encoded compactly as text with
@@ -29,6 +33,7 @@
 
 use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Write as _;
+use std::sync::Arc;
 
 /// Default history length of a new pane, in rows (tmux `history-limit`).
 pub const DEFAULT_HISTORY_LINES: usize = 2000;
@@ -48,9 +53,15 @@ const OSC_MAX: usize = 4096;
 const PARAMS_MAX: usize = 64;
 /// Most DEC private modes remembered beyond the ones the model interprets.
 const MODES_MAX: usize = 64;
+/// Longest hyperlink target kept (OSC 8); longer ones are ignored, as are targets with controls.
+pub const LINK_URI_MAX: usize = 2048;
+/// Longest hyperlink `id=` parameter kept.
+const LINK_ID_MAX: usize = 250;
+/// Reply bytes kept for a client view that has not collected them yet.
+const REPLIES_MAX: usize = 4096;
 
 /// A colour of a cell.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Color {
     #[default]
     Default,
@@ -84,7 +95,7 @@ const FLAG_CODES: [(u16, &str); 10] = [
 ];
 
 /// Graphic rendition of a cell.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Attrs {
     pub fg: Color,
     pub bg: Color,
@@ -94,6 +105,47 @@ pub struct Attrs {
 impl Attrs {
     fn is_default(&self) -> bool {
         *self == Self::default()
+    }
+
+    pub fn bold(&self) -> bool {
+        self.flags & BOLD != 0
+    }
+
+    pub fn dim(&self) -> bool {
+        self.flags & DIM != 0
+    }
+
+    pub fn italic(&self) -> bool {
+        self.flags & ITALIC != 0
+    }
+
+    /// 0 = none, 1 = single, 2 = double.
+    pub fn underline(&self) -> u8 {
+        if self.flags & DOUBLE_UNDERLINE != 0 {
+            2
+        } else {
+            u8::from(self.flags & UNDERLINE != 0)
+        }
+    }
+
+    pub fn blink(&self) -> bool {
+        self.flags & BLINK != 0
+    }
+
+    pub fn inverse(&self) -> bool {
+        self.flags & INVERSE != 0
+    }
+
+    pub fn hidden(&self) -> bool {
+        self.flags & HIDDEN != 0
+    }
+
+    pub fn strike(&self) -> bool {
+        self.flags & STRIKE != 0
+    }
+
+    pub fn overline(&self) -> bool {
+        self.flags & OVERLINE != 0
     }
 
     /// The SGR sequence that sets exactly these attributes from any state.
@@ -134,6 +186,62 @@ const NARROW: u8 = 0;
 const WIDE: u8 = 1;
 const TAIL: u8 = 2;
 
+/// The target of an OSC 8 hyperlink. Shared by every cell printed while it was active.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Link {
+    /// The `id=` parameter, which joins the cells of one link across rows.
+    pub id: Option<Box<str>>,
+    pub uri: Box<str>,
+}
+
+impl Link {
+    /// The OSC 8 sequence that starts this link.
+    fn open(&self, out: &mut String) {
+        out.push_str("\x1b]8;");
+        if let Some(id) = &self.id {
+            out.push_str("id=");
+            out.push_str(id);
+        }
+        out.push(';');
+        out.push_str(&self.uri);
+        out.push_str("\x1b\\");
+    }
+}
+
+/// The OSC 8 sequence that ends a hyperlink.
+const LINK_CLOSE: &str = "\x1b]8;;\x1b\\";
+
+fn same_link(a: Option<&Arc<Link>>, b: Option<&Arc<Link>>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => Arc::ptr_eq(a, b) || a == b,
+        _ => false,
+    }
+}
+
+/// What part of a character one cell shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CellWidth {
+    /// A one-column character.
+    Narrow,
+    /// The first column of a two-column character.
+    Wide,
+    /// The second column of a two-column character (draws nothing of its own).
+    Tail,
+}
+
+/// One cell as a view or a renderer sees it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CellInfo<'a> {
+    pub ch: char,
+    pub width: CellWidth,
+    pub attrs: Attrs,
+    /// Combining marks drawn with the character (empty for most cells).
+    pub combining: &'a str,
+    /// The hyperlink the character belongs to (a tail cell reports its character's link).
+    pub link: Option<&'a Arc<Link>>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Cell {
     ch: char,
@@ -155,13 +263,16 @@ impl Cell {
     }
 }
 
+/// One row of cells: a screen row, or a history line decoded by [`Screen::history_row`].
 #[derive(Debug, Clone)]
-struct Row {
+pub struct Row {
     cells: Vec<Cell>,
     /// The line continues on the next row (autowrap happened here).
     wrapped: bool,
     /// Combining marks after the character of a column (rare).
     combining: Vec<(u16, String)>,
+    /// Hyperlinks of the columns that start a linked character (rare).
+    links: Vec<(u16, Arc<Link>)>,
 }
 
 impl Row {
@@ -170,12 +281,71 @@ impl Row {
             cells: vec![Cell::blank(attrs); cols],
             wrapped: false,
             combining: Vec::new(),
+            links: Vec::new(),
         }
     }
 
-    fn drop_combining(&mut self, from: usize, to: usize) {
+    /// Columns of the row.
+    pub fn cols(&self) -> usize {
+        self.cells.len()
+    }
+
+    /// The line continues on the next row (a soft wrap).
+    pub fn wrapped(&self) -> bool {
+        self.wrapped
+    }
+
+    /// The cell at column `x` (a blank cell past the end).
+    pub fn cell(&self, x: usize) -> CellInfo<'_> {
+        let Some(c) = self.cells.get(x) else {
+            return CellInfo {
+                ch: ' ',
+                width: CellWidth::Narrow,
+                attrs: Attrs::default(),
+                combining: "",
+                link: None,
+            };
+        };
+        CellInfo {
+            ch: c.ch,
+            width: match c.kind {
+                WIDE => CellWidth::Wide,
+                TAIL => CellWidth::Tail,
+                _ => CellWidth::Narrow,
+            },
+            attrs: c.attrs,
+            combining: if c.kind == TAIL {
+                ""
+            } else {
+                self.combining_at(x).unwrap_or("")
+            },
+            link: self.link_at(x),
+        }
+    }
+
+    /// The hyperlink of the character at column `x` (looked up at its first column).
+    pub fn link_at(&self, x: usize) -> Option<&Arc<Link>> {
+        if self.links.is_empty() {
+            return None;
+        }
+        let x = match self.cells.get(x) {
+            Some(c) if c.kind == TAIL && x > 0 => x - 1,
+            _ => x,
+        };
+        self.links
+            .iter()
+            .find(|(c, _)| usize::from(*c) == x)
+            .map(|(_, l)| l)
+    }
+
+    /// Forgets combining marks and hyperlinks of columns `from..to` (they are being replaced).
+    fn drop_extras(&mut self, from: usize, to: usize) {
         if !self.combining.is_empty() {
             self.combining
+                .retain(|(c, _)| !(from..to).contains(&usize::from(*c)));
+        }
+        if !self.links.is_empty() {
+            self.links
                 .retain(|(c, _)| !(from..to).contains(&usize::from(*c)));
         }
     }
@@ -192,16 +362,26 @@ impl Row {
         if self.wrapped {
             return self.cells.len();
         }
-        self.cells
+        let shown = self
+            .cells
             .iter()
             .rposition(|c| !c.is_plain_blank())
-            .map_or(0, |i| i + 1)
+            .map_or(0, |i| i + 1);
+        let linked = self
+            .links
+            .iter()
+            .map(|(c, _)| usize::from(*c) + 1)
+            .max()
+            .unwrap_or(0);
+        shown.max(linked).min(self.cells.len())
     }
 
-    /// The row as text with the SGR sequences it needs (from default attributes, back to them).
+    /// The row as text with the SGR and OSC 8 sequences it needs (from default attributes and no
+    /// hyperlink, back to them).
     fn encode(&self, out: &mut String) -> usize {
         let used = self.used();
         let mut cur = Attrs::default();
+        let mut link: Option<&Arc<Link>> = None;
         for (x, c) in self.cells[..used].iter().enumerate() {
             if c.kind == TAIL {
                 continue;
@@ -210,10 +390,21 @@ impl Row {
                 c.attrs.sgr(out);
                 cur = c.attrs;
             }
+            let l = self.link_at(x);
+            if !same_link(l, link) {
+                match l {
+                    Some(l) => l.open(out),
+                    None => out.push_str(LINK_CLOSE),
+                }
+                link = l;
+            }
             out.push(c.ch);
             if let Some(m) = self.combining_at(x) {
                 out.push_str(m);
             }
+        }
+        if link.is_some() {
+            out.push_str(LINK_CLOSE);
         }
         if !cur.is_default() {
             out.push_str("\x1b[0m");
@@ -221,8 +412,8 @@ impl Row {
         used
     }
 
-    /// The row as plain text, all its columns.
-    fn text(&self) -> String {
+    /// The row as plain text, all its columns (wide characters once, combining marks included).
+    pub fn text(&self) -> String {
         let mut s = String::new();
         for (x, c) in self.cells.iter().enumerate() {
             if c.kind == TAIL {
@@ -252,25 +443,42 @@ impl Line {
         self.vt.len() + LINE_OVERHEAD
     }
 
-    /// The text without its SGR sequences.
+    /// The text without its SGR and OSC 8 sequences.
     fn text(&self) -> String {
-        strip_sgr(&self.vt)
+        strip_vt(&self.vt)
     }
 }
 
-/// Removes the SGR sequences [`Row::encode`] writes (`ESC [ … m`).
-fn strip_sgr(vt: &str) -> String {
+/// Removes the sequences [`Row::encode`] writes: SGR (`ESC [ … m`) and OSC 8
+/// (`ESC ] 8 ; … ESC \`).
+fn strip_vt(vt: &str) -> String {
     let mut out = String::with_capacity(vt.len());
-    let mut it = vt.chars();
+    let mut it = vt.chars().peekable();
     while let Some(c) = it.next() {
-        if c == '\x1b' {
-            for c in it.by_ref() {
-                if c == 'm' {
-                    break;
+        if c != '\x1b' {
+            out.push(c);
+            continue;
+        }
+        match it.next() {
+            Some('[') => {
+                for c in it.by_ref() {
+                    if ('\x40'..='\x7e').contains(&c) {
+                        break;
+                    }
                 }
             }
-        } else {
-            out.push(c);
+            Some(']') => {
+                while let Some(c) = it.next() {
+                    if c == '\x07' {
+                        break;
+                    }
+                    if c == '\x1b' && it.peek() == Some(&'\\') {
+                        it.next();
+                        break;
+                    }
+                }
+            }
+            _ => {}
         }
     }
     out
@@ -422,7 +630,12 @@ struct Modes {
     newline: bool,
     cursor_visible: bool,
     reverse_video: bool,
-    /// Other DEC private modes as last set (mouse, bracketed paste, focus…), replayed as given.
+    /// Mouse tracking: 0 (off), 9, 1000, 1002 or 1003. Setting one replaces the others and
+    /// resetting any turns tracking off, as in xterm.
+    mouse: u16,
+    /// Mouse coordinate encoding: 0 (default), 1005, 1006, 1015 or 1016 (same rules).
+    mouse_encoding: u16,
+    /// Other DEC private modes as last set (bracketed paste, focus…), replayed as given.
     other: BTreeMap<u16, bool>,
 }
 
@@ -437,9 +650,81 @@ impl Default for Modes {
             newline: false,
             cursor_visible: true,
             reverse_video: false,
+            mouse: 0,
+            mouse_encoding: 0,
             other: BTreeMap::new(),
         }
     }
+}
+
+/// Which mouse events the program asked for (DEC private modes 9, 1000, 1002, 1003).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseTracking {
+    Off,
+    /// Mode 9: button presses only.
+    X10,
+    /// Mode 1000: presses, releases and the wheel.
+    Normal,
+    /// Mode 1002: also motion while a button is held.
+    ButtonEvent,
+    /// Mode 1003: also motion with no button held.
+    AnyEvent,
+}
+
+/// How mouse coordinates are encoded (DEC private modes 1005, 1006, 1015, 1016).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseEncoding {
+    /// `CSI M` with one byte per value (coordinates up to 223).
+    Default,
+    /// Mode 1005: `CSI M` with UTF-8 encoded values (up to 2015).
+    Utf8,
+    /// Mode 1006: `CSI < b ; x ; y M/m`.
+    Sgr,
+    /// Mode 1015: `CSI b ; x ; y M`.
+    Urxvt,
+    /// Mode 1016: like 1006 with pixel coordinates.
+    SgrPixels,
+}
+
+/// The modes a client view needs to encode input and draw the screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ModeState {
+    /// DECCKM: cursor keys send `SS3` sequences.
+    pub app_cursor: bool,
+    /// DECKPAM: the keypad sends application sequences.
+    pub app_keypad: bool,
+    /// LNM: Enter sends CR LF.
+    pub newline: bool,
+    pub autowrap: bool,
+    pub insert: bool,
+    pub origin: bool,
+    /// DECTCEM.
+    pub cursor_visible: bool,
+    /// DECSCNM: default foreground and background swapped.
+    pub reverse_video: bool,
+    pub alternate_screen: bool,
+    pub mouse: MouseTracking,
+    pub mouse_encoding: MouseEncoding,
+    /// Mode 2004.
+    pub bracketed_paste: bool,
+    /// Mode 1004.
+    pub focus_events: bool,
+    /// Mode 1007: the wheel sends cursor keys on the alternate screen.
+    pub alternate_scroll: bool,
+    /// Mode 9001: keys are sent as win32-input-mode sequences (ConPTY asks for it).
+    pub win32_input: bool,
+    /// Mode 2026: the program is between the start and end of a synchronized update.
+    pub synchronized_output: bool,
+    /// Mode 12: the cursor blinks (also implied by DECSCUSR 0, 1, 3, 5).
+    pub cursor_blink: bool,
+}
+
+/// The cursor's shape (DECSCUSR).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CursorShape {
+    Block,
+    Underline,
+    Bar,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -541,8 +826,13 @@ pub struct Screen {
     title: String,
     cursor_style: u8,
     last_char: Option<char>,
+    /// The OSC 8 hyperlink printed characters get.
+    link: Option<Arc<Link>>,
     history: History,
     parser: Parser,
+    /// Answer device reports (a client view that is the pane's terminal); never in the Host.
+    answer: bool,
+    replies: Vec<u8>,
 }
 
 impl Screen {
@@ -567,8 +857,11 @@ impl Screen {
             title: String::new(),
             cursor_style: 0,
             last_char: None,
+            link: None,
             history: History::new(limits),
             parser: Parser::new(),
+            answer: false,
+            replies: Vec::new(),
         }
     }
 
@@ -592,6 +885,114 @@ impl Screen {
         self.history.info()
     }
 
+    /// Row `y` of the active screen.
+    pub fn row(&self, y: u16) -> &Row {
+        let g = self.grid();
+        &g[usize::from(y).min(g.len() - 1)]
+    }
+
+    /// History lines kept (index 0 is the oldest).
+    pub fn history_len(&self) -> usize {
+        self.history.lines.len()
+    }
+
+    /// History line `i` (0 = the oldest kept) decoded into cells by this same parser, cut or
+    /// padded to `cols` columns. The history keeps lines as compact VT text, so a view that
+    /// scrolls back decodes the few lines it shows.
+    pub fn history_row(&self, i: usize, cols: u16) -> Option<Row> {
+        let line = self.history.lines.get(i)?;
+        let width = u16::try_from(line.width).unwrap_or(u16::MAX).max(1);
+        let mut scratch = Screen::new(width, 1, Limits { lines: 0, bytes: 0 });
+        scratch.feed(line.vt.as_bytes());
+        let mut row = scratch.primary.swap_remove(0);
+        fit_row(&mut row, usize::from(cols.max(1)));
+        row.wrapped = line.wrapped;
+        Some(row)
+    }
+
+    /// The window title (OSC 0/2).
+    pub fn title(&self) -> &str {
+        &self.title
+    }
+
+    /// The hyperlink that characters printed now get (OSC 8).
+    pub fn active_link(&self) -> Option<&Arc<Link>> {
+        self.link.as_ref()
+    }
+
+    /// The cursor's shape and whether it blinks (DECSCUSR, mode 12).
+    pub fn cursor_shape(&self) -> (CursorShape, bool) {
+        let blink = self.modes.other.get(&12).copied().unwrap_or(false);
+        match self.cursor_style {
+            0 => (CursorShape::Block, blink),
+            1 => (CursorShape::Block, true),
+            3 => (CursorShape::Underline, true),
+            4 => (CursorShape::Underline, false),
+            5 => (CursorShape::Bar, true),
+            6 => (CursorShape::Bar, false),
+            _ => (CursorShape::Block, false),
+        }
+    }
+
+    /// The modes input encoding and drawing depend on.
+    pub fn modes(&self) -> ModeState {
+        let m = &self.modes;
+        let other = |n: u16| m.other.get(&n).copied().unwrap_or(false);
+        ModeState {
+            app_cursor: m.app_cursor,
+            app_keypad: m.app_keypad,
+            newline: m.newline,
+            autowrap: m.autowrap,
+            insert: m.insert,
+            origin: m.origin,
+            cursor_visible: m.cursor_visible,
+            reverse_video: m.reverse_video,
+            alternate_screen: self.alt.is_some(),
+            mouse: match m.mouse {
+                9 => MouseTracking::X10,
+                1000 => MouseTracking::Normal,
+                1002 => MouseTracking::ButtonEvent,
+                1003 => MouseTracking::AnyEvent,
+                _ => MouseTracking::Off,
+            },
+            mouse_encoding: match m.mouse_encoding {
+                1005 => MouseEncoding::Utf8,
+                1006 => MouseEncoding::Sgr,
+                1015 => MouseEncoding::Urxvt,
+                1016 => MouseEncoding::SgrPixels,
+                _ => MouseEncoding::Default,
+            },
+            bracketed_paste: other(2004),
+            focus_events: other(1004),
+            alternate_scroll: other(1007),
+            win32_input: other(9001),
+            synchronized_output: other(2026),
+            cursor_blink: self.cursor_shape().1,
+        }
+    }
+
+    /// Answers device reports (DA, DSR, CPR, DECRQM) into [`Screen::take_replies`]. Off by
+    /// default and always off in the Host: the terminal attached to a pane answers, never the
+    /// Host. Only the view that owns the pane's size should turn it on, so a program gets one
+    /// answer.
+    pub fn set_answer_reports(&mut self, on: bool) {
+        self.answer = on;
+        if !on {
+            self.replies.clear();
+        }
+    }
+
+    /// The answers to device reports since the last call, to be written to the pane as input.
+    pub fn take_replies(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.replies)
+    }
+
+    fn reply(&mut self, s: &str) {
+        if self.answer && self.replies.len() + s.len() <= REPLIES_MAX {
+            self.replies.extend_from_slice(s.as_bytes());
+        }
+    }
+
     /// Approximate memory the model holds: both grids and the history.
     pub fn memory_bytes(&self) -> usize {
         let grid = |g: &Vec<Row>| {
@@ -603,7 +1004,16 @@ impl Screen {
                 })
                 .sum::<usize>()
         };
-        grid(&self.primary) + self.alt.as_ref().map_or(0, grid) + self.history.bytes
+        let links = |g: &Vec<Row>| {
+            g.iter()
+                .map(|r| r.links.capacity() * size_of::<(u16, Arc<Link>)>())
+                .sum::<usize>()
+        };
+        grid(&self.primary)
+            + self.alt.as_ref().map_or(0, grid)
+            + links(&self.primary)
+            + self.alt.as_ref().map_or(0, links)
+            + self.history.bytes
     }
 
     /// Sets the history bounds; lines beyond them are evicted at once.
@@ -834,6 +1244,7 @@ impl Screen {
                         kind: NARROW,
                     });
                     row.combining.clear();
+                    row.links.clear();
                     row.wrapped = false;
                 }
                 self.top = 0;
@@ -909,14 +1320,54 @@ impl Screen {
         let Some(sep) = osc.iter().position(|&c| c == b';') else {
             return;
         };
-        if matches!(&osc[..sep], b"0" | b"2") {
-            let text = String::from_utf8_lossy(&osc[sep + 1..]);
-            self.title = text
-                .chars()
-                .filter(|c| !c.is_control())
-                .take(TITLE_MAX)
-                .collect();
+        match &osc[..sep] {
+            b"0" | b"2" => {
+                let text = String::from_utf8_lossy(&osc[sep + 1..]);
+                self.title = text
+                    .chars()
+                    .filter(|c| !c.is_control())
+                    .take(TITLE_MAX)
+                    .collect();
+            }
+            b"8" => self.set_link(&osc[sep + 1..]),
+            _ => {}
         }
+    }
+
+    /// OSC 8 `params ; uri`: an empty URI ends the hyperlink. A target that is too long, is not
+    /// UTF-8 or contains control characters is not a link (the text still prints).
+    fn set_link(&mut self, rest: &[u8]) {
+        let Some(sep) = rest.iter().position(|&c| c == b';') else {
+            self.link = None;
+            return;
+        };
+        let (params, uri) = (&rest[..sep], &rest[sep + 1..]);
+        let ok = |s: &str, max: usize| {
+            !s.is_empty() && s.len() <= max && !s.chars().any(|c| c.is_control() || c == ' ')
+        };
+        let Ok(uri) = std::str::from_utf8(uri) else {
+            self.link = None;
+            return;
+        };
+        if uri.is_empty() || !ok(uri, LINK_URI_MAX) {
+            self.link = None;
+            return;
+        }
+        let id = std::str::from_utf8(params).ok().and_then(|p| {
+            p.split(':')
+                .find_map(|kv| kv.strip_prefix("id="))
+                .filter(|id| ok(id, LINK_ID_MAX))
+        });
+        if let Some(cur) = &self.link
+            && *cur.uri == *uri
+            && cur.id.as_deref() == id
+        {
+            return;
+        }
+        self.link = Some(Arc::new(Link {
+            id: id.map(Into::into),
+            uri: uri.into(),
+        }));
     }
 
     fn execute(&mut self, b: u8) {
@@ -1002,13 +1453,17 @@ impl Screen {
             self.insert_cells(usize::from(w));
         }
         let attrs = self.attrs;
+        let link = self.link.clone();
         let y = usize::from(self.y);
         let row = &mut self.grid_mut()[y];
         fix_wide(row, x);
         if w == 2 {
             fix_wide(row, x + 1);
         }
-        row.drop_combining(x, x + usize::from(w));
+        row.drop_extras(x, x + usize::from(w));
+        if let Some(l) = link {
+            row.links.push((u16::try_from(x).unwrap_or(0), l));
+        }
         row.cells[x] = Cell {
             ch: c,
             attrs,
@@ -1147,7 +1602,7 @@ impl Screen {
         for c in &mut row.cells[from..to] {
             *c = Cell::blank(ea);
         }
-        row.drop_combining(from, to);
+        row.drop_extras(from, to);
         if to == row.cells.len() {
             row.wrapped = false;
         }
@@ -1174,7 +1629,7 @@ impl Screen {
         if row.cells[cols - 1].kind == WIDE {
             row.cells[cols - 1] = Cell::blank(ea);
         }
-        shift_combining(row, x, isize::try_from(n).unwrap_or(0), cols);
+        shift_extras(row, x, isize::try_from(n).unwrap_or(0), cols);
     }
 
     fn delete_cells(&mut self, n: usize) {
@@ -1187,10 +1642,10 @@ impl Screen {
         if x + n < cols {
             fix_wide(row, x + n);
         }
-        row.drop_combining(x, x + n);
+        row.drop_extras(x, x + n);
         row.cells.drain(x..x + n);
         row.cells.resize(cols, Cell::blank(ea));
-        shift_combining(row, x + n, -isize::try_from(n).unwrap_or(0), cols);
+        shift_extras(row, x + n, -isize::try_from(n).unwrap_or(0), cols);
     }
 
     fn move_to(&mut self, x: usize, y: usize) {
@@ -1293,17 +1748,45 @@ impl Screen {
             match (private, inter, f) {
                 (0, b" ", b'q') => self.cursor_style = u8::try_from(p(0, 0)).unwrap_or(0).min(6),
                 (0, b"!", b'p') => self.soft_reset(),
+                // DECRQM: report whether a mode is set (1), reset (2) or unknown (0).
+                (0 | b'?', b"$", b'p') => {
+                    let m = params
+                        .first()
+                        .and_then(|g| g.first().copied().flatten())
+                        .unwrap_or(0);
+                    let state = if private == b'?' {
+                        self.private_mode_state(m)
+                    } else {
+                        match m {
+                            4 => 2 - u8::from(self.modes.insert),
+                            20 => 2 - u8::from(self.modes.newline),
+                            _ => 0,
+                        }
+                    };
+                    let q = if private == b'?' { "?" } else { "" };
+                    self.reply(&format!("\x1b[{q}{m};{state}$y"));
+                }
                 _ => {}
             }
             return;
         }
         if private != 0 {
-            if private == b'?' && matches!(f, b'h' | b'l') {
-                for g in &params {
-                    if let Some(Some(m)) = g.first() {
-                        self.private_mode(*m, f == b'h');
+            match (private, f) {
+                (b'?', b'h' | b'l') => {
+                    for g in &params {
+                        if let Some(Some(m)) = g.first() {
+                            self.private_mode(*m, f == b'h');
+                        }
                     }
                 }
+                // DA2: a VT220-class terminal, firmware version 10.
+                (b'>', b'c') if p(0, 0) == 0 => self.reply("\x1b[>1;10;0c"),
+                // DECXCPR: the cursor position with the page.
+                (b'?', b'n') if p(0, 0) == 6 => {
+                    let (row, col) = self.report_position();
+                    self.reply(&format!("\x1b[?{row};{col};1R"));
+                }
+                _ => {}
             }
             return;
         }
@@ -1396,6 +1879,16 @@ impl Screen {
                 }
                 self.move_to(nx, y);
             }
+            // DA1: VT220 with ANSI colour.
+            b'c' if p(0, 0) == 0 => self.reply("\x1b[?62;22c"),
+            b'n' => match p(0, 0) {
+                5 => self.reply("\x1b[0n"),
+                6 => {
+                    let (row, col) = self.report_position();
+                    self.reply(&format!("\x1b[{row};{col}R"));
+                }
+                _ => {}
+            },
             b'b' => {
                 if let Some(c) = self.last_char {
                     for _ in 0..n(0).min(cols * rows) {
@@ -1490,12 +1983,44 @@ impl Screen {
             }
             // DECCOLM would resize the terminal; the pane's size is the Host's to decide.
             3 => {}
+            9 | 1000 | 1002 | 1003 => self.modes.mouse = if on { m } else { 0 },
+            1005 | 1006 | 1015 | 1016 => self.modes.mouse_encoding = if on { m } else { 0 },
             _ => {
                 if self.modes.other.contains_key(&m) || self.modes.other.len() < MODES_MAX {
                     self.modes.other.insert(m, on);
                 }
             }
         }
+    }
+
+    /// DECRQM's answer for DEC private mode `m`: 1 set, 2 reset, 0 not recognized.
+    fn private_mode_state(&self, m: u16) -> u8 {
+        let md = &self.modes;
+        let flag = |on: bool| if on { 1 } else { 2 };
+        match m {
+            1 => flag(md.app_cursor),
+            5 => flag(md.reverse_video),
+            6 => flag(md.origin),
+            7 => flag(md.autowrap),
+            25 => flag(md.cursor_visible),
+            47 | 1047 | 1049 => flag(self.alt.is_some()),
+            9 | 1000 | 1002 | 1003 => flag(md.mouse == m),
+            1005 | 1006 | 1015 | 1016 => flag(md.mouse_encoding == m),
+            12 | 1004 | 1007 | 2004 | 2026 | 9001 => {
+                flag(md.other.get(&m).copied().unwrap_or(false))
+            }
+            _ => md.other.get(&m).map_or(0, |on| flag(*on)),
+        }
+    }
+
+    /// The cursor position as CPR reports it: 1-based, relative to the region in origin mode.
+    fn report_position(&self) -> (usize, usize) {
+        let row = if self.modes.origin {
+            usize::from(self.y.saturating_sub(self.top)) + 1
+        } else {
+            usize::from(self.y) + 1
+        };
+        (row, usize::from(self.x) + 1)
     }
 
     fn sgr(&mut self, params: &[Vec<Option<u16>>]) {
@@ -1638,16 +2163,7 @@ impl Screen {
         let fit = |g: &mut Vec<Row>| {
             g.truncate(r);
             for row in g.iter_mut() {
-                if row.cells.len() > c {
-                    row.cells.truncate(c);
-                    if row.cells[c - 1].kind == WIDE {
-                        row.cells[c - 1] = Cell::blank(row.cells[c - 1].attrs);
-                    }
-                    row.drop_combining(c, usize::MAX);
-                    row.wrapped = false;
-                } else {
-                    row.cells.resize(c, Cell::blank(Attrs::default()));
-                }
+                fit_row(row, c);
             }
             while g.len() < r {
                 g.push(Row::new(c, Attrs::default()));
@@ -1759,9 +2275,16 @@ impl Screen {
             let c = row.cells[lx];
             let _ = write!(s, "\x1b[{};{}H", y + 1, lx + 1);
             c.attrs.sgr(&mut s);
+            let link = row.link_at(lx);
+            if let Some(l) = link {
+                l.open(&mut s);
+            }
             s.push(if c.kind == TAIL { ' ' } else { c.ch });
             if let Some(m) = row.combining_at(lx) {
                 s.push_str(m);
+            }
+            if link.is_some() {
+                s.push_str(LINK_CLOSE);
             }
         } else {
             let _ = write!(s, "\x1b[{};{}H", y + 1, x + 1);
@@ -1803,6 +2326,12 @@ impl Screen {
         if m.app_keypad {
             s.push_str("\x1b=");
         }
+        if m.mouse != 0 {
+            let _ = write!(s, "\x1b[?{}h", m.mouse);
+        }
+        if m.mouse_encoding != 0 {
+            let _ = write!(s, "\x1b[?{}h", m.mouse_encoding);
+        }
         for (mode, on) in &m.other {
             if *on {
                 let _ = write!(s, "\x1b[?{mode}h");
@@ -1815,6 +2344,9 @@ impl Screen {
             let _ = write!(s, "\x1b]0;{}\x07", self.title);
         }
         self.attrs.sgr(&mut s);
+        if let Some(l) = &self.link {
+            l.open(&mut s);
+        }
         if m.cursor_visible {
             s.push_str("\x1b[?25h");
         }
@@ -1897,15 +2429,26 @@ impl Screen {
     }
 }
 
-/// Paints a grid on a cleared client screen, row by row, at absolute positions.
+/// Paints a grid on a cleared client screen, row by row, at absolute positions. A row that
+/// soft-wraps into the next is continued without positioning, so the client's autowrap marks it
+/// wrapped too (copy and `capture --join` join it on the client as on the Host).
 fn paint(grid: &[Row], s: &mut String) {
     s.push_str("\x1b[H\x1b[2J");
+    let mut continues = false;
     for (y, row) in grid.iter().enumerate() {
-        if row.used() == 0 {
-            continue;
+        let used = row.used();
+        if continues {
+            // The previous row filled its last column; printing here wraps it on the client.
+            if used == 0 {
+                s.push(' ');
+            } else {
+                row.encode(s);
+            }
+        } else if used > 0 {
+            let _ = write!(s, "\x1b[{};1H", y + 1);
+            row.encode(s);
         }
-        let _ = write!(s, "\x1b[{};1H", y + 1);
-        row.encode(s);
+        continues = row.wrapped && y + 1 < grid.len();
     }
 }
 
@@ -1941,6 +2484,8 @@ fn fix_wide(row: &mut Row, x: usize) {
             let a = row.cells[x - 1].attrs;
             row.cells[x - 1] = Cell::blank(a);
             row.cells[x] = Cell::blank(c.attrs);
+            // The character's marks and hyperlink went with it.
+            row.drop_extras(x - 1, x);
         }
         WIDE if x + 1 < row.cells.len() => {
             let a = row.cells[x + 1].attrs;
@@ -1951,12 +2496,32 @@ fn fix_wide(row: &mut Row, x: usize) {
     }
 }
 
-/// Moves combining marks at or after column `from` by `by` columns, dropping those leaving the row.
-fn shift_combining(row: &mut Row, from: usize, by: isize, cols: usize) {
-    if row.combining.is_empty() {
+/// Cuts or pads a row to `c` columns (no reflow).
+fn fit_row(row: &mut Row, c: usize) {
+    if row.cells.len() > c {
+        row.cells.truncate(c);
+        if row.cells[c - 1].kind == WIDE {
+            row.cells[c - 1] = Cell::blank(row.cells[c - 1].attrs);
+        }
+        row.drop_extras(c, usize::MAX);
+        row.wrapped = false;
+    } else {
+        row.cells.resize(c, Cell::blank(Attrs::default()));
+    }
+}
+
+/// Moves combining marks and hyperlinks at or after column `from` by `by` columns, dropping
+/// those leaving the row.
+fn shift_extras(row: &mut Row, from: usize, by: isize, cols: usize) {
+    shift_cols(&mut row.combining, from, by, cols);
+    shift_cols(&mut row.links, from, by, cols);
+}
+
+fn shift_cols<T>(v: &mut Vec<(u16, T)>, from: usize, by: isize, cols: usize) {
+    if v.is_empty() {
         return;
     }
-    row.combining.retain_mut(|(c, _)| {
+    v.retain_mut(|(c, _)| {
         let i = usize::from(*c);
         if i < from {
             return true;
@@ -2175,9 +2740,19 @@ mod tests {
 
     /// Everything but the history (whose rows a client re-wraps at its width after a resize).
     fn assert_same(s: &Screen, c: &Screen) {
-        let cells = |g: &Vec<Row>| -> Vec<Vec<(char, Attrs, u8)>> {
+        type Cells = Vec<Vec<(char, Attrs, u8, Option<Link>)>>;
+        let cells = |g: &Vec<Row>| -> Cells {
             g.iter()
-                .map(|r| r.cells.iter().map(|c| (c.ch, c.attrs, c.kind)).collect())
+                .map(|r| {
+                    r.cells
+                        .iter()
+                        .enumerate()
+                        .map(|(x, c)| {
+                            let link = r.link_at(x).map(|l| (**l).clone());
+                            (c.ch, c.attrs, c.kind, link)
+                        })
+                        .collect()
+                })
                 .collect()
         };
         assert_eq!(cells(&s.primary), cells(&c.primary), "primary screen");
@@ -2199,6 +2774,7 @@ mod tests {
         assert_eq!(s.charsets, c.charsets, "charsets");
         assert_eq!(s.shift, c.shift, "shift");
         assert_eq!(s.cursor_style, c.cursor_style, "cursor style");
+        assert_eq!(s.link, c.link, "active hyperlink");
         assert_eq!(
             s.saved[usize::from(s.alt.is_some())].map(|v| (v.x, v.y, v.attrs)),
             c.saved[usize::from(c.alt.is_some())].map(|v| (v.x, v.y, v.attrs)),

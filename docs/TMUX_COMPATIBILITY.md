@@ -6,7 +6,8 @@ mouv · Tracks [SUBAK-FR-060](PRODUCT_REQUIREMENTS.md)
 > **Only the session basics are implemented, partially** (Step 10: named Terminals in the Host;
 > Step 11: pane programs and environment; Step 12: the CLI `subak new|ls|info|status|attach|
 > detach|rename|stop|kill|rm`; Step 13: scrollback, replay, `capture`, `clear-history`,
-> `--history-limit`). 10 rows are `implemented` and 27 are `partial`, all with
+> `--history-limit`; Step 15: mouse reports, wheel, word and line selection and focus events in
+> the client view). 10 rows are `implemented` and 32 are `partial`, all with
 > automated evidence; every other row is `planned`, `deferred` or `unsupported`. This document
 > is an inventory and a plan, not a compatibility claim.
 
@@ -38,7 +39,7 @@ appears as one GUI tab. A Subak internal **Window** is a tmux **window**; it is 
 **Status values.** `planned` — intended, not built · `partial` — some documented behaviour has
 automated evidence · `implemented` — the whole row has automated evidence · `deferred` — not
 planned before Step 26; may be revisited · `unsupported` — will not be provided, by design.
-`implemented` is used since Step 11 (four environment rows) and Step 12 (invocation, `has-session`, `new -d`); Step 13 made six scrollback rows `partial`.
+`implemented` is used since Step 11 (four environment rows) and Step 12 (invocation, `has-session`, `new -d`); Step 13 made six scrollback rows `partial`; Step 15 made five client-view rows `partial`.
 
 **Target Steps.**
 
@@ -198,7 +199,7 @@ Grouped by the manual page section that documents them. `set-window-option` and
 | tmux feature | tmux reference | Subak equivalent (planned) | Status | Target Step | Evidence |
 | --- | --- | --- | --- | --- | --- |
 | Choose a paste buffer | `choose-buffer` | Buffer chooser overlay | planned | 24 | — |
-| Clear pane history | `clear-history` (`clearhist`) | Clear the Pane's scrollback; `-H` also clears hyperlinks. *Partial:* `subak clear-history [<target>]` (asks or `--yes`, `--dry-run`) and IPC `pane.clear_history`; the screen stays; no hyperlinks are kept, so `-H` has nothing to clear yet | partial | 13 | `crates/subak/tests/scrollback_replay.rs::history_is_bounded_evicts_the_oldest_lines_and_clears_on_request` (2026-11-04) |
+| Clear pane history | `clear-history` (`clearhist`) | Clear the Pane's scrollback; `-H` also clears hyperlinks. *Partial:* `subak clear-history [<target>]` (asks or `--yes`, `--dry-run`) and IPC `pane.clear_history`; the screen stays; hyperlinks are kept in the history since Step 15 and go with its lines; `-H` alone (hyperlinks only) is not offered yet | partial | 13 | `crates/subak/tests/scrollback_replay.rs::history_is_bounded_evicts_the_oldest_lines_and_clears_on_request` (2026-11-04) |
 | Delete a paste buffer | `delete-buffer` (`deleteb`) | Delete a buffer | planned | 24 | — |
 | List paste buffers | `list-buffers` (`lsb`) | List buffers (`-F`, `-f`, `-O`) | planned | 24 | — |
 | Load a buffer from a file | `load-buffer` (`loadb`) | Load a file or stdin (`-`); `-w` also sets the clipboard | planned | 24 | — |
@@ -329,14 +330,14 @@ when `mouse` is on.
 
 | tmux feature | tmux reference | Subak equivalent (planned) | Status | Target Step | Evidence |
 | --- | --- | --- | --- | --- | --- |
-| Click focuses a pane; forwarded if the app uses the mouse | `MouseDown1Pane` → `select-pane -t=; send -M` | Click focuses the Pane; mouse reporting forwarded when the program requests it | planned | 22 | — |
+| Click focuses a pane; forwarded if the app uses the mouse | `MouseDown1Pane` → `select-pane -t=; send -M` | Click focuses the Pane; mouse reporting forwarded when the program requests it. *Partial:* the client view encodes the program's mouse reports for every tracking mode and encoding, and Shift keeps the mouse for selection ([TERMINAL_EMULATOR §4.3](TERMINAL_EMULATOR.md)); the window (Step 16) and focusing split panes (Step 22) are later | partial | 15, 22 | `crates/subak-term/tests/view.rs::the_view_routes_the_mouse_to_the_program_or_to_selection_and_scrolling` (2026-11-04) |
 | Drag selects text | `MouseDrag1Pane` → `copy-mode -M` (or `send -M`) | Drag selection in copy mode | planned | 24 | — |
 | Ctrl-drag creates a floating pane | `C-MouseDrag1Pane`, `C-MouseDrag1Empty` → `new-pane -M` | *Rationale:* floating panes deferred | deferred | post-26 | — |
 | Alt-drag moves a floating pane | `M-MouseDrag1Pane`, `M-MouseDrag1Border` → `move-pane -M` | *Rationale:* floating panes deferred | deferred | post-26 | — |
-| Wheel up scrolls history | `WheelUpPane` → `copy-mode -e` (or `send -M`) | Wheel scrolls scrollback; forwarded in the alternate screen or when the program uses the mouse | planned | 13 | — |
+| Wheel up scrolls history | `WheelUpPane` → `copy-mode -e` (or `send -M`) | Wheel scrolls scrollback; forwarded in the alternate screen or when the program uses the mouse. *Partial:* the client view scrolls its viewport over the Host's history, forwards the wheel to programs that track the mouse and sends cursor keys on the alternate screen when the program enables alternate scroll (1007); the window that delivers the wheel is Step 16 | partial | 13, 15 | `crates/subak-term/tests/view.rs::the_view_routes_the_mouse_to_the_program_or_to_selection_and_scrolling` (2026-11-04) |
 | Middle-click pastes | `MouseDown2Pane` → `paste -p` | Middle-click pastes the latest buffer | planned | 24 | — |
-| Double-click copies a word | `DoubleClick1Pane` → `select-word; copy-pipe-and-cancel` | Same gesture | planned | 24 | — |
-| Triple-click copies a line | `TripleClick1Pane` → `select-line; copy-pipe-and-cancel` | Same gesture | planned | 24 | — |
+| Double-click copies a word | `DoubleClick1Pane` → `select-word; copy-pipe-and-cancel` | Same gesture. *Partial:* word selection and its copy text in the client view (Windows Terminal's word delimiters, wide characters once); the gesture and the clipboard are the GUI's (Steps 16, 19) | partial | 15, 24 | `crates/subak-term/tests/view.rs::word_and_block_selection` (2026-11-04) |
+| Triple-click copies a line | `TripleClick1Pane` → `select-line; copy-pipe-and-cancel` | Same gesture. *Partial:* line selection (soft-wrapped rows as one line) and its copy text in the client view; the gesture and the clipboard are the GUI's (Steps 16, 19) | partial | 15, 24 | `crates/subak-term/tests/view.rs::copy_joins_soft_wrapped_rows_but_not_hard_line_breaks` (2026-11-04) |
 | Click a border selects the pane | `MouseDown1Border` → `select-pane -t=` | Same gesture | planned | 22 | — |
 | Drag a border resizes | `MouseDrag1Border` → `resize-pane -M` | Drag the split divider | planned | 22 | — |
 | Click the window list selects a window | `MouseDown1Status` → `switch-client -t=` | Click a Window in the in-tab window list | planned | 25 | — |
@@ -446,7 +447,7 @@ command (`send-keys -X <command>`) documented in tmux 3.8 is named in this table
 | Exit when no sessions remain | `exit-empty` | Fixed behaviour: the Host exits when it owns no Terminals and no client is attached (SUBAK-FR-002) | planned | 10 | — |
 | Exit when no clients are attached | `exit-unattached` | *Rationale:* contradicts Subak's core promise that Terminals outlive clients (SUBAK-FR-003) | unsupported | — | — |
 | Extended keys to programs | `extended-keys`, `extended-keys-format` | *Rationale:* Subak sends xterm encoding or win32-input-mode (ADR 0009); CSI u extended keys revisited after Step 23 | deferred | post-26 | — |
-| Focus events to programs | `focus-events` | Same | planned | 25 | — |
+| Focus events to programs | `focus-events` | Same. *Partial:* the client view sends `CSI I`/`CSI O` once per change when the program enables 1004 (the inbox ConPTY passes 1004 through, measured on 19045); the window's focus changes are Step 16 | partial | 15, 25 | `crates/subak-term/tests/view.rs::focus_reports_and_hyperlink_hit_test` (2026-11-04) |
 | OSC 52 clipboard | `set-clipboard`, `get-clipboard` | Windows clipboard; reading is opt-in (privacy) | planned | 24 | — |
 | Prompt history file | `history-file`, `prompt-history-limit` | Same, stored in the user profile | planned | 24 | — |
 | Escape-sequence size limit | `input-buffer-size` | Same | planned | 25 | — |
@@ -928,8 +929,8 @@ whenever a row or Status changes.
 
 | Status | Rows |
 | --- | --- |
-| `planned` | 490 |
-| `partial` | 27 |
+| `planned` | 485 |
+| `partial` | 32 |
 | `implemented` | 10 |
 | `deferred` | 55 |
 | `unsupported` | 24 |
@@ -941,11 +942,11 @@ whenever a row or Status changes.
 | §2 Commands | 71 | 10 | 1 | 5 | 5 | 92 |
 | §3 Notable command flags | 12 | 5 | 1 | 1 | 1 | 20 |
 | §4 Prefix table | 62 | 0 | 0 | 9 | 1 | 72 |
-| §5 Root table (mouse) | 12 | 0 | 0 | 7 | 0 | 19 |
+| §5 Root table (mouse) | 8 | 4 | 0 | 7 | 0 | 19 |
 | §6 Key tables overview | 7 | 0 | 0 | 1 | 0 | 8 |
 | §7 Copy mode | 29 | 0 | 0 | 0 | 0 | 29 |
 | §8 Other pane modes | 5 | 0 | 0 | 2 | 0 | 7 |
-| §9 Options | 79 | 2 | 0 | 9 | 5 | 95 |
+| §9 Options | 78 | 3 | 0 | 9 | 5 | 95 |
 | §10 Formats | 40 | 0 | 0 | 2 | 2 | 44 |
 | §11 Status line and styles | 17 | 0 | 0 | 0 | 0 | 17 |
 | §12 Hooks | 53 | 0 | 0 | 4 | 0 | 57 |
@@ -959,7 +960,7 @@ whenever a row or Status changes.
 | §20 Multiple clients and access control | 5 | 3 | 0 | 2 | 4 | 14 |
 | §21 Layouts, names, alerts, pane lifecycle | 22 | 0 | 0 | 1 | 0 | 23 |
 | §22 Terminal integration and exit messages | 0 | 2 | 0 | 1 | 0 | 3 |
-| **Total** | **490** | **27** | **10** | **55** | **24** | **606** |
+| **Total** | **485** | **32** | **10** | **55** | **24** | **606** |
 
 Coverage checks for matrix version 1: all 92 commands and their aliases, all 184 options in
 `options-table.c`, all 51 named hooks and all 99 copy-mode commands of tmux 3.8 appear in the

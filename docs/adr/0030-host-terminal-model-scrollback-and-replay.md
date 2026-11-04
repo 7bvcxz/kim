@@ -133,3 +133,13 @@ Measured on Windows 10 Pro 19045 before deciding (a probe pane at 80×24):
 
 `SUBAK-FR-001`, `SUBAK-FR-004`, `SUBAK-FR-012`, `SUBAK-FR-015`, `SUBAK-FR-042`, `SUBAK-SEC-010`,
 `SUBAK-SEC-011`, `KIM-SEC-013`, `KIM-NFR-001`, `KIM-NFR-011`, `KIM-NFR-013`.
+
+## Notes
+
+- 2026-11-04 (Step 15, [ADR 0036](0036-terminal-emulation-and-rendering-path.md)): the model moved
+  unchanged from `crates/subak/src/screen.rs` into the headless crate `crates/subak-term`, which
+  the Host and every client view use, so both parse each byte the same way. It gained OSC 8
+  hyperlinks (kept per cell, in the history as OSC 8 sequences and in snapshots), mouse tracking
+  and encoding modes held as one mode each (as xterm), soft wraps of screen rows reproduced by the
+  snapshot (a late client used to see them as hard breaks), and device reports that only a view
+  may answer (the Host still never does). Decision 1's choice of an in-house model stands.

@@ -21,4 +21,6 @@ kim = { path = "../crates/kim" }
 regex = "1.13.1"
 serde_json = "1.0.154"
 sha2 = "0.11.1"
+# step15 feeds `subak attach` output into the Subak client view and renders it headlessly.
+subak-term = { path = "../crates/subak-term" }
 zip = { version = "=9.0.5", default-features = false, features = ["deflate-flate2-zlib-rs"] }

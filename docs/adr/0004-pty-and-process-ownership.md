@@ -77,3 +77,7 @@ tree (`SUBAK-FR-016`), but must never touch another Pane's tree.
   write by the sending connection. §5: exit detection waits on the root process; the job's
   completion port is not used, since teardown terminates leftovers anyway. Breakaway from a
   pane's job is refused (measured from inside a pane). See [PTY_PROCESSES](../PTY_PROCESSES.md).
+- 2026-11-04 (Step 15): item 7 decided by [ADR 0036](0036-terminal-emulation-and-rendering-path.md)
+  §5 — the inbox ConPTY stays for M2. Measured on Windows 10 19045: bracketed paste and focus
+  events pass through, mouse tracking modes and OSC 8 do not; shipping `conpty.dll` +
+  `OpenConsole.exe` would add a second binary set with its own update and signing path.

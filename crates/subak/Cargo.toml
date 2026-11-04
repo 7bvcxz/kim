@@ -22,6 +22,9 @@ serde_json = "1.0.154"
 # Terminal names are compared after Unicode NFC normalization (ADR 0007, docs/SESSION_MODEL.md),
 # so a Hangul or accented name typed as composed or decomposed text is the same name.
 unicode-normalization = "0.1.25"
+# The terminal model of every pane (ADR 0030): parser, screen, scrollback, snapshot and capture,
+# shared with Subak's client views (ADR 0036). Built without its `render` feature.
+subak-term = { path = "../subak-term", default-features = false }
 
 [target."cfg(windows)".dependencies]
 # The Host and its clients: pseudo console, job objects, named pipes and peer identity, detached
@@ -45,6 +48,9 @@ windows-sys = { version = "0.61.2", features = [
 [dev-dependencies]
 # tests/cli.rs validates `subak --json` output with xtask/src/jsonschema.rs (test-only).
 regex = "1.13.1"
+# tests/terminal_render.rs renders real ConPTY output headlessly with the client view and the
+# CPU renderer (ADR 0036); dev-dependency features are not unified into the `subak` binary.
+subak-term = { path = "../subak-term", features = ["render"] }
 
 [target."cfg(windows)".dev-dependencies]
 # tests/conpty_host.rs drives the real Host: hidden consoles, job objects, window-close messages.

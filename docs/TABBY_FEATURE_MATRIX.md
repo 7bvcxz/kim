@@ -36,7 +36,7 @@ plugin API docs (docs.tabby.sh) are about development and were not inventoried.
 | Status | Meaning |
 | --- | --- |
 | `planned` | Subak intends to provide it at the Target Step. Nothing exists yet. |
-| `partial` | Some of it ships, with evidence. The approach cell says what is missing. *(Not used yet.)* |
+| `partial` | Some of it ships, with evidence. The approach cell says what is missing. |
 | `implemented` | It ships, with evidence (see [How evidence is recorded](#how-evidence-is-recorded)). *(Not used yet.)* |
 | `excluded` | Deliberately not built. The approach cell gives the rationale. |
 | `blocked` | Wanted, but cannot proceed until the named dependency is resolved. |
@@ -59,13 +59,13 @@ Each row has a permanent ID (`CORE-01`) so that commits, tests and later audits 
 
 | Tabby feature | Tabby reference | Subak approach | Status | Target Step | Evidence |
 | --- | --- | --- | --- | --- | --- |
-| `CORE-01` VT220 emulation with extensions | R: "A VT220 terminal + various extensions" | Host-side headless VT emulator per pane, whose grid the GUI renders. Checked by conformance tests (a vttest subset). | planned | Step 15 | — |
-| `CORE-02` xterm extensions: 256 colors, truecolor, mouse, alternate screen, OSC titles | S `term: 'xterm-256color'`; K | Same emulator: SGR truecolor, mouse modes 1000/1002/1003/1006, DECSET 1049, OSC 0/2 | planned | Step 15 | — |
-| `CORE-03` Full Unicode including double-width characters | R: "Full Unicode support including double-width characters" | Host emulator and GUI share one width table. Covers Korean/CJK, emoji and combining marks, with system font fallback (KIM-NFR-013, SUBAK-FR-031). | planned | Steps 15, 20 | — |
+| `CORE-01` VT220 emulation with extensions | R: "A VT220 terminal + various extensions" | Host-side headless VT emulator per pane, whose grid the GUI renders: one model in `subak-term` for the Host and every client view ([TERMINAL_EMULATOR](TERMINAL_EMULATOR.md)). *Partial:* the emulator and its vttest-like conformance fixtures exist; the GUI that shows it is Step 16 | partial | Step 15 | T: `crates/subak-term/tests/conformance.rs` (`vttest_cursor_movements_border_and_frame` and 15 more) (Step 15, commits db12228, c26b026, fe0a286) |
+| `CORE-02` xterm extensions: 256 colors, truecolor, mouse, alternate screen, OSC titles | S `term: 'xterm-256color'`; K | Same emulator: SGR truecolor, mouse modes 9/1000/1002/1003 with 1005/1006/1015/1016, DECSET 47/1047/1049, OSC 0/2, OSC 8. *Partial:* modelled, encoded and rendered headlessly; the inbox ConPTY of Windows 10 does not pass mouse modes or OSC 8 through (ADR 0036 §5); the GUI is Step 16 | partial | Step 15 | T: `crates/subak-term/tests/conformance.rs::sgr_attributes_and_colours`, `::mouse_modes`, `::alternate_screen_variants`; T: `crates/subak-term/tests/view.rs::mouse_reports_for_every_tracking_mode_and_encoding` (Step 15, commits db12228, c26b026, fe0a286) |
+| `CORE-03` Full Unicode including double-width characters | R: "Full Unicode support including double-width characters" | Host emulator and GUI share one width table. Covers Korean/CJK, emoji and combining marks, with system font fallback (KIM-NFR-013, SUBAK-FR-031). *Partial:* shared model and width table; the renderer draws Korean with Malgun Gothic in two cells and emoji with Segoe UI Emoji (monochrome) from real ConPTY output; the GUI is Step 16, colour emoji need a DirectWrite rasterizer | partial | Steps 15, 20 | T: `crates/subak-term/tests/conformance.rs::unicode_wide_korean_emoji_and_combining`; T: `crates/subak/tests/terminal_render.rs::cmd_renders_korean_wide_glyphs_and_follows_a_resize` (Step 15, commits db12228, c26b026, fe0a286) |
 | `CORE-04` Fast output handling | R: "Doesn't choke on fast-flowing outputs" | The Host drains ConPTY into a bounded history ring with backpressure, and the GUI coalesces frames. Throughput is measured, not assumed. | planned | Step 13 | — |
 | `CORE-05` Scrollback size | S `scrollbackLines: 25000` | Configurable per-pane history kept in the Host, so it survives GUI close. Saving it to disk is optional and off by default (SUBAK-FR-042). | planned | Step 13 | — |
-| `CORE-06` Sixel inline images | S `sixel: true` | Blocked: older inbox ConPTY re-renders output and may drop Sixel data. Depends on the Step 15 decision about shipping a newer ConPTY ([ADR 0004](adr/0004-pty-and-process-ownership.md)) and on emulator support. | blocked | Step 15 (decision) | — |
-| `CORE-07` GPU rendering with a fallback | S `frontend: 'xterm-webgl'`, `hacks.disableGPU` | Native GPU renderer (no WebGL, no browser), with a software-rendering setting | planned | Step 20 | — |
+| `CORE-06` Sixel inline images | S `sixel: true` | Blocked: older inbox ConPTY re-renders output and may drop Sixel data. Step 15 kept the inbox ConPTY for M2 ([ADR 0036](adr/0036-terminal-emulation-and-rendering-path.md) §5: on 19045 even mouse modes and OSC 8 do not pass) and the emulator does not decode images; unblocked by shipping a newer ConPTY and an image-capable renderer | blocked | post-M2 | — |
+| `CORE-07` GPU rendering with a fallback | S `frontend: 'xterm-webgl'`, `hacks.disableGPU` | A CPU cell-grid renderer instead of a GPU one ([ADR 0036](adr/0036-terminal-emulation-and-rendering-path.md)): idle 3.4 MiB private against ~107 MiB for egui + glow, measured; frames presented with GDI, so there is no GPU path to fall back from. *Partial:* the renderer and its benchmark exist; the window is Step 16 | partial | Step 20 | T: `crates/subak-term/tests/render.rs` (golden frames); `crates/subak-term/examples/term_bench.rs` (D: TERMINAL_EMULATOR §7) (Step 15, commits db12228, c26b026, fe0a286) |
 
 ### 1.2 Tabs and windows
 
@@ -118,12 +118,12 @@ Each row has a permanent ID (`CORE-01`) so that commits, tests and later audits 
 | `CORE-37` Terminal color schemes, separate light and dark | S `colorScheme`, `lightColorScheme`, `customColorSchemes` | Scheme files paired per mode, with per-profile override | planned | Step 20 | — |
 | `CORE-38` Bundled community color schemes | S package `tabby-community-color-schemes` | A curated set shipped as data files with their licenses | planned | Step 20 | — |
 | `CORE-39` Minimum contrast ratio | S `minimumContrastRatio: 4` | Contrast floor in the renderer. The default follows KIM-NFR-012 (4.5:1). | planned | Step 20 | — |
-| `CORE-40` Bold as bright, palette generation | S `drawBoldTextInBrightColors`, `paletteGenerate` | Renderer options | planned | Step 20 | — |
+| `CORE-40` Bold as bright, palette generation | S `drawBoldTextInBrightColors`, `paletteGenerate` | Renderer options. *Partial:* bold as bright for ANSI 0–7 is on by default (`RenderOptions::bold_is_bright`); palette generation and the settings UI are Step 20 | partial | Step 20 | T: `crates/subak-term/tests/render.rs::colours_attributes_and_golden_frames` (Step 15, commits db12228, c26b026, fe0a286) |
 | `CORE-41` Font family, size, weight, line spacing | S `fontSize`, `fontWeight`, `fontWeightBold`, `linePadding` | DirectWrite fonts, set in the settings UI or the config | planned | Step 20 | — |
-| `CORE-42` Fallback font | S `fallbackFont` | An explicit fallback chain, then system fallback for Korean/CJK (KIM-NFR-013) | planned | Step 20 | — |
+| `CORE-42` Fallback font | S `fallbackFont` | An explicit fallback chain, then system fallback for Korean/CJK (KIM-NFR-013). *Partial:* the design system's chain (Cascadia Mono → Consolas → D2Coding → Malgun Gothic → Segoe UI Emoji → Segoe UI Symbol) chosen per character by each font's cmap; a user-set chain is Step 20 | partial | Step 20 | T: `crates/subak-term/src/render/gdi.rs::the_chain_skips_missing_families_and_falls_back_by_cmap` (Step 15, commits db12228, c26b026, fe0a286) |
 | `CORE-43` Font ligatures | R: "Font ligatures"; S `ligatures: false` | Shaped in the renderer. Off by default, as in Tabby. | planned | Step 20 | — |
 | `CORE-44` Zoom in, out, reset | S `zoom-in`, `zoom-out`, `reset-zoom` | Font zoom per window with `Ctrl+=`, `Ctrl+-` and `Ctrl+0`, all rebindable | planned | Step 20 | — |
-| `CORE-45` Cursor style and blink | S `cursor`, `cursorBlink` | Block, bar or underline. Honors DECSCUSR and reduced motion. | planned | Step 20 | — |
+| `CORE-45` Cursor style and blink | S `cursor`, `cursorBlink` | Block, bar or underline. Honors DECSCUSR and reduced motion. *Partial:* the three shapes and the hollow unfocused cursor are drawn from DECSCUSR; blinking (a timer, reduced motion) and the setting are Steps 16 and 20 | partial | Step 20 | T: `crates/subak-term/tests/render.rs::cursor_shapes_focus_and_visibility` (Step 15, commits db12228, c26b026, fe0a286) |
 | `CORE-46` Opacity and acrylic/Mica background | S `opacity`, `vibrancy`, `hacks.enableFluentBackground` | DWM system backdrop on Windows 11, opaque fallback elsewhere. Text contrast is preserved. | planned | Step 20 | — |
 | `CORE-47` Window frame style | S `frame` (native or thin) | Native title bar or a compact frame, DPI-aware (KIM-NFR-012) | planned | Step 20 | — |
 | `CORE-48` Interface density | S `spaciness` | Compact and regular density tokens | planned | Step 20 | — |
@@ -158,11 +158,11 @@ Each row has a permanent ID (`CORE-01`) so that commits, tests and later audits 
 | `CORE-67` Copy on select | R: "Optional RMB paste and copy-on select (PuTTY style)"; S `copyOnSelect` (on by default on Windows) | Optional. The default is chosen in Step 19. | planned | Step 19 | — |
 | `CORE-68` Right-click and middle-click actions | R: "Optional RMB paste…"; S `rightClick` (menu, paste, clipboard), `pasteOnMiddleClick` | The same choices | planned | Step 19 | — |
 | `CORE-69` Rich clipboard (copy as HTML) | S `copyAsHTML: true` | Puts plain text plus HTML (colors, font) on the Windows clipboard | planned | Step 19 | — |
-| `CORE-70` Word separators for selection | S `wordSeparator` | Configurable, Unicode-aware double-click word boundaries | planned | Step 19 | — |
-| `CORE-71` Bracketed paste | R: "Bracketed paste"; S `bracketedPaste: true` | Honors DECSET 2004. On by default. | planned | Step 19 | — |
+| `CORE-70` Word separators for selection | S `wordSeparator` | Configurable, Unicode-aware double-click word boundaries. *Partial:* word selection with Windows Terminal's default delimiters, Korean as word characters; making them configurable is Step 19 | partial | Step 19 | T: `crates/subak-term/tests/view.rs::word_and_block_selection` (Step 15, commits db12228, c26b026, fe0a286) |
+| `CORE-71` Bracketed paste | R: "Bracketed paste"; S `bracketedPaste: true` | Honors DECSET 2004. On by default. *Partial:* the view wraps pastes in 200~/201~ when the program asks and strips control characters so a paste cannot end the bracket (SUBAK-SEC-013); 2004 passes the inbox ConPTY; the GUI paste action is Step 19 | partial | Step 19 | T: `crates/subak-term/tests/view.rs::paste_is_sanitized_and_bracketed_when_asked` (Step 15, commits db12228, c26b026, fe0a286) |
 | `CORE-72` Multiline paste warning | R: "multiline paste warnings"; S `warnOnMultilinePaste` | Shows a preview before sending. On by default. CLI input never prompts (KIM-FR-012). | planned | Step 19 | — |
 | `CORE-73` Paste clean-up | S `trimWhitespaceOnPaste`, `replaceNewlinesWithSpacesOnPaste` | The same options | planned | Step 19 | — |
-| `CORE-74` Clickable links | S package `tabby-linkifier` (URL, IP, Unix and Windows path handlers) | URLs, OSC 8 hyperlinks and file paths. Opens only on an explicit Ctrl+click, and shows the target first. | planned | Step 19 | — |
+| `CORE-74` Clickable links | S package `tabby-linkifier` (URL, IP, Unix and Windows path handlers) | URLs, OSC 8 hyperlinks and file paths. Opens only on an explicit Ctrl+click, and shows the target first. *Partial:* OSC 8 links are modelled, kept in the history, drawn with a dotted underline and hit-tested by the view, which never opens them; URL/path detection and the Ctrl+click action are Step 19 | partial | Step 19 | T: `crates/subak-term/tests/conformance.rs::osc8_hyperlinks`, T: `crates/subak-term/tests/view.rs::focus_reports_and_hyperlink_hit_test` (Step 15, commits db12228, c26b026, fe0a286) |
 | `CORE-75` Drop files to paste paths | S `pathDrop.ts` | Dropping from Explorer pastes the paths, quoted for the pane's shell | planned | Step 19 | — |
 | `CORE-76` Save output to a file | R plugin: "save-output - record terminal output into a file" | Built in: `subak` capture (text or JSON) and an optional per-pane log file, off by default | planned | Step 19 | — |
 | `CORE-77` Search selected text in the browser | R plugin: "search-in-browser - opens default system browser with a text selected…" | A context-menu action that opens the system browser only when clicked | planned | Step 19 | — |
@@ -424,29 +424,30 @@ where each area belongs. The named Step confirms or changes the placement.
 
 | Status | Rows |
 | --- | --- |
-| `planned` | 180 |
-| `partial` | 0 |
+| `planned` | 170 |
+| `partial` | 10 |
 | `implemented` | 0 |
 | `excluded` | 26 |
 | `blocked` | 3 (`CORE-06` Sixel, `SHELL-22` run as administrator, `APP-13` Windows ARM64) |
 | **Total** | **209** |
 
-| Group | planned | excluded | blocked | Total |
-| --- | --- | --- | --- | --- |
-| 1. Terminal core (`CORE`) | 80 | 2 | 1 | 83 |
-| 2. Shells and profiles (`SHELL`) | 24 | 2 | 1 | 27 |
-| 3. SSH (`SSH`) | 29 | 2 | 0 | 31 |
-| 4. File transfer (`XFER`) | 7 | 0 | 0 | 7 |
-| 5. Serial (`SER`) | 14 | 0 | 0 | 14 |
-| 6. Telnet (`TEL`) | 4 | 0 | 0 | 4 |
-| 7. Secrets (`VAULT`) | 4 | 4 | 0 | 8 |
-| 8. Configuration and sync (`CFG`) | 6 | 2 | 0 | 8 |
-| 9. Plugins and themes (`PLUG`) | 4 | 5 | 0 | 9 |
-| 10. Web app (`WEB`) | 0 | 3 | 0 | 3 |
-| 11. Application and platforms (`APP`) | 8 | 6 | 1 | 15 |
+| Group | planned | partial | excluded | blocked | Total |
+| --- | --- | --- | --- | --- | --- |
+| 1. Terminal core (`CORE`) | 70 | 10 | 2 | 1 | 83 |
+| 2. Shells and profiles (`SHELL`) | 24 | 0 | 2 | 1 | 27 |
+| 3. SSH (`SSH`) | 29 | 0 | 2 | 0 | 31 |
+| 4. File transfer (`XFER`) | 7 | 0 | 0 | 0 | 7 |
+| 5. Serial (`SER`) | 14 | 0 | 0 | 0 | 14 |
+| 6. Telnet (`TEL`) | 4 | 0 | 0 | 0 | 4 |
+| 7. Secrets (`VAULT`) | 4 | 0 | 4 | 0 | 8 |
+| 8. Configuration and sync (`CFG`) | 6 | 0 | 2 | 0 | 8 |
+| 9. Plugins and themes (`PLUG`) | 4 | 0 | 5 | 0 | 9 |
+| 10. Web app (`WEB`) | 0 | 0 | 3 | 0 | 3 |
+| 11. Application and platforms (`APP`) | 8 | 0 | 6 | 1 | 15 |
 
 ## Audit history
 
 | Date | Tabby reference | Step | Change |
 | --- | --- | --- | --- |
 | 2026-11-03 | v1.0.238 (2026-10-07) | Step 03 | Initial inventory. Nothing implemented. |
+| 2026-11-04 | v1.0.238 (2026-10-07) | Step 15 | Ten terminal-core rows `partial` (emulator, xterm extensions, Unicode, CPU renderer, bold as bright, fallback font, cursor shapes, word separators, bracketed paste, OSC 8 links); `CORE-06` stays blocked with the ConPTY decision of ADR 0036. No Tabby re-fetch. |

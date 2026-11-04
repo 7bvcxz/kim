@@ -39,6 +39,7 @@ the requirements it serves. ADRs are immutable once **Accepted**; a later ADR ma
 | [0032](0032-noeul-double-click-pin-and-outputs.md) | Noeul double-click to pin: press counting, the toolbar, separate outputs and gesture settings | Accepted (Step 51) |
 | [0034](0034-ddalgak-typing-runs-hotstrings-and-clipboard.md) | Ddalgak typing: worker runs, hotstrings from untouched key translation, a clipboard always given back | Accepted (Step 69; real-application checks manual) |
 | [0035](0035-noeul-smart-selection-and-precision.md) | Noeul smart selection: a window list taken with the picture, UI Automation rectangles off the UI thread, keyboard precision and in-memory history | Accepted (Step 52) |
+| [0036](0036-terminal-emulation-and-rendering-path.md) | Terminal emulation core and rendering path: one in-house model for Host and views, a CPU cell-grid renderer with GDI glyphs, inbox ConPTY kept | Accepted (Step 15) |
 
 "Accepted (validated in Step N)" means the decision is made, but the named Step must confirm it
 on real Windows; if validation fails, that Step writes a superseding ADR.

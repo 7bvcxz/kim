@@ -1636,7 +1636,7 @@
       }
     },
     "error_code": {
-      "description": "Every error code subak reports (docs/CLI_CONTRACT.md §6; crates/subak/src/output.rs).",
+      "description": "Every error code subak reports (docs/CLI_CONTRACT.md §6; crates/subak/src/output.rs). The `hotkey*` and `action_not_found` codes come from the `subak hotkeys` group (Step 17), whose documents follow hotkeys-cli-v1.",
       "enum": [
         "io",
         "internal",
@@ -1660,7 +1660,14 @@
         "invalid_state",
         "terminals_running",
         "confirmation_required",
-        "cancelled"
+        "cancelled",
+        "hotkey_invalid",
+        "hotkey_reserved",
+        "action_not_found",
+        "hotkeys_invalid",
+        "hotkey_unsupported",
+        "hotkeys_from_newer_version",
+        "hotkey_conflict"
       ]
     },
     "error": {
@@ -1724,7 +1731,9 @@
               "enum": [
                 "usage",
                 "invalid_name",
-                "ambiguous_target"
+                "ambiguous_target",
+                "hotkey_invalid",
+                "hotkey_reserved"
               ]
             }
           }
@@ -1737,7 +1746,8 @@
             "code": {
               "enum": [
                 "host_not_running",
-                "target_not_found"
+                "target_not_found",
+                "action_not_found"
               ]
             }
           }
@@ -1750,7 +1760,8 @@
             "code": {
               "enum": [
                 "protocol_error",
-                "host_identity_mismatch"
+                "host_identity_mismatch",
+                "hotkeys_invalid"
               ]
             }
           }
@@ -1764,7 +1775,9 @@
               "enum": [
                 "unsupported_platform",
                 "host_too_old",
-                "host_too_new"
+                "host_too_new",
+                "hotkey_unsupported",
+                "hotkeys_from_newer_version"
               ]
             }
           }
@@ -1794,7 +1807,8 @@
                 "name_conflict",
                 "invalid_state",
                 "terminals_running",
-                "confirmation_required"
+                "confirmation_required",
+                "hotkey_conflict"
               ]
             }
           }

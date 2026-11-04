@@ -207,6 +207,96 @@
       "dry_run": true,
       "requires_yes": false,
       "opens_window": false
+    },
+    {
+      "name": "hotkeys.list",
+      "usage": "subak hotkeys list [--scope <scope>] [--profile <name>] [--json]",
+      "summary": "The window's shortcuts: every action with its keys, scope, source and state, and the reserved navigation keys",
+      "effect": "read",
+      "network": false,
+      "dry_run": false,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "hotkeys.show",
+      "usage": "subak hotkeys show <action> [--profile <name>] [--json]",
+      "summary": "One shortcut action with its bindings and every conflict that involves it",
+      "effect": "read",
+      "network": false,
+      "dry_run": false,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "hotkeys.set",
+      "usage": "subak hotkeys set <action> <keys>... [--scope global|app] [--trigger press|release|hold] [--hold-ms <ms>] [--repeat] [--profile <name>] [--replace] [--allow-conflict] [--dry-run] [--json]",
+      "summary": "Replace an action's bindings in hotkeys.json; a conflicting change is refused (hotkey_conflict) and nothing is written",
+      "effect": "write",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "hotkeys.disable",
+      "usage": "subak hotkeys disable (<action> [--profile <name>] | --all | --scope <global|app|context>) [--dry-run] [--json]",
+      "summary": "Disable one shortcut, all of them or one scope (e.g. to let programs receive Ctrl+W)",
+      "effect": "write",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "hotkeys.enable",
+      "usage": "subak hotkeys enable (--all | --scope <global|app|context>) [--dry-run] [--json]",
+      "summary": "Turn all shortcuts or one scope back on",
+      "effect": "write",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "hotkeys.reset",
+      "usage": "subak hotkeys reset (<action> [--profile <name>] | --all [--yes]) [--dry-run] [--json]",
+      "summary": "Restore an action's default, or discard every change (--all keeps hotkeys.json.bak)",
+      "effect": "destructive",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": true,
+      "opens_window": false
+    },
+    {
+      "name": "hotkeys.check",
+      "usage": "subak hotkeys check [--all-tools] [--min-severity error|warning|info] [--profile <name>] [--json]",
+      "summary": "Conflict report for Subak's shortcuts; --all-tools reads every installed Kim tool's hotkey files (starts nothing)",
+      "effect": "read",
+      "network": false,
+      "dry_run": false,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "hotkeys.export",
+      "usage": "subak hotkeys export [--json]",
+      "summary": "Print Subak's hotkeys.json user layer",
+      "effect": "read",
+      "network": false,
+      "dry_run": false,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "hotkeys.import",
+      "usage": "subak hotkeys import <file> [--dry-run] [--json]",
+      "summary": "Validate a kim.hotkeys document and replace the user layer (keeps a backup)",
+      "effect": "write",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": false,
+      "opens_window": false
     }
   ]
 }

@@ -1,13 +1,15 @@
 # Subak CLI reference
 
 Status: **current** (implemented in Step 12; `capture`, `history`, `clear-history` and
-`new --history-limit` in Step 13; Windows only, Linux with M4) · Decisions:
+`new --history-limit` in Step 13; `hotkeys` in Step 17; Windows only, Linux with M4 — the
+`hotkeys` commands are portable) · Decisions:
 [ADR 0027](adr/0027-subak-cli-structure-and-headless-control.md),
 [ADR 0030](adr/0030-host-terminal-model-scrollback-and-replay.md) · Contract:
 [CLI_CONTRACT.md](CLI_CONTRACT.md) v1, schema
 [subak-cli-v1](contracts/schemas/subak-cli-v1.schema.json) · Requirements: `SUBAK-FR-002`,
-`SUBAK-FR-003`, `SUBAK-FR-004`, `SUBAK-FR-011`…`SUBAK-FR-015`, `SUBAK-FR-060`, `SUBAK-SEC-010`,
-`KIM-FR-010`…`KIM-FR-012`, `KIM-SEC-013`
+`SUBAK-FR-003`, `SUBAK-FR-004`, `SUBAK-FR-011`…`SUBAK-FR-015`, `SUBAK-FR-033`, `SUBAK-FR-034`,
+`SUBAK-FR-060`, `SUBAK-SEC-010`, `KIM-FR-010`…`KIM-FR-012`, `KIM-FR-041`…`KIM-FR-046`,
+`KIM-SEC-013`, `KIM-SEC-023`
 
 `subak` is the headless command line of Subak, the persistent terminal. Every command is a
 short-lived client of your per-user **Host**, which owns the **Terminals** (named workspaces,
@@ -41,6 +43,7 @@ that only your user can open.
 | `subak history [<target>]` | read | How much output the Host keeps (counters and limits, never content) |
 | `subak clear-history [<target>]` | destructive | Delete the kept history; the screen stays |
 | `subak host start\|status\|health\|attach\|stop\|serve` | — | The Host itself ([§3.11](#311-the-host-subak-host-)) |
+| `subak hotkeys list\|show\|set\|disable\|enable\|reset\|check\|export\|import` | read / write | The window's keyboard shortcuts ([§3.12](#312-keyboard-shortcuts-subak-hotkeys-)); never contacts a Host |
 | `subak capabilities` | read | The machine-readable command list (CLI_CONTRACT §9) |
 
 **Structure.** The Terminal verbs are top level and named like tmux's
@@ -53,7 +56,7 @@ Bare `subak` prints help; nothing starts implicitly.
 (`t-` + 12 hex digits). `attach` and `detach` also take `<terminal>:<window>[.<pane>]` and window
 or pane ids ([SESSION_MODEL §3](SESSION_MODEL.md)).
 
-**Endpoints.** Every command takes `--endpoint <name>`; the default is your per-user,
+**Endpoints.** Every command except `hotkeys` takes `--endpoint <name>`; the default is your per-user,
 per-Windows-session pipe `\\.\pipe\mouv-subak-<SID>-s<session>`. Use your own name for
 experiments: it never touches the default Host.
 
@@ -257,6 +260,71 @@ process). Details: [IPC_PROTOCOL §8](contracts/IPC_PROTOCOL.md), [CONPTY_PROOF]
 Every client verifies that the pipe is served by `subak.exe` of this user before it sends a byte;
 a Host that does not answer is reported, never ended or replaced.
 
+### 3.12 Keyboard shortcuts (`subak hotkeys …`)
+
+The window's shortcuts follow the Kim hotkey contract ([HOTKEY_CONTRACT §10, §13.1](HOTKEY_CONTRACT.md),
+ADR 0017, ADR 0009): the same commands, output (schema
+[hotkeys-cli-v1](contracts/schemas/hotkeys-cli-v1.schema.json)) and error codes as `kim hotkeys`
+and `noeul hotkeys`. They are **portable and headless**: they read and write one file, never
+contact or start a Host, never open a window, never register a hotkey or install a hook.
+
+| Command | Effect | What it does |
+| --- | --- | --- |
+| `subak hotkeys list [--scope <scope>] [--profile <name>]` | read | Every action with its keys, scope, source and state, plus the reserved navigation keys |
+| `subak hotkeys show <action> [--profile <name>]` | read | One action and every conflict that involves it |
+| `subak hotkeys set <action> <keys>... [--scope global\|app] [--trigger press\|release\|hold] [--hold-ms <ms>] [--repeat] [--profile <name>] [--replace] [--allow-conflict]` | write (`--dry-run`) | Replace an action's bindings; aliases (`ctrl+t`, `C-t`) are stored canonically |
+| `subak hotkeys disable <action>\|--all\|--scope <global\|app\|context> [--profile <name>]` | write (`--dry-run`) | Disable one action, every shortcut, or one scope |
+| `subak hotkeys enable --all\|--scope <family>` | write (`--dry-run`) | Turn them back on (per action: `reset`) |
+| `subak hotkeys reset <action>\|--all [--yes] [--profile <name>]` | write; `--all` destructive (asks or `--yes`) | Restore the default; `--all` discards every change and keeps `hotkeys.json.bak` |
+| `subak hotkeys check [--all-tools] [--min-severity error\|warning\|info] [--profile <name>]` | read | The conflict report (exit 0 even with conflicts; read `summary`) |
+| `subak hotkeys export` / `import <file> [--dry-run]` | read / write | Print or replace the user layer as a `kim.hotkeys` document (import keeps a backup) |
+
+**The actions** of this build: `terminal.new` `Ctrl+T`, `terminal.close` `Ctrl+W` (destructive:
+"Close Terminal" kills it and confirms when busy, ADR 0020), `tab.next` `Ctrl+Tab`,
+`tab.previous` `Ctrl+Shift+Tab`, `terminal.rename` `Ctrl+Shift+R`, `tab.hide`, `tab.move-left`,
+`tab.move-right` (no default; bind them if you want keys) — all `app` scope — and, in the
+`terminal` context, the Step 16 keys `clipboard.copy`, `clipboard.paste`, `view.zoom-in|out|reset`
+and `scroll.page-up|page-down|line-up|line-down|top|bottom`. The prefix leader (`Ctrl+B`) and its
+table (`window.*`, `pane.*`, `client.detach`, `help.show`) arrive with Step 23 and are not listed
+until they work; Subak has no global action yet (`gui.show` comes with Step 18), so every
+`registration` is `not_applicable`.
+
+**The file** is `%APPDATA%\mouv\subak\hotkeys.json` (next to the window's `gui.json`). It holds
+only your changes: an action you never changed follows the current default. Writes are atomic.
+An open Subak window re-reads the file when it regains focus.
+
+**Safe mode.** A file that is not valid, or was written by a newer Subak, is never rewritten
+implicitly: the window uses the defaults, `list` says why (`config.state`: `invalid` or
+`newer_version`, and a warning), and every change is refused (`hotkeys_invalid`, exit 4;
+`hotkeys_from_newer_version`, exit 5) until you fix it or run `subak hotkeys reset --all --yes`,
+which keeps the broken file as `hotkeys.json.bak` (a newer file is never replaced).
+`KIM_NO_HOTKEYS=1` (or `subak-gui --no-hotkeys`) starts the window with every shortcut off
+without touching the file.
+
+**Conflicts.** A change that collides with another binding of Subak is refused (`hotkey_conflict`,
+exit 7) and nothing is written; `--replace` takes the keys away from the other action and lists
+both changes. A binding of yours that equals a *default* of another action wins over it
+(`default_suppressed`, an info). Reserved chords (`Win+…`, `Alt+F4`, `F6`, typing keys in app
+scope, IME keys) are refused with `hotkey_reserved`. `check --all-tools` adds every other
+installed Kim tool by reading its installed `hotkeys.manifest.json` and its `hotkeys.json`
+(files only; nothing is started).
+
+**Keys for programs.** `Ctrl+T` and `Ctrl+W` are shortcuts of the window, so programs in a pane
+do not receive them (`check` reports them as `shadows_terminal_input` infos). Until the prefix
+pass-through of Step 23 (`Ctrl+B` followed by the shadowed key), disable or rebind them to give
+them back to the program — for example `subak hotkeys disable terminal.close` for readline's
+delete-word, or `subak hotkeys set terminal.close Ctrl+Shift+W`.
+
+```console
+> subak hotkeys set tab.next ctrl+pagedown
+tab.next: Ctrl+Tab (default) → Ctrl+PageDown (user)
+Saved to C:\Users\me\AppData\Roaming\mouv\subak\hotkeys.json. An open Subak window applies it when it regains focus.
+> subak hotkeys set terminal.rename Ctrl+PageDown
+subak: error: Ctrl+PageDown conflicts with another binding
+  - duplicate_binding: Ctrl+PageDown is also bound to subak's "Next Terminal tab"; subak's "Rename Terminal" does not fire on Ctrl+PageDown.
+hint: try Ctrl+Shift+PageDown or Ctrl+Alt+Shift+PageDown; --replace takes Ctrl+PageDown away from tab.next
+```
+
 ## 4. Typical sessions
 
 ```console
@@ -425,6 +493,7 @@ scenario `e2e/tests/step12_subak_cli.rs`):
 | `cmd_and_windows_powershell_keep_working_after_an_attach_ends_or_is_killed` | §5, killed clients under cmd.exe and PowerShell 5.1 |
 | `the_cli_schema_embeds_the_ipc_and_capabilities_definitions_unchanged` | `subak-cli-v1` shares the IPC and capabilities definitions verbatim |
 | `scrollback_replay.rs` (Step 13) | `capture`, `history`, `clear-history` and `--history-limit` against real panes; reattach coherence, concurrency, resize, eviction, resync, idle cost, redaction ([SCROLLBACK §8](SCROLLBACK.md)) |
+| `hotkeys_cli.rs` (Step 17) | every `subak hotkeys` command in a sandboxed profile, validated against `hotkeys-cli-v1`: the shipped defaults, dry runs that write nothing, refused reserved, invalid, unknown and conflicting changes that write nothing, `--replace`, switches, `reset --all` needing `--yes` and keeping a backup, safe mode for a broken and a newer file, export/import keeping unknown fields, `check --all-tools` reading a simulated Noeul install without starting it (also `e2e/tests/step17_subak_hotkeys.rs`) |
 | `milestone_a.rs` (Step 14) | real `subak attach` clients killed, detached by `Ctrl+B d`, by the end of input and by `subak detach`, reattached to the same programs with their state; 60 cycles without leaks; a reattached client's output equals the Host's history and screen; clients exit 6 when the Host is killed ([MILESTONE_A_VALIDATION](MILESTONE_A_VALIDATION.md)) |
 
 ## 10. Not implemented yet
@@ -432,7 +501,8 @@ scenario `e2e/tests/step12_subak_cli.rs`):
 - `pane.send_keys` / `subak send-keys` (Step 24); the CLI writes input only through an attach.
   `attach` does not reconnect by itself.
 - Persisted history (Steps 29+, opt-in) and search in history (GUI, Steps 16–25).
-- Rebinding the detach key (Steps 17 and 23), `new -A`, `attach -d`, format strings (`-F`,
+- Rebinding the console detach key (`Ctrl+B d` of `subak attach`; Step 23 makes the prefix a
+  hotkey-contract leader), `new -A`, `attach -d`, format strings (`-F`,
   Step 25), windows and panes (Steps 21–22).
 - Persistence and recovery (Steps 29–30): Terminals end with their Host.
 - Linux (M4): every command answers `unsupported_platform`.

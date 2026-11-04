@@ -22,6 +22,8 @@
 mod cli;
 /// Subak's keyboard shortcuts (hotkey contract; `subak hotkeys`, the window's dispatch).
 pub mod hotkeys;
+/// `subak hotkeys …` (Step 17): portable, never contacts a Host.
+mod hotkeys_cmd;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod output;
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -90,8 +92,18 @@ USAGE:
     subak host attach [--size <cols>x<rows>] [--read-only] [--dry-run [--json]]
     subak host stop   [--kill-terminals] [--yes] [--dry-run] [--json]
     subak host serve  [--shell <command> | --no-shell] [--idle-exit <secs>] [--dry-run] [--json]
+    subak hotkeys list [--scope <scope>] [--profile <name>] [--json]
+    subak hotkeys show <action> [--profile <name>] [--json]
+    subak hotkeys set <action> <keys>... [--scope global|app] [--trigger press|release|hold]
+                  [--hold-ms <ms>] [--repeat] [--profile <name>] [--replace] [--allow-conflict]
+                  [--dry-run] [--json]
+    subak hotkeys disable (<action> [--profile <name>] | --all | --scope <family>) [--dry-run]
+    subak hotkeys enable (--all | --scope <family>) [--dry-run] [--json]
+    subak hotkeys reset (<action> [--profile <name>] | --all [--yes]) [--dry-run] [--json]
+    subak hotkeys check [--all-tools] [--min-severity error|warning|info] [--profile <name>]
+    subak hotkeys export [--json]  |  subak hotkeys import <file> [--dry-run] [--json]
     subak capabilities [--json]
-    Every command also takes --endpoint <name>. `subak terminal new|list|info|rename|attach|
+    Every command except `hotkeys` also takes --endpoint <name>. `subak terminal new|list|info|rename|attach|
     stop|kill|rm` is the deprecated Step 10 spelling of the same commands (a warning says so).
 
 TERMINALS (Windows only; docs/SUBAK_CLI.md, docs/SESSION_MODEL.md):
@@ -165,6 +177,20 @@ ATTACH (docs/SUBAK_CLI.md §5):
     With redirected input the bytes are sent as they are and the end of input detaches; a
     read-only attach reads no redirected input. With redirected output, nothing is restored or
     switched off, because nothing was changed.
+
+HOTKEYS (docs/SUBAK_CLI.md §3.12, docs/HOTKEY_CONTRACT.md):
+    The window's keyboard shortcuts (Ctrl+T new Terminal, Ctrl+W close Terminal, Ctrl+Tab /
+    Ctrl+Shift+Tab next/previous tab, Ctrl+Shift+R rename, copy, paste, zoom, scroll) follow
+    the Kim hotkey contract. Your changes live in %APPDATA%\\mouv\\subak\\hotkeys.json; an
+    action you never changed keeps the current default. A broken or newer file is never
+    rewritten implicitly: the window uses the defaults (safe mode) and changes are refused
+    (`hotkeys_invalid`) until it is fixed or `reset --all --yes` replaces it (keeping a .bak).
+    A conflicting change is refused (`hotkey_conflict`) and nothing is written; --replace takes
+    the keys away from the other Subak action. Disable or rebind Ctrl+T/Ctrl+W to let programs
+    receive them (the Ctrl+B prefix pass-through comes with Step 23). `check --all-tools` reads
+    the other installed Kim tools' files only. These commands never contact a Host, open a
+    window or register a hotkey; an open window applies a change when it regains focus.
+    KIM_NO_HOTKEYS=1 (or subak-gui --no-hotkeys) starts the window with every shortcut off.
 
 HOST (Windows only; docs/contracts/IPC_PROTOCOL.md, docs/CONPTY_PROOF.md):
     host start    Start a detached per-user Host, unless one already serves the endpoint
@@ -276,12 +302,36 @@ pub fn cli_main() -> ExitCode {
                 "subak {} — pre-alpha (CLI contract v1, IPC protocol v1)\n\
                  Commands: new, ls, info, status, attach, detach, rename, stop, kill, rm \
                  (named Terminals in the Host); capture, history, clear-history (scrollback); \
-                 host start|status|health|attach|stop|serve; capabilities.\n\
+                 host start|status|health|attach|stop|serve; hotkeys list|show|set|disable|\
+                 enable|reset|check|export|import (the window's shortcuts); capabilities.\n\
                  The window is the separate program subak-gui; no tabs, splits, persistence\n\
                  or recovery yet.\n",
                 env!("CARGO_PKG_VERSION")
             );
             ExitCode::SUCCESS
+        }
+        _ if cmd.is_hotkeys() => {
+            drop(out);
+            match hotkeys_cmd::run(cmd, &args) {
+                Ok(o) => {
+                    let mut warnings = o.warnings;
+                    warnings.extend(deprecation);
+                    let mut out = std::io::stdout().lock();
+                    if args.json {
+                        let _ =
+                            writeln!(out, "{}", output::success(cmd.name(), &o.data, &warnings));
+                    } else {
+                        if !args.quiet {
+                            for w in &warnings {
+                                eprintln!("subak: warning: {w}");
+                            }
+                        }
+                        let _ = write!(out, "{}", o.human);
+                    }
+                    ExitCode::SUCCESS
+                }
+                Err(e) => fail(cmd.name(), &e, args.json),
+            }
         }
         _ => {
             drop(out);
@@ -357,9 +407,8 @@ fn run_host(cmd: Cmd, a: &Args) -> Result<Value, CliError> {
         Cmd::Capture => terminal::capture(a, &endpoint),
         Cmd::History => terminal::history(a, &endpoint),
         Cmd::ClearHistory => terminal::clear_history(a, &endpoint),
-        Cmd::Help | Cmd::Version | Cmd::Capabilities => {
-            Err(CliError::new(Code::Internal, "not a host command"))
-        }
+        // Help, version, capabilities and the portable `hotkeys` commands run elsewhere.
+        _ => Err(CliError::new(Code::Internal, "not a host command")),
     }
 }
 
@@ -942,6 +991,6 @@ fn human(cmd: Cmd, d: &Value, a: &Args) {
             bytes_text(&d["cleared_bytes"]),
             text(&d["name"]),
         ),
-        Cmd::Help | Cmd::Version | Cmd::Capabilities => Ok(()),
+        _ => Ok(()),
     };
 }

@@ -292,19 +292,19 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
-            .filter(|c| {
-                c["passthrough"] == true
-                    || actions.iter().any(|a| a["context"] == c["id"])
-            })
+            .filter(|c| c["passthrough"] == true || actions.iter().any(|a| a["context"] == c["id"]))
             .cloned()
             .collect();
-        let mut want = fin.clone();
+        let mut want = fin;
         want["version"] = json!(env!("CARGO_PKG_VERSION"));
         want["actions"] = Value::Array(actions);
         want["contexts"] = Value::Array(contexts);
         want.as_object_mut().unwrap().remove("leaders");
         let ours: Value = serde_json::from_str(MANIFEST_JSON).unwrap();
-        assert_eq!(ours, want, "shipped = final manifest ∩ IMPLEMENTED, no @prefix yet");
+        assert_eq!(
+            ours, want,
+            "shipped = final manifest ∩ IMPLEMENTED, no @prefix yet"
+        );
         let ids: Vec<&str> = m.actions.iter().map(|a| a.id.as_str()).collect();
         assert_eq!(ids, IMPLEMENTED);
         assert!(m.leaders.is_empty(), "the prefix leader is Step 23's");
@@ -329,7 +329,11 @@ mod tests {
             assert!(shadowed.contains(&"terminal.new"), "{shadowed:?}");
             assert!(shadowed.contains(&"terminal.close"), "{shadowed:?}");
             // Every default of the shipped manifest is active.
-            for decl in m.actions.iter().filter(|d| IMPLEMENTED.contains(&d.id.as_str())) {
+            for decl in m
+                .actions
+                .iter()
+                .filter(|d| IMPLEMENTED.contains(&d.id.as_str()))
+            {
                 for spec in &decl.defaults {
                     if !spec.keys().contains('@') {
                         assert!(
@@ -355,7 +359,11 @@ mod tests {
         let (st, loaded) = load(Some(&dir));
         assert_eq!(loaded.state, ConfigState::Invalid);
         assert!(st.safe_mode);
-        assert!(safe_mode_warning(&loaded).unwrap().contains("reset --all --yes"));
+        assert!(
+            safe_mode_warning(&loaded)
+                .unwrap()
+                .contains("reset --all --yes")
+        );
         std::fs::write(
             layer_path(&dir),
             json!({"schema": "kim.hotkeys", "schema_version": 1, "tool": "subak",

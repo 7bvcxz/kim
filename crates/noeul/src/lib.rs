@@ -20,6 +20,7 @@
 //! | [`zoom`] | Pin zoom levels, sizes, fitting and the premultiplying scaler |
 //! | [`transform`] | Pin transforms (Step 54): orientation, opacity, thumbnails, border resizing, and the window's outline, shadow and click-through badge |
 //! | [`gif`] | Recognising an animated GIF on the clipboard, so a pin never flattens one silently |
+//! | [`decode`] | Local image decoding (Step 55): PNG, JPEG, GIF, BMP, ICO, TIFF, TGA with limits, alpha, ICC to sRGB, multi-image counts |
 //! | [`annotation`] | Annotation (Step 56): editable vector objects, undo/redo, the editor (tools, text, IME), the rasterizer and the export |
 //! | [`settings`], [`paths`] | `config.toml` and the stable per-user folders |
 //! | [`hotkeys`] | The shipped manifest subset, global registration, pin keys |
@@ -31,6 +32,7 @@
 pub mod annotation;
 pub mod app;
 pub mod capture;
+pub mod decode;
 pub mod detect;
 pub mod dib;
 pub mod dpi;

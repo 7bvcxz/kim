@@ -290,6 +290,12 @@ fn zero_one_and_many_terminals_have_isolated_process_trees() {
     let pids: BTreeSet<u32> = listed.iter().map(|t| pid_of(&t["pid"])).collect();
     assert_eq!(pids.len(), 5, "five distinct root processes");
     assert_eq!(s.conhosts().len(), 5, "one pseudo console per pane");
+    // With several Terminals, an attach without a target is ambiguous and names the candidates.
+    let r = s.raw("cli").request(1, "pane.attach", &json!({}));
+    assert_eq!(error_code(&r), "ambiguous_target", "{r}");
+    assert_eq!(r["error"]["details"]["candidates"].as_array().unwrap().len(), 5);
+    let (_, doc) = s.cli(&["host", "attach", "--dry-run"]);
+    assert_eq!(doc["ok"], true, "a dry run only describes");
     // Each Terminal is reported in full by id and by name (names ignore case).
     let info = s.info("ONE");
     assert_eq!(info["id"], one_id.as_str());

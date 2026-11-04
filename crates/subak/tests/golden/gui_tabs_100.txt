@@ -1,0 +1,4 @@
+# tabs_100: 480x15 client area, cell 8x15, hash 55d307964ef24459
+# legend a=#15151b b=#8bc79a c=#a9a6b8 d=#9592a8 e=#0e0e12 f=#e8e6f0 g=#b7a6f5
+ 0 bg aaaaaaaaaaaaeeeeeeeeeeeeaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+ 0 fg .b.cccc...d..b.ffffff.d..d.cccc...d..g......................

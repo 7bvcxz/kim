@@ -42,9 +42,10 @@ the requirements it serves. ADRs are immutable once **Accepted**; a later ADR ma
 | [0036](0036-terminal-emulation-and-rendering-path.md) | Terminal emulation core and rendering path: one in-house model for Host and views, a CPU cell-grid renderer with GDI glyphs, inbox ConPTY kept | Accepted (Step 15) |
 | [0037](0037-ddalgak-program-and-website-launches.md) | Ddalgak launches: CreateProcessW without a shell, the shell's `open` for websites and apps, a launch thread per run | Accepted (Step 70; installed programs, the default browser, elevation and focus checks manual) |
 | [0038](0038-noeul-annotation.md) | Noeul annotation: vector objects until export, one editor for captures and pins, GDI text with fallback | Accepted (Step 56; real-desktop and real-IME checks manual; the privacy tools in Step 57, see 0041) |
-| [0039](0039-subak-window-plain-win32-client.md) | The Subak window: a plain Win32 IPC client of one Terminal (`subak-gui`), no GUI framework or GPU | Accepted (Step 16; visible-window checks pending the maintainer) |
+| [0039](0039-subak-window-plain-win32-client.md) | The Subak window: a plain Win32 IPC client of one Terminal (`subak-gui`), no GUI framework or GPU | Accepted (Step 16; visible-window checks pending the maintainer; tabs since Step 17, see 0042) |
 | [0040](0040-ddalgak-mouse-actions.md) | Ddalgak mouse actions: physical desktop pixels, normalized absolute moves, holds on the remap ledger | Accepted (Step 71; real pointer, monitors, DPI and games checks manual) |
 | [0041](0041-noeul-privacy-tools.md) | Noeul privacy tools: effects as objects, redactions applied first, outputs hold pixels only | Accepted (Step 57; real-desktop checks manual) |
+| [0042](0042-subak-window-tabs-and-safe-close.md) | Subak window tabs, the tab keys and safe close: the Host's Terminals as tabs, one attached pane, hide/close/remove as three requests, `Ctrl+W` asks when the Host says busy, keys from the hotkey contract | Accepted (Step 17; visible-window checks pending the maintainer) |
 | [0044](0044-noeul-pin-transforms-and-control.md) | Noeul pin transforms and control: an orientation group, a picture that never changes, click-through only with a way back, groups in memory | Accepted (Step 54; real-desktop checks manual) |
 
 "Accepted (validated in Step N)" means the decision is made, but the named Step must confirm it

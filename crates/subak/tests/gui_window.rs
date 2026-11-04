@@ -9,7 +9,10 @@
 //! only the processes it started, and stops its Host on drop.
 //!
 //! Requirements: `SUBAK-FR-003`, `SUBAK-FR-015`, `SUBAK-FR-031`, `SUBAK-FR-037`,
-//! `SUBAK-FR-046`, `SUBAK-NFR-002`.
+//! `SUBAK-FR-046`, `SUBAK-NFR-002`; since Step 17 (tabs, the tab keys, safe close, renames,
+//! `hotkeys.json`): `SUBAK-FR-011`, `SUBAK-FR-013`, `SUBAK-FR-014`, `SUBAK-FR-033`,
+//! `SUBAK-FR-034`. A "running Claude process" is played by `standin_helper` (this test binary
+//! started again in a pane), never by Claude Code.
 #![cfg(windows)]
 #![allow(unsafe_code)]
 
@@ -32,12 +35,11 @@ use windows_sys::Win32::System::DataExchange::COPYDATASTRUCT;
 use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     PostMessageW, SMTO_ABORTIFHUNG, SendMessageTimeoutW, WM_CHAR, WM_CLOSE, WM_COPYDATA,
-    WM_KEYDOWN, WM_SIZE,
+    WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_SIZE,
 };
 
 const COPYDATA_TEST: usize = 0x5355_424B;
 const VK_RETURN: usize = 0x0D;
-const VK_DOWN: usize = 0x28;
 
 fn gui_exe() -> &'static str {
     env!("CARGO_BIN_EXE_subak-gui")
@@ -68,6 +70,10 @@ struct Gui {
 
 impl Gui {
     fn start(ep: &str, target: Option<&str>, appdata: &Path) -> Self {
+        Self::start_with(ep, target, appdata, &[])
+    }
+
+    fn start_with(ep: &str, target: Option<&str>, appdata: &Path, extra: &[&str]) -> Self {
         let mut cmd = Command::new(gui_exe());
         cmd.args([
             "--test-offscreen",
@@ -76,6 +82,7 @@ impl Gui {
             "--endpoint",
             ep,
         ]);
+        cmd.args(extra);
         if let Some(t) = target {
             cmd.arg(t);
         }
@@ -493,19 +500,18 @@ fn a_detached_window_reattaches_and_a_returning_host_is_reconnected() {
         "the window did not start a Host while reconnecting"
     );
     // A Host comes back (`subak new` starts one) with another Terminal: the window reconnects
-    // by itself and offers it (the old one is gone, and it says so).
+    // by itself and opens it as its tab (the old one is gone, and it says so).
     let (_, pid2) = new_terminal(&ep, "two");
-    let choosing = gui.state("choosing");
-    assert!(
-        choosing["detail"]["notice"]
+    let notice = gui.wait("notice", |v| {
+        v["text"]
             .as_str()
-            .unwrap()
-            .contains("`one` is no longer running"),
-        "{choosing}"
-    );
-    gui.key(VK_RETURN);
+            .is_some_and(|t| t.contains("`one` is no longer running"))
+    });
+    assert!(notice["text"].is_string());
     let attached = gui.state("attached");
     assert_eq!(attached["detail"]["pane_pid"], pid2);
+    let d = gui.dump();
+    assert_eq!(d["tabs"].as_array().unwrap().len(), 1, "{d}");
     let (_, st) = sub(&ep, &["host", "status"]);
     let new_host = Proc::open(pid_of(&st["data"]["host"]["pid"]));
     drop(gui);
@@ -514,7 +520,7 @@ fn a_detached_window_reattaches_and_a_returning_host_is_reconnected() {
 }
 
 #[test]
-fn state_screens_empty_choice_and_failure() {
+fn state_screens_empty_tabs_and_failure() {
     // Empty: a Host with no Terminal; a Terminal created later opens by itself.
     let host = Host::start("gui-states", &["--no-shell"]);
     let ep = host.ep.clone();
@@ -522,7 +528,15 @@ fn state_screens_empty_choice_and_failure() {
     let gui = Gui::start(&ep, None, &appdata);
     gui.state("empty");
     let d = gui.dump();
-    assert!(screen_text(&d).contains("No Terminal is running"), "{d}");
+    assert!(
+        screen_text(&d).contains("No Terminal is open in this window"),
+        "{d}"
+    );
+    assert!(
+        screen_text(&d).contains("Ctrl+T (or the + above) starts one"),
+        "{d}"
+    );
+    assert_eq!(d["tabs"].as_array().unwrap().len(), 0);
     assert_eq!(d["title"], "Subak");
     let (_, pid) = new_terminal(&ep, "later");
     let attached = gui.state("attached");
@@ -533,21 +547,16 @@ fn state_screens_empty_choice_and_failure() {
         "{d}"
     );
     drop(gui);
-    // Choosing: two Terminals and nothing named or remembered.
+    // Two Terminals and nothing named or remembered: both are tabs, the first one opens
+    // (Step 17 replaces Step 16's chooser).
     new_terminal(&ep, "second");
-    let gui = Gui::start(&ep, None, &sandbox("states-choose"));
-    let choosing = gui.state("choosing");
-    assert_eq!(choosing["detail"]["count"], 2);
-    let d = gui.dump();
-    let text = screen_text(&d);
-    assert!(
-        text.contains("Choose a Terminal") && text.contains("later") && text.contains("second"),
-        "{text}"
-    );
-    gui.key(VK_DOWN);
-    gui.key(VK_RETURN);
+    let gui = Gui::start(&ep, None, &sandbox("states-tabs"));
     let attached = gui.state("attached");
-    assert_eq!(attached["terminal"]["name"], "second");
+    assert_eq!(attached["terminal"]["name"], "later");
+    let d = gui.until("two tabs", |d| d["tabs"].as_array().unwrap().len() == 2);
+    let bar = d["bar"]["text"].as_str().unwrap();
+    assert!(bar.contains("later") && bar.contains("second"), "{bar}");
+    assert_eq!(d["active"], 0);
     drop(gui);
     // Failure: the endpoint is held by a process that is not a Subak Host.
     let squat_ep = endpoint("gui-squat");
@@ -719,8 +728,11 @@ fn dpi_resize_minimize_zoom_and_preferences() {
         d["cell"][0].as_u64().unwrap(),
         d["cell"][1].as_u64().unwrap(),
     );
+    // The tab bar (32 logical px at 100 %) sits above the pane.
+    let bar = d["bar"]["height"].as_u64().unwrap();
+    assert!((32..=40).contains(&bar), "{}", d["bar"]);
     // A resize to 80 × 24 cells: the pane follows.
-    let (w, h) = (80 * cell.0 + 16, 24 * cell.1 + 16);
+    let (w, h) = (80 * cell.0 + 16, 24 * cell.1 + 16 + bar);
     gui.cmd(&json!({"cmd": "size", "width": w, "height": h}));
     gui.until("80x24", |d| grid(d) == (80, 24));
     wait_for("the pane is 80x24", || size_of_pane() == (80, 24));
@@ -824,19 +836,46 @@ fn rendered_frames_of_the_window_content() {
     };
     let (w, h, px) = shot("gui_empty");
     assert!(w > 400 && h > 200);
-    assert_eq!(px(1, 1), (0x0E, 0x0E, 0x12), "bg.base around the text");
+    let top = gui.dump()["bar"]["height"].as_u64().unwrap() as u32;
+    assert_eq!(px(1, 1), (0x15, 0x15, 0x1B), "bg.raised: the tab bar");
+    assert_eq!(
+        px(1, top + 1),
+        (0x0E, 0x0E, 0x12),
+        "bg.base around the text"
+    );
     new_terminal(&ep, "shots");
     gui.state("attached");
     gui.type_text("echo 한글 Subak ┌─┐\r");
     gui.until("output", |d| has_line(d, "한글 Subak ┌─┐"));
     let (_, _, px) = shot("gui_attached");
     assert_eq!(px(w - 2, h - 2), (0x0E, 0x0E, 0x12), "terminal.background");
+    // The active tab: a lilac marker on top, bg.base joining the pane below it.
+    let d = gui.dump();
+    let tab = d["bar"]["spans"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s[2] == "tab:0")
+        .unwrap()
+        .clone();
+    let cw = d["bar"]["cell"][0].as_u64().unwrap() as u32;
+    let x = d["bar"]["pad_x"].as_u64().unwrap() as u32 + tab[0].as_u64().unwrap() as u32 * cw + 2;
+    assert_eq!(
+        px(x, 0),
+        (0xB7, 0xA6, 0xF5),
+        "accent: the active tab's marker"
+    );
+    assert_eq!(
+        px(x, top - 1),
+        (0x0E, 0x0E, 0x12),
+        "the active tab joins the pane"
+    );
     let (_, _) = sub(&ep, &["detach", "shots"]);
     gui.state("ended");
     let (_, _, px) = shot("gui_detached_banner");
     // The banner: the info colour as a 3 px marker at the left, a tinted fill.
-    assert_eq!(px(1, 4), (0x8A, 0xB4, 0xF8), "status.info marker");
-    let fill = px(w / 2, 2);
+    assert_eq!(px(1, top + 4), (0x8A, 0xB4, 0xF8), "status.info marker");
+    let fill = px(w / 2, top + 2);
     assert_ne!(fill, (0x0E, 0x0E, 0x12), "the banner is not the background");
     println!("EVIDENCE shots: {}", dir.display());
 }
@@ -931,4 +970,597 @@ fn threads_of(pid: u32) -> usize {
     // SAFETY: valid snapshot handle.
     unsafe { windows_sys::Win32::Foundation::CloseHandle(snap) };
     n
+}
+
+// ---------------------------------------------------------------------------------------------
+// Step 17: tabs, the tab keys, safe close (docs/SUBAK_GUI.md §2, ADR 0042). `SUBAK-FR-011`,
+// `SUBAK-FR-013`, `SUBAK-FR-014`, `SUBAK-FR-015`, `SUBAK-FR-031`, `SUBAK-FR-033`,
+// `SUBAK-FR-034`.
+
+const VK_TAB: u64 = 0x09;
+const VK_ESCAPE: u64 = 0x1B;
+const VK_APPS: u64 = 0x5D;
+
+/// The stand-in for a long-running interactive program such as Claude Code (never the real
+/// one): runs only inside a pane with `SUBAK_TEST_STANDIN` set, says it is ready, and answers
+/// every input line with the hex of its bytes (`standin-got-<hex>`) until `quit`. Its root
+/// program is not a shell, so the Host counts its Terminal as busy (SESSION_MODEL §4).
+#[test]
+fn standin_helper() {
+    if std::env::var_os("SUBAK_TEST_STANDIN").is_none() {
+        return;
+    }
+    println!("standin-ready-pid-{}", std::process::id());
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        match std::io::stdin().lock().read_until(b'\n', &mut line) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {}
+        }
+        let t: Vec<u8> = line
+            .iter()
+            .copied()
+            .filter(|b| *b != b'\r' && *b != b'\n')
+            .collect();
+        if t == b"quit" {
+            break;
+        }
+        let hex: String = t.iter().map(|b| format!("{b:02x}")).collect();
+        println!("standin-got-{hex}");
+    }
+}
+
+/// A Terminal running the stand-in; returns its id and pane pid.
+fn new_standin(ep: &str, name: &str) -> (String, u32) {
+    let me = std::env::current_exe().unwrap().display().to_string();
+    let (code, doc) = sub(
+        ep,
+        &[
+            "new",
+            name,
+            "--size",
+            "100x30",
+            "--env",
+            "SUBAK_TEST_STANDIN=1",
+            "--",
+            &me,
+            "standin_helper",
+            "--exact",
+            "--nocapture",
+            "--test-threads=1",
+        ],
+    );
+    assert_eq!(code, 0, "{doc}");
+    let t = &doc["data"]["terminal"];
+    let id = t["id"].as_str().unwrap().to_string();
+    wait_for("the stand-in is ready", || {
+        capture(ep, &id).contains("standin-ready-pid-")
+    });
+    (id, pid_of(&t["windows"][0]["panes"][0]["pid"]))
+}
+
+/// The Terminals the Host lists: (id, name, state).
+fn terminals(ep: &str) -> Vec<(String, String, String)> {
+    let (code, doc) = sub(ep, &["ls"]);
+    assert_eq!(code, 0, "{doc}");
+    doc["data"]["terminals"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| {
+            (
+                t["id"].as_str().unwrap().to_string(),
+                t["name"].as_str().unwrap().to_string(),
+                t["state"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect()
+}
+
+fn tab_names(d: &Value) -> Vec<String> {
+    d["tabs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_string())
+        .collect()
+}
+
+fn shown(d: &Value) -> String {
+    d["terminal"]["name"].as_str().unwrap_or("").to_string()
+}
+
+impl Gui {
+    /// A key press through the window's dispatch (`char`: what TranslateMessage would make of
+    /// it when the window does not handle it).
+    fn press(&self, vk: u64, ctrl: bool, shift: bool) -> Value {
+        self.cmd(&json!({"cmd": "key", "vk": vk, "ctrl": ctrl, "shift": shift}))
+    }
+
+    /// A left click at a client point, as real mouse messages to the window.
+    fn click(&self, x: u32, y: u32) {
+        let lp = ((y as isize) << 16) | x as isize;
+        self.post(WM_LBUTTONDOWN, 1, lp);
+        self.post(WM_LBUTTONUP, 0, lp);
+    }
+
+    /// The client point in the middle of a tab bar span (`tab:0`, `close:1`, `new`).
+    fn bar_point(&self, d: &Value, what: &str) -> (u32, u32) {
+        let span = d["bar"]["spans"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s[2] == what)
+            .unwrap_or_else(|| panic!("no `{what}` in {}", d["bar"]))
+            .clone();
+        let cw = d["bar"]["cell"][0].as_u64().unwrap();
+        let pad = d["bar"]["pad_x"].as_u64().unwrap();
+        let mid = (span[0].as_u64().unwrap() + span[1].as_u64().unwrap()) * cw / 2;
+        (
+            (pad + mid) as u32,
+            (d["bar"]["height"].as_u64().unwrap() / 2) as u32,
+        )
+    }
+}
+
+#[test]
+fn tabs_follow_the_headless_cli_and_ctrl_tab_switches_without_ending_anything() {
+    let host = Host::start("gui-tabs", &["--no-shell"]);
+    let ep = host.ep.clone();
+    let (id1, pid1) = new_terminal(&ep, "one");
+    let (id2, pid2) = new_terminal(&ep, "two");
+    let gui = Gui::start(&ep, None, &sandbox("tabs"));
+    let attached = gui.state("attached");
+    assert_eq!(attached["detail"]["pane_pid"], pid1, "the first tab opens");
+    let d = gui.until("two tabs", |d| tab_names(d) == ["one", "two"]);
+    assert_eq!(d["active"], 0);
+    assert!(d["bar"]["text"].as_str().unwrap().contains("● one"), "{d}");
+    // `subak new` from a console: a third tab appears; the shown tab stays (keys never move to a
+    // Terminal the user did not choose).
+    let (id3, _) = new_terminal(&ep, "three");
+    let d = gui.until("the CLI's new Terminal is a tab", |d| {
+        tab_names(d) == ["one", "two", "three"]
+    });
+    assert_eq!(shown(&d), "one");
+    // `subak rename`: the tab follows.
+    let (code, doc) = sub(&ep, &["rename", "two", "deux"]);
+    assert_eq!(code, 0, "{doc}");
+    gui.until("the rename shows", |d| {
+        tab_names(d) == ["one", "deux", "three"]
+    });
+    // Ctrl+Tab: the next tab; the window detaches `one` and attaches `deux`; nothing ends.
+    gui.press(VK_TAB, true, false);
+    let d = gui.until("deux is shown", |d| {
+        d["phase"] == "attached" && shown(d) == "deux"
+    });
+    assert_eq!(d["active"], 1);
+    wait_for("one has no client, deux has the window", || {
+        info(&ep, "one")["clients"].as_u64() == Some(0)
+            && info(&ep, "deux")["clients"].as_u64() == Some(1)
+    });
+    gui.type_text("echo typed-into-deux\r");
+    wait_for("typed into deux only", || {
+        capture(&ep, "deux").contains("typed-into-deux")
+    });
+    assert!(!capture(&ep, "one").contains("typed-into-deux"));
+    // Ctrl+Shift+Tab: back; Ctrl+Tab twice wraps around.
+    gui.press(VK_TAB, true, true);
+    gui.until("one again", |d| {
+        d["phase"] == "attached" && shown(d) == "one"
+    });
+    gui.press(VK_TAB, true, false);
+    gui.press(VK_TAB, true, false);
+    gui.until("three", |d| d["phase"] == "attached" && shown(d) == "three");
+    gui.press(VK_TAB, true, false);
+    gui.until("wrapped to one", |d| {
+        d["phase"] == "attached" && shown(d) == "one"
+    });
+    // `subak kill three`: its tab goes; `subak stop deux`: its tab says stopped.
+    let (code, doc) = sub(&ep, &["kill", "three", "--yes"]);
+    assert_eq!(code, 0, "{doc}");
+    gui.until("three's tab is gone", |d| tab_names(d) == ["one", "deux"]);
+    let (code, doc) = sub(&ep, &["stop", "deux", "--yes"]);
+    assert_eq!(code, 0, "{doc}");
+    let d = gui.until("deux is stopped", |d| d["tabs"][1]["state"] == "stopped");
+    assert!(d["bar"]["text"].as_str().unwrap().contains("■ deux"), "{d}");
+    // The stored tab: its state screen; Ctrl+W removes its record (nothing runs in it).
+    gui.press(VK_TAB, true, false);
+    let d = gui.until("the stored screen", |d| d["phase"] == "stored");
+    assert!(screen_text(&d).contains("`deux` is stopped"), "{d}");
+    assert!(screen_text(&d).contains("Ctrl+W removes it"), "{d}");
+    gui.press(u64::from(b'W'), true, false);
+    gui.until("deux removed, one shown", |d| {
+        tab_names(d) == ["one"] && d["phase"] == "attached"
+    });
+    assert_eq!(
+        terminals(&ep),
+        [(id1, "one".into(), "running".into())],
+        "only the stored record was removed"
+    );
+    // `one` kept its process the whole time; nothing else was touched.
+    assert_eq!(pid_of(&pane(&info(&ep, "one"))["pid"]), pid1);
+    assert!(Proc::open(pid1).alive());
+    let _ = (id2, id3, pid2);
+    println!(
+        "EVIDENCE tabs: CLI new/rename/kill/stop followed by the tabs; Ctrl+Tab/Ctrl+Shift+Tab switched attachments (one pid {pid1} kept); Ctrl+W on the stopped tab removed only its record"
+    );
+}
+
+#[test]
+fn ctrl_t_creates_and_ctrl_w_closes_asking_first_when_busy_never_hitting_another_terminal() {
+    let host = Host::start("gui-close-tabs", &["--no-shell"]);
+    let ep = host.ep.clone();
+    let (idle_id, idle_pid) = new_terminal(&ep, "idle");
+    let gui = Gui::start(&ep, Some("idle"), &sandbox("close-tabs"));
+    gui.state("attached");
+    // Ctrl+T: a new Terminal (the Host's default shell), shown at once.
+    gui.press(u64::from(b'T'), true, false);
+    let d = gui.until("the new Terminal is shown", |d| {
+        d["phase"] == "attached" && tab_names(d).len() == 2 && shown(d) != "idle"
+    });
+    let created = shown(&d);
+    assert_eq!(terminals(&ep).len(), 2);
+    let created_info = info(&ep, &created);
+    let size = &pane(&created_info)["size"];
+    assert_eq!(
+        (size["cols"].as_u64(), size["rows"].as_u64()),
+        (d["grid"][0].as_u64(), d["grid"][1].as_u64()),
+        "created at the window's size"
+    );
+    // Ctrl+W on an idle shell: ended without a question (ADR 0009), only that Terminal.
+    gui.press(u64::from(b'W'), true, false);
+    let d = gui.until("back on idle", |d| {
+        tab_names(d) == ["idle"] && d["phase"] == "attached"
+    });
+    assert!(d["confirm"].is_null());
+    assert_eq!(
+        terminals(&ep),
+        [(idle_id.clone(), "idle".into(), "running".into())]
+    );
+    // Repeated create and close leave nothing behind.
+    for _ in 0..3 {
+        gui.press(u64::from(b'T'), true, false);
+        // Wait until the new Terminal is the shown one: until then Ctrl+W would close `idle`,
+        // the tab the user still sees.
+        gui.until("created and shown", |d| {
+            d["phase"] == "attached" && tab_names(d).len() == 2 && shown(d) != "idle"
+        });
+        gui.press(u64::from(b'W'), true, false);
+        gui.until("closed", |d| {
+            d["phase"] == "attached" && tab_names(d) == ["idle"]
+        });
+    }
+    assert_eq!(terminals(&ep).len(), 1);
+    // A busy Terminal: the stand-in for a running Claude process.
+    let (busy_id, busy_pid) = new_standin(&ep, "claude");
+    gui.until("its tab", |d| tab_names(d) == ["idle", "claude"]);
+    gui.press(VK_TAB, true, false);
+    gui.until("claude shown", |d| {
+        d["phase"] == "attached" && shown(d) == "claude"
+    });
+    // Ctrl+W asks first: the Host refused without consent; nothing ended.
+    gui.press(u64::from(b'W'), true, false);
+    let c = gui.wait("confirm", |_| true);
+    assert_eq!(c["id"], busy_id.as_str());
+    let d = gui.dump();
+    assert_eq!(
+        d["confirm"]["focus"], "cancel",
+        "the safe choice is the default"
+    );
+    let text = d["banner_text"].as_str().unwrap();
+    assert!(
+        text.contains("End `claude`?") && text.contains("process") && text.contains("[ Cancel"),
+        "{text}"
+    );
+    assert!(Proc::open(busy_pid).alive());
+    // Keys do not leak into the program while the question is open; Esc cancels. (Typed through
+    // the window's own character path synchronously, so they surely come before the Esc.)
+    gui.cmd(&json!({"cmd": "type", "text": "leak\r"}));
+    gui.press(VK_ESCAPE, false, false);
+    let d = gui.until("cancelled", |d| d["confirm"].is_null());
+    assert_eq!(d["phase"], "attached");
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(
+        !capture(&ep, "claude").contains(
+            &"leak"
+                .bytes()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        ),
+        "typing during the question never reached the program"
+    );
+    assert!(Proc::open(busy_pid).alive(), "Esc ends nothing");
+    // Enter on the default (Cancel) ends nothing either; a click on Cancel neither.
+    gui.press(u64::from(b'W'), true, false);
+    gui.wait("confirm", |_| true);
+    gui.cmd(&json!({"cmd": "key", "vk": 0x0D}));
+    gui.until("cancelled by Enter", |d| d["confirm"].is_null());
+    assert!(Proc::open(busy_pid).alive());
+    gui.press(u64::from(b'W'), true, false);
+    gui.wait("confirm", |_| true);
+    let d = gui.dump();
+    let cancel = d["confirm"]["spans"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s[2] == "cancel")
+        .unwrap()
+        .clone();
+    let b = &d["confirm"]["banner"];
+    let (cw, pad, bh) = (
+        b["cell"].as_u64().unwrap(),
+        b["pad"].as_u64().unwrap(),
+        b["height"].as_u64().unwrap(),
+    );
+    let x = pad + (cancel[0].as_u64().unwrap() + 2) * cw;
+    let y = d["bar"]["height"].as_u64().unwrap() + bh / 2;
+    gui.click(x as u32, y as u32);
+    gui.until("cancelled by a click", |d| d["confirm"].is_null());
+    assert!(Proc::open(busy_pid).alive());
+    // Consent: Tab to "End Terminal", Enter. Only `claude` ends, by its id.
+    gui.press(u64::from(b'W'), true, false);
+    gui.wait("confirm", |_| true);
+    gui.press(VK_TAB, false, false);
+    assert_eq!(gui.dump()["confirm"]["focus"], "end");
+    let d = gui.cmd(&json!({"cmd": "key", "vk": 0x0D}));
+    assert!(d["confirm"].is_null());
+    assert!(
+        gui.history().contains(&format!(
+            "\"choice\":\"end\",\"event\":\"confirm_answer\",\"id\":\"{busy_id}\""
+        )),
+        "{}",
+        gui.history()
+    );
+    gui.until("claude is gone", |d| {
+        tab_names(d) == ["idle"] && d["phase"] == "attached"
+    });
+    assert!(
+        Proc::try_open(busy_pid).is_none_or(|p| p.wait(LONG)),
+        "the stand-in ended"
+    );
+    assert_eq!(
+        terminals(&ep),
+        [(idle_id, "idle".into(), "running".into())],
+        "the other Terminal was never touched"
+    );
+    assert_eq!(pid_of(&pane(&info(&ep, "idle"))["pid"]), idle_pid);
+    println!(
+        "EVIDENCE close: Ctrl+T created at the window size; Ctrl+W ended idle shells at once; the busy stand-in (pid {busy_pid}) was asked about (Esc, Enter on Cancel and a click on Cancel ended nothing), then ended by consent; `idle` pid {idle_pid} untouched"
+    );
+}
+
+#[test]
+fn the_window_x_and_a_tab_x_only_detach_and_hidden_tabs_come_back() {
+    let host = Host::start("gui-hide", &["--no-shell"]);
+    let ep = host.ep.clone();
+    let (_, pid_a) = new_terminal(&ep, "a");
+    let (_, pid_b) = new_standin(&ep, "b");
+    let appdata = sandbox("hide");
+    let mut gui = Gui::start(&ep, Some("b"), &appdata);
+    gui.state("attached");
+    let d = gui.until("two tabs", |d| tab_names(d).len() == 2);
+    // The × of the shown tab (real mouse messages): a detach; the Terminal keeps running.
+    let (x, y) = gui.bar_point(&d, "close:1");
+    gui.click(x, y);
+    let d = gui.until("b hidden", |d| {
+        tab_names(d) == ["a"] && d["phase"] == "attached"
+    });
+    assert_eq!(d["hidden"][0]["name"], "b");
+    wait_for("b has no client", || {
+        info(&ep, "b")["clients"].as_u64() == Some(0)
+    });
+    assert_eq!(info(&ep, "b")["state"], "running");
+    assert!(Proc::open(pid_b).alive(), "hiding never ends a Terminal");
+    // The tab menu (the Menu key, a real key message) offers it again; the test window reports
+    // the menu instead of showing one on the desktop.
+    gui.key(VK_APPS as usize);
+    let menu = gui.wait("menu", |_| true);
+    let labels: Vec<&str> = menu["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["label"].as_str().unwrap())
+        .collect();
+    assert!(
+        labels
+            .iter()
+            .any(|l| l.starts_with("Rename…\tCtrl+Shift+R")),
+        "{labels:?}"
+    );
+    assert!(
+        labels.iter().any(|l| l.starts_with("Close Terminal")),
+        "{labels:?}"
+    );
+    assert!(labels.contains(&"Show hidden: b"), "{labels:?}");
+    let show = menu["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["label"] == "Show hidden: b")
+        .unwrap()["id"]
+        .clone();
+    gui.cmd(&json!({"cmd": "menu", "id": show}));
+    let d = gui.until("b is back and shown", |d| {
+        tab_names(d) == ["a", "b"] && d["phase"] == "attached" && shown(d) == "b"
+    });
+    assert!(d["hidden"].as_array().unwrap().is_empty());
+    // A middle click hides a tab too; the menu's Move right orders tabs (this window only).
+    let (x, y) = gui.bar_point(&d, "tab:0");
+    let lp = ((y as isize) << 16) | x as isize;
+    gui.post(WM_MBUTTONUP, 0, lp);
+    gui.until("a hidden", |d| tab_names(d) == ["b"]);
+    assert!(Proc::open(pid_a).alive());
+    // The window's X (WM_CLOSE): a detach of everything; both Terminals keep running.
+    assert_eq!(gui.close(), 0);
+    wait_for("no client left", || {
+        info(&ep, "a")["clients"].as_u64() == Some(0)
+            && info(&ep, "b")["clients"].as_u64() == Some(0)
+    });
+    for (name, pid) in [("a", pid_a), ("b", pid_b)] {
+        assert_eq!(info(&ep, name)["state"], "running", "{name}");
+        assert_eq!(pid_of(&pane(&info(&ep, name))["pid"]), pid, "{name}");
+    }
+    // A new window shows both again (hiding belongs to the window that hid them).
+    let gui = Gui::start(&ep, None, &appdata);
+    gui.state("attached");
+    gui.until("both tabs", |d| tab_names(d).len() == 2);
+    println!(
+        "EVIDENCE hide: tab x, middle click and the window X detached only; a pid {pid_a} and b (stand-in) pid {pid_b} kept running"
+    );
+}
+
+#[test]
+fn rename_in_place_and_keys_for_the_program_reach_it_once_a_shortcut_is_off() {
+    let host = Host::start("gui-rename", &["--no-shell"]);
+    let ep = host.ep.clone();
+    new_standin(&ep, "agent");
+    new_terminal(&ep, "taken");
+    let appdata = sandbox("rename");
+    let gui = Gui::start(&ep, Some("agent"), &appdata);
+    gui.state("attached");
+    // Ctrl+Shift+R: the field takes the keys (text capture); Korean typed as WM_CHAR.
+    gui.press(u64::from(b'R'), true, true);
+    let d = gui.until("editing", |d| !d["renaming"].is_null());
+    assert_eq!(d["renaming"]["text"], "agent");
+    for _ in 0..5 {
+        gui.press(0x08, false, false); // Backspace
+    }
+    gui.type_text("에이전트");
+    let d = gui.until("typed", |d| d["renaming"]["text"] == "에이전트");
+    assert!(
+        d["bar"]["text"].as_str().unwrap().contains("에이전트"),
+        "{d}"
+    );
+    gui.cmd(&json!({"cmd": "key", "vk": 0x0D}));
+    gui.wait("renamed", |v| v["ok"] == true);
+    wait_for("the Host has the new name", || {
+        terminals(&ep).iter().any(|t| t.1 == "에이전트")
+    });
+    let d = gui.until("the field closed", |d| d["renaming"].is_null());
+    assert_eq!(tab_names(&d), ["에이전트", "taken"]);
+    // A name in use: refused by the Host, the field stays with the reason; Esc cancels.
+    gui.press(u64::from(b'R'), true, true);
+    gui.until("editing", |d| !d["renaming"].is_null());
+    gui.cmd(&json!({"cmd": "key", "vk": 0x23})); // End
+    for _ in 0..4 {
+        gui.press(0x08, false, false);
+    }
+    gui.type_text("TAKEN");
+    gui.until("typed", |d| d["renaming"]["text"] == "TAKEN");
+    gui.cmd(&json!({"cmd": "key", "vk": 0x0D}));
+    let r = gui.wait("renamed", |_| true);
+    assert_eq!(r["ok"], false);
+    assert!(
+        r["error"].as_str().unwrap().contains("name_conflict"),
+        "{r}"
+    );
+    let d = gui.dump();
+    assert!(!d["renaming"].is_null(), "the field stays open");
+    gui.press(VK_ESCAPE, false, false);
+    gui.until("closed", |d| d["renaming"].is_null());
+    // Nothing typed into the field reached the program.
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(
+        !capture(&ep, "에이전트").contains("standin-got-"),
+        "{}",
+        capture(&ep, "에이전트")
+    );
+    // Ctrl+T is a shortcut: it never reaches the program. With it disabled through
+    // `subak hotkeys` (re-read when the window gets focus), the program gets it (0x14).
+    let env = [("APPDATA", appdata.to_str().unwrap())];
+    let (code, doc) = run_env(&["hotkeys", "disable", "terminal.new"], &env);
+    assert_eq!(code, 0, "{doc}");
+    gui.cmd(&json!({"cmd": "focus", "on": false}));
+    let d = gui.cmd(&json!({"cmd": "focus", "on": true}));
+    assert_eq!(
+        d["hotkeys"]["state"], "user",
+        "re-read when the window got focus"
+    );
+    assert!(
+        !d["shortcuts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|b| b["action"] == "terminal.new"),
+        "{}",
+        d["shortcuts"]
+    );
+    let before = terminals(&ep).len();
+    gui.cmd(&json!({"cmd": "key", "vk": u32::from(b'T'), "ctrl": true, "char": "\u{14}"}));
+    gui.type_text("x\r");
+    wait_for("the program got Ctrl+T", || {
+        capture(&ep, "에이전트").contains("standin-got-1478")
+    });
+    assert_eq!(terminals(&ep).len(), before, "no Terminal was created");
+    // Ctrl+Tab is still a shortcut: never sent to the program.
+    gui.press(VK_TAB, true, false);
+    gui.until("taken shown", |d| {
+        d["phase"] == "attached" && shown(d) == "taken"
+    });
+    println!(
+        "EVIDENCE rename: in-place rename to Korean via the Host, name_conflict kept the field; a disabled Ctrl+T reached the stand-in as 0x14"
+    );
+}
+
+#[test]
+fn shortcuts_off_safe_mode_and_focus_transitions() {
+    let host = Host::start("gui-keys-off", &["--no-shell"]);
+    let ep = host.ep.clone();
+    new_terminal(&ep, "p");
+    new_terminal(&ep, "q");
+    // A broken hotkeys.json: safe mode (defaults) and a notice; the file is left alone.
+    let appdata = sandbox("keys-off");
+    let dir = appdata.join("mouv").join("subak");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("hotkeys.json"), b"{ broken").unwrap();
+    let gui = Gui::start(&ep, Some("p"), &appdata);
+    gui.state("attached");
+    let d = gui.dump();
+    assert_eq!(d["hotkeys"]["state"], "invalid");
+    assert!(
+        d["notice"].as_str().unwrap().contains("hotkeys.json"),
+        "{d}"
+    );
+    gui.press(VK_TAB, true, false);
+    gui.until("defaults work in safe mode", |d| shown(d) == "q");
+    assert_eq!(
+        std::fs::read(dir.join("hotkeys.json")).unwrap(),
+        b"{ broken"
+    );
+    drop(gui);
+    // A user sequence: its first key waits (and is swallowed); focus loss cancels it.
+    std::fs::write(
+        dir.join("hotkeys.json"),
+        json!({"schema": "kim.hotkeys", "schema_version": 1, "tool": "subak",
+            "overrides": [{"action": "tab.next", "bindings": ["Ctrl+K Ctrl+N"]}]})
+        .to_string(),
+    )
+    .unwrap();
+    let gui = Gui::start(&ep, Some("p"), &appdata);
+    gui.state("attached");
+    let d = gui.press(u64::from(b'K'), true, false);
+    assert_eq!(d["hotkeys"]["pending"], "Ctrl+K");
+    gui.cmd(&json!({"cmd": "focus", "on": false}));
+    let d = gui.cmd(&json!({"cmd": "focus", "on": true}));
+    assert!(d["hotkeys"]["pending"].is_null(), "focus loss cancels");
+    assert_eq!(shown(&d), "p");
+    gui.press(u64::from(b'K'), true, false);
+    gui.press(u64::from(b'N'), true, false);
+    gui.until("the sequence switched tabs", |d| shown(d) == "q");
+    // Focus follows the shown tab: typing goes to the program of the tab now shown.
+    gui.until("q attached", |d| d["phase"] == "attached");
+    gui.type_text("echo focus-on-q\r");
+    wait_for("q got it", || capture(&ep, "q").contains("focus-on-q"));
+    assert!(!capture(&ep, "p").contains("focus-on-q"));
+    drop(gui);
+    // --no-hotkeys: no shortcut at all; Ctrl+Tab stays on the tab.
+    let gui = Gui::start_with(&ep, Some("p"), &appdata, &["--no-hotkeys"]);
+    gui.state("attached");
+    let d = gui.dump();
+    assert_eq!(d["hotkeys"]["off"], "--no-hotkeys");
+    assert!(d["shortcuts"].as_array().unwrap().is_empty());
+    gui.press(VK_TAB, true, false);
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(shown(&gui.dump()), "p");
 }

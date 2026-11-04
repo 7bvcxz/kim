@@ -106,3 +106,8 @@ ambiguous action (`SUBAK-SEC-001` in spirit, `SUBAK-FR-014`, `SUBAK-FR-015`).
   [ADR 0027](0027-subak-cli-structure-and-headless-control.md): `subak new|ls|info|rename|attach|stop|kill|rm`;
   `subak terminal <verb>` remains as a deprecated alias with the same meaning. `subak detach`
   (IPC `client.detach`) adds detaching other clients; like every detach it ends nothing.
+- 2026-11-04 (Step 17): the GUI rows of decision 7 are implemented
+  ([ADR 0042](0042-subak-window-tabs-and-safe-close.md)): a tab's × is a `pane.detach`;
+  `Ctrl+W` sends `terminal.kill` by id without `force`, and only after the user answers the
+  window's question for a `busy` Terminal does it send `force`; on a `stopped` or `failed` tab
+  `Ctrl+W` is `terminal.remove` without `force`.

@@ -71,7 +71,7 @@ Each row has a permanent ID (`CORE-01`) so that commits, tests and later audits 
 
 | Tabby feature | Tabby reference | Subak approach | Status | Target Step | Evidence |
 | --- | --- | --- | --- | --- | --- |
-| `CORE-08` Tabs | R: "Tabs on any side of the window"; S `next-tab`, `previous-tab` | One tab per Terminal, with `Ctrl+T`, `Ctrl+W` and `Ctrl+Tab` (SUBAK-FR-031, SUBAK-FR-033) | planned | Step 17 | — |
+| `CORE-08` Tabs | R: "Tabs on any side of the window"; S `next-tab`, `previous-tab` | One tab per Terminal, with `Ctrl+T`, `Ctrl+W` and `Ctrl+Tab` (SUBAK-FR-031, SUBAK-FR-033). *Partial:* a top tab bar in `subak-gui` (state, name, `×` = hide, `+`, rename in place, move left/right, tabs following other clients), `Ctrl+Tab`/`Ctrl+Shift+Tab`/`Ctrl+T`/`Ctrl+W` (asks when busy), all rebindable ([SUBAK_GUI §2](SUBAK_GUI.md), ADR 0042); tabs only at the top, no drag reordering yet | partial | Step 17 | T: `crates/subak/tests/gui_window.rs::tabs_follow_the_headless_cli_and_ctrl_tab_switches_without_ending_anything`, `::ctrl_t_creates_and_ctrl_w_closes_asking_first_when_busy_never_hitting_another_terminal` (Step 17) |
 | `CORE-09` Tab bar on any side | R: "Tabs on any side of the window"; S `tabsLocation` | Top by default. Bottom, left and right are a setting. | planned | Step 17 | — |
 | `CORE-10` Tab bar options | S `flexTabs`, `hideTabIndex`, `hideCloseButton`, `tabsInFullscreen`, `cycleTabs` | Settings for tab width, index, close button, fullscreen visibility and wrap-around | planned | Step 17 | — |
 | `CORE-11` Rename, reorder, jump to tab N | S `rename-tab`, `move-tab-left`, `move-tab-right`, `tab-1` to `tab-20` | Renaming a tab renames the Terminal (SUBAK-FR-013). Reorder by drag or key, and jump with rebindable keys. | planned | Step 17 | — |

@@ -1,0 +1,1 @@
+{"type": "response", "id": 4, "ok": true, "result": {"detached": [{"client": {"id": 3, "pid": 4321, "kind": "cli", "name": "subak-cli"}, "stream_id": 1, "pane_id": "p-9b0e7d6c5a41", "terminal_id": "t-3fa9c0d21b7e", "interactive": true}], "terminal": {"id": "t-3fa9c0d21b7e", "name": "work"}}}

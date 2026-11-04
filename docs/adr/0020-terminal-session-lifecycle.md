@@ -99,3 +99,10 @@ ambiguous action (`SUBAK-SEC-001` in spirit, `SUBAK-FR-014`, `SUBAK-FR-015`).
 
 `SUBAK-FR-002`, `SUBAK-FR-003`, `SUBAK-FR-010`, `SUBAK-FR-011`, `SUBAK-FR-012`, `SUBAK-FR-013`,
 `SUBAK-FR-014`, `SUBAK-FR-015`, `SUBAK-FR-016`, `SUBAK-FR-033`, `SUBAK-SEC-001`, `KIM-NFR-014`.
+
+## Notes
+
+- 2026-11-04 (Step 12): the CLI verbs of this decision are top level since
+  [ADR 0027](0027-subak-cli-structure-and-headless-control.md): `subak new|ls|info|rename|attach|stop|kill|rm`;
+  `subak terminal <verb>` remains as a deprecated alias with the same meaning. `subak detach`
+  (IPC `client.detach`) adds detaching other clients; like every detach it ends nothing.

@@ -119,7 +119,7 @@ with Step 30.
 | `starting` | Ids and name reserved, pane process being started | create | info, rename |
 | `running` | ≥ 1 pane process alive | create, start, restore | attach, input, rename, split, stop, kill |
 | `stopping` | Its processes are being ended | stop, kill, host stop, or its program exited | info, rename (a kill escalates a stop) |
-| `stopped` | Terminal kept, no live process (all exited with remain-on-exit, or `subak terminal stop`) | last process ends while kept; explicit stop | start (respawn panes; Step 30), rename, delete |
+| `stopped` | Terminal kept, no live process (all exited with remain-on-exit, or `subak stop`) | last process ends while kept; explicit stop | start (respawn panes; Step 30), rename, delete |
 | `restorable` | Loaded from state after a Host restart/reboot; old processes are gone | Host start with persisted Terminals | restore (dry-run or confirmed), rename, delete |
 | `failed` | Last start/restore failed; reason kept | spawn failure | retry, edit profile, delete |
 | `unknown` | State cannot be trusted (e.g. written by a newer Subak version) | Host start with unreadable/newer state | inspect, delete only with `--force` |
@@ -161,12 +161,12 @@ There is no `close` verb: every "close" in a UI is one of these rows.
 
 | Intent | CLI | GUI (Steps 16–18) | Processes | Stored Terminal |
 | --- | --- | --- | --- | --- |
-| Stop looking | `Ctrl+B d`, end of piped input, close the console window (`subak detach` in Step 12) | close window / quit / `Ctrl+B d` / crash | unaffected | unaffected |
-| Look again | `subak terminal attach <target>` | open tab / session manager | unaffected | unaffected |
+| Stop looking | `Ctrl+B d`, Ctrl+Break, end of piped input, close the console window; from elsewhere `subak detach <t>` / `--client <id>` | close window / quit / `Ctrl+B d` / crash | unaffected | unaffected |
+| Look again | `subak attach <target>` | open tab / session manager | unaffected | unaffected |
 | Hide one tab | — | the tab's × button, tab menu "Hide tab" | unaffected | unaffected |
-| End processes, keep Terminal | `subak terminal stop <t>` (graceful, then forced after 5 s; asks or `--yes`) | session manager "Stop" | ended | kept as `stopped` |
-| End Terminal (tmux kill-session) | `subak terminal kill <t>` (at once; asks or `--yes`) | `Ctrl+W` / "Close Terminal" (confirms when busy) | ended | removed |
-| Remove a dead Terminal record | `subak terminal rm <t>` (only `stopped`/`failed`, later `restorable`; `--force` also ends a running one) | session manager "Delete" | none running | removed |
+| End processes, keep Terminal | `subak stop <t>` (graceful, then forced after 5 s; asks or `--yes`) | session manager "Stop" | ended | kept as `stopped` |
+| End Terminal (tmux kill-session) | `subak kill <t>` (at once; asks or `--yes`) | `Ctrl+W` / "Close Terminal" (confirms when busy) | ended | removed |
+| Remove a dead Terminal record | `subak rm <t>` (only `stopped`/`failed`, later `restorable`; `--force` also ends a running one) | session manager "Delete" | none running | removed |
 | Kill pane / window | `subak kill <t:w.p>` (Step 21) | `Ctrl+B x` / `Ctrl+B &` (confirm) | that pane/window only | topology updated |
 
 "Graceful" = `ClosePseudoConsole` (processes receive `CTRL_CLOSE_EVENT`), wait up to 5 s,
@@ -256,8 +256,9 @@ one pane are the single trait `pty::Pty` ([PTY_PROCESSES §8](PTY_PROCESSES.md),
 | ConPTY + detached Host proof: `subak host start\|status\|attach\|stop` prototype (one shell per Host, prototype pipe; [CONPTY_PROOF](CONPTY_PROOF.md), ADR 0016) | implemented (prototype) | 08 |
 | Host supervisor and IPC v1: identity-checked per-user pipe, version negotiation, authorization by client kind, start on demand under a start lock, idle exit, health, user logon environment ([IPC_PROTOCOL](contracts/IPC_PROTOCOL.md), ADR 0019) | implemented | 09 |
 | Terminal session lifecycle: named Terminals (Terminal → Window → Pane, one window and pane each), the state machine, names and targets, create/list/info/rename/stop/kill/remove over IPC and `subak terminal …`, `host stop --kill-terminals` ([SESSION_MODEL](SESSION_MODEL.md), ADR 0020) | implemented (no persistence before Step 29) | 10 |
-| PTY and shell process management: the platform-neutral `pty::Pty` interface (Windows ConPTY + job; `unsupported_platform` stub elsewhere), program resolution on the pane's `PATH` with scripts refused, MSVC-rule quoting, fresh logon environment per pane plus `--env`/`--unset-env` overrides and `SUBAK_PANE_ID`/`SUBAK_TERMINAL_ID` (values never shown), precise `spawn_failed` reasons, exit status, byte-bounded send queues ([PTY_PROCESSES](PTY_PROCESSES.md), ADR 0025) | implemented (Ctrl+Break, verbatim command lines and profiles: not yet) | 11 |
-| CLI, replay | planned | 12–14 |
+| PTY and shell process management: the platform-neutral `pty::Pty` interface (Windows ConPTY + job; `unsupported_platform` stub elsewhere), program resolution on the pane's `PATH` with scripts refused, MSVC-rule quoting, fresh logon environment per pane plus `--env`/`--unset-env` overrides and `SUBAK_PANE_ID`/`SUBAK_TERMINAL_ID` (values never shown), precise `spawn_failed` reasons, exit status, byte-bounded send queues ([PTY_PROCESSES](PTY_PROCESSES.md), ADR 0025) | implemented (Ctrl+Break to panes and profiles: not yet; verbatim command lines: Step 12) | 11 |
+| Subak CLI and headless control: tmux-familiar verbs `new`/`ls`/`info`/`status`/`attach`/`detach`/`rename`/`stop`/`kill`/`rm` (`terminal <verb>` deprecated alias), `subak-cli-v1` schema with golden files, `client.detach` and `pane.detached` over IPC, verbatim `--command-line`, `--no-start`, read-only attach, console restore on every exit path a client survives, Ctrl+Break detaches ([SUBAK_CLI](SUBAK_CLI.md), ADR 0027) | implemented (send-keys, capture and detach-key rebinding: later Steps) | 12 |
+| Replay, scrollback, Milestone A validation | planned | 13–14 |
 | GUI, tabs, floating icon | planned | 15–20 |
 | Windows/panes, layout, tmux engine | planned | 21–26 |
 | Claude integration, persistence, recovery | planned | 27–31 |

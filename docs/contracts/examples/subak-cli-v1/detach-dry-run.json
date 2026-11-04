@@ -1,0 +1,17 @@
+{
+  "command": "detach",
+  "data": {
+    "dry_run": true,
+    "host": {
+      "pid": 4242
+    },
+    "terminal": {
+      "id": "t-000000000001",
+      "name": "build"
+    },
+    "would_detach": []
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

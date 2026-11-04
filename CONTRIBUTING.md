@@ -56,7 +56,7 @@ milestone M4 (`KIM-NFR-011`); macOS is out of scope.
 | `crates/kim-manager` | `kim-manager` | Kim Manager GUI (egui + glow, ADR 0014); the only package allowed to depend on GUI crates so far |
 | `crates/ddalgak` | `ddalgak` | Ddalgak automation engine: headless CLI (binary `ddalgak`) and the tray app that owns the keyboard-hook engine (binary `ddalgak-gui`); engine-control rules in Step 66 ([DDALGAK_ENGINE](docs/DDALGAK_ENGINE.md)) |
 | `crates/noeul` | `noeul` | Noeul (binary `noeul`): resident instance with pins, optional tray icon and global hotkeys, its CLI and IPC v1 ([ADR 0023](docs/adr/0023-noeul-app-foundation.md)); plain Win32, no GUI framework (listed in `cargo xtask deps-check`) |
-| `crates/subak` | `subak` | Subak CLI (binary `subak`): `capabilities`, the per-user Host with IPC v1 (`subak host …`, [IPC_PROTOCOL](docs/contracts/IPC_PROTOCOL.md)) and named Terminals (`subak terminal …`, [SESSION_MODEL](docs/SESSION_MODEL.md)); GUI and recovery arrive in later steps |
+| `crates/subak` | `subak` | Subak CLI (binary `subak`): `capabilities`, the per-user Host with IPC v1 (`subak host …`, [IPC_PROTOCOL](docs/contracts/IPC_PROTOCOL.md)) and named Terminals (`subak new`, `ls`, `attach`, `detach`, …; [SUBAK_CLI](docs/SUBAK_CLI.md)); GUI and recovery arrive in later steps |
 | `xtask` | `xtask` | Repository automation (docs/schema checks, CI gate, gated e2e runner); never shipped |
 | `e2e` | `kim-e2e` | End-to-end suite; excluded from `default-members` and CI |
 

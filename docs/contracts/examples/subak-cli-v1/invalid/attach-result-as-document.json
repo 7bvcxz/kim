@@ -1,0 +1,11 @@
+{
+  "ok": true,
+  "command": "attach",
+  "schema_version": 1,
+  "data": {
+    "detached": true,
+    "host": { "pid": 4242 },
+    "terminal_id": "t-000000000001"
+  },
+  "warnings": []
+}

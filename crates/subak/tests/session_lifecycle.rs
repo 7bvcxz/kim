@@ -3,7 +3,7 @@
 //! `SUBAK-FR-010`…`SUBAK-FR-016`, `SUBAK-SEC-001`.
 //!
 //! Real `subak.exe` Hosts, each on its **own** endpoint (a user's Host is never touched), driven by
-//! the `subak terminal` CLI and by raw IPC v1 clients. Every control message a raw client receives
+//! the `subak` CLI and by raw IPC v1 clients. Every control message a raw client receives
 //! is validated against `docs/contracts/schemas/ipc-v1.schema.json`, and method results against
 //! their `result_*` definitions. Every test ends what it started: the [`Session`] guard stops the
 //! Host with `--kill-terminals --yes` (or kills it), then checks that the Host, every pane
@@ -64,9 +64,9 @@ impl Session {
         run(&a)
     }
 
-    /// `terminal new` that must succeed; returns its `data` (the `terminal.create` result).
+    /// `new` that must succeed; returns its `data` (the `terminal.create` result).
     fn new_terminal(&self, args: &[&str]) -> Value {
-        let mut a = vec!["terminal", "new"];
+        let mut a = vec!["new"];
         a.extend_from_slice(args);
         let (code, doc) = self.cli(&a);
         assert_eq!(code, 0, "{a:?}: {doc}");
@@ -87,14 +87,14 @@ impl Session {
     }
 
     fn info(&self, target: &str) -> Value {
-        let (code, doc) = self.cli(&["terminal", "info", target]);
+        let (code, doc) = self.cli(&["info", target]);
         assert_eq!(code, 0, "{doc}");
         ipc_def("result_terminal_info", &doc["data"]);
         doc["data"]["terminal"].clone()
     }
 
     fn list(&self) -> Vec<Value> {
-        let (code, doc) = self.cli(&["terminal", "list"]);
+        let (code, doc) = self.cli(&["ls"]);
         assert_eq!(code, 0, "{doc}");
         let mut r = doc["data"].clone();
         if let Some(o) = r.as_object_mut() {
@@ -333,7 +333,7 @@ fn zero_one_and_many_terminals_have_isolated_process_trees() {
     let (shell_a, shell_b) = (pane_pid(&info), pane_pid(&s.info("2")));
     let (ping_a, ping_b) = (ping_of(shell_a), ping_of(shell_b));
     assert!(s.info("one")["busy"] == true && s.info("2")["busy"] == true);
-    let (code, doc) = s.cli(&["terminal", "kill", "one", "--yes"]);
+    let (code, doc) = s.cli(&["kill", "one", "--yes"]);
     assert_eq!(code, 0, "{doc}");
     ipc_def("result_terminal_end", &doc["data"]);
     assert_eq!(doc["data"]["removed"], true);
@@ -365,7 +365,7 @@ fn names_are_unique_ignoring_case_and_composition_and_renames_keep_ids() {
     let work = s.new_terminal(&["Work"]);
     let id = work["terminal_id"].as_str().unwrap().to_string();
     for clash in ["work", "WORK", " Work "] {
-        let (code, doc) = s.cli(&["terminal", "new", clash]);
+        let (code, doc) = s.cli(&["new", clash]);
         assert_eq!(error(&doc), (7, "name_conflict"), "{clash}: {doc}");
         assert_eq!(code, 7);
         assert!(doc["error"]["details"].to_string().contains(&id), "{doc}");
@@ -380,7 +380,7 @@ fn names_are_unique_ignoring_case_and_composition_and_renames_keep_ids() {
         "   ",
         "tab\there",
     ] {
-        let (_, doc) = s.cli(&["terminal", "new", bad]);
+        let (_, doc) = s.cli(&["new", bad]);
         assert_eq!(error(&doc), (2, "invalid_name"), "{bad:?}: {doc}");
     }
     // (`-x` on the command line is an unknown option; the Host refuses it as a name too.)
@@ -401,12 +401,12 @@ fn names_are_unique_ignoring_case_and_composition_and_renames_keep_ids() {
     let text = a.text().to_lowercase();
     assert!(text.contains(&windir.to_lowercase()), "{text}");
     drop(a);
-    let (_, doc) = s.cli(&["terminal", "new", "\u{1109}\u{1165}\u{1107}\u{1165}"]);
+    let (_, doc) = s.cli(&["new", "\u{1109}\u{1165}\u{1107}\u{1165}"]);
     assert_eq!(error(&doc), (7, "name_conflict"), "NFC: {doc}");
     assert_eq!(s.info("서버")["id"], seoul["terminal_id"]);
 
     // Renames: case changes of one's own name are fine; another Terminal's name is not.
-    let (code, doc) = s.cli(&["terminal", "rename", "work", "work"]);
+    let (code, doc) = s.cli(&["rename", "work", "work"]);
     assert_eq!(code, 0, "{doc}");
     ipc_def("result_terminal_rename", &doc["data"]);
     assert_eq!(
@@ -416,15 +416,15 @@ fn names_are_unique_ignoring_case_and_composition_and_renames_keep_ids() {
         ),
         (Some("Work"), Some("work"))
     );
-    let (_, doc) = s.cli(&["terminal", "rename", "work", "서버"]);
+    let (_, doc) = s.cli(&["rename", "work", "서버"]);
     assert_eq!(error(&doc), (7, "name_conflict"));
-    let (code, doc) = s.cli(&["terminal", "rename", &id, "build", "--dry-run"]);
+    let (code, doc) = s.cli(&["rename", &id, "build", "--dry-run"]);
     assert_eq!(code, 0);
     ipc_def("result_terminal_rename", &doc["data"]);
     assert_eq!(s.info(&id)["name"], "work", "a dry run renames nothing");
     let watcher = s.raw("gui");
     watcher.request(1, "events.subscribe", &json!({"topics": ["terminals"]}));
-    let (code, _) = s.cli(&["terminal", "rename", "WORK", "build"]);
+    let (code, _) = s.cli(&["rename", "WORK", "build"]);
     assert_eq!(code, 0);
     let t = s.info("build");
     assert_eq!(t["id"], id.as_str(), "the id survives a rename");
@@ -436,9 +436,9 @@ fn names_are_unique_ignoring_case_and_composition_and_renames_keep_ids() {
     let evs = events_until(&watcher, |e| !e.is_empty());
     assert_eq!(evs[0]["event"], "terminal.renamed");
     assert_eq!(evs[0]["data"]["previous_name"], "work");
-    let (_, doc) = s.cli(&["terminal", "info", "work"]);
+    let (_, doc) = s.cli(&["info", "work"]);
     assert_eq!(error(&doc), (3, "target_not_found"), "the old name is free");
-    let (_, doc) = s.cli(&["terminal", "rename", "nope", "x"]);
+    let (_, doc) = s.cli(&["rename", "nope", "x"]);
     assert_eq!(error(&doc), (3, "target_not_found"));
     // A freed name can be taken; nothing is ever suffixed.
     let again = s.new_terminal(&["work"]);
@@ -637,7 +637,7 @@ fn failed_creations_leave_no_pty_job_process_or_record() {
     let mut failures = 0;
     for round in 0..5 {
         for (args, reason) in &cases {
-            let mut a = vec!["terminal", "new"];
+            let mut a = vec!["new"];
             a.extend_from_slice(args);
             let (code, doc) = s.cli(&a);
             assert_eq!(code, 1, "{a:?}: {doc}");
@@ -651,7 +651,7 @@ fn failed_creations_leave_no_pty_job_process_or_record() {
             failures += 1;
         }
     }
-    let (_, doc) = s.cli(&["terminal", "new", "--cwd", "relative\\dir"]);
+    let (_, doc) = s.cli(&["new", "--cwd", "relative\\dir"]);
     assert_eq!(error(&doc), (2, "usage"), "a relative cwd is a usage error");
     assert!(s.list().is_empty(), "no half-created Terminal remains");
     assert!(s.conhosts().is_empty(), "no pseudo console remains");
@@ -673,12 +673,11 @@ fn failed_creations_leave_no_pty_job_process_or_record() {
         handles(&after)
     );
     // A dry run hits the same error without creating anything.
-    let (_, doc) = s.cli(&["terminal", "new", "--dry-run", "--", r"C:\subak-nope\x.exe"]);
+    let (_, doc) = s.cli(&["new", "--dry-run", "--", r"C:\subak-nope\x.exe"]);
     assert_eq!(error(&doc), (1, "spawn_failed"));
 
     // keep_on_failure keeps a `failed` record, which rm removes without --force.
     let (code, doc) = s.cli(&[
-        "terminal",
         "new",
         "kept",
         "--keep-on-failure",
@@ -689,13 +688,13 @@ fn failed_creations_leave_no_pty_job_process_or_record() {
     let t = s.info("kept");
     assert_eq!(t["state"], "failed");
     assert_eq!(t["failure"]["reason"], "not_found");
-    let (_, doc) = s.cli(&["terminal", "rm", "kept", "--no-input"]);
+    let (_, doc) = s.cli(&["rm", "kept", "--no-input"]);
     assert_eq!(
         error(&doc),
         (7, "confirmation_required"),
         "rm deletes data: consent"
     );
-    let (code, doc) = s.cli(&["terminal", "rm", "kept", "--yes"]);
+    let (code, doc) = s.cli(&["rm", "kept", "--yes"]);
     assert_eq!(code, 0, "{doc}");
     assert_eq!(doc["data"]["removed"], true);
     assert!(s.list().is_empty());
@@ -742,14 +741,14 @@ fn stop_kill_and_rm_have_distinct_explicit_guarded_meanings() {
     ipc_def("end_plan", &r["error"]["details"]);
     assert!(r["error"]["details"]["processes"].as_u64().unwrap() >= 2);
     for args in [
-        &["terminal", "stop", "busy", "--no-input"][..],
-        &["terminal", "kill", "busy", "--no-input"],
-        &["terminal", "rm", "busy", "--force", "--no-input"],
+        &["stop", "busy", "--no-input"][..],
+        &["kill", "busy", "--no-input"],
+        &["rm", "busy", "--force", "--no-input"],
     ] {
         let (_, doc) = s.cli(args);
         assert_eq!(error(&doc), (7, "confirmation_required"), "{args:?}");
     }
-    let (_, doc) = s.cli(&["terminal", "rm", "busy", "--yes"]);
+    let (_, doc) = s.cli(&["rm", "busy", "--yes"]);
     assert_eq!(
         error(&doc),
         (7, "invalid_state"),
@@ -757,7 +756,7 @@ fn stop_kill_and_rm_have_distinct_explicit_guarded_meanings() {
     );
     let r = c.request(4, "terminal.remove", &json!({"target": "busy"}));
     assert_eq!(error_code(&r), "invalid_state");
-    let (code, doc) = s.cli(&["terminal", "stop", "busy", "--dry-run"]);
+    let (code, doc) = s.cli(&["stop", "busy", "--dry-run"]);
     assert_eq!(code, 0);
     ipc_def("result_terminal_end", &doc["data"]);
     assert_eq!(doc["data"]["would_stop"]["busy"], true);
@@ -765,14 +764,14 @@ fn stop_kill_and_rm_have_distinct_explicit_guarded_meanings() {
         alive(shell) && alive(ping[0]),
         "refusals and dry runs end nothing"
     );
-    let (code, doc) = s.cli(&["terminal", "stop", "busy", "--yes"]);
+    let (code, doc) = s.cli(&["stop", "busy", "--yes"]);
     assert_eq!(code, 0, "{doc}");
     assert_eq!(doc["data"]["removed"], false, "stop keeps the Terminal");
     assert_eq!(doc["data"]["terminal"]["state"], "stopped");
     wait_until("busy's tree ended", || !alive(shell) && !alive(ping[0]));
     drop(a);
     assert!(s.names().contains("busy"), "listed as stopped");
-    let (_, doc) = s.cli(&["terminal", "attach", "busy", "--dry-run"]);
+    let (_, doc) = s.cli(&["attach", "busy", "--dry-run"]);
     assert_eq!(doc["ok"], true, "a dry run only describes");
     let r = c.request(5, "pane.attach", &json!({"target": "busy"}));
     assert_eq!(
@@ -780,22 +779,22 @@ fn stop_kill_and_rm_have_distinct_explicit_guarded_meanings() {
         "invalid_state",
         "a stopped Terminal cannot be attached"
     );
-    let (code, doc) = s.cli(&["terminal", "rm", "busy", "--yes"]);
+    let (code, doc) = s.cli(&["rm", "busy", "--yes"]);
     assert_eq!(code, 0, "{doc}");
     assert!(!s.names().contains("busy"));
 
     // kill: ends at once and removes; rm --force on a running Terminal does the same.
     let k = s.new_terminal(&["k"]);
-    let (code, doc) = s.cli(&["terminal", "kill", "k", "--dry-run"]);
+    let (code, doc) = s.cli(&["kill", "k", "--dry-run"]);
     assert_eq!(code, 0);
     assert_eq!(doc["data"]["would_kill"]["removes_terminal"], true);
     let t = Instant::now();
-    let (code, doc) = s.cli(&["terminal", "kill", "k", "--yes"]);
+    let (code, doc) = s.cli(&["kill", "k", "--yes"]);
     assert_eq!(code, 0, "{doc}");
     let kill_took = t.elapsed();
     assert!(!alive(pane_pid(&k["terminal"])));
     let f = s.new_terminal(&["f"]);
-    let (code, doc) = s.cli(&["terminal", "rm", "f", "--force", "--yes"]);
+    let (code, doc) = s.cli(&["rm", "f", "--force", "--yes"]);
     assert_eq!(code, 0, "{doc}");
     assert_eq!(doc["data"]["removed"], true);
     assert!(!alive(pane_pid(&f["terminal"])));
@@ -994,7 +993,7 @@ fn exits_restarts_and_reconnects_leave_no_stale_state() {
         assert!(Instant::now() < until, "the Host connection stayed open");
     }
     // A Host started afterwards (on demand) owns nothing stale: no Terminal, no old id.
-    let (code, doc) = s.cli(&["terminal", "list"]);
+    let (code, doc) = s.cli(&["ls"]);
     assert_eq!(code, 0);
     assert_eq!(doc["data"]["terminals"], json!([]));
     let fresh = s.new_terminal(&["live"]);

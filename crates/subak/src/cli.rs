@@ -1,13 +1,18 @@
-//! Argument parsing for the `subak` CLI (docs/CLI_CONTRACT.md §2–§4).
+//! Argument parsing for the `subak` CLI (docs/CLI_CONTRACT.md §2–§4, docs/SUBAK_CLI.md).
 //!
-//! Hand-written on purpose: the CLI is small until Step 12, and staying dependency-free keeps the
-//! binary small. Flags may appear anywhere before `--`; everything after `--` is the command of
-//! `terminal new`. Each command accepts only its documented options and positional arguments.
+//! Hand-written on purpose: staying dependency-free keeps the binary small. Flags may appear
+//! anywhere before `--`; everything after `--` is the program of `new`. Each command accepts only
+//! its documented options and positional arguments.
+//!
+//! Since Step 12 (ADR 0027) the Terminal commands are top-level, tmux-familiar verbs: `subak new`,
+//! `ls`, `info`, `status`, `attach`, `detach`, `rename`, `stop`, `kill`, `rm`. The Step 10 spelling
+//! `subak terminal <verb>` still works as a **deprecated alias**: it runs the same command, reports
+//! the same command name, and adds a deprecation warning.
 
 use crate::output::CliError;
 
 /// What to run.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Cmd {
     Help,
     Version,
@@ -18,14 +23,16 @@ pub enum Cmd {
     HostHealth,
     HostAttach,
     HostStop,
-    TerminalNew,
-    TerminalList,
-    TerminalInfo,
-    TerminalRename,
-    TerminalAttach,
-    TerminalStop,
-    TerminalKill,
-    TerminalRm,
+    New,
+    Ls,
+    Info,
+    Status,
+    Attach,
+    Detach,
+    Rename,
+    Stop,
+    Kill,
+    Rm,
 }
 
 impl Cmd {
@@ -40,27 +47,40 @@ impl Cmd {
             Self::HostHealth => "host.health",
             Self::HostAttach => "host.attach",
             Self::HostStop => "host.stop",
-            Self::TerminalNew => "terminal.new",
-            Self::TerminalList => "terminal.list",
-            Self::TerminalInfo => "terminal.info",
-            Self::TerminalRename => "terminal.rename",
-            Self::TerminalAttach => "terminal.attach",
-            Self::TerminalStop => "terminal.stop",
-            Self::TerminalKill => "terminal.kill",
-            Self::TerminalRm => "terminal.rm",
+            Self::New => "new",
+            Self::Ls => "ls",
+            Self::Info => "info",
+            Self::Status => "status",
+            Self::Attach => "attach",
+            Self::Detach => "detach",
+            Self::Rename => "rename",
+            Self::Stop => "stop",
+            Self::Kill => "kill",
+            Self::Rm => "rm",
+        }
+    }
+
+    /// The command words in the canonical spelling (`host status`, `new`).
+    pub fn words(&self) -> String {
+        self.name().replace('.', " ")
+    }
+
+    /// Whether the command streams a terminal instead of printing one document.
+    pub fn streams(&self, a: &Args) -> bool {
+        match self {
+            Self::HostAttach | Self::Attach => !a.dry_run,
+            Self::New => a.attach && !a.dry_run,
+            _ => false,
         }
     }
 
     /// The positional arguments after the command words, and how many are required.
     fn positionals(&self) -> (&'static [&'static str], usize) {
         match self {
-            Self::TerminalNew => (&["name"], 0),
-            Self::TerminalInfo
-            | Self::TerminalAttach
-            | Self::TerminalStop
-            | Self::TerminalKill
-            | Self::TerminalRm => (&["target"], 1),
-            Self::TerminalRename => (&["target", "new name"], 2),
+            Self::New => (&["name"], 0),
+            Self::Attach | Self::Detach => (&["target"], 0),
+            Self::Info | Self::Stop | Self::Kill | Self::Rm => (&["target"], 1),
+            Self::Rename => (&["target", "new name"], 2),
             _ => (&[], 0),
         }
     }
@@ -84,10 +104,14 @@ impl Cmd {
                 "--idle-exit",
                 "--dry-run",
             ],
-            Self::HostStatus | Self::HostHealth => &["--endpoint"],
-            Self::HostAttach => &["--endpoint", "--size", "--dry-run"],
+            Self::HostStatus | Self::HostHealth | Self::Ls | Self::Info | Self::Status => {
+                &["--endpoint"]
+            }
+            Self::HostAttach | Self::Attach => {
+                &["--endpoint", "--size", "--read-only", "--dry-run"]
+            }
             Self::HostStop => &["--endpoint", "--dry-run", "--yes", "--kill-terminals"],
-            Self::TerminalNew => &[
+            Self::New => &[
                 "--endpoint",
                 "--cwd",
                 "--env",
@@ -95,13 +119,16 @@ impl Cmd {
                 "--size",
                 "--remain-on-exit",
                 "--keep-on-failure",
+                "--command-line",
+                "--no-start",
+                "--attach",
+                "--read-only",
                 "--dry-run",
             ],
-            Self::TerminalList | Self::TerminalInfo => &["--endpoint"],
-            Self::TerminalRename => &["--endpoint", "--dry-run"],
-            Self::TerminalAttach => &["--endpoint", "--size", "--dry-run"],
-            Self::TerminalStop | Self::TerminalKill => &["--endpoint", "--dry-run", "--yes"],
-            Self::TerminalRm => &["--endpoint", "--dry-run", "--yes", "--force"],
+            Self::Detach => &["--endpoint", "--client", "--dry-run"],
+            Self::Rename => &["--endpoint", "--dry-run"],
+            Self::Stop | Self::Kill => &["--endpoint", "--dry-run", "--yes"],
+            Self::Rm => &["--endpoint", "--dry-run", "--yes", "--force"],
         };
         allowed.contains(&opt)
     }
@@ -126,21 +153,33 @@ pub struct Args {
     pub job_breakaway: Option<bool>,
     /// `host stop`: consent to end every live Terminal (ADR 0003 §7).
     pub kill_terminals: bool,
-    /// `terminal rm`: also end a Terminal that still runs.
+    /// `rm`: also end a Terminal that still runs.
     pub force: bool,
-    /// `terminal new`: working directory of the pane.
+    /// `new`: working directory of the pane.
     pub cwd: Option<String>,
-    /// `terminal new --env` / `--unset-env`, in the order given.
+    /// `new --env` / `--unset-env`, in the order given.
     pub env: Vec<EnvArg>,
     pub remain_on_exit: bool,
     pub keep_on_failure: bool,
+    /// `new --command-line <line>`: a verbatim Windows command line (ADR 0027 §4).
+    pub command_line: Option<String>,
+    /// `new --no-start`: fail with `host_not_running` instead of starting a Host.
+    pub no_start: bool,
+    /// `new --attach`: attach to the new Terminal at once.
+    pub attach: bool,
+    /// `attach --read-only`: a viewer whose keys (except the detach keys) are not sent.
+    pub read_only: bool,
+    /// `detach --client <id>`: one client, by the id `subak status` lists.
+    pub client: Option<u64>,
+    /// The deprecated spelling that was used (`terminal new`), if any (ADR 0027).
+    pub alias: Option<String>,
     /// Positional arguments after the command words (a target, a name).
     pub positional: Vec<String>,
-    /// `terminal new -- <program> [args…]`.
+    /// `new -- <program> [args…]`.
     pub command: Vec<String>,
 }
 
-/// One environment override of `terminal new` (docs/PTY_PROCESSES.md §3).
+/// One environment override of `new` (docs/PTY_PROCESSES.md §3).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EnvArg {
     /// `--env NAME=VALUE`.
@@ -177,6 +216,28 @@ pub fn parse_size(text: &str) -> Option<(u16, u16)> {
     let r: u16 = r.parse().ok()?;
     ((2..=1000).contains(&c) && (2..=1000).contains(&r)).then_some((c, r))
 }
+
+/// The Terminal verbs and the command each one runs (top level, and after `terminal`).
+fn terminal_verb(word: &str) -> Option<Cmd> {
+    Some(match word {
+        "new" => Cmd::New,
+        "ls" | "list" => Cmd::Ls,
+        "info" => Cmd::Info,
+        "status" => Cmd::Status,
+        "attach" => Cmd::Attach,
+        "detach" => Cmd::Detach,
+        "rename" => Cmd::Rename,
+        "stop" => Cmd::Stop,
+        "kill" => Cmd::Kill,
+        "rm" => Cmd::Rm,
+        _ => return None,
+    })
+}
+
+/// The verbs `subak terminal …` had in Steps 10–11; only these are deprecated aliases.
+const STEP10_VERBS: [&str; 9] = [
+    "new", "list", "ls", "info", "rename", "attach", "stop", "kill", "rm",
+];
 
 /// Parses `args` (without the program name). On failure returns the longest recognized
 /// command name and a `usage` error, so `--json` callers still get one document.
@@ -250,9 +311,47 @@ pub fn parse(raw: &[String]) -> Result<(Cmd, Args), (String, CliError)> {
                     a.shell = Some(v);
                 }
             }
+            "--command-line" => {
+                opts.push("--command-line");
+                if let Some(v) = value("--command-line") {
+                    if v.trim().is_empty() || v.contains('\0') {
+                        bad.get_or_insert(
+                            CliError::usage("--command-line needs a command line").hint(
+                                "e.g. --command-line \"cmd.exe /d /s /c \\\"echo \\\"a  b\\\" & ver\\\"\"",
+                            ),
+                        );
+                    }
+                    a.command_line = Some(v);
+                }
+            }
+            "--client" => {
+                opts.push("--client");
+                if let Some(v) = value("--client") {
+                    a.client = v.parse::<u64>().ok().filter(|c| *c > 0);
+                    if a.client.is_none() {
+                        bad.get_or_insert(
+                            CliError::usage(format!("invalid client id `{v}`")).hint(
+                                "a client id is a positive number; `subak status` lists them",
+                            ),
+                        );
+                    }
+                }
+            }
             "--no-shell" => {
                 a.no_shell = true;
                 opts.push("--no-shell");
+            }
+            "--no-start" => {
+                a.no_start = true;
+                opts.push("--no-start");
+            }
+            "--attach" => {
+                a.attach = true;
+                opts.push("--attach");
+            }
+            "--read-only" => {
+                a.read_only = true;
+                opts.push("--read-only");
             }
             "--kill-terminals" => {
                 a.kill_terminals = true;
@@ -374,19 +473,19 @@ pub fn parse(raw: &[String]) -> Result<(Cmd, Args), (String, CliError)> {
         ["host", "health", ..] => (Cmd::HostHealth, 2),
         ["host", "attach", ..] => (Cmd::HostAttach, 2),
         ["host", "stop", ..] => (Cmd::HostStop, 2),
-        ["terminal", "new", ..] => (Cmd::TerminalNew, 2),
-        ["terminal", "list" | "ls", ..] => (Cmd::TerminalList, 2),
-        ["terminal", "info", ..] => (Cmd::TerminalInfo, 2),
-        ["terminal", "rename", ..] => (Cmd::TerminalRename, 2),
-        ["terminal", "attach", ..] => (Cmd::TerminalAttach, 2),
-        ["terminal", "stop", ..] => (Cmd::TerminalStop, 2),
-        ["terminal", "kill", ..] => (Cmd::TerminalKill, 2),
-        ["terminal", "rm", ..] => (Cmd::TerminalRm, 2),
+        ["terminal", verb, ..] if STEP10_VERBS.contains(verb) => {
+            let cmd = terminal_verb(verb).expect("every Step 10 verb is a Terminal verb");
+            a.alias = Some(format!("terminal {verb}"));
+            (cmd, 2)
+        }
+        [verb, ..] if terminal_verb(verb).is_some() => {
+            (terminal_verb(verb).expect("checked above"), 1)
+        }
         ["terminal", ..] => {
             return Err((
                 "terminal".into(),
                 CliError::usage(format!("unknown command `{}`", words.join(" "))).hint(
-                    "terminal commands: new, list, info, rename, attach, stop, kill, rm (see `subak --help`)",
+                    "`subak terminal <verb>` is the deprecated spelling of the Terminal commands; use `subak new|ls|info|status|attach|detach|rename|stop|kill|rm` (see `subak --help`)",
                 ),
             ));
         }
@@ -402,11 +501,12 @@ pub fn parse(raw: &[String]) -> Result<(Cmd, Args), (String, CliError)> {
             return Err((
                 "subak".into(),
                 CliError::usage(format!("unknown command `{}`", words.join(" "))).hint(
-                    "Subak is pre-alpha: only `capabilities`, `terminal` and `host` commands exist; see `subak --help`",
+                    "commands: new, ls, info, status, attach, detach, rename, stop, kill, rm, host, capabilities (see `subak --help`)",
                 ),
             ));
         }
     };
+    let typed = words[..n].join(" ");
     let (names, min) = cmd.positionals();
     let rest = &words[n..];
     if rest.len() > names.len() || rest.len() < min {
@@ -428,51 +528,45 @@ pub fn parse(raw: &[String]) -> Result<(Cmd, Args), (String, CliError)> {
         };
         return Err((
             cmd.name().into(),
-            CliError::usage(format!("`{}` takes {want}", words[..n].join(" "))),
+            CliError::usage(format!("`{typed}` takes {want}")),
         ));
     }
     a.positional = rest.iter().map(|s| (*s).to_string()).collect();
-    if dashdash && cmd != Cmd::TerminalNew {
-        return Err((
-            cmd.name().into(),
-            CliError::usage("only `terminal new` takes a command after `--`"),
-        ));
+    let fail = |e: CliError| Err((cmd.name().to_string(), e));
+    if dashdash && cmd != Cmd::New {
+        return fail(CliError::usage("only `new` takes a program after `--`"));
     }
     if dashdash && a.command.first().is_none_or(|p| p.trim().is_empty()) {
-        return Err((
-            cmd.name().into(),
-            CliError::usage("`--` must be followed by a program"),
-        ));
+        return fail(CliError::usage("`--` must be followed by a program"));
     }
     if a.no_shell && a.shell.is_some() {
-        return Err((
-            cmd.name().into(),
-            CliError::usage("--shell and --no-shell conflict"),
-        ));
+        return fail(CliError::usage("--shell and --no-shell conflict"));
     }
     if let Some(e) = bad {
-        return Err((cmd.name().into(), e));
+        return fail(e);
     }
     if let Some(o) = opts.iter().find(|o| !cmd.accepts(o)) {
-        return Err((
-            cmd.name().into(),
-            CliError::usage(format!("`{o}` is not an option of `{}`", words.join(" "))),
-        ));
+        return fail(CliError::usage(format!(
+            "`{o}` is not an option of `{typed}`"
+        )));
     }
     if a.quiet && a.verbose {
-        return Err((
-            cmd.name().into(),
-            CliError::usage("--quiet and --verbose conflict"),
-        ));
+        return fail(CliError::usage("--quiet and --verbose conflict"));
     }
-    if matches!(cmd, Cmd::HostAttach | Cmd::TerminalAttach) && a.json && !a.dry_run {
-        return Err((
-            cmd.name().into(),
-            CliError::usage(format!(
-                "`{}` streams the terminal; --json works only with --dry-run",
-                words[..n].join(" ")
-            )),
-        ));
+    if dashdash && a.command_line.is_some() {
+        return fail(
+            CliError::usage("give the program either after `--` or with --command-line, not both")
+                .hint("`-- <program> [args…]` quotes every word for Windows; --command-line passes one line verbatim (for cmd.exe /c)"),
+        );
+    }
+    if cmd == Cmd::New && a.read_only && !a.attach {
+        return fail(CliError::usage("--read-only needs --attach"));
+    }
+    if cmd.streams(&a) && a.json {
+        return fail(CliError::usage(format!(
+            "`{typed}{}` streams the terminal; --json works only with --dry-run",
+            if cmd == Cmd::New { " --attach" } else { "" }
+        )));
     }
     Ok((cmd, a))
 }
@@ -542,10 +636,120 @@ mod tests {
         );
     }
 
+    /// ADR 0027: the Terminal verbs are top level; `terminal <verb>` is a deprecated alias of
+    /// the very same command, and `list` is an alias of `ls`.
+    #[test]
+    fn terminal_verbs_are_top_level_and_the_step10_spelling_is_an_alias() {
+        for (args, cmd) in [
+            (&["new"][..], Cmd::New),
+            (&["new", "work"], Cmd::New),
+            (&["ls"], Cmd::Ls),
+            (&["list"], Cmd::Ls),
+            (&["info", "work"], Cmd::Info),
+            (&["status"], Cmd::Status),
+            (&["attach"], Cmd::Attach),
+            (&["attach", "work"], Cmd::Attach),
+            (&["detach"], Cmd::Detach),
+            (&["detach", "work"], Cmd::Detach),
+            (&["rename", "a", "b"], Cmd::Rename),
+            (&["stop", "a"], Cmd::Stop),
+            (&["kill", "a"], Cmd::Kill),
+            (&["rm", "a"], Cmd::Rm),
+        ] {
+            let (got, a) = p(args).unwrap_or_else(|(_, e)| panic!("{args:?}: {}", e.message));
+            assert_eq!(got, cmd, "{args:?}");
+            assert_eq!(a.alias, None, "{args:?}");
+        }
+        for (args, cmd, alias) in [
+            (&["terminal", "new", "x"][..], Cmd::New, "terminal new"),
+            (&["terminal", "list"], Cmd::Ls, "terminal list"),
+            (&["terminal", "ls"], Cmd::Ls, "terminal ls"),
+            (&["terminal", "info", "x"], Cmd::Info, "terminal info"),
+            (
+                &["terminal", "rename", "x", "y"],
+                Cmd::Rename,
+                "terminal rename",
+            ),
+            (&["terminal", "attach", "x"], Cmd::Attach, "terminal attach"),
+            (&["terminal", "stop", "x"], Cmd::Stop, "terminal stop"),
+            (&["terminal", "kill", "x"], Cmd::Kill, "terminal kill"),
+            (&["terminal", "rm", "x", "--force"], Cmd::Rm, "terminal rm"),
+        ] {
+            let (got, a) = p(args).unwrap_or_else(|(_, e)| panic!("{args:?}: {}", e.message));
+            assert_eq!(got, cmd, "{args:?}");
+            assert_eq!(a.alias.as_deref(), Some(alias));
+            assert_eq!(
+                got.name(),
+                cmd.name(),
+                "the alias reports the canonical name"
+            );
+        }
+        // Verbs that never existed under `terminal` are not invented there.
+        assert_eq!(p(&["terminal", "status"]).unwrap_err().0, "terminal");
+        assert_eq!(p(&["terminal", "detach", "x"]).unwrap_err().0, "terminal");
+        assert_eq!(p(&["terminal", "close", "x"]).unwrap_err().0, "terminal");
+    }
+
+    #[test]
+    fn new_options_and_their_conflicts() {
+        let (cmd, a) = p(&[
+            "new",
+            "build",
+            "--command-line",
+            r#"cmd.exe /d /s /c "echo "a  b" & ver""#,
+            "--no-start",
+            "--attach",
+            "--read-only",
+        ])
+        .unwrap();
+        assert_eq!(cmd, Cmd::New);
+        assert_eq!(
+            a.command_line.as_deref(),
+            Some(r#"cmd.exe /d /s /c "echo "a  b" & ver""#)
+        );
+        assert!(a.no_start && a.attach && a.read_only);
+        assert!(cmd.streams(&a));
+        let usage = |args: &[&str]| {
+            let (name, e) = p(args).unwrap_err();
+            assert_eq!(e.code, crate::output::Code::Usage, "{args:?}");
+            name
+        };
+        assert_eq!(
+            usage(&["new", "--command-line", "cmd", "--", "cmd.exe"]),
+            "new"
+        );
+        assert_eq!(usage(&["new", "--command-line", "  "]), "new");
+        assert_eq!(usage(&["new", "--read-only"]), "new");
+        assert_eq!(usage(&["new", "--attach", "--json"]), "new");
+        assert!(p(&["new", "--attach", "--json", "--dry-run"]).is_ok());
+        assert_eq!(usage(&["ls", "--command-line", "x"]), "ls");
+        assert_eq!(usage(&["attach", "--no-start"]), "attach");
+        assert_eq!(usage(&["info", "x", "--", "cmd.exe"]), "info");
+    }
+
+    #[test]
+    fn detach_takes_a_target_or_a_client() {
+        let (cmd, a) = p(&["detach", "work", "--client", "7", "--dry-run"]).unwrap();
+        assert_eq!(cmd, Cmd::Detach);
+        assert_eq!(a.client, Some(7));
+        assert_eq!(a.positional, ["work"]);
+        assert!(a.dry_run);
+        for bad in ["0", "-1", "x", "1.5"] {
+            assert_eq!(
+                p(&["detach", &format!("--client={bad}")]).unwrap_err().0,
+                "detach",
+                "{bad}"
+            );
+        }
+        assert_eq!(p(&["detach", "a", "b"]).unwrap_err().0, "detach");
+        assert_eq!(p(&["detach", "--yes"]).unwrap_err().0, "detach");
+        assert_eq!(p(&["attach", "--client", "3"]).unwrap_err().0, "attach");
+    }
+
     #[test]
     fn rejects_bad_usage_with_the_longest_known_command() {
         let usage = |args: &[&str]| p(args).unwrap_err();
-        assert_eq!(usage(&["attach"]).0, "subak");
+        assert_eq!(usage(&["frobnicate"]).0, "subak");
         assert_eq!(usage(&["host", "frob"]).0, "host");
         assert_eq!(usage(&["host", "status", "--yes"]).0, "host.status");
         assert_eq!(
@@ -554,6 +758,7 @@ mod tests {
         );
         assert_eq!(usage(&["host", "attach", "--size", "1x1"]).0, "host.attach");
         assert_eq!(usage(&["host", "attach", "--json"]).0, "host.attach");
+        assert_eq!(usage(&["attach", "--json"]).0, "attach");
         assert_eq!(usage(&["host", "stop", "--endpoint"]).0, "host.stop");
         let (name, e) = usage(&["host", "stop", "--endpoint", "--json"]);
         assert_eq!(name, "host.stop");
@@ -569,7 +774,12 @@ mod tests {
         assert_eq!(usage(&["host", "status", "-q", "-v"]).0, "host.status");
         assert_eq!(usage(&["--json"]).0, "subak");
         assert_eq!(usage(&["capabilities", "--bogus"]).0, "capabilities");
-        for (_, e) in [usage(&["attach"]), usage(&["host", "frob"])] {
+        assert_eq!(usage(&["info"]).0, "info");
+        assert_eq!(usage(&["rename", "a"]).0, "rename");
+        assert_eq!(usage(&["ls", "extra"]).0, "ls");
+        assert_eq!(usage(&["stop", "a", "--force"]).0, "stop");
+        assert_eq!(usage(&["kill", "a", "--kill-terminals"]).0, "kill");
+        for (_, e) in [usage(&["frobnicate"]), usage(&["host", "frob"])] {
             assert_eq!(e.code, crate::output::Code::Usage);
         }
     }
@@ -578,6 +788,7 @@ mod tests {
     fn help_version_and_bare_invocation() {
         assert_eq!(p(&[]).unwrap().0, Cmd::Help);
         assert_eq!(p(&["host", "--help"]).unwrap().0, Cmd::Help);
+        assert_eq!(p(&["new", "--help"]).unwrap().0, Cmd::Help);
         assert_eq!(p(&["-V"]).unwrap().0, Cmd::Version);
         assert_eq!(
             p(&["host", "attach", "--dry-run", "--json"]).unwrap().0,
@@ -588,7 +799,6 @@ mod tests {
     #[test]
     fn env_overrides_parse_in_order_and_never_echo_values() {
         let (cmd, a) = p(&[
-            "terminal",
             "new",
             "--env",
             "RUST_LOG=debug",
@@ -605,7 +815,7 @@ mod tests {
             "not-ours",
         ])
         .unwrap();
-        assert_eq!(cmd, Cmd::TerminalNew);
+        assert_eq!(cmd, Cmd::New);
         assert_eq!(
             a.env,
             vec![
@@ -623,9 +833,10 @@ mod tests {
         );
         let secret = "s3cr3t-never-echoed";
         for bad in [
-            vec!["terminal", "new", "--env", "=x"],
-            vec!["terminal", "new", "--env"],
-            vec!["terminal", "new", "--unset-env", "A=B"],
+            vec!["new", "--env", "=x"],
+            vec!["new", "--env"],
+            vec!["new", "--unset-env", "A=B"],
+            vec!["ls", "--env", "TOKEN=s3cr3t-never-echoed"],
             vec!["terminal", "list", "--env", "TOKEN=s3cr3t-never-echoed"],
         ] {
             let (_, e) = p(&bad).unwrap_err();

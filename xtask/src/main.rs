@@ -36,10 +36,11 @@ COMMANDS:
                       Sign a catalog (default: catalog/catalog.json) -> <catalog>.sig
     ci                Run the CI gate locally: fmt --check, clippy -D warnings, tests,
                       docs-check, schema-check, design-check, deps-check
-    e2e [--force]     Build release binaries and run the e2e suite. Refuses unless the
-                      e2e ledger says 15 Step issues were processed since the last run
-                      (AGENTS.md §4); --force overrides and must be justified in the ledger.
-    e2e-status        Print how many Step issues were processed since the last e2e run
+    e2e --scheduled   Build release binaries and run the e2e suite: the Daily GitHub
+                      Actions workflow, once a day (AGENTS.md §4). Refused outside GitHub
+                      Actions.
+    e2e --force       Run the e2e suite locally anyway; must be justified in e2e/LEDGER.md.
+    e2e-status        Print how many Step issues were processed since the last recorded run
 ";
 
 fn main() -> ExitCode {
@@ -66,11 +67,15 @@ fn main() -> ExitCode {
         Some("design-check") => run_design_check(&root, args.iter().any(|a| a == "--verbose")),
         Some("schema-check") => run_schema_check(&root, args.iter().any(|a| a == "--verbose")),
         Some("ci") => run_ci(&root),
-        Some("e2e") => run_e2e(&root, args.iter().any(|a| a == "--force")),
+        Some("e2e") => run_e2e(
+            &root,
+            args.iter().any(|a| a == "--force"),
+            args.iter().any(|a| a == "--scheduled"),
+        ),
         Some("e2e-status") => e2e_status(&root).map(|n| {
             println!(
-                "{n}/{} Step issues processed since the last e2e run",
-                ledger::CADENCE
+                "{n} Step issues processed since the last recorded e2e run \
+                 (the suite runs once a day in the Daily workflow)"
             );
         }),
         Some("--help" | "-h") | None => {
@@ -235,16 +240,21 @@ fn e2e_status(root: &Path) -> Result<u32, String> {
     ledger::since_last_run(&text)
 }
 
-fn run_e2e(root: &Path, force: bool) -> Result<(), String> {
-    let since = e2e_status(root)?;
-    if since < ledger::CADENCE && !force {
-        return Err(format!(
-            "e2e suite is due after {} processed Step issues; ledger shows {since}. \
-             The suite must not run routinely (AGENTS.md §4). Use --force only with a \
-             recorded justification in e2e/LEDGER.md.",
-            ledger::CADENCE
-        ));
+fn run_e2e(root: &Path, force: bool, scheduled: bool) -> Result<(), String> {
+    // AGENTS.md §4: the suite runs once a day in the Daily GitHub Actions workflow, never on
+    // push, in hooks or in ad-hoc verification.
+    let on_actions = std::env::var("GITHUB_ACTIONS").is_ok_and(|v| v == "true");
+    if scheduled && !on_actions {
+        return Err("`--scheduled` is for the Daily GitHub Actions workflow only".into());
     }
+    if !scheduled && !force {
+        return Err(
+            "the e2e suite runs once a day in the Daily GitHub Actions workflow (AGENTS.md §4). \
+             Use --force for a local run only with a recorded justification in e2e/LEDGER.md."
+                .into(),
+        );
+    }
+    e2e_status(root)?; // the ledger must still parse
     cargo(
         root,
         &[

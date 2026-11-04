@@ -1,11 +1,14 @@
 # E2E ledger
 
 Rules: [AGENTS.md §4](../AGENTS.md#4-development-cadence-tests-and-e2e-maintainer-rules).
-The e2e suite runs **once per 15 processed Step issues** and never otherwise. Append one row per
-processed Step issue; when *Since last e2e run* reaches 15, run the suite once and log it below.
+The e2e suite runs **once a day** in the `Daily` GitHub Actions workflow (maintainer decision
+2026-11-04; until then it ran once per 15 processed Step issues). Append one row per processed
+Step issue; the master records each daily run below. *Since last e2e run* counts the Steps
+processed since the last recorded run and is informational.
 
 Harness: crate `kim-e2e` (`e2e/`), one test file per Step (`e2e/tests/stepNN_<topic>.rs`).
-Run with `cargo xtask e2e`, which refuses unless the counter below has reached 15.
+The workflow runs `cargo xtask e2e --scheduled`; a local run needs `cargo xtask e2e --force` and
+a recorded justification.
 
 ## Processed Step issues
 

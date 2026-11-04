@@ -1,7 +1,5 @@
-//! Parsing of `e2e/LEDGER.md` to enforce the "once per 15 Step issues" e2e cadence.
-
-/// Number of processed Step issues between two e2e runs (AGENTS.md §4).
-pub const CADENCE: u32 = 15;
+//! Parsing of `e2e/LEDGER.md`. The e2e suite runs once a day in the Daily GitHub Actions
+//! workflow (AGENTS.md §4); the "since last e2e run" counter is informational.
 
 /// Returns the "Since last e2e run" value of the last row in the "Processed Step issues" table.
 pub fn since_last_run(ledger: &str) -> Result<u32, String> {
@@ -79,10 +77,7 @@ mod tests {
     fn real_ledger_parses() {
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../e2e/LEDGER.md");
         let text = std::fs::read_to_string(path).expect("ledger exists");
-        let n = since_last_run(&text).expect("ledger parses");
-        assert!(
-            n <= CADENCE,
-            "e2e run overdue: {n} Steps since the last run"
-        );
+        // The suite runs daily (AGENTS.md §4); the counter is informational.
+        since_last_run(&text).expect("ledger parses");
     }
 }

@@ -47,6 +47,10 @@ weaken them in code, defaults, tests or docs.
   document, the JSON schemas and the golden examples in the same change.
 - **Portable boundaries, Windows first.** Put OS-specific code behind narrow interfaces so Linux
   can be added later; do not implement Linux support prematurely, and never claim it.
+- **Windows only for now** (maintainer decision 2026-11-04). Do not implement, build or test
+  anything for Linux on this Windows PC: no Linux code paths, no Linux stubs added or fixed,
+  no Linux compile check, no Linux CI job. Linux is done later on a Linux server. Existing
+  non-Windows stubs stay as they are.
 - **Verification.** Run formatting, lint, build and tests relevant to the change, plus a manual
   smoke check of the real behavior on Windows when applicable. If something cannot be
   verified (hardware, OS, network), say **not tested** explicitly and give reproducible manual
@@ -75,14 +79,16 @@ These rules come directly from the maintainer and are mandatory.
    test command).
 3. **Every feature is added to the e2e suite.** Each feature also gets an end-to-end scenario
    in the e2e suite (`e2e/`), exercising the real binaries the way a user or agent would.
-4. **The e2e suite never runs routinely.** It must not run as part of the normal test command,
-   CI on push, pre-commit hooks, or ad-hoc verification. It runs **exactly once per 15
-   processed Step issues** (after the 15th, 30th, 45th … Step issue is processed).
+4. **The e2e suite runs once a day, nowhere else** (maintainer decision 2026-11-04, replacing
+   the earlier once-per-15-Steps cadence). The `Daily` GitHub Actions workflow runs it
+   (`cargo xtask e2e --scheduled`) together with the dependency policy, so a failure sends at
+   most one notification per day. It must not run as part of
+   the normal test command, on push, in pre-commit hooks, or in ad-hoc verification; a local
+   run (`cargo xtask e2e --force`) needs a recorded justification in the ledger.
 5. **Keep the ledger.** [e2e/LEDGER.md](e2e/LEDGER.md) records every processed Step issue and
-   every e2e run. When a Step completes, append it; when the count since the last e2e run
-   reaches 15, run the e2e suite once, record the result, and report it in that Step's
-   completion comment. Failures found by the e2e run are fixed (or filed as issues) before
-   the next Step starts.
+   every e2e run. When a Step completes, append it. The master checks each daily run, records
+   its result in the ledger, and fixes failures (or files them as issues) before the next Step
+   starts.
 
 ## 5. Working on this machine (agents)
 
@@ -96,11 +102,14 @@ These rules come directly from the maintainer and are mandatory.
   repository is the only exception.
 - Commit messages: imperative summary, then a body that references the issue
   (`Refs #N`) and the requirement IDs touched.
-- **No pull requests** (maintainer decision, 2026-11-04). Push the issue branch; CI runs on every
-  branch push. When the branch's CI is green and `cargo xtask ci` passes on the merged result,
-  merge it into `main` locally with `git merge --no-ff` (a merge commit, so reported SHAs stay
-  valid) and push `main`. Parallel agents keep using their own branch and worktree; only the
-  integrating agent (the master) merges into `main`.
+- **No pull requests** (maintainer decision, 2026-11-04). Push the issue branch.
+- **No CI on push** (maintainer decision, 2026-11-04, to keep failure notifications low). The
+  gate is local: `cargo xtask ci` must pass on the branch and again on the merged result before
+  the master merges it into `main` with `git merge --no-ff` (a merge commit, so reported SHAs
+  stay valid) and pushes `main`. The `Daily` workflow (§4) adds e2e and the dependency policy
+  once a day; when dependencies change, also run `cargo deny` locally.
+  Parallel agents keep using their own branch and worktree; only the integrating agent (the
+  master) merges into `main`.
 - After completing an issue, post a **Korean completion report** as a comment on that issue
   with the headings `구현 내용`, `설계 및 주요 결정`, `변경 파일`, `테스트 및 실제 결과`,
   `커밋 및 Push`, `남은 문제와 다음 Step`, giving concrete evidence (commands, outputs, SHAs).

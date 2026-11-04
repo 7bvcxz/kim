@@ -12,6 +12,8 @@ pub enum Code {
     PermissionDenied,
     SpawnFailed,
     Usage,
+    InvalidName,
+    AmbiguousTarget,
     HostNotRunning,
     TargetNotFound,
     ProtocolError,
@@ -25,18 +27,23 @@ pub enum Code {
     HostUnresponsive,
     Timeout,
     HostAlreadyRunning,
+    NameConflict,
+    InvalidState,
+    TerminalsRunning,
     ConfirmationRequired,
     Cancelled,
 }
 
 impl Code {
     #[cfg(test)]
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 23] = [
         Self::Io,
         Self::Internal,
         Self::PermissionDenied,
         Self::SpawnFailed,
         Self::Usage,
+        Self::InvalidName,
+        Self::AmbiguousTarget,
         Self::HostNotRunning,
         Self::TargetNotFound,
         Self::ProtocolError,
@@ -48,6 +55,9 @@ impl Code {
         Self::HostUnresponsive,
         Self::Timeout,
         Self::HostAlreadyRunning,
+        Self::NameConflict,
+        Self::InvalidState,
+        Self::TerminalsRunning,
         Self::ConfirmationRequired,
         Self::Cancelled,
     ];
@@ -59,6 +69,8 @@ impl Code {
             Self::PermissionDenied => "permission_denied",
             Self::SpawnFailed => "spawn_failed",
             Self::Usage => "usage",
+            Self::InvalidName => "invalid_name",
+            Self::AmbiguousTarget => "ambiguous_target",
             Self::HostNotRunning => "host_not_running",
             Self::TargetNotFound => "target_not_found",
             Self::ProtocolError => "protocol_error",
@@ -70,6 +82,9 @@ impl Code {
             Self::HostUnresponsive => "host_unresponsive",
             Self::Timeout => "timeout",
             Self::HostAlreadyRunning => "host_already_running",
+            Self::NameConflict => "name_conflict",
+            Self::InvalidState => "invalid_state",
+            Self::TerminalsRunning => "terminals_running",
             Self::ConfirmationRequired => "confirmation_required",
             Self::Cancelled => "cancelled",
         }
@@ -79,12 +94,16 @@ impl Code {
     pub fn exit_code(self) -> u8 {
         match self {
             Self::Io | Self::Internal | Self::PermissionDenied | Self::SpawnFailed => 1,
-            Self::Usage => 2,
+            Self::Usage | Self::InvalidName | Self::AmbiguousTarget => 2,
             Self::HostNotRunning | Self::TargetNotFound => 3,
             Self::ProtocolError | Self::HostIdentityMismatch => 4,
             Self::UnsupportedPlatform | Self::HostTooOld | Self::HostTooNew => 5,
             Self::HostDisconnected | Self::HostUnresponsive | Self::Timeout => 6,
-            Self::HostAlreadyRunning | Self::ConfirmationRequired => 7,
+            Self::HostAlreadyRunning
+            | Self::NameConflict
+            | Self::InvalidState
+            | Self::TerminalsRunning
+            | Self::ConfirmationRequired => 7,
             Self::Cancelled => 8,
         }
     }

@@ -312,7 +312,14 @@ impl Host {
 impl Drop for Host {
     fn drop(&mut self) {
         if self.proc.alive() {
-            let _ = run(&["host", "stop", "--endpoint", &self.ep, "--yes"]);
+            let _ = run(&[
+                "host",
+                "stop",
+                "--endpoint",
+                &self.ep,
+                "--kill-terminals",
+                "--yes",
+            ]);
             if !self.proc.wait(Duration::from_secs(15)) {
                 self.proc.kill();
             }
@@ -830,9 +837,19 @@ fn requests_are_validated_and_violations_close_only_that_connection() {
             "unknown_request",
         ),
         (
-            "terminal.create",
-            json!({"command": {"program": "cmd.exe", "args": ["/c", "echo pwned > %TEMP%\\pwned.txt"]}}),
+            "terminal.restore",
+            json!({"target": "t-000000000001", "claude_resume": true}),
             "unknown_request",
+        ),
+        (
+            "terminal.create",
+            json!({"command": "cmd.exe /c echo pwned"}),
+            "invalid_params",
+        ),
+        (
+            "terminal.create",
+            json!({"env": {"X": "1"}}),
+            "invalid_params",
         ),
         ("Host.Status", json!({}), "unknown_request"),
         ("host.stop", json!({"dry_run": "yes"}), "invalid_params"),

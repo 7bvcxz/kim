@@ -6,7 +6,7 @@
     "code": "usage",
     "exit_code": 2,
     "message": "unknown command `attach`",
-    "hint": "Subak is pre-alpha: only `capabilities` and the Step 08 `host` prototype exist; see `subak --help`",
+    "hint": "Subak is pre-alpha: only `capabilities`, `terminal` and `host` commands exist; see `subak --help`",
     "details": []
   }
 }

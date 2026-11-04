@@ -1,8 +1,9 @@
-//! Integration tests for the `subak` binary's CLI contract surface (Steps 02, 07, 08, 09;
+//! Integration tests for the `subak` binary's CLI contract surface (Steps 02, 07, 08, 09, 10;
 //! docs/CLI_CONTRACT.md): help, version, capabilities, structured usage errors, and the `host`
-//! commands' errors and dry runs. JSON outputs are validated against the shared schemas with the
-//! same validator as `cargo xtask schema-check`. The live Host is exercised by
-//! `tests/conpty_host.rs` (ConPTY, Step 08) and `tests/host_ipc.rs` (IPC v1, Step 09).
+//! and `terminal` commands' errors and dry runs without a Host. JSON outputs are validated
+//! against the shared schemas with the same validator as `cargo xtask schema-check`. The live
+//! Host is exercised by `tests/conpty_host.rs` (ConPTY, Step 08), `tests/host_ipc.rs` (IPC v1,
+//! Step 09) and `tests/session_lifecycle.rs` (Terminals, Step 10).
 
 #[path = "../../../xtask/src/jsonschema.rs"]
 mod jsonschema;
@@ -38,7 +39,7 @@ fn validate(schema: &str, doc: &Value) {
 /// Runs with `--json`; checks one envelope on stdout, empty stderr, and exit == error.exit_code.
 fn json(args: &[&str]) -> (i32, Value) {
     let mut a = args.to_vec();
-    a.push("--json");
+    a.insert(0, "--json"); // before any `--`, after which everything is the command
     let out = subak(&a);
     assert!(
         out.stderr.is_empty(),
@@ -70,12 +71,21 @@ fn help_is_honest_about_the_prototype_status() {
     let out = subak(&["--help"]);
     assert!(out.status.success());
     let text = String::from_utf8_lossy(&out.stdout);
-    assert!(text.contains("pre-alpha; Host supervisor and IPC v1, one prototype pane"));
+    assert!(text.contains("pre-alpha; Host, IPC v1 and the Terminal lifecycle"));
     assert!(text.contains("No command opens a window"));
-    assert!(text.contains("no Terminals, windows, GUI or recovery yet"));
+    assert!(text.contains("no GUI, windows/panes splits, persistence or recovery yet"));
     assert!(text.contains("no Windows service exists"));
+    assert!(text.contains("There is no ambiguous `close`"));
     for cmd in [
         "capabilities",
+        "terminal new",
+        "terminal list",
+        "terminal info",
+        "terminal rename",
+        "terminal attach",
+        "terminal stop",
+        "terminal kill",
+        "terminal rm",
         "host start",
         "host status",
         "host health",
@@ -100,7 +110,7 @@ fn unknown_arguments_fail_with_usage_exit_code_on_stderr() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.starts_with("subak: error:"), "{err}");
     assert!(
-        err.contains("only `capabilities` and the `host` commands exist"),
+        err.contains("only `capabilities`, `terminal` and `host` commands exist"),
         "{err}"
     );
 }
@@ -116,7 +126,7 @@ fn capabilities_are_honest_and_follow_the_contract() {
     assert_eq!(data["version"], env!("CARGO_PKG_VERSION"));
     assert_eq!(
         data["implementation"], "placeholder",
-        "no Terminals or sessions yet: one prototype pane per Host until Step 10"
+        "pre-alpha: no GUI, splits or recovery yet"
     );
     let names: Vec<&str> = data["commands"]
         .as_array()
@@ -128,6 +138,14 @@ fn capabilities_are_honest_and_follow_the_contract() {
         names,
         [
             "capabilities",
+            "terminal.new",
+            "terminal.list",
+            "terminal.info",
+            "terminal.rename",
+            "terminal.attach",
+            "terminal.stop",
+            "terminal.kill",
+            "terminal.rm",
             "host.start",
             "host.status",
             "host.health",
@@ -137,11 +155,14 @@ fn capabilities_are_honest_and_follow_the_contract() {
         ],
         "only commands that really exist"
     );
-    let stop = &data["commands"][5];
-    assert_eq!(
-        (stop["effect"].as_str(), &stop["requires_yes"]),
-        (Some("destructive"), &Value::Bool(true))
-    );
+    for c in data["commands"].as_array().unwrap() {
+        let destructive = matches!(
+            c["name"].as_str().unwrap(),
+            "terminal.stop" | "terminal.kill" | "terminal.rm" | "host.stop"
+        );
+        assert_eq!(c["effect"] == "destructive", destructive, "{c}");
+        assert_eq!(c["requires_yes"] == true, destructive, "{c}");
+    }
     assert!(
         data["commands"]
             .as_array()
@@ -173,7 +194,7 @@ fn capabilities_are_honest_and_follow_the_contract() {
 
     let human = subak(&["capabilities"]);
     assert!(human.status.success());
-    assert!(String::from_utf8_lossy(&human.stdout).contains("one prototype pane per Host"));
+    assert!(String::from_utf8_lossy(&human.stdout).contains("named Terminals in the Host"));
 }
 
 #[test]
@@ -187,6 +208,22 @@ fn usage_errors_are_structured_with_json() {
         (&["host", "attach", "--size", "1x1"], "host.attach"),
         (&["host", "attach"], "host.attach"), // --json streams nothing; only with --dry-run
         (&["host", "stop", "--endpoint"], "host.stop"),
+        (&["host", "stop", "--force"], "host.stop"),
+        (&["terminal"], "terminal"),
+        (&["terminal", "close", "x"], "terminal"),
+        (&["terminal", "info"], "terminal.info"),
+        (&["terminal", "rename", "a"], "terminal.rename"),
+        (&["terminal", "rename", "a", "b", "c"], "terminal.rename"),
+        (&["terminal", "stop", "a", "--force"], "terminal.stop"),
+        (
+            &["terminal", "kill", "a", "--kill-terminals"],
+            "terminal.kill",
+        ),
+        (&["terminal", "list", "extra"], "terminal.list"),
+        (&["terminal", "attach", "a"], "terminal.attach"), // --json only with --dry-run
+        (&["terminal", "new", "--", ""], "terminal.new"),
+        (&["terminal", "info", "a", "--", "cmd.exe"], "terminal.info"),
+        (&["terminal", "new", "--cwd"], "terminal.new"),
     ] {
         let (code, doc) = json(args);
         assert_eq!(code, 2, "{args:?}");
@@ -286,6 +323,59 @@ fn host_dry_runs_describe_the_plan_and_start_nothing() {
             .to_string()
             .contains("--no-shell")
     );
+}
+
+#[cfg(windows)]
+#[test]
+fn terminal_commands_without_a_host_start_nothing() {
+    let ep = nobody();
+    // Listing needs no Host: no Host means no Terminals, and nothing is started to find out.
+    let (code, doc) = json(&["terminal", "list", "--endpoint", &ep]);
+    assert_eq!(code, 0, "{doc}");
+    assert_eq!(doc["data"]["terminals"], serde_json::json!([]));
+    assert!(doc["data"]["host"].is_null());
+    let out = subak(&["terminal", "list", "--endpoint", &ep]);
+    assert!(String::from_utf8_lossy(&out.stdout).contains("no Terminals (no Host is running)"));
+    for args in [
+        &["terminal", "info", "work", "--endpoint", &ep][..],
+        &["terminal", "rename", "work", "x", "--endpoint", &ep],
+        &["terminal", "stop", "work", "--endpoint", &ep, "--yes"],
+        &["terminal", "kill", "work", "--endpoint", &ep, "--yes"],
+        &["terminal", "rm", "work", "--endpoint", &ep, "--yes"],
+        &["terminal", "attach", "work", "--endpoint", &ep, "--dry-run"],
+    ] {
+        let (code, doc) = json(args);
+        assert_eq!(
+            (code, doc["error"]["code"].as_str()),
+            (3, Some("host_not_running")),
+            "{args:?}"
+        );
+    }
+    // A dry run of `new` without a Host validates the name and starts nothing.
+    let (code, doc) = json(&[
+        "terminal",
+        "new",
+        "서버",
+        "--endpoint",
+        &ep,
+        "--dry-run",
+        "--",
+        "cmd.exe",
+        "/d",
+    ]);
+    assert_eq!(code, 0, "{doc}");
+    let plan = &doc["data"];
+    assert_eq!(plan["would_start_host"], true);
+    assert_eq!(plan["would_create"]["name"], "서버");
+    assert_eq!(plan["would_create"]["command"]["args"][0], "/d");
+    let (code, doc) = json(&["terminal", "new", "a:b", "--endpoint", &ep, "--dry-run"]);
+    assert_eq!(
+        (code, doc["error"]["code"].as_str()),
+        (2, Some("invalid_name")),
+        "{doc}"
+    );
+    let (code, _) = json(&["host", "status", "--endpoint", &ep]);
+    assert_eq!(code, 3, "nothing was started");
 }
 
 #[cfg(not(windows))]

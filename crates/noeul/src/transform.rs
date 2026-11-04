@@ -533,42 +533,40 @@ pub fn paint(frame: &Frame, view: &View, dst: &mut [u8]) {
     let m = view.margin() as usize;
     let (pw, ph) = (view.rect.width as usize, view.rect.height as usize);
     debug_assert_eq!(dst.len(), ww * wh * 4);
-    dst.fill(0);
     let px = dst.as_chunks_mut::<4>().0;
     let b = view.border() as usize;
-    if view.look.shadow {
-        let sigma = f64::from(scale_px(SHADOW_BLUR, view.dpi)) / 2.0;
-        let off = f64::from(scale_px(SHADOW_OFFSET, view.dpi));
-        // The shadow of the outlined picture, moved down.
-        let (x0, x1) = ((m - b) as f64, (m + pw + b) as f64);
-        let (y0, y1) = ((m - b) as f64 + off, (m + ph + b) as f64 + off);
-        let cx: Vec<f64> = (0..ww).map(|i| coverage(i as i64, x0, x1, sigma)).collect();
-        let cy: Vec<f64> = (0..wh).map(|i| coverage(i as i64, y0, y1, sigma)).collect();
-        for (y, fy) in cy.iter().enumerate() {
-            for (x, fx) in cx.iter().enumerate() {
-                let a = (SHADOW_ALPHA * fx * fy * 255.0).round() as u8;
-                px[y * ww + x] = [0, 0, 0, a];
-            }
-        }
-    }
-    if view.resizable && m > 0 {
-        for p in px.iter_mut() {
-            p[3] = p[3].max(1);
-        }
-    }
-    if b > 0 {
+    // Only the margin is painted here; the picture's own pixels are written once below (a
+    // transparent picture shows what is behind the window, never the shadow).
+    if m > 0 {
+        let floor = u8::from(view.resizable);
+        let shadow = view.look.shadow.then(|| {
+            let sigma = f64::from(scale_px(SHADOW_BLUR, view.dpi)) / 2.0;
+            let off = f64::from(scale_px(SHADOW_OFFSET, view.dpi));
+            // The shadow of the outlined picture, moved down.
+            let (x0, x1) = ((m - b) as f64, (m + pw + b) as f64);
+            let (y0, y1) = ((m - b) as f64 + off, (m + ph + b) as f64 + off);
+            let cx: Vec<f64> = (0..ww).map(|i| coverage(i as i64, x0, x1, sigma)).collect();
+            let cy: Vec<f64> = (0..wh).map(|i| coverage(i as i64, y0, y1, sigma)).collect();
+            (cx, cy)
+        });
         let (l, t, r, bt) = (m - b, m - b, m + pw + b, m + ph + b);
-        for y in t..bt {
-            for x in l..r {
-                if x < m || x >= m + pw || y < m || y >= m + ph {
-                    px[y * ww + x] = BORDER_BGRA;
-                }
+        let mut put = |x: usize, y: usize| {
+            px[y * ww + x] = if (l..r).contains(&x) && (t..bt).contains(&y) {
+                BORDER_BGRA
+            } else {
+                let a = shadow.as_ref().map_or(0, |(cx, cy)| {
+                    (SHADOW_ALPHA * cx[x] * cy[y] * 255.0).round() as u8
+                });
+                [0, 0, 0, a.max(floor)]
+            };
+        };
+        for y in 0..wh {
+            if (m..m + ph).contains(&y) {
+                (0..m).chain(m + pw..ww).for_each(|x| put(x, y));
+            } else {
+                (0..ww).for_each(|x| put(x, y));
             }
         }
-    }
-    // The picture inside, clear of the shadow (a transparent picture shows what is behind it).
-    for y in m..m + ph {
-        px[y * ww + m..y * ww + m + pw].fill([0, 0, 0, 0]);
     }
     let start = (m * ww + m) * 4;
     zoom::render_into(

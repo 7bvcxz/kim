@@ -14,7 +14,11 @@
 //!   process's private bytes before a pin, with it, zoomed to 200 %, and after it was destroyed;
 //!   then twenty 1920×1080 pins at once (NOEUL-NFR-007).
 //! - **Idle** (NOEUL-NFR-001): with twenty pins open, the process waits for messages for ten
-//!   seconds; the CPU time it used and the messages it received are counted.
+//!   seconds; the CPU time it used and the messages it received are counted; then again with the
+//!   twenty pins hidden (NOEUL-NFR-007, Step 54).
+//! - **Transforms** (Step 54, ADR 0044): through the pin engine (`Pins` over real off-screen
+//!   windows), the latency of a quarter turn, a flip, an opacity step, thumbnail mode and a
+//!   border-drag resize step of a 1920×1080 and a 3840×2160 pin, each with its inverse.
 //!
 //! Safety on a machine in use: every window lies at -20000,-20000 (no monitor there), is never
 //! activated and never on top (`Style::OFF_SCREEN_TEST`); the pictures are generated patterns,
@@ -153,6 +157,88 @@ mod measure {
         WindowSpec::plain(rect)
     }
 
+    /// Step 54: transform latencies through the pin engine, each step and its inverse.
+    fn transforms(ledger: &std::sync::Arc<Ledger>, runs: usize) {
+        use noeul::capture::{Desktop, DesktopState, Monitor};
+        use noeul::pins::{NewPin, Pins, Placement, Source};
+        use noeul::transform::{Edge, Orientation};
+        use noeul::win::pinwnd::WinPins;
+        let desk = Desktop {
+            state: DesktopState::Available,
+            virtual_rect: Some(Rect::new(FAR, FAR, 7680, 4320)),
+            monitors: vec![Monitor::new(Rect::new(FAR, FAR, 7680, 4320), true)],
+        };
+        let mut windows = WinPins {
+            style: Style::OFF_SCREEN_TEST,
+        };
+        println!();
+        println!("transform latency through the pin engine (step and its inverse), {runs} runs");
+        println!(
+            "size        | turn p50/p95 ms | flip p50/p95 ms | opacity p50/p95 ms | thumbnail p50/p95 ms | resize step p50/p95 ms"
+        );
+        for (w, h) in [(1920u32, 1080u32), (3840, 2160)] {
+            let mut pins = Pins::new();
+            let id = pins
+                .create(
+                    &mut windows,
+                    &desk,
+                    NewPin {
+                        frame: picture(ledger, w, h),
+                        source: Source::Capture,
+                        placement: Placement::Exact,
+                        focus: false,
+                        guard: None,
+                        annotations: Vec::new(),
+                    },
+                )
+                .expect("a pin");
+            let mut lat: [Vec<u64>; 5] = Default::default();
+            let us = |t: Instant| u64::try_from(t.elapsed().as_micros()).unwrap_or(u64::MAX);
+            for i in 0..runs * 2 {
+                let t = Instant::now();
+                pins.orient(
+                    id,
+                    if i % 2 == 0 {
+                        Orientation::rotate_cw
+                    } else {
+                        Orientation::rotate_ccw
+                    },
+                )
+                .expect("turned");
+                lat[0].push(us(t));
+                let t = Instant::now();
+                pins.orient(id, Orientation::flip_horizontal)
+                    .expect("flipped");
+                lat[1].push(us(t));
+                let t = Instant::now();
+                pins.set_opacity(id, if i % 2 == 0 { 50 } else { 100 })
+                    .expect("faded");
+                lat[2].push(us(t));
+                let t = Instant::now();
+                pins.set_thumbnail(id, i % 2 == 0).expect("thumbnail");
+                lat[3].push(us(t));
+                let r = pins.rect(id).expect("a rect");
+                let t = Instant::now();
+                if pins.info(id).expect("info").transforms.thumbnail.is_none() {
+                    pins.resize(id, Edge::Right, r, (-20, 0)).expect("resized");
+                    lat[4].push(us(t));
+                    pins.set_zoom(id, 100, (r.x, r.y)).expect("back");
+                }
+            }
+            let ms = |v: u64| format!("{:.1}", v as f64 / 1000.0);
+            let mut cells = Vec::new();
+            for v in &mut lat {
+                if v.is_empty() {
+                    cells.push("—".to_string());
+                } else {
+                    cells.push(format!("{} / {}", ms(pct(v, 50)), ms(pct(v, 95))));
+                }
+            }
+            println!("{w}×{h} | {}", cells.join(" | "));
+            pins.clear();
+        }
+    }
+
     pub fn main() {
         noeul::win::per_monitor_dpi_awareness();
         let runs: usize = std::env::args()
@@ -287,9 +373,24 @@ mod measure {
             t0.elapsed().as_secs_f64(),
             cpu as f64 / 10_000.0
         );
+        let mut pins = pins;
+        for p in &mut pins {
+            p.set_visible(false);
+        }
+        idle(Duration::from_millis(300));
+        let cpu0 = cpu_time();
+        let t0 = Instant::now();
+        let messages = idle(Duration::from_secs(10));
+        let cpu = cpu_time() - cpu0;
+        println!(
+            "idle with the twenty pins hidden for {:.1} s: {:.1} ms CPU, {messages} message(s) received",
+            t0.elapsed().as_secs_f64(),
+            cpu as f64 / 10_000.0
+        );
         drop(pins);
         drop(frames);
         idle(Duration::from_millis(300));
+        transforms(&ledger, runs.min(20));
         println!(
             "after closing them: private {} MiB; image bytes held: {}",
             mib(private_bytes()),

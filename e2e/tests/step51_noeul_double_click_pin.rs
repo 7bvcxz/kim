@@ -30,9 +30,9 @@ use kim_e2e::{TempDir, bin};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::Duration;
 #[cfg(windows)]
 use std::time::Instant;
-use std::time::Duration;
 
 /// The synthetic desktop's primary monitor starts here (`noeul::capture::OFF_SCREEN`).
 #[cfg(windows)]

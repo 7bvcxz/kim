@@ -174,7 +174,7 @@ fn rect_of(r: RECT) -> Rect {
 }
 
 /// The extended frame bounds of `h`, else its window rectangle (device pixels).
-pub fn frame_bounds(h: HWND) -> Option<Rect> {
+fn frame_bounds(h: HWND) -> Option<Rect> {
     let mut r = RECT::default();
     // SAFETY: `r` is a writable RECT, the attribute's documented type and size.
     let dwm = unsafe {
@@ -223,7 +223,7 @@ pub fn own_elevated() -> bool {
 }
 
 /// The rights of the process that owns `h`, read from its token (UIPI).
-pub fn target_rights(h: HWND) -> TargetRights {
+fn target_rights(h: HWND) -> TargetRights {
     let pid = owner(h);
     if pid == 0 {
         return TargetRights::Unknown;
@@ -623,7 +623,6 @@ fn worker(rx: &Receiver<ElementRequest>, out: &Answers, waker: &dyn Fn()) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::detect::{DetectMode, Snapshot};
     use crate::win::wide;
     use std::sync::OnceLock;
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -820,13 +819,8 @@ mod tests {
         // No text anywhere in what detection keeps.
         assert!(!format!("{s:?}").contains("NOEUL-SECRET"));
         // SAFETY: a plain query.
-        assert_eq!(
-            unsafe { GetForegroundWindow() },
-            before,
-            "focus never moved"
-        );
-        let _ = DetectMode::default();
-        let _: Snapshot = s;
+        let after = unsafe { GetForegroundWindow() };
+        assert_eq!(after, before, "focus never moved");
     }
 
     /// UI Automation against our own window only: the deepest control under a point is found

@@ -2,14 +2,14 @@
 //! states why it is sound. The helpers follow Subak's (ADR 0019) without depending on Subak:
 //! no tool depends on another tool's crate (`KIM-FR-001`).
 
-// pub mod context;
-// pub mod hook;
-// pub mod host;
-// pub mod inject;
-// pub mod instance;
-// pub mod pipe;
-// pub mod startup;
-// pub mod tray;
+pub mod context;
+pub mod hook;
+pub mod host;
+pub mod inject;
+pub mod instance;
+pub mod pipe;
+pub mod startup;
+pub mod tray;
 
 use std::ffi::{OsStr, c_void};
 use std::io;

@@ -767,15 +767,27 @@ struct Detacher {
     pipe: Arc<Pipe>,
     ids: Arc<AtomicU64>,
     detach_id: Arc<AtomicU64>,
+    /// Serializes whole frames: the input thread and the console control handler both write.
+    writing: Arc<std::sync::Mutex<()>>,
 }
 
 impl Detacher {
+    /// Writes one whole frame.
+    fn write(&self, frame: &[u8]) -> io::Result<()> {
+        let _guard = self
+            .writing
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.pipe.write_all_bytes(frame)
+    }
+
     fn request(&self, method: &str, params: &Value) -> bool {
         let id = self.ids.fetch_add(1, Ordering::SeqCst);
         if method == "pane.detach" {
             self.detach_id.store(id, Ordering::SeqCst);
         }
-        send(&self.pipe, &proto::request(id, method, params)).is_ok()
+        self.write(&proto::encode_control(&proto::request(id, method, params)))
+            .is_ok()
     }
 
     fn detach(&self) -> bool {
@@ -848,6 +860,7 @@ pub fn attach(a: &Args, endpoint: &str, target: Option<&str>) -> Result<Value, C
         pipe: Arc::clone(&s.pipe),
         ids: Arc::clone(&s.next_id),
         detach_id: Arc::new(AtomicU64::new(0)),
+        writing: Arc::new(std::sync::Mutex::new(())),
     };
     let raw = (console_in || console_out).then(console::RawMode::enable);
     // A panic anywhere still puts the console back; Ctrl+Break detaches cleanly.
@@ -970,13 +983,12 @@ fn input(
     size: Option<(u16, u16)>,
     verbose: bool,
 ) {
-    let pipe = &d.pipe;
     let mut keys = DetachKeys::default();
     let mut forward = |bytes: &[u8]| -> Option<bool> {
         let (fwd, detach) = keys.feed(bytes);
         if !fwd.is_empty() && interactive {
             for chunk in fwd.chunks(32 * 1024) {
-                pipe.write_all_bytes(&proto::encode_data(stream, 0, FLAG_INPUT, chunk))
+                d.write(&proto::encode_data(stream, 0, FLAG_INPUT, chunk))
                     .ok()?;
             }
         }

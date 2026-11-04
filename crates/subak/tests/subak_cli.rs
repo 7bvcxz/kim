@@ -1083,10 +1083,8 @@ struct OuterConsole {
 fn pipe_pair() -> (HANDLE, HANDLE) {
     let (mut r, mut w): (HANDLE, HANDLE) = (std::ptr::null_mut(), std::ptr::null_mut());
     // SAFETY: both out-pointers are valid; no inheritance.
-    assert_ne!(
-        unsafe { CreatePipe(&raw mut r, &raw mut w, std::ptr::null(), 0) },
-        0
-    );
+    let ok = unsafe { CreatePipe(&raw mut r, &raw mut w, std::ptr::null(), 0) };
+    assert_ne!(ok, 0);
     (r, w)
 }
 

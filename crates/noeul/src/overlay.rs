@@ -1323,6 +1323,17 @@ impl Overlay {
         &self.monitors
     }
 
+    /// The displays changed while the overlay is open (Step 58): the handles, the border band,
+    /// the toolbar, the magnifier and the labels are measured with the new scales from now on;
+    /// the selection, the pointer and the annotations (device and picture pixels) stay. The help
+    /// stays on the monitor it was on when it still exists.
+    pub fn set_monitors(&mut self, monitors: Vec<Monitor>) {
+        if self.help_monitor >= monitors.len() {
+            self.help_monitor = 0;
+        }
+        self.monitors = monitors;
+    }
+
     pub fn phase(&self) -> Phase {
         match self.state {
             State::Hover => Phase::Hover,

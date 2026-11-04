@@ -18,6 +18,8 @@ pub enum Code {
     NoeulNotRunning,
     PinNotFound,
     NothingToPin,
+    MonitorNotFound,
+    WindowNotFound,
     ProtocolError,
     NoeulIdentityMismatch,
     HotkeysInvalid,
@@ -51,6 +53,8 @@ impl Code {
         Code::NoeulNotRunning,
         Code::PinNotFound,
         Code::NothingToPin,
+        Code::MonitorNotFound,
+        Code::WindowNotFound,
         Code::ProtocolError,
         Code::NoeulIdentityMismatch,
         Code::HotkeysInvalid,
@@ -84,6 +88,8 @@ impl Code {
             Code::NoeulNotRunning => "noeul_not_running",
             Code::PinNotFound => "pin_not_found",
             Code::NothingToPin => "nothing_to_pin",
+            Code::MonitorNotFound => "monitor_not_found",
+            Code::WindowNotFound => "window_not_found",
             Code::ProtocolError => "protocol_error",
             Code::NoeulIdentityMismatch => "noeul_identity_mismatch",
             Code::HotkeysInvalid => "hotkeys_invalid",
@@ -118,7 +124,9 @@ impl Code {
             Code::ActionNotFound
             | Code::NoeulNotRunning
             | Code::PinNotFound
-            | Code::NothingToPin => 3,
+            | Code::NothingToPin
+            | Code::MonitorNotFound
+            | Code::WindowNotFound => 3,
             Code::ProtocolError
             | Code::NoeulIdentityMismatch
             | Code::HotkeysInvalid

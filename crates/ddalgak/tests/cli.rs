@@ -516,9 +516,11 @@ fn the_app_lifecycle_through_the_cli() {
     // Ddalgak's own shortcuts are registered with RegisterHotKey (obscure chords only; never
     // pressed by this test), unless another program owns them.
     let global = d["shortcuts"]["global"].as_array().unwrap();
+    // Since Step 74 `editor.open` is registered too; the test host never opens a window for it.
     for (action, keys) in [
         ("engine.toggle", "Ctrl+Alt+Shift+F13"),
         ("engine.pause", "Ctrl+Alt+Shift+F14"),
+        ("editor.open", "Ctrl+Alt+Shift+F15"),
     ] {
         let s = global.iter().find(|s| s["action"] == action).unwrap();
         assert_eq!(s["keys"], keys);
@@ -527,13 +529,6 @@ fn the_app_lifecycle_through_the_cli() {
             "{s}"
         );
     }
-    assert_eq!(
-        global
-            .iter()
-            .find(|s| s["action"] == "editor.open")
-            .unwrap()["registration"],
-        "unavailable"
-    );
     // Privacy: status names rule IDs and codes, never rule titles or keys of rules.
     assert!(!st.to_string().contains("CapsLock acts as Ctrl"));
     bless("status-off", &st);

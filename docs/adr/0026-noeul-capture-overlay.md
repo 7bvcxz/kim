@@ -245,3 +245,11 @@ Against the budgets:
   acceleration of held keys, edge snapping (`Alt` turns it off), the magnifier and
   `history.previous`/`history.next`. §8's test hook lists only the windows of processes named in
   `NOEUL_DEV_DETECT_PIDS`.
+- 2026-11-04 (Step 58): [ADR 0050](0050-noeul-displays-and-capture-backends.md) changes §3's
+  `WM_DISPLAYCHANGE` rule: the overlay window no longer leaves on it. `WM_DISPLAYCHANGE` and
+  `WM_DPICHANGED` are reported to the core, which looks once the displays are quiet (a one-shot
+  timer): a capture whose frozen picture no longer matches the monitors (one attached, removed,
+  moved, resized or turned) is cancelled with a notice; after a change of scale, work area, HDR
+  or primary only, the overlay keeps its selection and is drawn again for the new scales.
+  `WM_CLOSE` and `Alt+F4` still leave. With `[capture] pointer = "on"` §2's frozen picture
+  shows the pointer where it was; the parts of it no monitor shows are opaque black.

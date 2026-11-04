@@ -33,7 +33,9 @@
             "y": 0,
             "width": 1920,
             "height": 1080
-          }
+          },
+          "rotation": 0,
+          "hdr": null
         },
         {
           "rect": {
@@ -48,7 +50,9 @@
             "y": 0,
             "width": 2560,
             "height": 1392
-          }
+          },
+          "rotation": 0,
+          "hdr": null
         }
       ]
     },
@@ -76,6 +80,11 @@
       "frames": 1,
       "bytes": 480000,
       "peak_bytes": 480000
+    },
+    "displays": {
+      "changes": 0,
+      "handled": 0,
+      "pending": false
     },
     "hotkeys": {
       "enabled": true,

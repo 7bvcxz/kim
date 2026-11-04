@@ -236,3 +236,11 @@ machine), pin latency (NOEUL-NFR-004; Steps 51/53), a visible tray icon, and con
   Noeul's process" (measured there). §7's shipped pin keys gained `pin.destroy`, `pin.zoom-in`,
   `pin.zoom-out`, `pin.zoom-reset` and `pin.hide`; §8's tray gained Hide all pins / Show all pins
   and Bring pins on screen; §5's IPC gained `pin.create`, `pin.hide` and `pin.show`.
+- 2026-11-04 (Step 58): [ADR 0050](0050-noeul-displays-and-capture-backends.md) revisits §3 as
+  planned: GDI stays the only backend, with no silent fallback to DXGI, Windows.Graphics.Capture
+  or `PrintWindow` (measured: `PrintWindow` without `PW_RENDERFULLCONTENT` and `BitBlt` from a
+  window's own DC return the content of a window that excludes itself from capture). §3's table
+  row "HDR: clipped SDR" is refined there (an 8-bit conversion by Windows, not verified on an HDR
+  display). `Monitor` gained `rotation` and `hdr` from the display configuration; captures make
+  the gaps of the virtual desktop opaque black; IPC `capture` also takes `monitor`, `window`
+  and `pointer`.

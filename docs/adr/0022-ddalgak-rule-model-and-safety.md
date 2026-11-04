@@ -154,3 +154,9 @@ discloses Ddalgak's permissions (`keyboard-hook`, `input-injection`, `launch-pro
   string or elevation — and `open_program` gained an explicit `env` list of overrides (additive to
   rules v1, covered by the fingerprint). Custom URL protocols stay refused in v1. See
   [ADR 0037](0037-ddalgak-program-and-website-launches.md).
+- 2026-11-04 (Step 74): §3 is refined by
+  [ADR 0049](0049-ddalgak-editor-process-and-toolkit.md): the editor is not a window of
+  `ddalgak-gui.exe` but its own on-demand process, `ddalgak-editor.exe` (package
+  `ddalgak-editor`, egui + glow), which the tray app starts from its menu and the `editor.open`
+  shortcut. The CLI and the tray app still link no GUI toolkit; the editor writes through the rule
+  store like the CLI and shows a rule as active only after the running app confirmed the reload.

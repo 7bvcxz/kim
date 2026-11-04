@@ -1,6 +1,6 @@
 # Noeul Requirements
 
-Status: **current** (product definition; the app foundation is implemented since Step 49, [ADR 0023](adr/0023-noeul-app-foundation.md); the `F1` selection overlay since Step 50, [ADR 0026](adr/0026-noeul-capture-overlay.md), with its NOEUL-NFR-003 measurements; the pin engine since Step 53, [ADR 0029](adr/0029-noeul-pin-engine.md), with its NOEUL-NFR-001/002/004/007 measurements; the double-click-to-pin signature flow, the toolbar, copy, save, quick save and the gesture settings since Step 51, [ADR 0032](adr/0032-noeul-double-click-pin-and-outputs.md); window and UI element detection, the magnifier, the precision keys, snapping and the in-memory rectangle history since Step 52, [ADR 0035](adr/0035-noeul-smart-selection-and-precision.md), with the detection cost measured there; annotation — rectangle, ellipse, line, arrow, pen, marker and text with the input method and font fallback, undo and redo, editable objects, crop and the size readout, in the overlay and on pins — since Step 56, [ADR 0038](adr/0038-noeul-annotation.md), without polyline and colour opacity; the privacy tools — mosaic, blur, the eraser and an irreversible solid redaction — since Step 57, [ADR 0041](adr/0041-noeul-privacy-tools.md), with their CPU cost measured there; the pin transforms — rotation, flips, opacity, thumbnails, border resizing, precise placement, the outline and shadow — click-through with its ways back, groups and an honest first-frame notice for animated GIFs since Step 54, [ADR 0044](adr/0044-noeul-pin-transforms-and-control.md), with the hidden-pin cost and the transform latency measured there; the `F3` paste of images, image files, colour values, HTML and text as cards, local image decoding with limits, drops on pins and `noeul pin <file>` since Step 55, [ADR 0047](adr/0047-noeul-clipboard-paste-and-rich-sources.md), without a notice when the tray icon is off; GIF playback (NOEUL-FR-068) is not implemented) · Owner: mouv ·
+Status: **current** (product definition; the app foundation is implemented since Step 49, [ADR 0023](adr/0023-noeul-app-foundation.md); the `F1` selection overlay since Step 50, [ADR 0026](adr/0026-noeul-capture-overlay.md), with its NOEUL-NFR-003 measurements; the pin engine since Step 53, [ADR 0029](adr/0029-noeul-pin-engine.md), with its NOEUL-NFR-001/002/004/007 measurements; the double-click-to-pin signature flow, the toolbar, copy, save, quick save and the gesture settings since Step 51, [ADR 0032](adr/0032-noeul-double-click-pin-and-outputs.md); window and UI element detection, the magnifier, the precision keys, snapping and the in-memory rectangle history since Step 52, [ADR 0035](adr/0035-noeul-smart-selection-and-precision.md), with the detection cost measured there; annotation — rectangle, ellipse, line, arrow, pen, marker and text with the input method and font fallback, undo and redo, editable objects, crop and the size readout, in the overlay and on pins — since Step 56, [ADR 0038](adr/0038-noeul-annotation.md), without polyline and colour opacity; the privacy tools — mosaic, blur, the eraser and an irreversible solid redaction — since Step 57, [ADR 0041](adr/0041-noeul-privacy-tools.md), with their CPU cost measured there; the pin transforms — rotation, flips, opacity, thumbnails, border resizing, precise placement, the outline and shadow — click-through with its ways back, groups and an honest first-frame notice for animated GIFs since Step 54, [ADR 0044](adr/0044-noeul-pin-transforms-and-control.md), with the hidden-pin cost and the transform latency measured there; the `F3` paste of images, image files, colour values, HTML and text as cards, local image decoding with limits, drops on pins and `noeul pin <file>` since Step 55, [ADR 0047](adr/0047-noeul-clipboard-paste-and-rich-sources.md), without a notice when the tray icon is off; whole-monitor and active-window capture without the overlay (CLI and the keyless `capture.monitor`/`capture.window` keys), the pointer in a capture, the logical mapping and honest warnings of every capture, each monitor's rotation and HDR state, gaps made black and debounced display changes that pins and the overlay follow since Step 58, [ADR 0050](adr/0050-noeul-displays-and-capture-backends.md), with GDI kept as the only capture backend and the physical multi-monitor, mixed-DPI, rotation and HDR checks pending the maintainer; GIF playback (NOEUL-FR-068) is not implemented) · Owner: mouv ·
 Step 48 · Derived from [NOEUL_PHILOSOPHY](NOEUL_PHILOSOPHY.md) and [KIM_PHILOSOPHY](KIM_PHILOSOPHY.md) ·
 Parity: [NOEUL_SNIPASTE_MATRIX](NOEUL_SNIPASTE_MATRIX.md) · UX: [NOEUL_UX_SPEC](NOEUL_UX_SPEC.md) ·
 Decision: [ADR 0021](adr/0021-noeul-product-definition.md)
@@ -56,7 +56,7 @@ What Noeul needs from Windows, and what it never asks for:
 | Capability | Mechanism (Windows) | Consent or limit |
 | --- | --- | --- |
 | Two global shortcuts | `RegisterHotKey`, only while Noeul runs and they are enabled | First come, first served; a taken key is reported, never stolen (`KIM-SEC-020`) |
-| Read the screen | A capture API of the user's own desktop, chosen in Step 49 and refined in Step 58 (GDI, DXGI Desktop Duplication or Windows.Graphics.Capture), at the moment of an explicit capture | A desktop app needs no permission to read the user's own desktop through GDI or DXGI on Windows 10 (*documented*); Step 49 checks which privacy controls current Windows 11 builds apply to each capture API. Noeul's own rule stands in for the missing prompt: capture only on an explicit action (NOEUL-SEC-001). Content excluded by display affinity or DRM stays excluded (NOEUL-SEC-004). |
+| Read the screen | GDI `BitBlt` of the user's own desktop, chosen in Step 49 and kept in Step 58 over DXGI Desktop Duplication, Windows.Graphics.Capture and `PrintWindow` ([ADR 0050](adr/0050-noeul-displays-and-capture-backends.md)), at the moment of an explicit capture; the pointer's image (`GetCursorInfo`) only when a capture asks for it; the display configuration (`QueryDisplayConfig`: rotation, advanced colour) read-only | A desktop app needs no permission to read the user's own desktop through GDI or DXGI on Windows 10 (*documented*); Step 49 checks which privacy controls current Windows 11 builds apply to each capture API. Noeul's own rule stands in for the missing prompt: capture only on an explicit action (NOEUL-SEC-001). Content excluded by display affinity or DRM stays excluded (NOEUL-SEC-004). |
 | Window and element geometry | `WindowFromPoint`/window rectangles; UI Automation `BoundingRectangle` | Geometry only (NOEUL-SEC-007); elevated windows refuse UI Automation from a normal process (UIPI, *documented*), so detection falls back to the window rectangle |
 | Clipboard | Open, read or write, close, only on paste or copy | No clipboard listener (NOEUL-SEC-002) |
 | Pointer position in the overlay | `SetCursorPos` while Noeul's overlay is the foreground window | Never `SendInput`, never input to other programs (NOEUL-SEC-012) |
@@ -174,6 +174,7 @@ rules, edge cases and tests are in [NOEUL_UX_SPEC §4](NOEUL_UX_SPEC.md#4-the-si
 | NOEUL-FR-090 | Noeul is per-monitor DPI aware (v2). The overlay covers the whole virtual desktop, including monitors at negative coordinates. On one monitor at any scale, and on several monitors with the same scale, selections, readouts, pins and saved images are exact in device pixels. | P0 | N1 | T, M |
 | NOEUL-FR-091 | Mixed and changing layouts: monitors with different scales, rotations and resolutions, and monitors attached, removed or rearranged while Noeul runs. Each monitor is captured at its native resolution, the toolbar keeps its visual size on every monitor, and pins keep their pixel size when moved between monitors. | P1 | N4 | T, M |
 | NOEUL-FR-092 | HDR and color management: on HDR or color-managed displays the captured picture is converted to SDR sRGB, the color picker reports that picture's values, and Noeul states that they can differ from what the display shows. | P2 | N4 | T, M, D |
+| NOEUL-FR-093 | Display changes are handled once the layout is quiet: display notifications (`WM_DISPLAYCHANGE`, work-area changes, `WM_DPICHANGED` of Noeul's windows) are coalesced without polling, by a one-shot timer that exists only while a change is pending; an open capture whose frozen picture no longer matches the monitors ends with a notice and keeps nothing, while a change of scale or work area only redraws it; pins keep their place and pixel size and redraw their outline for their monitor's scale. (Step 58, [ADR 0050](adr/0050-noeul-displays-and-capture-backends.md)) | P1 | N4 | T, M |
 
 ### 3.11 Settings, shortcuts and accessibility
 
@@ -226,7 +227,9 @@ Step 52's window-list and element-lookup cost in
 [ADR 0035](adr/0035-noeul-smart-selection-and-precision.md#measurements), Step 54's hidden-pin
 idle cost (NOEUL-NFR-007: twenty hidden pins, 0.0 ms CPU and no message in 10 s), transform
 latency and the pin latency with the outline and shadow in
-[ADR 0044](adr/0044-noeul-pin-transforms-and-control.md#measurements)):
+[ADR 0044](adr/0044-noeul-pin-transforms-and-control.md#measurements), Step 58's desktop query,
+capture path from a memory DC, gap filling and display-change cost with twenty pins in
+[ADR 0050](adr/0050-noeul-displays-and-capture-backends.md) (Measurements)):
 
 | Budget | Measured as | Method |
 | --- | --- | --- |
@@ -291,7 +294,9 @@ Proposed for the Steps that implement them (Steps 49 and 62); each is added to
 `capture_not_allowed` waits for the privacy setting of Step 62. **Registered in Step 51** with
 `noeul config set|reset`: `config_invalid` (4: `config.toml` is invalid or cannot be edited in
 place without changing other keys) and `config_from_newer_version` (5: written by a newer Noeul,
-never rewritten) ([ADR 0032](adr/0032-noeul-double-click-pin-and-outputs.md) §4).
+never rewritten) ([ADR 0032](adr/0032-noeul-double-click-pin-and-outputs.md) §4). **Registered in
+Step 58** with `noeul capture --monitor`/`--window active`: `monitor_not_found` (3) and
+`window_not_found` (3) ([ADR 0050](adr/0050-noeul-displays-and-capture-backends.md) §2).
 Noeul also uses the shared codes (`usage`, `io`, `permission_denied`, `internal`,
 `confirmation_required`, `cancelled`, `unsupported_platform`) and the `hotkeys` codes.
 
@@ -303,6 +308,8 @@ Noeul also uses the shared codes (`usage`, `io`, `permission_denied`, `internal`
 | `capture_not_allowed` | 7 | The user's privacy setting refuses captures or clipboard reads from the CLI or an agent. |
 | `clipboard_unavailable` | 6 | Another program kept the clipboard open. |
 | `nothing_to_pin` | 3 | The clipboard or file holds nothing Noeul can pin (also content marked private, Step 55). |
+| `monitor_not_found` | 3 | `--monitor <n>` names a monitor that is not attached now (registered in Step 58). |
+| `window_not_found` | 3 | `--window active` or `capture.window` found no window to capture: none has focus, or it is minimized, hidden or off every monitor (registered in Step 58). |
 | `image_invalid` | 4 | The image is malformed or exceeds the size limits. |
 
 ## 8. Inherited Kim requirements

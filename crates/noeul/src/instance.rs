@@ -438,8 +438,9 @@ fn capture_cancel(ctx: &Ctx, dry_run: bool) -> Result<Outcome> {
     }
 }
 
-/// `noeul capture`: `--region … --pin` (the instance captures and pins), `--interactive` (the
-/// selection overlay) or `--cancel`.
+/// `noeul capture`: `--region …`, `--monitor <n>` or `--window active` with `--pin` (the instance
+/// captures and pins; `--pointer` draws the pointer in; monitors, windows and the pointer since
+/// Step 58), `--interactive` (the selection overlay) or `--cancel`.
 pub fn capture(ctx: &Ctx, a: &crate::CaptureArgs) -> Result<Outcome> {
     if a.cancel {
         return capture_cancel(ctx, a.dry_run);
@@ -447,10 +448,25 @@ pub fn capture(ctx: &Ctx, a: &crate::CaptureArgs) -> Result<Outcome> {
     if a.interactive {
         return capture_interactive(ctx, a);
     }
-    let region = Rect::parse(a.region.as_deref().unwrap_or("")).map_err(|e| {
-        NoeulError::new(Code::Usage, e)
-            .hint("for example: noeul capture --region 0,0,400,300 --pin")
-    })?;
+    let mut params = json!({"pin": true, "dry_run": a.dry_run, "pointer": a.pointer});
+    if let Some(m) = &a.monitor {
+        let spec = noeul::displays::MonitorSpec::parse(m).ok_or_else(|| {
+            NoeulError::new(
+                Code::Usage,
+                format!("`{m}` is not a monitor: use a number from 1, `primary` or `pointer`"),
+            )
+            .hint("`noeul status` lists the monitors in order (1 is the leftmost)")
+        })?;
+        params["monitor"] = spec.to_json();
+    } else if a.window.is_some() {
+        params["window"] = json!("active");
+    } else {
+        let region = Rect::parse(a.region.as_deref().unwrap_or("")).map_err(|e| {
+            NoeulError::new(Code::Usage, e)
+                .hint("for example: noeul capture --region 0,0,400,300 --pin")
+        })?;
+        params["region"] = region.to_json();
+    }
     if !a.pin {
         return Err(NoeulError::new(
             Code::Usage,
@@ -460,22 +476,52 @@ pub fn capture(ctx: &Ctx, a: &crate::CaptureArgs) -> Result<Outcome> {
     #[cfg(windows)]
     {
         let mut s = session_or_start(ctx, a.start && !a.dry_run)?;
-        let v = s.request(
-            "capture",
-            json!({"region": region.to_json(), "pin": true, "dry_run": a.dry_run}),
-        )?;
-        let human = match v["pin"]["id"].as_str() {
-            Some(id) => format!("Pinned {region} as {id}.\n"),
-            None => format!("Would capture {region} and pin it (dry run).\n"),
-        };
-        Ok(Outcome::new(v, human))
+        let v = s.request("capture", params)?;
+        let mut out = Outcome::new(v.clone(), capture_human(&v));
+        out.warnings = v["warnings"]
+            .as_array()
+            .map(|w| {
+                w.iter()
+                    .filter_map(|s| s.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok(out)
     }
     #[cfg(not(windows))]
     {
-        let _ = (ctx, region);
+        let _ = (ctx, params);
         Err(DesktopState::Unsupported
             .error()
             .unwrap_or_else(unsupported))
+    }
+}
+
+/// One line about a `capture` result: what was taken, its device and logical size, the pin.
+#[cfg(windows)]
+fn capture_human(v: &Value) -> String {
+    let region = Rect::from_json(&v["region"]).map_or_else(String::new, |r| r.to_string());
+    let what = match v["target"].as_str() {
+        Some("monitor") => format!("monitor {}", v["monitor"]["number"]),
+        Some("window") => "the active window".to_string(),
+        _ => "the region".to_string(),
+    };
+    let m = &v["mapping"];
+    let scale = if m.is_object() {
+        format!(
+            " ({}×{} logical at {} % on monitor {})",
+            m["logical"]["width"], m["logical"]["height"], m["scale_percent"], m["monitor"]
+        )
+    } else {
+        String::new()
+    };
+    let pointer = match v["pointer"]["drawn"].as_bool() {
+        Some(true) => ", with the pointer",
+        _ => "",
+    };
+    match v["pin"]["id"].as_str() {
+        Some(id) => format!("Pinned {what} {region}{scale}{pointer} as {id}.\n"),
+        None => format!("Would capture {what} {region}{scale} and pin it (dry run).\n"),
     }
 }
 
@@ -987,7 +1033,7 @@ pub fn config_show() -> Result<Outcome> {
         "off".to_string()
     };
     let human = format!(
-        "Settings: {} ({})\n  general.tray_icon = {}\n  capture.keyboard_help = {}\n  capture.quick_save_folder = {}\n  capture.detection = {}\n  capture.magnifier = {}\n  gestures.double_click = {}\n  gestures.middle_click = {}\n  gestures.preset = {} (Snipaste-style gestures: {preset})\n  paste.paths = {}\n  paste.file_cards = {}\nShortcuts: {}\nData folder (ui-state.json only, never pictures): {}\nChange a setting: noeul config set <key> <value>; reset: noeul config reset [<section>] --yes\n",
+        "Settings: {} ({})\n  general.tray_icon = {}\n  capture.keyboard_help = {}\n  capture.quick_save_folder = {}\n  capture.detection = {}\n  capture.magnifier = {}\n  capture.pointer = {}\n  gestures.double_click = {}\n  gestures.middle_click = {}\n  gestures.preset = {} (Snipaste-style gestures: {preset})\n  paste.paths = {}\n  paste.file_cards = {}\nShortcuts: {}\nData folder (ui-state.json only, never pictures): {}\nChange a setting: noeul config set <key> <value>; reset: noeul config reset [<section>] --yes\n",
         paths.config_file().display(),
         s.state.as_str(),
         st.tray_icon,
@@ -998,6 +1044,7 @@ pub fn config_show() -> Result<Outcome> {
         ),
         st.detection.as_str(),
         if st.magnifier { "on" } else { "off" },
+        if st.pointer { "on" } else { "off" },
         st.gestures.double_click.as_str(),
         st.gestures.middle_click.as_str(),
         st.preset.as_str(),

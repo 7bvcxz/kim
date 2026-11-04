@@ -7,7 +7,7 @@
 //! | --- | --- |
 //! | `engine.toggle` | turns the engine on or off |
 //! | `engine.pause` | pauses or resumes |
-//! | `editor.open` | not registered: the editor arrives in Step 74 (reported as `unavailable`) |
+//! | `editor.open` | opens the rule editor (`ddalgak-editor.exe`, Step 74, ADR 0049); the debug test host registers it but never opens a window |
 //! | `engine.emergency-off` | not a registration: the hook checks the chord on physical keys |
 //!
 //! All four ship without a default (§7.5); a user binds them in `hotkeys.json` (the
@@ -32,14 +32,15 @@ pub fn manifest() -> Manifest {
 }
 
 /// Actions the tray app registers.
-pub const REGISTERED: [&str; 2] = ["engine.toggle", "engine.pause"];
+pub const REGISTERED: [&str; 3] = ["engine.toggle", "engine.pause", "editor.open"];
 
 /// One global shortcut and what became of it.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Shortcut {
     pub action: String,
     pub keys: String,
-    /// `wanted` (to register), `unavailable` (no feature yet), `unsupported` (needs a hook).
+    /// `wanted` (to register), `unsupported` (needs a hook). (`unavailable` meant "no feature
+    /// yet" for `editor.open` before Step 74.)
     pub status: &'static str,
     pub chord: Option<Chord>,
 }
@@ -70,9 +71,7 @@ impl Shortcuts {
                     continue;
                 }
                 let chord = b.seq.single_chord().copied();
-                let status = if b.action == "editor.open" {
-                    "unavailable"
-                } else if !REGISTERED.contains(&b.action.as_str()) {
+                let status = if !REGISTERED.contains(&b.action.as_str()) {
                     continue;
                 } else if chord.is_some_and(|c| win32_chord(&c).is_ok()) {
                     "wanted"
@@ -171,8 +170,8 @@ mod tests {
             "{got:?}"
         );
         assert!(got.contains(&("engine.pause", "Ctrl+Alt+Shift+F14", "wanted")));
-        assert!(got.contains(&("editor.open", "Ctrl+Alt+Shift+F15", "unavailable")));
-        assert_eq!(s.wanted().count(), 2);
+        assert!(got.contains(&("editor.open", "Ctrl+Alt+Shift+F15", "wanted")));
+        assert_eq!(s.wanted().count(), 3);
         assert!(
             Shortcuts::load(&p, true).list.is_empty(),
             "--no-hotkeys registers nothing"

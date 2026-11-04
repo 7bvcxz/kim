@@ -1,0 +1,46 @@
+[package]
+name = "ddalgak-editor"
+version = "0.0.1"
+description = "Ddalgak rule editor: the on-demand visual editor window (egui + glow), a separate process from the engine"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+# ADR 0049: the editor is its own on-demand process and package, so neither `ddalgak.exe` (the
+# headless CLI) nor `ddalgak-gui.exe` (the tray app that owns the engine) links a GUI toolkit
+# (`cargo xtask deps-check` keeps the `ddalgak` package on the headless list).
+[[bin]]
+name = "ddalgak-editor"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+# The rules document, the rule store (lock, re-read, revision check, atomic write), validation,
+# the editor data models of Steps 68-73 and the identity-checked pipe client.
+ddalgak = { version = "0.0.1", path = "../ddalgak" }
+# Key names of the hotkey contract (capture) and the editor's in-window shortcuts from hotkeys.json.
+kim-hotkeys = { version = "0.0.1", path = "../kim-hotkeys" }
+# ADR 0014: egui + glow for GUI chrome, AccessKit for UI Automation, the same pin as Kim Manager.
+eframe = { version = "=0.37.0", default-features = false, features = ["glow", "accesskit", "default_fonts"] }
+serde_json = "1.0.154"
+
+[target."cfg(windows)".dependencies]
+# One editor per user session: a named mutex and a named "show yourself" event; the second start
+# lets the first one take the foreground (AllowSetForegroundWindow) and exits. The UI language
+# defaults to Windows' display language (GetUserDefaultUILanguage).
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Globalization",
+    "Win32_Security",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[dev-dependencies]
+# Headless flow tests (no window, no GPU), as Kim Manager's (ADR 0014).
+egui_kittest = "=0.37.0"

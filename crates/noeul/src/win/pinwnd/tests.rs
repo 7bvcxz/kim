@@ -130,7 +130,7 @@ fn off_screen_pin_window_lifecycle() {
     assert_eq!(
         rect_of(hwnd),
         (FAR, FAR, 16, 12),
-        "WM_DPICHANGED changes nothing"
+        "WM_DPICHANGED keeps the pixel size (and is reported, Step 58)"
     );
     let ev = take_events();
     let esc = chord_of("Escape", false, false, false).unwrap();
@@ -146,6 +146,7 @@ fn off_screen_pin_window_lifecycle() {
             PinEvent::Wheel(PinId(77), 120, (0, 0), true),
             PinEvent::Wheel(PinId(77), -120, (0, 0), false),
             PinEvent::Closed(PinId(77)),
+            PinEvent::DpiChanged(PinId(77)),
         ],
         "the double-click produced nothing (NOEUL-FR-026)"
     );

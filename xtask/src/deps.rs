@@ -20,8 +20,8 @@ pub const GUI_CRATES: &[&str] = &[
 
 /// Packages that must not reach GUI framework crates: the headless tools and libraries, and
 /// Noeul and Ddalgak, whose windows are plain Win32 (ADR 0023: no framework, a 20 MB idle
-/// budget; ADR 0024: the Ddalgak tray app has no editor before Step 74, which must keep the
-/// `ddalgak` CLI free of GUI crates), and `subak-term`, the terminal core the Host links (ADR 0036:
+/// budget; ADR 0024 and ADR 0049: the Ddalgak CLI and tray app link no GUI toolkit, the rule
+/// editor is the separate `ddalgak-editor` package), and `subak-term`, the terminal core the Host links (ADR 0036:
 /// its renderer draws on the CPU and needs no GUI framework either). `subak` also builds the
 /// Subak window `subak-gui`, which is plain Win32 (ADR 0039).
 pub const HEADLESS: &[&str] = &[
@@ -147,5 +147,8 @@ version = "0.30.0"
         // And the GUI package really does use the GUI stack (the check is not vacuous).
         let g = parse_lock(&std::fs::read_to_string(root.join("Cargo.lock")).unwrap());
         assert!(closure(&g, "kim-manager").contains("eframe"));
+        // The Ddalgak editor uses egui (ADR 0049); the engine package does not.
+        assert!(closure(&g, "ddalgak-editor").contains("eframe"));
+        assert!(!closure(&g, "ddalgak").contains("eframe"));
     }
 }

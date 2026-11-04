@@ -1,6 +1,11 @@
 //! Ddalgak: a native, Windows-first automation engine (docs/DDALGAK_PHILOSOPHY.md, ADR 0022,
 //! ADR 0024).
 //!
+//! Step 74 adds the **rule editor** as its own on-demand process (`ddalgak-editor.exe`, package
+//! `ddalgak-editor`, ADR 0049): the tray app opens it from its menu and the `editor.open`
+//! shortcut ([`win::host`]); the editor and the CLI share the identity-checked pipe client
+//! ([`win::client`]).
+//!
 //! Step 73 adds **enable, disable, pause and recovery**: the user's turn-off survives restarts
 //! ([`lifecycle`]), per-profile and per-mode `enabled` (`profile_disabled`, `mode_disabled`),
 //! stale-key release after a crash and on request and the hook-timeout check ([`recovery`]), and
@@ -87,3 +92,28 @@ pub const TOOL: &str = "ddalgak";
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// The tray app's file name; the CLI verifies that the pipe is served by it.
 pub const GUI_EXE: &str = "ddalgak-gui.exe";
+/// The rule editor's file name (Step 74, ADR 0049): a separate on-demand process beside the tray
+/// app, built by the `ddalgak-editor` package so neither binary here links a GUI toolkit.
+pub const EDITOR_EXE: &str = "ddalgak-editor.exe";
+
+/// Where the editor is for a tray app at `gui`: the same folder.
+pub fn editor_path(gui: &std::path::Path) -> std::path::PathBuf {
+    gui.parent().map_or_else(
+        || std::path::PathBuf::from(EDITOR_EXE),
+        |d| d.join(EDITOR_EXE),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_editor_sits_beside_the_tray_app() {
+        let p = super::editor_path(std::path::Path::new(
+            r"C:\Programs\mouv\ddalgak\ddalgak-gui.exe",
+        ));
+        assert_eq!(
+            p,
+            std::path::Path::new(r"C:\Programs\mouv\ddalgak\ddalgak-editor.exe")
+        );
+    }
+}

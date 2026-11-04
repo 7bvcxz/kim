@@ -15,15 +15,18 @@ manual; enable, disable, pause and recovery (the D2 rows `DDALGAK-FR-002…004`,
 `DDALGAK-SEC-003`, `DDALGAK-SEC-005`, with per-mode and per-profile `enabled`) since Step 73, whose
 physical emergency-chord, real lock, sign-out, reboot and stuck-key checks are manual; see
 [DDALGAK_ENGINE](DDALGAK_ENGINE.md) §8, §10, §11, §12, §13, §14, §15 and §16 for what was
-verified; the GUI half of `DDALGAK-FR-007` and undo arrive with the
-editor, Step 74) · Owner: mouv ·
+verified; the rule editor (`DDALGAK-FR-050…053`, the GUI half of `DDALGAK-FR-007` with undo,
+the export and import hooks of `DDALGAK-FR-032`, `DDALGAK-NFR-007`) since Step 74, whose visible
+window, screen-reader and real-IME checks are manual and whose `DDALGAK-NFR-003` editor budget is
+met only without rules so far, see [DDALGAK_GUI_JOURNEYS §7](DDALGAK_GUI_JOURNEYS.md)) · Owner: mouv ·
 Derived from [DDALGAK_PHILOSOPHY](DDALGAK_PHILOSOPHY.md) · Decisions:
 [ADR 0022](adr/0022-ddalgak-rule-model-and-safety.md), [ADR 0028](adr/0028-ddalgak-rule-store-validation-and-reload.md),
 [ADR 0031](adr/0031-ddalgak-remap-execution-and-mouse-hook.md),
 [ADR 0034](adr/0034-ddalgak-typing-runs-hotstrings-and-clipboard.md),
 [ADR 0037](adr/0037-ddalgak-program-and-website-launches.md),
 [ADR 0040](adr/0040-ddalgak-mouse-actions.md),
-[ADR 0046](adr/0046-ddalgak-enable-disable-and-recovery.md)
+[ADR 0046](adr/0046-ddalgak-enable-disable-and-recovery.md),
+[ADR 0049](adr/0049-ddalgak-editor-process-and-toolkit.md)
 
 ## 0. How to read this document
 

@@ -16,6 +16,10 @@ workspace = true
 [dev-dependencies]
 # step66 injects obscure keys and checks the input desktop with the Ddalgak library.
 ddalgak = { path = "../crates/ddalgak" }
+# step74 drives the Ddalgak editor's own code headlessly (egui_kittest) against the real test host.
+ddalgak-editor = { path = "../crates/ddalgak-editor" }
+eframe = { version = "=0.37.0", default-features = false, features = ["glow", "accesskit", "default_fonts"] }
+egui_kittest = "=0.37.0"
 kim = { path = "../crates/kim" }
 # step57 decodes Noeul's quick-saved PNG to check that a redaction left no original pixel.
 png = { version = "0.18.1", default-features = false }

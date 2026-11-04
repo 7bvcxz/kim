@@ -1,7 +1,7 @@
 //! Noeul (노을): a small native screenshot and floating-pin tool for Windows (pre-alpha:
 //! Step 49 foundation, Step 50 region selection overlay, Step 51 double-click to pin, Step 52
 //! smart selection and pixel precision, Step 53 floating pin engine, Step 56 annotation, Step 55
-//! clipboard paste and rich sources). See
+//! clipboard paste and rich sources, Step 58 displays, monitor and window capture). See
 //! docs/NOEUL_PHILOSOPHY.md, docs/NOEUL_REQUIREMENTS.md, docs/adr/0023-noeul-app-foundation.md,
 //! docs/adr/0026-noeul-capture-overlay.md, docs/adr/0029-noeul-pin-engine.md and
 //! docs/adr/0038-noeul-annotation.md.
@@ -16,6 +16,7 @@
 //! | [`overlay`] | The region-selection overlay: state machine, double-click gesture, toolbar, detection highlight, magnifier, precision keys, snapping, history, geometry, pixels |
 //! | [`detect`] | What hover detection offers: window facts and their classification, element requests and answers (rectangles only) |
 //! | [`dpi`] | Logical and device pixels on mixed-DPI layouts |
+//! | [`displays`] | Display changes (debounced), monitor and window capture targets, logical mapping, gaps, the synthetic pointer (Step 58) |
 //! | [`output`] | Copy and save of a selection: PNG and `CF_DIBV5` in memory, files only where the user asked |
 //! | [`pins`] | The pin engine's model: stable IDs, placement, zoom, hide/show, close/reopen/destroy, the window trait |
 //! | [`zoom`] | Pin zoom levels, sizes, fitting and the premultiplying scaler |
@@ -40,6 +41,7 @@ pub mod card;
 pub mod decode;
 pub mod detect;
 pub mod dib;
+pub mod displays;
 pub mod dpi;
 pub mod error;
 pub mod frame;

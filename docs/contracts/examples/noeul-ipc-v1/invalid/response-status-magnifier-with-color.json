@@ -34,7 +34,9 @@
             "y": 0,
             "width": 1920,
             "height": 1080
-          }
+          },
+          "rotation": 0,
+          "hdr": null
         },
         {
           "rect": {
@@ -50,7 +52,9 @@
             "y": 0,
             "width": 2560,
             "height": 1392
-          }
+          },
+          "rotation": 0,
+          "hdr": null
         }
       ]
     },
@@ -160,6 +164,11 @@
       "bytes": 26284800,
       "peak_bytes": 26284800
     },
+    "displays": {
+      "changes": 0,
+      "handled": 0,
+      "pending": false
+    },
     "hotkeys": {
       "enabled": true,
       "off_reason": null,
@@ -220,6 +229,7 @@
       "quick_save_folder": null,
       "detection": "window",
       "magnifier": "on",
+      "pointer": "off",
       "pins": {
         "border": "on",
         "shadow": "on"

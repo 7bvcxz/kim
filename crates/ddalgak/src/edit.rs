@@ -601,6 +601,16 @@ fn check_modes(doc: &Document, pi: usize, rule: &Rule) -> Result<(), EditError> 
             return Err(EditError::ModeNotFound(m.clone()));
         }
     }
+    // Step 72: the modes a mode step switches to.
+    for s in &rule.steps {
+        if let Action::Mode(m) = s {
+            for target in m.mode.iter().chain(m.modes.iter().flatten()) {
+                if !known.contains(target.as_str()) {
+                    return Err(EditError::ModeNotFound(target.clone()));
+                }
+            }
+        }
+    }
     Ok(())
 }
 

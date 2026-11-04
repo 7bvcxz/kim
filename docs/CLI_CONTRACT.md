@@ -154,6 +154,27 @@ table matches its code.
 | `host_unresponsive` | 6 | A verified Host accepted the connection but did not answer the handshake in time. It is neither stopped nor replaced. |
 | `host_already_running` | 7 | A Host already serves the endpoint; attach to it or stop it explicitly. |
 
+**Noeul codes** (Step 49 foundation: the resident instance, Noeul IPC v1, region pins requested
+from the CLI, `F3` image paste; [ADR 0023](adr/0023-noeul-app-foundation.md),
+[NOEUL_REQUIREMENTS §7](NOEUL_REQUIREMENTS.md#7-planned-cli-error-codes)). `noeul` also uses
+`io`, `internal`, `permission_denied`, `usage`, `protocol_error`, `unsupported_platform`,
+`timeout`, `busy`, `confirmation_required`, `cancelled` and the `hotkeys` codes below with the
+meaning and exit code above. `crates/noeul/src/error.rs` tests that every code it reports is in
+this document with its exit code.
+
+| Code | Exit | Meaning |
+| --- | --- | --- |
+| `noeul_start_failed` | 1 | The Noeul instance could not be started, or ended during start-up. |
+| `noeul_not_running` | 3 | The command needs the running Noeul (pins, capture, quit), and none runs; start it or pass `--start`. |
+| `pin_not_found` | 3 | No open pin with this ID, or no closed pin to reopen. |
+| `nothing_to_pin` | 3 | The clipboard holds nothing Noeul can pin. |
+| `noeul_identity_mismatch` | 4 | The endpoint is served by a process that is not `noeul.exe` of this user (a pipe squatter, or a process that cannot be verified). Nothing was sent to it. |
+| `image_invalid` | 4 | The image is malformed or exceeds the size limits. |
+| `noeul_incompatible` | 5 | The running Noeul and this CLI share no IPC protocol major. Neither is restarted. |
+| `desktop_unavailable` | 6 | No unlocked interactive desktop for this user: locked, secure desktop, disconnected remote session, no interactive window station, or no display. Retry after unlocking. |
+| `clipboard_unavailable` | 6 | Another program kept the clipboard open for longer than 500 ms. |
+| `noeul_unresponsive` | 6 | A verified Noeul accepted the connection but did not answer in time (or closed it). It is not stopped. |
+
 Codes registered for the `hotkeys` command group of every GUI tool
 ([HOTKEY_CONTRACT §10](HOTKEY_CONTRACT.md)). They are registered so that no tool gives them
 another meaning; `kim` implements them since Step 46:

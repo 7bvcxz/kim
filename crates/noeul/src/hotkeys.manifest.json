@@ -1,0 +1,19 @@
+{
+  "schema": "kim.hotkey-manifest",
+  "schema_version": 1,
+  "hotkey_contract": 1,
+  "tool": "noeul",
+  "version": "0.0.1",
+  "backend": "register",
+  "contexts": [
+    { "id": "pin", "title": "Floating pinned image" }
+  ],
+  "actions": [
+    { "id": "paste.float", "title": "Pin the clipboard", "scopes": ["global", "app"], "defaults": ["F3"] },
+    { "id": "pin.close", "title": "Close the pin (can be reopened)", "context": "pin", "defaults": ["Escape", "Ctrl+W"] },
+    { "id": "pin.move-up", "title": "Move the pin up one pixel", "context": "pin", "defaults": [{ "keys": "Up", "repeat": true }] },
+    { "id": "pin.move-down", "title": "Move the pin down one pixel", "context": "pin", "defaults": [{ "keys": "Down", "repeat": true }] },
+    { "id": "pin.move-left", "title": "Move the pin left one pixel", "context": "pin", "defaults": [{ "keys": "Left", "repeat": true }] },
+    { "id": "pin.move-right", "title": "Move the pin right one pixel", "context": "pin", "defaults": [{ "keys": "Right", "repeat": true }] }
+  ]
+}

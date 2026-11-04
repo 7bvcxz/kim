@@ -30,6 +30,7 @@ pub enum Code {
     ClipboardUnavailable,
     NoeulUnresponsive,
     Timeout,
+    Busy,
     ConfirmationRequired,
     HotkeyConflict,
     Cancelled,
@@ -60,6 +61,7 @@ impl Code {
         Code::ClipboardUnavailable,
         Code::NoeulUnresponsive,
         Code::Timeout,
+        Code::Busy,
         Code::ConfirmationRequired,
         Code::HotkeyConflict,
         Code::Cancelled,
@@ -90,6 +92,7 @@ impl Code {
             Code::ClipboardUnavailable => "clipboard_unavailable",
             Code::NoeulUnresponsive => "noeul_unresponsive",
             Code::Timeout => "timeout",
+            Code::Busy => "busy",
             Code::ConfirmationRequired => "confirmation_required",
             Code::HotkeyConflict => "hotkey_conflict",
             Code::Cancelled => "cancelled",
@@ -106,9 +109,10 @@ impl Code {
         match self {
             Code::Io | Code::Internal | Code::PermissionDenied | Code::NoeulStartFailed => 1,
             Code::Usage | Code::HotkeyInvalid | Code::HotkeyReserved => 2,
-            Code::ActionNotFound | Code::NoeulNotRunning | Code::PinNotFound | Code::NothingToPin => {
-                3
-            }
+            Code::ActionNotFound
+            | Code::NoeulNotRunning
+            | Code::PinNotFound
+            | Code::NothingToPin => 3,
             Code::ProtocolError
             | Code::NoeulIdentityMismatch
             | Code::HotkeysInvalid
@@ -121,7 +125,7 @@ impl Code {
             | Code::ClipboardUnavailable
             | Code::NoeulUnresponsive
             | Code::Timeout => 6,
-            Code::ConfirmationRequired | Code::HotkeyConflict => 7,
+            Code::Busy | Code::ConfirmationRequired | Code::HotkeyConflict => 7,
             Code::Cancelled => 8,
         }
     }
@@ -213,7 +217,11 @@ mod tests {
         let mut seen = std::collections::BTreeSet::new();
         for c in Code::ALL {
             assert!(seen.insert(c.as_str()), "duplicate {c}");
-            assert!(c.as_str().chars().all(|ch| ch.is_ascii_lowercase() || ch == '_'));
+            assert!(
+                c.as_str()
+                    .chars()
+                    .all(|ch| ch.is_ascii_lowercase() || ch == '_')
+            );
             assert!((1..=8).contains(&c.exit_code()));
             assert_eq!(Code::parse(c.as_str()), Some(*c));
         }

@@ -1,0 +1,578 @@
+//! CLI commands that concern the resident instance: `status`, `health`, `start`, `run`, `quit`,
+//! `capture`, `pin …`, and the instance queries of `hotkeys …` (ADR 0023 §4).
+//!
+//! Everything here talks to the instance over the identity-checked pipe (`noeul::win::client`)
+//! and never starts it implicitly: only `start`, `run` and `capture --start` do. `status` and
+//! `health` are headless reads; when no instance runs, `status` reports what it can from files
+//! and the desktop check alone.
+
+use crate::{Ctx, Outcome, QuitArgs, StartArgs, confirm};
+#[cfg(not(windows))]
+use noeul::capture::DesktopState;
+use noeul::error::{Code, NoeulError};
+use noeul::frame::Rect;
+use noeul::paths::Paths;
+use noeul::{hotkeys, settings};
+use serde_json::{Value, json};
+
+#[cfg(windows)]
+use noeul::win::{client, pipe};
+#[cfg(windows)]
+use std::time::{Duration, Instant};
+
+type Result<T> = std::result::Result<T, NoeulError>;
+
+#[cfg(windows)]
+fn endpoint(ctx: &Ctx) -> Result<String> {
+    match &ctx.endpoint {
+        Some(e) if !e.is_empty() && !e.contains(['\\', '/']) && e.len() <= 200 => Ok(e.clone()),
+        Some(e) => Err(NoeulError::new(
+            Code::Usage,
+            format!("`{e}` is not a pipe name (no slashes, at most 200 characters)"),
+        )),
+        None => pipe::default_endpoint().map_err(|e| NoeulError::io("the current user", &e)),
+    }
+}
+
+/// Connects to the running instance; `Ok(None)` when none runs.
+#[cfg(windows)]
+fn connect(ctx: &Ctx) -> Result<Option<client::Session>> {
+    let ep = endpoint(ctx)?;
+    match client::open(&ep) {
+        Ok(s) => Ok(Some(s)),
+        Err(e) if e.code == Code::NoeulNotRunning => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+#[cfg(windows)]
+fn session(ctx: &Ctx) -> Result<client::Session> {
+    connect(ctx)?.ok_or_else(NoeulError::not_running)
+}
+
+#[cfg(not(windows))]
+fn unsupported() -> NoeulError {
+    NoeulError::unsupported_platform("the Noeul instance")
+}
+
+fn desktop_json() -> Value {
+    noeul::capture::system().desktop().to_json()
+}
+
+fn hotkeys_offline(paths: &Paths) -> Value {
+    let (state, loaded) = hotkeys::load(paths);
+    json!({
+        "enabled": state.enabled() && !loaded.state.safe_mode(),
+        "config": {"path": loaded.path.display().to_string(), "state": loaded.state.as_str()},
+        "problem": hotkeys::safe_mode_warning(&loaded),
+        "registrations": [],
+    })
+}
+
+fn status_human(v: &Value) -> String {
+    if v["running"] != true {
+        return format!(
+            "Noeul is not running (start it with `noeul start`).\nDesktop: {}\nShortcuts file: {} ({})\n",
+            v["desktop"]["state"].as_str().unwrap_or("?"),
+            v["hotkeys"]["config"]["path"].as_str().unwrap_or(""),
+            v["hotkeys"]["config"]["state"].as_str().unwrap_or("")
+        );
+    }
+    let mut s = format!(
+        "Noeul {} is running (pid {}, up {} s).\nDesktop: {}\nPins: {} open{}\nImage memory: {} bytes in {} picture(s)\n",
+        v["instance"]["version"].as_str().unwrap_or("?"),
+        v["instance"]["pid"],
+        v["instance"]["uptime_s"],
+        v["desktop"]["state"].as_str().unwrap_or("?"),
+        v["pins"]["open"],
+        v["pins"]["reopenable"]
+            .as_str()
+            .map_or(String::new(), |p| format!(", {p} can be reopened")),
+        v["memory"]["bytes"],
+        v["memory"]["frames"],
+    );
+    let regs = v["hotkeys"]["registrations"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    if let Some(off) = v["hotkeys"]["off_reason"].as_str() {
+        s.push_str(&format!("Global hotkeys: off ({off})\n"));
+    } else if regs.is_empty() {
+        s.push_str("Global hotkeys: none bound\n");
+    }
+    for r in regs {
+        s.push_str(&format!(
+            "  {} {}: {}{}\n",
+            r["action"].as_str().unwrap_or(""),
+            r["keys"].as_str().unwrap_or(""),
+            r["status"].as_str().unwrap_or(""),
+            r["message"]
+                .as_str()
+                .map_or(String::new(), |m| format!(" — {m}"))
+        ));
+    }
+    for c in v["hotkeys"]["conflicts"].as_array().into_iter().flatten() {
+        if c["code"] == "taken"
+            && let Some(offer) = c["offers"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|o| o["kind"] == "rebind")
+        {
+            s.push_str(&format!(
+                "  fix: `noeul hotkeys set {} {}` (a key another program registered is never taken over)\n",
+                c["action"].as_str().unwrap_or(""),
+                offer["keys"].as_str().unwrap_or("")
+            ));
+        }
+    }
+    s.push_str(&format!(
+        "Tray icon: {}\n",
+        if v["tray"]["shown"] == true {
+            "shown"
+        } else {
+            "not shown"
+        }
+    ));
+    s
+}
+
+/// `noeul status`: never starts anything.
+pub fn status(ctx: &Ctx) -> Result<Outcome> {
+    #[cfg(windows)]
+    if let Some(mut s) = connect(ctx)? {
+        let v = s.request("status", json!({}))?;
+        let human = status_human(&v);
+        return Ok(Outcome::new(v, human));
+    }
+    #[cfg(not(windows))]
+    let _ = ctx;
+    let paths = Paths::from_env()?;
+    let v = json!({
+        "running": false,
+        "desktop": desktop_json(),
+        "capture_backend": noeul::capture::system().name(),
+        "hotkeys": hotkeys_offline(&paths),
+        "settings": settings::load(&paths.config_file()).to_json(),
+    });
+    let human = status_human(&v);
+    Ok(Outcome::new(v, human))
+}
+
+/// `noeul health`: the heartbeat (identity checks, handshake, one answer).
+pub fn health(ctx: &Ctx) -> Result<Outcome> {
+    #[cfg(windows)]
+    {
+        let t = Instant::now();
+        let mut s = session(ctx)?;
+        let st = s.request("status", json!({}))?;
+        let ms = u64::try_from(t.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let v = json!({
+            "healthy": true,
+            "pid": s.pid,
+            "endpoint": pipe::path(&s.endpoint),
+            "protocol": s.welcome["protocol"],
+            "answer_ms": ms,
+            "identity": {"same_user": true, "image": noeul::IMAGE},
+            "version": st["instance"]["version"],
+        });
+        let human = format!(
+            "healthy: Noeul pid {} answered in {ms} ms (same user, {})\n",
+            s.pid,
+            noeul::IMAGE
+        );
+        Ok(Outcome::new(v, human))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = ctx;
+        Err(unsupported())
+    }
+}
+
+/// `noeul start`: start detached, or hand over to the running instance (NOEUL-FR-003).
+pub fn start(ctx: &Ctx, a: &StartArgs) -> Result<Outcome> {
+    #[cfg(windows)]
+    {
+        let ep = endpoint(ctx)?;
+        if let Some(mut s) = connect(ctx)? {
+            if a.dry_run {
+                return Ok(Outcome::new(
+                    json!({"dry_run": true, "started": false, "already_running": true, "pid": s.pid}),
+                    format!("Noeul already runs (pid {}); nothing would start.\n", s.pid),
+                ));
+            }
+            let act = s.request("activate", json!({"reason": "start"}))?;
+            return Ok(Outcome::new(
+                json!({"dry_run": false, "started": false, "already_running": true, "pid": s.pid, "activate": act}),
+                format!("Noeul already runs (pid {}).\n", s.pid),
+            ));
+        }
+        if a.dry_run {
+            return Ok(Outcome::new(
+                json!({"dry_run": true, "started": false, "already_running": false,
+                       "endpoint": pipe::path(&ep), "tray": !a.no_tray,
+                       "hotkeys": hotkeys::off_reason(a.no_hotkeys).is_none()}),
+                "Would start Noeul detached (dry run: nothing was started).\n",
+            ));
+        }
+        let mut args = vec!["--endpoint".to_string(), ep.clone()];
+        if a.no_tray {
+            args.push("--no-tray".into());
+        }
+        if a.no_hotkeys {
+            args.push("--no-hotkeys".into());
+        }
+        let mut child = noeul::win::spawn::instance(&args).map_err(|e| {
+            NoeulError::new(Code::NoeulStartFailed, format!("cannot start Noeul: {e}"))
+        })?;
+        let pid = child.id();
+        // Wait until the new instance answers (or ends: then it lost a start race or failed).
+        let until = Instant::now() + Duration::from_secs(10);
+        loop {
+            match client::open(&ep) {
+                Ok(s) => {
+                    let started = s.pid == pid;
+                    return Ok(Outcome::new(
+                        json!({"dry_run": false, "started": started, "already_running": !started,
+                               "pid": s.pid, "endpoint": pipe::path(&ep)}),
+                        format!("Noeul is running (pid {}).\n", s.pid),
+                    ));
+                }
+                Err(e) if e.code != Code::NoeulNotRunning => return Err(e),
+                Err(_) => {}
+            }
+            if let Ok(Some(status)) = child.try_wait() {
+                return Err(NoeulError::new(
+                    Code::NoeulStartFailed,
+                    format!("Noeul exited during start-up ({status})"),
+                )
+                .hint("run `noeul run --verbose` to see why"));
+            }
+            if Instant::now() >= until {
+                return Err(NoeulError::new(
+                    Code::NoeulUnresponsive,
+                    format!("Noeul (pid {pid}) did not answer within 10 s of starting"),
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (ctx, a);
+        Err(unsupported())
+    }
+}
+
+/// `noeul run`: the instance in this process.
+pub fn run(ctx: &Ctx, a: &StartArgs) -> Result<Outcome> {
+    #[cfg(windows)]
+    {
+        let ep = endpoint(ctx)?;
+        if a.dry_run {
+            return Ok(Outcome::new(
+                json!({"dry_run": true, "endpoint": pipe::path(&ep), "tray": !a.no_tray,
+                       "hotkeys": hotkeys::off_reason(a.no_hotkeys).is_none()}),
+                "Would run Noeul in this process (dry run).\n",
+            ));
+        }
+        let v = noeul::win::runtime::run(&noeul::win::runtime::RunOpts {
+            endpoint: ep,
+            no_tray: a.no_tray,
+            no_hotkeys: a.no_hotkeys,
+        })?;
+        let human = if v["handed_over"] == true {
+            format!("Noeul already runs (pid {}); handed over.\n", v["pid"])
+        } else {
+            "Noeul ended.\n".to_string()
+        };
+        Ok(Outcome::new(v, human))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (ctx, a);
+        Err(unsupported())
+    }
+}
+
+/// `noeul quit`: ends the instance (open pins need `--yes`, FR-002).
+pub fn quit(ctx: &Ctx, a: &QuitArgs) -> Result<Outcome> {
+    #[cfg(windows)]
+    {
+        let mut s = session(ctx)?;
+        let pid = s.pid;
+        let pins = s.request("pin.list", json!({}))?["pins"]
+            .as_array()
+            .map_or(0, Vec::len);
+        let mut force = a.yes;
+        if pins > 0 && !force && !a.dry_run {
+            match confirm(
+                ctx,
+                &format!("Quit Noeul and close {pins} pin(s)? Pins are not backed up. [y/N]"),
+                "y",
+            ) {
+                Some(true) => force = true,
+                Some(false) => {
+                    return Err(NoeulError::new(
+                        Code::Cancelled,
+                        "quit cancelled; nothing was changed",
+                    ));
+                }
+                None => {}
+            }
+        }
+        let r = s.request(
+            "quit",
+            json!({"force": force || a.dry_run, "dry_run": a.dry_run}),
+        )?;
+        drop(s);
+        let exited = !a.dry_run && noeul::win::wait_exit(pid, Duration::from_secs(5));
+        let mut v = r;
+        v["pid"] = json!(pid);
+        v["exited"] = json!(exited);
+        let human = if a.dry_run {
+            format!("Would quit Noeul (pid {pid}) and close {pins} pin(s) (dry run).\n")
+        } else {
+            format!("Noeul (pid {pid}) quit; its hotkeys were released and {pins} pin(s) closed.\n")
+        };
+        Ok(Outcome::new(v, human))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (ctx, a);
+        Err(unsupported())
+    }
+}
+
+/// `noeul capture --region … --pin`: the instance captures and pins.
+pub fn capture(ctx: &Ctx, a: &crate::CaptureArgs) -> Result<Outcome> {
+    let region = Rect::parse(&a.region).map_err(|e| {
+        NoeulError::new(Code::Usage, e)
+            .hint("for example: noeul capture --region 0,0,400,300 --pin")
+    })?;
+    if !a.pin {
+        return Err(NoeulError::new(
+            Code::Usage,
+            "nothing to do: add --pin (capture to a file or the clipboard is planned, NOEUL-FR-112)",
+        ));
+    }
+    #[cfg(windows)]
+    {
+        let mut s = match connect(ctx)? {
+            Some(s) => s,
+            None if a.start && !a.dry_run => {
+                start(
+                    ctx,
+                    &StartArgs {
+                        no_tray: false,
+                        no_hotkeys: false,
+                        dry_run: false,
+                    },
+                )?;
+                session(ctx)?
+            }
+            None => return Err(NoeulError::not_running()),
+        };
+        let v = s.request(
+            "capture",
+            json!({"region": region.to_json(), "pin": true, "dry_run": a.dry_run}),
+        )?;
+        let human = match v["pin"]["id"].as_str() {
+            Some(id) => format!("Pinned {region} as {id}.\n"),
+            None => format!("Would capture {region} and pin it (dry run).\n"),
+        };
+        Ok(Outcome::new(v, human))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = ctx;
+        Err(DesktopState::Unsupported
+            .error()
+            .unwrap_or_else(unsupported))
+    }
+}
+
+pub fn pin_list(ctx: &Ctx) -> Result<Outcome> {
+    #[cfg(windows)]
+    {
+        let v = session(ctx)?.request("pin.list", json!({}))?;
+        let mut human = String::new();
+        let pins = v["pins"].as_array().cloned().unwrap_or_default();
+        if pins.is_empty() {
+            human.push_str("No pins are open.\n");
+        } else {
+            let mut rows = vec![vec!["PIN".to_string(), "RECT".into(), "SOURCE".into()]];
+            for p in &pins {
+                let r = &p["rect"];
+                rows.push(vec![
+                    p["id"].as_str().unwrap_or("").into(),
+                    format!("{},{},{},{}", r["x"], r["y"], r["width"], r["height"]),
+                    p["source"].as_str().unwrap_or("").into(),
+                ]);
+            }
+            human.push_str(&noeul::util::table(&rows));
+        }
+        if let Some(r) = v["reopenable"].as_str() {
+            human.push_str(&format!("{r} can be reopened (`noeul pin reopen`).\n"));
+        }
+        Ok(Outcome::new(v, human))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = ctx;
+        Err(unsupported())
+    }
+}
+
+pub fn pin_close(ctx: &Ctx, a: &crate::PinCloseArgs) -> Result<Outcome> {
+    #[cfg(windows)]
+    {
+        let mut s = session(ctx)?;
+        if !a.yes && !a.dry_run {
+            let what = a.id.clone().unwrap_or_else(|| "every pin".into());
+            match confirm(
+                ctx,
+                &format!("Close {what}? Only the last closed pin can be reopened. [y/N]"),
+                "y",
+            ) {
+                Some(true) => {}
+                Some(false) => {
+                    return Err(NoeulError::new(Code::Cancelled, "nothing was closed"));
+                }
+                None => {
+                    return Err(NoeulError::new(
+                        Code::ConfirmationRequired,
+                        "closing pins needs confirmation",
+                    )
+                    .hint("re-run with --yes (or --dry-run to preview); nothing was closed"));
+                }
+            }
+        }
+        let params = match &a.id {
+            Some(id) => json!({"id": id, "dry_run": a.dry_run}),
+            None => json!({"all": true, "dry_run": a.dry_run}),
+        };
+        let v = s.request("pin.close", params)?;
+        let names: Vec<&str> = v["closed"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
+        let human = if a.dry_run {
+            format!("Would close: {} (dry run).\n", names.join(", "))
+        } else if names.is_empty() {
+            "No pins were open.\n".into()
+        } else {
+            format!("Closed: {}.\n", names.join(", "))
+        };
+        Ok(Outcome::new(v, human))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (ctx, a);
+        Err(unsupported())
+    }
+}
+
+pub fn pin_reopen(ctx: &Ctx, dry_run: bool) -> Result<Outcome> {
+    #[cfg(windows)]
+    {
+        let v = session(ctx)?.request("pin.reopen", json!({"dry_run": dry_run}))?;
+        let human = format!(
+            "{} {}.\n",
+            if dry_run { "Would reopen" } else { "Reopened" },
+            v["pin"].as_str().unwrap_or("")
+        );
+        Ok(Outcome::new(v, human))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (ctx, dry_run);
+        Err(unsupported())
+    }
+}
+
+/// `noeul config show`: settings and the stable paths (reads files only).
+pub fn config_show() -> Result<Outcome> {
+    let paths = Paths::from_env()?;
+    let s = settings::load(&paths.config_file());
+    let v = json!({
+        "settings": s.to_json(),
+        "paths": {
+            "config_dir": paths.config_dir.display().to_string(),
+            "config_file": paths.config_file().display().to_string(),
+            "hotkeys_file": paths.hotkeys_file().display().to_string(),
+            "data_dir": paths.data_dir.display().to_string(),
+        },
+    });
+    let human = format!(
+        "Settings: {} ({})\n  tray_icon = {}\nShortcuts: {}\nData folder (unused in this build): {}\n",
+        paths.config_file().display(),
+        s.state.as_str(),
+        s.settings.tray_icon,
+        paths.hotkeys_file().display(),
+        paths.data_dir.display()
+    );
+    let mut out = Outcome::new(v, human);
+    out.warnings = s.problems;
+    Ok(out)
+}
+
+/// The running instance's global registrations `(action, keys, status)`; `Ok(None)` when no
+/// instance runs.
+pub fn registrations(ctx: &Ctx) -> Result<Option<Vec<(String, String, String)>>> {
+    #[cfg(windows)]
+    {
+        let Some(mut s) = connect(ctx)? else {
+            return Ok(None);
+        };
+        let v = s.request("status", json!({}))?;
+        Ok(Some(
+            v["hotkeys"]["registrations"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|r| {
+                    (
+                        r["action"].as_str().unwrap_or("").to_string(),
+                        r["keys"].as_str().unwrap_or("").to_string(),
+                        r["status"].as_str().unwrap_or("").to_string(),
+                    )
+                })
+                .collect(),
+        ))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = ctx;
+        Err(unsupported())
+    }
+}
+
+/// Tells a running instance to re-read `hotkeys.json`; a sentence when that did not work.
+pub fn reload_hotkeys(ctx: &Ctx) -> Option<String> {
+    #[cfg(windows)]
+    {
+        match connect(ctx) {
+            Ok(None) => None,
+            Ok(Some(mut s)) => match s.request("hotkeys.reload", json!({})) {
+                Ok(v) => v["problem"].as_str().map(str::to_string),
+                Err(e) => Some(format!(
+                    "the running Noeul could not reload its shortcuts: {}",
+                    e.message
+                )),
+            },
+            Err(e) => Some(format!(
+                "the running Noeul could not be told to reload: {}",
+                e.message
+            )),
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = ctx;
+        None
+    }
+}

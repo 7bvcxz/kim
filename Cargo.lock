@@ -1616,6 +1616,7 @@ dependencies = [
  "regex",
  "serde_json",
  "sha2",
+ "subak-term",
  "zip",
 ]
 

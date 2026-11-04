@@ -35,6 +35,15 @@ for differences listed in §6.
 > frames (§3, §6), and the Host now resolves the program itself instead of letting
 > `CreateProcessW` search. New measured limits of the inbox ConPTY on 19045: one handle kept per
 > pseudo console after `ClosePseudoConsole`, and no Ctrl+Break through its input.
+>
+> **Step 14 update (2026-11-04).** The Milestone A validation
+> ([MILESTONE_A_VALIDATION.md](MILESTONE_A_VALIDATION.md)) repeats the survival evidence with
+> named Terminals, several shells, a development server and an interactive stand-in, and adds the
+> failure and concurrency matrix and baseline measurements. The Windows Terminal check of §7.1 and
+> the Claude Code check of §7.4 are now one procedure with `subak new claude`
+> (`scripts/milestone-a-smoke.ps1`, MILESTONE_A_VALIDATION §6); both are still **pending** the
+> maintainer's run. `scripts/conpty-smoke.ps1` still passes unchanged (Auto phase re-run on this
+> machine on 2026-11-04), and §7.2 and §7.3 (sleep, logoff) still use it.
 
 ## 1. Result
 

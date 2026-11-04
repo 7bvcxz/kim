@@ -34,6 +34,7 @@ did.
 | [SCROLLBACK.md](SCROLLBACK.md) | current (implemented, Step 13) | Scrollback and replay: what the Host keeps per pane (terminal model, bounded history, deterministic eviction), attach as snapshot + live stream without loss or duplication, resize and readers of different sizes, `capture`/`history`/`clear-history`, slow-client resync and idle cost, the privacy and security policy for terminal output (redaction, retention, persistence deferred), known limits, evidence |
 | [PTY_PROCESSES.md](PTY_PROCESSES.md) | current (implemented, Step 11; lagging clients resynced since Step 13) | What runs in a pane: program resolution and quoting, PowerShell/cmd/pwsh, working directory, the three environment layers and secrets, size/Unicode/Ctrl+C, exit status, process-tree containment, backpressure and memory, the platform-neutral PTY interface, errors, evidence |
 | [CONPTY_PROOF.md](CONPTY_PROOF.md) | current (Step 08 prototype) | Windows ConPTY + detached Host proof: what "detached" means, evidence with process ids, OS limitations and power states, manual procedures (Windows Terminal, sleep, logoff pending) |
+| [MILESTONE_A_VALIDATION.md](MILESTONE_A_VALIDATION.md) | current (Step 14; **Milestone A not complete**: the live Windows Terminal + Claude Code acceptance run is pending) | Persistent sessions and reconnection validated: the plan, the automated integration suite and its evidence, the failure and concurrency matrix, baseline measurements with the machine and environment, the maintainer's manual procedure (`scripts/milestone-a-smoke.ps1`) with its pending results table, defects and open risks |
 | [CLI_CONTRACT.md](CLI_CONTRACT.md) | current (contract v1) | Cross-tool CLI contract: names, help, streams, `--json` envelope, exit codes, error-code registry, dry-run/confirmation, versioning, capabilities and tool-to-tool invocation, secret redaction |
 | [KIM_CLI.md](KIM_CLI.md) | current | `kim` command reference, files and environment, sample agent workflows |
 | [HOTKEY_CONTRACT.md](HOTKEY_CONTRACT.md) | current (contract v1; implemented by `kim-hotkeys` and `kim`, Step 46) | Customizable shortcuts for every Kim GUI tool: action IDs, scopes, key syntax, layouts and IME, reserved keys, `hotkeys.json`, conflicts and precedence, `hotkeys` CLI, accessibility and safety, Subak/Kim Manager/Noeul/Ddalgak mapping |
@@ -73,7 +74,6 @@ cross-reference checks of [DDALGAK_RULE_MODEL §8](DDALGAK_RULE_MODEL.md) on the
 
 | Document | Status | Planned by | Purpose |
 | --- | --- | --- | --- |
-| `MILESTONE_A_VALIDATION.md` | planned | Step 14 | Persistent sessions validation evidence |
 | `MILESTONE_B_VALIDATION.md` | planned | Step 20 | GUI journey validation evidence |
 | `RECOVERY.md` | planned | Steps 29–31 | Persistence, cold recovery and Claude resume procedures |
 | `MCP_GUIDE.md` | planned | Step 37 | Subak MCP server guide for agents |

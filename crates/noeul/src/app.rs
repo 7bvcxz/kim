@@ -87,22 +87,30 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
-/// What the core needs from the desktop besides capturing.
-/// What one clipboard read found: the image to pin and, when the clipboard also offered an
-/// animated GIF, its frame count (the image is its first frame; NOEUL-FR-068).
-#[derive(Debug)]
-pub struct Pasted {
-    pub frame: Frame,
-    /// 1 for a still picture.
-    pub frames: u32,
-}
+mod pasting;
 
+/// What the core needs from the desktop besides capturing.
 pub trait Shell {
     fn pin_windows(&mut self) -> &mut dyn PinWindows;
-    /// Reads the clipboard once and returns its image (`nothing_to_pin`,
-    /// `clipboard_unavailable` or `image_invalid` otherwise), and how many frames the GIF next
-    /// to it has when there is one. Called only for `paste.float` and `pin.create`.
-    fn clipboard_image(&mut self, ledger: &Arc<Ledger>) -> Result<Pasted>;
+    /// Reads the clipboard once and takes what a paste pins ([`crate::paste::take`]: the first
+    /// kind it offers, or `want`), the clipboard opened for the read only and retried briefly
+    /// when another program holds it (`clipboard_unavailable`); `nothing_to_pin` when it holds
+    /// nothing Noeul pins or content marked private. Called only when the user pastes:
+    /// `paste.float`, "Pin clipboard as…" and `pin.create` (NOEUL-SEC-002). The debug-build test
+    /// hook reads its in-memory stand-in, never the user's clipboard.
+    fn clipboard_take(
+        &mut self,
+        want: Option<crate::paste::Kind>,
+        opts: crate::paste::Options,
+    ) -> Result<crate::paste::Taken>;
+    /// Puts plain text on the clipboard (`pin.copy-text`), kept out of cloud sync like Copy.
+    fn clipboard_write_text(&mut self, text: &str) -> Result<()>;
+    /// The bytes of a local image file, at most `max`: drive-letter paths only, never a network
+    /// drive, a cloud placeholder (reading it would download it), a link or a folder
+    /// (NOEUL-NFR-008). Called for `noeul pin <file>`, a copied image file and a drop.
+    fn read_image_file(&mut self, path: &std::path::Path, max: u64) -> Result<Vec<u8>>;
+    /// The text renderer cards are drawn with (GDI on Windows).
+    fn text_engine(&mut self) -> &mut dyn crate::card::TextEngine;
     /// Puts a picture on the clipboard (Copy, NOEUL-FR-030): `png` as the registered `PNG`
     /// format and `dib` as `CF_DIBV5`, the clipboard opened for the write only and retried
     /// briefly when another program holds it (`clipboard_unavailable`). Never called for a pin.
@@ -444,7 +452,7 @@ pub fn overlay_help(m: &Manager, gestures: Gestures) -> Vec<String> {
 }
 
 /// Something a pin window reports.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PinEvent {
     /// A key press in a focused pin (matched against the `pin` context); `true` when it is an
     /// auto-repeat.
@@ -469,6 +477,9 @@ pub enum PinEvent {
     Dropped(PinId, i32, i32),
     /// `Shift`+double-click: thumbnail mode on or off (Step 54).
     ShiftDoubleClick(PinId),
+    /// Files were dropped on the pin at this screen point (Step 55, NOEUL-FR-073): they are
+    /// pinned like `noeul pin <file>`.
+    Files(PinId, Vec<PathBuf>, (i32, i32)),
 }
 
 /// One entry of a pin's context menu.
@@ -551,6 +562,7 @@ pub struct PinOptions {
 /// The menu's entries: implemented pin actions only (NOEUL-FR-114).
 const MENU: &[Option<(&str, &str)>] = &[
     Some(("pin.copy", "Copy")),
+    Some(("pin.copy-text", "Copy text")),
     Some(("pin.save", "Save\u{2026}")),
     Some(("pin.quick-save", "Quick save")),
     None,
@@ -573,6 +585,16 @@ const MENU: &[Option<(&str, &str)>] = &[
     Some(("pin.hide", "Hide")),
     Some(("pin.close", "Close")),
     Some(("pin.destroy", "Destroy")),
+];
+
+/// "Pin clipboard as…" (Step 55, NOEUL-FR-071): the menu's actions for each kind a paste can pin.
+pub const PASTE_AS: &[(&str, crate::paste::Kind)] = &[
+    ("paste.as-image", crate::paste::Kind::Image),
+    ("paste.as-image-file", crate::paste::Kind::ImageFile),
+    ("paste.as-color", crate::paste::Kind::Color),
+    ("paste.as-html", crate::paste::Kind::Html),
+    ("paste.as-text", crate::paste::Kind::Text),
+    ("paste.as-files", crate::paste::Kind::Files),
 ];
 
 /// Global actions without default keys (Step 54): the keyboard's way back from click-through
@@ -1034,6 +1056,7 @@ impl<S: Shell> App<S> {
                 self.shell.notice(match source {
                     Source::Capture => "Noeul captured a region (command line).",
                     Source::Clipboard => "Noeul pinned the clipboard (command line).",
+                    Source::File => "Noeul pinned a file (command line).",
                 });
                 Ok(id)
             }
@@ -1126,28 +1149,77 @@ impl<S: Shell> App<S> {
                         NoeulError::new(Code::Usage, "`at` must be {x, y} in device pixels")
                     })?),
                 };
+                let want = match params.get("as") {
+                    None | Some(Value::Null) => None,
+                    Some(v) => Some(v.as_str().and_then(crate::paste::Kind::parse).ok_or_else(
+                        || {
+                            NoeulError::new(
+                                Code::Usage,
+                                "`as` must be image, image_file, color, html, text or files",
+                            )
+                        },
+                    )?),
+                };
                 if dry_run {
                     // A dry run never opens the clipboard.
                     return Ok(json!({"dry_run": true, "source": "clipboard", "pin": null}));
                 }
-                let pasted = self.shell.clipboard_image(&self.ledger)?;
-                let (x, y) = at.unwrap_or_else(|| self.shell.pointer());
-                let id = self.create_pin(
-                    &desktop,
-                    pasted.frame,
-                    Source::Clipboard,
-                    Placement::At(x, y),
-                )?;
-                self.first_frame_only(id, pasted.frames);
+                let at = at.unwrap_or_else(|| self.shell.pointer());
+                let made = self.paste_clipboard(want, at, false)?;
+                self.shell
+                    .notice("Noeul pinned the clipboard (command line).");
                 self.last_action = Some(("pin.create".into(), "pinned"));
-                Ok(json!({"dry_run": false, "source": "clipboard", "pin": self.pin_ref(id)}))
+                Ok(self.made_json("clipboard", &made))
+            }
+            "file" => {
+                if let Some(e) = desktop.state.error() {
+                    return Err(e);
+                }
+                let path = params
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .map(PathBuf::from)
+                    .filter(|p| crate::paste::is_local_path(p))
+                    .ok_or_else(|| {
+                        NoeulError::new(
+                            Code::Usage,
+                            "`path` must be an absolute local path (C:\\…) to an image file",
+                        )
+                        .hint("network paths (\\\\server\\share) are never opened")
+                    })?;
+                let at = match params.get("at") {
+                    None | Some(Value::Null) => None,
+                    Some(v) => Some(point(v).ok_or_else(|| {
+                        NoeulError::new(Code::Usage, "`at` must be {x, y} in device pixels")
+                    })?),
+                };
+                if dry_run {
+                    // A dry run never opens the file.
+                    return Ok(json!({"dry_run": true, "source": "file", "pin": null}));
+                }
+                let at = at.unwrap_or_else(|| self.shell.pointer());
+                let made = self.paste_files(vec![path], at, false)?;
+                self.shell.notice("Noeul pinned a file (command line).");
+                self.last_action = Some(("pin.create".into(), "pinned"));
+                Ok(self.made_json("file", &made))
             }
             _ => Err(NoeulError::new(
                 Code::Usage,
-                "`source` must be \"region\" (with `region`) or \"clipboard\"",
-            )
-            .hint("pinning a file is planned (NOEUL-FR-073)")),
+                "`source` must be \"region\" (with `region`), \"clipboard\" or \"file\" (with `path`)",
+            )),
         }
+    }
+
+    /// A clipboard or file `pin.create` result: the first pin, all of them, what was pinned and
+    /// what the clipboard offered (kinds only, never content or paths).
+    fn made_json(&self, source: &str, made: &pasting::Made) -> Value {
+        let refs: Vec<Value> = made.ids.iter().map(|id| self.pin_ref(*id)).collect();
+        let mut v = json!({"dry_run": false, "source": source,
+            "pin": refs.first().cloned().unwrap_or(Value::Null)});
+        if let (Value::Object(o), Value::Object(extra)) = (&mut v, made.to_json(&refs)) {
+            o.extend(extra);
+        }
+        v
     }
 
     /// `pin.hide`: hides pins without closing them. Nothing takes focus; a hidden pin that had
@@ -1271,7 +1343,12 @@ impl<S: Shell> App<S> {
         }
         let result = match (action, pin) {
             ("capture.region", _) => self.capture_region_action(Origin::Hotkey, Instant::now()),
-            ("paste.float", _) => self.paste_float(),
+            ("paste.float", _) => self.paste_float(None),
+            ("pin.copy-text", Some(id)) => self.copy_text(id),
+            (a, _) if PASTE_AS.iter().any(|(n, _)| *n == a) => {
+                let kind = PASTE_AS.iter().find(|(n, _)| *n == a).map(|(_, k)| *k);
+                self.paste_float(kind)
+            }
             ("pin.annotate", Some(id)) => self.edit_pin(id),
             ("pin.close", Some(id)) => found(self.pins.close(id).is_ok(), "closed"),
             ("pin.destroy", Some(id)) => found(self.pins.destroy(id).is_ok(), "destroyed"),
@@ -1465,51 +1542,26 @@ impl<S: Shell> App<S> {
         }
     }
 
-    /// `paste.float`: read the clipboard once and pin its image at the pointer, at 100 % unless
-    /// it is larger than the work area of the monitor there (then zoomed out to fit, ADR 0029;
-    /// NOEUL-FR-070, image formats only in this build). Nothing to pin → a notice, no change
-    /// (NOEUL-FR-074). While the capture overlay is open it does nothing: a new pin would cover
-    /// the overlay or take its focus.
-    fn paste_float(&mut self) -> &'static str {
+    /// `paste.float` (`F3`, the tray's middle click) and "Pin clipboard as…" (`want`): read the
+    /// clipboard once and pin what it holds at the pointer — an image, image files, or a text,
+    /// HTML, colour or file card (Step 55, NOEUL-FR-070, NOEUL-FR-071) — at 100 % unless it is
+    /// larger than the work area of the monitor there (then zoomed out to fit, ADR 0029).
+    /// Nothing to pin → a notice, no change (NOEUL-FR-074). While the capture overlay is open it
+    /// does nothing: a new pin would cover the overlay or take its focus.
+    fn paste_float(&mut self, want: Option<crate::paste::Kind>) -> &'static str {
         if self.capture.desktop().state != DesktopState::Available {
             return "desktop_unavailable";
         }
         if self.overlay.is_some() {
             return "overlay_open";
         }
-        let pasted = match self.shell.clipboard_image(&self.ledger) {
-            Ok(p) => p,
+        let at = self.shell.pointer();
+        let focus = self.shell.interactive();
+        match self.paste_clipboard(want, at, focus) {
+            Ok(_) => "pinned",
             Err(e) => {
-                let text = match e.code {
-                    Code::NothingToPin => "Nothing to pin: the clipboard holds no image.",
-                    Code::ClipboardUnavailable => {
-                        "The clipboard is in use by another program; try again."
-                    }
-                    Code::ImageInvalid => "The clipboard image could not be read.",
-                    _ => "The clipboard could not be read.",
-                };
-                self.shell.notice(text);
-                return e.code.as_str();
-            }
-        };
-        let (px, py) = self.shell.pointer();
-        let desktop = self.capture.desktop();
-        let new = NewPin {
-            frame: pasted.frame,
-            source: Source::Clipboard,
-            placement: Placement::At(px, py),
-            focus: self.shell.interactive(),
-            guard: None,
-            annotations: Vec::new(),
-        };
-        match self.pins.create(self.shell.pin_windows(), &desktop, new) {
-            Ok(id) => {
-                self.first_frame_only(id, pasted.frames);
-                "pinned"
-            }
-            Err((_, _)) => {
-                self.shell.notice("The pin window could not be created.");
-                "failed"
+                self.paste_failed_notice(&e);
+                e.code.as_str()
             }
         }
     }
@@ -2574,6 +2626,19 @@ impl<S: Shell> App<S> {
                 self.last_action = Some(("pin.resize".into(), r));
             }
             PinEvent::ShiftDoubleClick(id) => self.action("pin.thumbnail", Some(id)),
+            PinEvent::Files(id, paths, at) => {
+                // Image files dropped on a pin are pinned where they were dropped (NOEUL-FR-073).
+                let _ = id;
+                let focus = self.shell.interactive();
+                let r = match self.paste_files(paths, at, focus) {
+                    Ok(_) => "pinned",
+                    Err(e) => {
+                        self.paste_failed_notice(&e);
+                        e.code.as_str()
+                    }
+                };
+                self.last_action = Some(("pin.drop-files".into(), r));
+            }
             PinEvent::Closed(id) => {
                 self.cancel_pin_edit_of(id);
                 let _ = self.pins.close(id);
@@ -2637,8 +2702,11 @@ impl<S: Shell> App<S> {
         let t = info.map(|i| i.transforms).unwrap_or_default();
         let thumb = t.thumbnail.is_some();
         let (w, h) = info.map_or((1, 1), |i| t.orientation.size(i.image.0, i.image.1));
+        let card = self.pins.content(id).is_some_and(|c| c.text.is_some());
         let mut items: Vec<PinMenuItem> = MENU
             .iter()
+            // "Copy text" belongs to cards only (UX spec §3.3).
+            .filter(|entry| card || !matches!(entry, Some(("pin.copy-text", _))))
             .map(|entry| match entry {
                 None => PinMenuItem {
                     action: None,
@@ -2662,6 +2730,8 @@ impl<S: Shell> App<S> {
                         "pin.opacity-down" => t.opacity > transform::OPACITY_MIN,
                         // Turning it on needs a way back without the pin (NOEUL-FR-063).
                         "pin.click-through" => t.click_through || self.click_through_recoverable(),
+                        // Only a card has text to copy (Step 55).
+                        "pin.copy-text" => self.pins.content(id).is_some_and(|c| c.text.is_some()),
                         _ => true,
                     };
                     let text = match *action {
@@ -2687,6 +2757,28 @@ impl<S: Shell> App<S> {
                 }
             })
             .collect();
+        // "Pin clipboard as…" (Step 55, NOEUL-FR-071): the other kinds the clipboard offered when
+        // this pin was pasted; choosing one reads the clipboard again, once.
+        if let Some(c) = self.pins.content(id)
+            && c.offered.len() > 1
+        {
+            items.push(PinMenuItem {
+                action: None,
+                label: String::new(),
+                enabled: false,
+                checked: false,
+            });
+            for (action, kind) in PASTE_AS {
+                if c.offered.contains(kind) && c.pasted != Some(*kind) {
+                    items.push(PinMenuItem {
+                        action: Some(action),
+                        label: format!("Pin clipboard as: {}", kind.title()),
+                        enabled: true,
+                        checked: false,
+                    });
+                }
+            }
+        }
         if let Some(frames) = info.and_then(|i| i.animation) {
             // Never flattened silently (NOEUL-FR-068): the menu says what the pin shows.
             items.push(PinMenuItem {
@@ -2714,7 +2806,9 @@ impl<S: Shell> App<S> {
 
     /// The user chose `action` in the menu of `pin` (the pin may be gone by then).
     pub fn pin_menu_choice(&mut self, pin: PinId, action: &str) {
-        if MENU.iter().flatten().any(|(a, _)| *a == action) {
+        if MENU.iter().flatten().any(|(a, _)| *a == action)
+            || PASTE_AS.iter().any(|(a, _)| *a == action)
+        {
             self.action(action, Some(pin));
         }
     }
@@ -3141,6 +3235,9 @@ fn point(v: &Value) -> Option<(i32, i32)> {
 }
 
 #[cfg(test)]
+mod paste_tests;
+
+#[cfg(test)]
 pub(crate) mod tests {
     use super::*;
     use crate::capture::{CaptureError, Desktop, Monitor, Synthetic};
@@ -3280,7 +3377,14 @@ pub(crate) mod tests {
     #[derive(Default)]
     pub struct FakeShell {
         pub windows: FakeWindows,
+        /// A clipboard image of this size (a solid `CF_DIB`), unless `paste` is set.
         pub clipboard: Option<(u32, u32)>,
+        /// The in-memory clipboard of a test (Step 55): every format synthesized by the test.
+        pub paste: Option<crate::paste::Snapshot>,
+        /// Text `pin.copy-text` put on the (fake) clipboard.
+        pub copied_text: Vec<String>,
+        /// Files `read_image_file` was asked for (paths are never reported elsewhere).
+        pub files_read: Vec<PathBuf>,
         /// Frames of the GIF next to the clipboard image (0 or 1: none; Step 54).
         pub clipboard_frames: u32,
         /// The tray icon is shown (a way back from click-through, Step 54).
@@ -3310,21 +3414,84 @@ pub(crate) mod tests {
         pub element_requests: Vec<ElementRequest>,
         /// How many times element lookups were stopped (an overlay closed).
         pub detection_ended: usize,
+        /// Cards are drawn with block glyphs.
+        pub text: crate::card::BlockText,
+    }
+
+    /// A packed 32-bit `CF_DIB` of one colour (BGRA `[1, 1, 1, 255]`), bottom-up.
+    pub fn solid_dib(w: u32, h: u32) -> Vec<u8> {
+        let mut d = Vec::new();
+        d.extend_from_slice(&40u32.to_le_bytes());
+        d.extend_from_slice(&(w as i32).to_le_bytes());
+        d.extend_from_slice(&(h as i32).to_le_bytes());
+        d.extend_from_slice(&1u16.to_le_bytes());
+        d.extend_from_slice(&32u16.to_le_bytes());
+        d.extend_from_slice(&0u32.to_le_bytes());
+        d.extend_from_slice(&(w * h * 4).to_le_bytes());
+        d.extend_from_slice(&[0; 16]);
+        for _ in 0..w * h {
+            d.extend_from_slice(&[1, 1, 1, 255]);
+        }
+        d
     }
 
     impl Shell for FakeShell {
         fn pin_windows(&mut self) -> &mut dyn PinWindows {
             &mut self.windows
         }
-        fn clipboard_image(&mut self, ledger: &Arc<Ledger>) -> Result<Pasted> {
+        fn clipboard_take(
+            &mut self,
+            want: Option<crate::paste::Kind>,
+            opts: crate::paste::Options,
+        ) -> Result<crate::paste::Taken> {
             self.clipboard_reads += 1;
-            match self.clipboard {
-                Some((w, h)) => Ok(Pasted {
-                    frame: Frame::solid(ledger, Rect::new(0, 0, w, h), [1, 1, 1, 255]).unwrap(),
-                    frames: self.clipboard_frames.max(1),
-                }),
-                None => Err(NoeulError::new(Code::NothingToPin, "no image")),
+            if self.clipboard_busy {
+                return Err(NoeulError::new(Code::ClipboardUnavailable, "held (test)"));
             }
+            let mut snap = match (&self.paste, self.clipboard) {
+                (Some(s), _) => s.clone(),
+                (None, Some((w, h))) => {
+                    let mut s = crate::paste::Snapshot::default()
+                        .with(crate::paste::Format::Dib, solid_dib(w, h));
+                    if self.clipboard_frames > 1 {
+                        s = s.with(
+                            crate::paste::Format::Gif,
+                            crate::gif::tests::sample(self.clipboard_frames),
+                        );
+                    }
+                    s
+                }
+                (None, None) => crate::paste::Snapshot::default(),
+            };
+            let r = crate::paste::take(&mut snap, want, opts)
+                .map_err(|r| crate::paste::refusal_error(&r));
+            if let Some(s) = self.paste.as_mut() {
+                s.reads = snap.reads;
+            }
+            r
+        }
+        fn clipboard_write_text(&mut self, text: &str) -> Result<()> {
+            self.clipboard_writes += 1;
+            if self.clipboard_busy {
+                return Err(NoeulError::new(Code::ClipboardUnavailable, "held (test)"));
+            }
+            self.copied_text.push(text.to_string());
+            Ok(())
+        }
+        fn read_image_file(&mut self, path: &std::path::Path, max: u64) -> Result<Vec<u8>> {
+            self.files_read.push(path.to_path_buf());
+            if !crate::paste::is_local_path(path) {
+                return Err(NoeulError::new(Code::PermissionDenied, "not local (test)"));
+            }
+            let meta = std::fs::metadata(path)
+                .map_err(|_| NoeulError::new(Code::NothingToPin, "the file does not exist"))?;
+            if meta.len() > max {
+                return Err(NoeulError::new(Code::ImageInvalid, "too large (test)"));
+            }
+            std::fs::read(path).map_err(|e| NoeulError::io("the file", &e))
+        }
+        fn text_engine(&mut self) -> &mut dyn crate::card::TextEngine {
+            &mut self.text
         }
         fn clipboard_write(&mut self, png: &[u8], dib: &[u8]) -> Result<()> {
             self.clipboard_writes += 1;

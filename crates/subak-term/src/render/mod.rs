@@ -11,6 +11,7 @@
 //! Windows, tests compare it with goldens, and another toolkit could upload it as a texture.
 
 pub mod glyph;
+pub mod html;
 pub mod theme;
 
 #[cfg(windows)]
@@ -254,6 +255,8 @@ pub struct Renderer {
     stats: RenderStats,
     /// Per-cell foreground colours of the row being drawn (kept to avoid an allocation per row).
     fgs: Vec<Rgb>,
+    /// The search highlights of the row being drawn.
+    marks: Vec<(u16, u16, bool)>,
 }
 
 impl Renderer {
@@ -280,6 +283,7 @@ impl Renderer {
             full: true,
             stats: RenderStats::default(),
             fgs: Vec::new(),
+            marks: Vec::new(),
         };
         r.configure();
         r
@@ -454,25 +458,28 @@ impl Renderer {
             full,
             rows: Vec::new(),
         };
+        let mut marks = std::mem::take(&mut self.marks);
         for r in 0..rows {
             let row = view.row_at(r);
             let sel = view.selection_cols(r);
+            view.highlight_cols(r, &mut marks);
             let cur = cursor.filter(|c| c.1 == r).map(|c| c.0);
             let mut h = Fnv::default();
             hash_row(&row, &mut h);
-            (sel, cur, shape as u8, self.focused).hash(&mut h);
+            (sel, cur, shape as u8, self.focused, &marks).hash(&mut h);
             let h = h.finish();
             let i = usize::from(r);
             if !full && self.hashes[i] == h {
                 continue;
             }
             self.hashes[i] = h;
-            self.draw_row(r, &row, sel, cur, shape);
+            self.draw_row(r, &row, sel, &marks, cur, shape);
             match damage.rows.last_mut() {
                 Some((_, end)) if *end == r => *end = r + 1,
                 _ => damage.rows.push((r, r + 1)),
             }
         }
+        self.marks = marks;
         self.stats.frames += 1;
         self.stats.rows_drawn += damage.row_count() as u64;
         damage
@@ -480,40 +487,9 @@ impl Renderer {
 
     /// Foreground and background of a cell.
     fn colors(&self, a: Attrs, selected: bool) -> (Rgb, Rgb) {
-        let t = &self.theme;
-        let (dfg, dbg) = if self.reverse {
-            (t.background, t.foreground)
-        } else {
-            (t.foreground, t.background)
-        };
-        let mut fg = match a.fg {
-            Color::Default => dfg,
-            Color::Indexed(n) => {
-                let n = if self.opts.bold_is_bright && a.bold() && n < 8 {
-                    n + 8
-                } else {
-                    n
-                };
-                t.indexed(n)
-            }
-            Color::Rgb(r, g, b) => Rgb(r, g, b),
-        };
-        let mut bg = match a.bg {
-            Color::Default => dbg,
-            Color::Indexed(n) => t.indexed(n),
-            Color::Rgb(r, g, b) => Rgb(r, g, b),
-        };
-        if a.inverse() {
-            std::mem::swap(&mut fg, &mut bg);
-        }
-        if a.dim() {
-            fg = fg.mix(bg, 102);
-        }
-        if a.hidden() {
-            fg = bg;
-        }
+        let (fg, mut bg) = cell_colors(&self.theme, a, self.opts.bold_is_bright, self.reverse);
         if selected {
-            bg = t.selection;
+            bg = self.theme.selection;
         }
         (fg, bg)
     }
@@ -523,6 +499,7 @@ impl Renderer {
         r: u16,
         row: &Row,
         sel: Option<(u16, u16)>,
+        marks: &[(u16, u16, bool)],
         cursor: Option<u16>,
         shape: CursorShape,
     ) {
@@ -547,6 +524,19 @@ impl Renderer {
             let c = row.cell(x);
             let selected = sel.is_some_and(|(a, b)| (usize::from(a)..=usize::from(b)).contains(&x));
             let (mut fg, mut bg) = self.colors(c.attrs, selected);
+            // Search matches: the current one wins over the selection (it is usually also
+            // selected), other matches only tint unselected cells.
+            if let Some(&(_, _, current)) = marks
+                .iter()
+                .find(|(a, b, _)| (usize::from(*a)..=usize::from(*b)).contains(&x))
+            {
+                if current {
+                    bg = self.theme.search_current;
+                    fg = self.theme.search_current_text;
+                } else if !selected {
+                    bg = self.theme.search_match;
+                }
+            }
             if let Some((start, n)) = block
                 && (start..start + n).contains(&x)
             {
@@ -632,6 +622,43 @@ impl Renderer {
             }
         }
     }
+}
+
+/// The foreground and background of a cell with attributes `a` (inverse, dim and hidden
+/// applied; `reverse` is the screen's reverse video), as drawn and as copied as HTML.
+pub fn cell_colors(t: &Theme, a: Attrs, bold_is_bright: bool, reverse: bool) -> (Rgb, Rgb) {
+    let (dfg, dbg) = if reverse {
+        (t.background, t.foreground)
+    } else {
+        (t.foreground, t.background)
+    };
+    let mut fg = match a.fg {
+        Color::Default => dfg,
+        Color::Indexed(n) => {
+            let n = if bold_is_bright && a.bold() && n < 8 {
+                n + 8
+            } else {
+                n
+            };
+            t.indexed(n)
+        }
+        Color::Rgb(r, g, b) => Rgb(r, g, b),
+    };
+    let mut bg = match a.bg {
+        Color::Default => dbg,
+        Color::Indexed(n) => t.indexed(n),
+        Color::Rgb(r, g, b) => Rgb(r, g, b),
+    };
+    if a.inverse() {
+        std::mem::swap(&mut fg, &mut bg);
+    }
+    if a.dim() {
+        fg = fg.mix(bg, 102);
+    }
+    if a.hidden() {
+        fg = bg;
+    }
+    (fg, bg)
 }
 
 /// Everything about a row that changes its pixels.

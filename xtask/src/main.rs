@@ -227,7 +227,8 @@ fn run_ci(root: &Path) -> Result<(), String> {
             "warnings",
         ],
     )?;
-    cargo(root, &["test"])?;
+    // Run every test binary even after a failure, so one gate run reports all failures.
+    cargo(root, &["test", "--no-fail-fast"])?;
     run_docs_check(root)?;
     run_schema_check(root, false)?;
     run_design_check(root, false)?;

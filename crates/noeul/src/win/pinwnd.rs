@@ -48,7 +48,7 @@ use crate::pins::{PinId, PinWindow, PinWindows, WindowSpec};
 use crate::transform::{self, Edge, View};
 use crate::win::wide;
 use crate::zoom;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, VecDeque};
 use std::ffi::c_void;
 use std::sync::OnceLock;
@@ -65,6 +65,9 @@ use windows_sys::Win32::UI::Input::Ime::ImmAssociateContextEx;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyState, ReleaseCapture, SetCapture, VK_CONTROL, VK_MENU, VK_SHIFT,
 };
+use windows_sys::Win32::UI::Shell::{
+    DragAcceptFiles, DragFinish, DragQueryFileW, DragQueryPoint, HDROP,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CS_DBLCLKS, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
     DestroyWindow, GWL_EXSTYLE, GWLP_USERDATA, GetForegroundWindow, GetWindowLongPtrW,
@@ -76,12 +79,12 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     SWP_SHOWWINDOW, SetCursor, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow,
     TPM_NONOTIFY, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, ULW_ALPHA, UpdateLayeredWindow,
     WA_INACTIVE, WM_ACTIVATE, WM_CAPTURECHANGED, WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY,
-    WM_DPICHANGED, WM_EXITSIZEMOVE, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN,
-    WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCDESTROY, WM_NCHITTEST, WM_NCLBUTTONDBLCLK,
-    WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMBUTTONDBLCLK, WM_NCMBUTTONDOWN, WM_NCMBUTTONUP,
-    WM_NCRBUTTONDBLCLK, WM_NCRBUTTONDOWN, WM_NCRBUTTONUP, WM_NULL, WM_RBUTTONDOWN, WM_SETCURSOR,
-    WM_SYSKEYDOWN, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
-    WS_EX_TRANSPARENT, WS_POPUP,
+    WM_DPICHANGED, WM_DROPFILES, WM_EXITSIZEMOVE, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MBUTTONDOWN, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCDESTROY, WM_NCHITTEST,
+    WM_NCLBUTTONDBLCLK, WM_NCLBUTTONDOWN, WM_NCLBUTTONUP, WM_NCMBUTTONDBLCLK, WM_NCMBUTTONDOWN,
+    WM_NCMBUTTONUP, WM_NCRBUTTONDBLCLK, WM_NCRBUTTONDOWN, WM_NCRBUTTONUP, WM_NULL, WM_RBUTTONDOWN,
+    WM_SETCURSOR, WM_SYSKEYDOWN, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
 
 const CLASS: &str = "NoeulPin";
@@ -121,6 +124,8 @@ thread_local! {
     static EVENTS: RefCell<VecDeque<PinEvent>> = const { RefCell::new(VecDeque::new()) };
     static WAKER: RefCell<Option<Box<dyn Fn()>>> = const { RefCell::new(None) };
     static SLOTS: RefCell<BTreeMap<isize, Slot>> = const { RefCell::new(BTreeMap::new()) };
+    /// The debug-build test hook: no key state is read ([`ignore_key_state`]).
+    static IGNORE_KEYS: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Sets what runs after a pin window queued an event (the instance's pump). Same thread.
@@ -236,9 +241,19 @@ pub fn vk_name(vk: u32) -> Option<String> {
     })
 }
 
+/// Whether a key is down for the message being processed. Under the debug-build test hook
+/// ([`ignore_key_state`]) the pins are never activated, so they never have the keyboard: any key
+/// state their thread sees can only be the user's real keyboard leaking in (a modifier held
+/// elsewhere while a test runs), and it reads as up.
 fn down(vk: u16) -> bool {
     // SAFETY: plain key-state query for this thread's input.
-    unsafe { GetKeyState(i32::from(vk)) < 0 }
+    !IGNORE_KEYS.get() && unsafe { GetKeyState(i32::from(vk)) < 0 }
+}
+
+/// The debug-build test hook's instance reads no key state for its pins (see [`down`]): the
+/// messages its tests post carry everything. Same thread as the pins.
+pub fn ignore_key_state(ignore: bool) {
+    IGNORE_KEYS.set(ignore);
 }
 
 fn pin_of(hwnd: HWND) -> Option<PinId> {
@@ -285,6 +300,40 @@ fn edge_of(ht: u32) -> Option<Edge> {
 }
 
 /// The window's top-left corner on screen (client coordinates start there: no frame).
+/// The paths of a drop (at most [`MAX_DROPPED`]) and its point in client coordinates.
+fn dropped_files(drop: HDROP) -> (Vec<std::path::PathBuf>, (i32, i32)) {
+    let mut files = Vec::new();
+    // SAFETY: a drop handle from WM_DROPFILES; 0xFFFFFFFF asks the count.
+    let count = unsafe { DragQueryFileW(drop, u32::MAX, std::ptr::null_mut(), 0) };
+    for i in 0..count.min(MAX_DROPPED) {
+        // SAFETY: the length (in characters, without the NUL) of file `i`.
+        let len = unsafe { DragQueryFileW(drop, i, std::ptr::null_mut(), 0) } as usize;
+        if len == 0 || len > 32_767 {
+            continue;
+        }
+        let mut buf = vec![0u16; len + 1];
+        // SAFETY: `buf` holds `len + 1` characters.
+        let n = unsafe {
+            DragQueryFileW(
+                drop,
+                i,
+                buf.as_mut_ptr(),
+                u32::try_from(len + 1).unwrap_or(0),
+            )
+        } as usize;
+        files.push(std::path::PathBuf::from(String::from_utf16_lossy(
+            &buf[..n.min(len)],
+        )));
+    }
+    let mut pt = POINT::default();
+    // SAFETY: `pt` is writable; the drop handle is valid until DragFinish.
+    unsafe { DragQueryPoint(drop, &raw mut pt) };
+    (files, (pt.x, pt.y))
+}
+
+/// The most paths of one drop that are looked at (the core pins at most `paste::MAX_FILES`).
+const MAX_DROPPED: u32 = 256;
+
 fn origin(hwnd: HWND) -> (i32, i32) {
     let mut r = RECT::default();
     // SAFETY: our window; `r` is writable.
@@ -479,6 +528,25 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             // Alt+F4 or the system: the core closes the pin (and destroys this window).
             if let Some(id) = pin_of(hwnd) {
                 push(PinEvent::Closed(id));
+            }
+            return 0;
+        }
+        // Files dropped on the pin (Step 55, NOEUL-FR-073): their paths and the drop point; the
+        // core pins the image files among them. The drop's memory is freed here.
+        WM_DROPFILES => {
+            let drop = wp as HDROP;
+            let (files, at) = dropped_files(drop);
+            // SAFETY: the HDROP of this message, freed once (the sender gave it to us).
+            unsafe { DragFinish(drop) };
+            if let Some(id) = pin_of(hwnd)
+                && !files.is_empty()
+            {
+                let (ox, oy) = origin(hwnd);
+                push(PinEvent::Files(
+                    id,
+                    files,
+                    (ox.saturating_add(at.0), oy.saturating_add(at.1)),
+                ));
             }
             return 0;
         }
@@ -938,6 +1006,8 @@ pub fn create(id: PinId, frame: &Frame, spec: &WindowSpec, style: Style) -> Resu
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, isize::try_from(id.0).unwrap_or(0));
         // No input method context: letter keys are shortcuts, also in Hangul mode.
         ImmAssociateContextEx(hwnd, std::ptr::null_mut(), 0);
+        // Image files can be dropped on a pin (Step 55, NOEUL-FR-073).
+        DragAcceptFiles(hwnd, 1);
     }
     if let Err(e) = upload(hwnd, frame, &view) {
         pin.destroy();

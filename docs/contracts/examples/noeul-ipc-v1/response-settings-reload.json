@@ -15,6 +15,10 @@
         "border": "on",
         "shadow": "on"
       },
+      "paste": {
+        "paths": "on",
+        "file_cards": "off"
+      },
       "gestures": {
         "double_click": "copy",
         "middle_click": "pin",

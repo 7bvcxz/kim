@@ -58,6 +58,7 @@ use windows_sys::Win32::Graphics::Gdi::{
     SetBkMode, SetTextColor, TRANSPARENT, TextOutW, UpdateWindow, VARIABLE_PITCH,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows_sys::Win32::System::SystemServices::{MK_CONTROL, MK_SHIFT};
 use windows_sys::Win32::UI::Input::Ime::{
     CANDIDATEFORM, CFS_CANDIDATEPOS, CFS_POINT, COMPOSITIONFORM, GCS_COMPSTR, GCS_RESULTSTR,
     IACE_DEFAULT, ISC_SHOWUICOMPOSITIONWINDOW, ImmAssociateContextEx, ImmGetCompositionStringW,
@@ -193,12 +194,30 @@ fn push(e: OverlayEvent) {
     });
 }
 
+/// Whether a key is down for the message being processed. Under the test placement the window
+/// never has the keyboard, so whatever key state the thread sees can only be the user's real
+/// keyboard leaking in (a modifier held elsewhere while a test runs): it reads as up, and the
+/// tests carry their modifiers in the messages they post.
 fn down(vk: u16) -> bool {
     // SAFETY: plain key-state query for this thread's input.
-    unsafe { GetKeyState(i32::from(vk)) < 0 }
+    ACTIVATES.get() && unsafe { GetKeyState(i32::from(vk)) < 0 }
 }
 
-fn mods() -> Mods {
+/// The modifiers of a mouse message: `Shift` and `Ctrl` as the message itself records them
+/// (`MK_SHIFT`, `MK_CONTROL` in `wParam`, the state when the event happened), `Alt` and the
+/// Windows keys from the key state (mouse messages carry no flag for them).
+fn mods(wp: WPARAM) -> Mods {
+    let flags = (wp & 0xFFFF) as u32;
+    Mods {
+        ctrl: flags & MK_CONTROL != 0,
+        shift: flags & MK_SHIFT != 0,
+        alt: down(VK_MENU),
+        win: down(VK_LWIN) || down(VK_RWIN),
+    }
+}
+
+/// The modifiers when no mouse message is at hand (`Shift` pressed or released alone).
+fn key_mods() -> Mods {
     Mods {
         ctrl: down(VK_CONTROL),
         shift: down(VK_SHIFT),
@@ -277,7 +296,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         WM_MOUSEMOVE => {
             let (x, y) = point(lp);
             LAST.set((x, y));
-            input(Input::Move { x, y, mods: mods() });
+            input(Input::Move {
+                x,
+                y,
+                mods: mods(wp),
+            });
             return 0;
         }
         WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN => {
@@ -297,7 +320,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 button,
                 x,
                 y,
-                mods: mods(),
+                mods: mods(wp),
                 time_ms: time(),
             });
             return 0;
@@ -330,7 +353,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             if vk == u32::from(VK_SHIFT) {
                 // Shift changes the shape of a drag (a square) without a pointer move.
                 let (x, y) = LAST.get();
-                input(Input::Move { x, y, mods: mods() });
+                input(Input::Move {
+                    x,
+                    y,
+                    mods: key_mods(),
+                });
                 return 0;
             }
             if msg == WM_KEYUP || msg == WM_SYSKEYUP {
@@ -1339,6 +1366,59 @@ mod tests {
         win.destroy(); // idempotent
         drop(frozen);
         assert_eq!(ledger.live(), (0, 0));
+    }
+
+    /// The modifiers of a pointer message are the message's own (`MK_SHIFT`, `MK_CONTROL`), and
+    /// under the test placement the thread's key state is never read: a `Shift` or `Ctrl` the user
+    /// holds elsewhere cannot turn a test's drag into a square or its key into a chord. The key
+    /// state is this test thread's own table (`SetKeyboardState` generates no input).
+    #[test]
+    fn pointer_modifiers_come_from_the_message_and_the_test_window_ignores_held_keys() {
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetKeyboardState, SetKeyboardState};
+        crate::win::per_monitor_dpi_awareness();
+        let picture = Rect::new(-23_000, -23_000, 200, 100);
+        let mut win = WinOverlay::create(picture, Placement::OFF_SCREEN_TEST, false).unwrap();
+        let hwnd = win.hwnd();
+        let _ = take_events();
+        let mut keys = [0u8; 256];
+        // SAFETY: this thread's key-state table, read, changed and restored below; synchronous
+        // messages to our own window on this thread.
+        unsafe {
+            GetKeyboardState(keys.as_mut_ptr());
+            let saved = keys;
+            for vk in [VK_SHIFT, VK_CONTROL, VK_MENU] {
+                keys[usize::from(vk)] = 0x80;
+            }
+            SetKeyboardState(keys.as_ptr());
+            SendMessageW(hwnd, WM_LBUTTONDOWN, 1, lp(10, 10));
+            SendMessageW(hwnd, WM_MOUSEMOVE, 1 | MK_SHIFT as usize, lp(20, 20));
+            SendMessageW(hwnd, WM_MOUSEMOVE, 1 | MK_CONTROL as usize, lp(30, 30));
+            SendMessageW(hwnd, WM_KEYDOWN, 0x51, 0); // Q
+            SetKeyboardState(saved.as_ptr());
+        }
+        let ev = take_events();
+        let mods_of = |e: &OverlayEvent| match e {
+            OverlayEvent::Input(Input::Press { mods, .. } | Input::Move { mods, .. }) => *mods,
+            other => panic!("a pointer input: {other:?}"),
+        };
+        assert_eq!(mods_of(&ev[0]), Mods::NONE, "held keys are not read");
+        assert_eq!(
+            mods_of(&ev[1]),
+            Mods {
+                shift: true,
+                ..Mods::NONE
+            }
+        );
+        assert_eq!(
+            mods_of(&ev[2]),
+            Mods {
+                ctrl: true,
+                ..Mods::NONE
+            }
+        );
+        let q = chord_of("Q", false, false, false).unwrap();
+        assert_eq!(ev[3], OverlayEvent::Key(q, None, false), "a plain Q");
+        win.destroy();
     }
 
     #[test]

@@ -81,14 +81,35 @@ mod measure {
     struct Quiet {
         windows: WinPins,
         pointer: (i32, i32),
+        text: noeul::card::BlockText,
     }
 
     impl Shell for Quiet {
         fn pin_windows(&mut self) -> &mut dyn PinWindows {
             &mut self.windows
         }
-        fn clipboard_image(&mut self, _: &Arc<Ledger>) -> noeul::error::Result<noeul::app::Pasted> {
+        fn clipboard_take(
+            &mut self,
+            _: Option<noeul::paste::Kind>,
+            _: noeul::paste::Options,
+        ) -> noeul::error::Result<noeul::paste::Taken> {
             Err(NoeulError::new(Code::NothingToPin, "not used"))
+        }
+        fn clipboard_write_text(&mut self, _: &str) -> noeul::error::Result<()> {
+            Err(NoeulError::new(
+                Code::ClipboardUnavailable,
+                "never touches the clipboard",
+            ))
+        }
+        fn read_image_file(
+            &mut self,
+            _: &std::path::Path,
+            _: u64,
+        ) -> noeul::error::Result<Vec<u8>> {
+            Err(NoeulError::new(Code::NothingToPin, "not used"))
+        }
+        fn text_engine(&mut self) -> &mut dyn noeul::card::TextEngine {
+            &mut self.text
         }
         fn clipboard_write(&mut self, _: &[u8], _: &[u8]) -> noeul::error::Result<()> {
             Err(NoeulError::new(
@@ -209,6 +230,7 @@ mod measure {
                     style: Style::OFF_SCREEN_TEST,
                 },
                 pointer: center,
+                text: noeul::card::BlockText,
             },
             backend,
             mgr,
@@ -407,6 +429,7 @@ mod measure {
                     style: Style::OFF_SCREEN_TEST,
                 },
                 pointer: (OFF_SCREEN.0 + 10, OFF_SCREEN.1 + 10),
+                text: noeul::card::BlockText,
             },
             Box::new(Synthetic::new(mon)),
             mgr,

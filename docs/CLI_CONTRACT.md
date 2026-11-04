@@ -182,9 +182,9 @@ this document with its exit code.
 | `noeul_start_failed` | 1 | The Noeul instance could not be started, or ended during start-up. |
 | `noeul_not_running` | 3 | The command needs the running Noeul (pins, capture, quit), and none runs; start it or pass `--start`. |
 | `pin_not_found` | 3 | No open pin with this ID, or no closed pin to reopen. |
-| `nothing_to_pin` | 3 | The clipboard holds nothing Noeul can pin. |
+| `nothing_to_pin` | 3 | The clipboard or file holds nothing Noeul can pin: it is empty, holds no supported content (or not the kind asked for with `--as`), holds content its program marked private, or the file is missing, a folder or not a picture (Step 55). |
 | `noeul_identity_mismatch` | 4 | The endpoint is served by a process that is not `noeul.exe` of this user (a pipe squatter, or a process that cannot be verified). Nothing was sent to it. |
-| `image_invalid` | 4 | The image is malformed or exceeds the size limits. |
+| `image_invalid` | 4 | The image is malformed or exceeds the size limits (128 MiB of data, 32767 pixels a side, 40 million pixels; Step 55). |
 | `config_invalid` | 4 | `config.toml` is not valid TOML, or `noeul config set` or `reset` cannot edit its layout in place without changing other keys; nothing was written (Step 51). |
 | `noeul_incompatible` | 5 | The running Noeul and this CLI share no IPC protocol major. Neither is restarted. |
 | `config_from_newer_version` | 5 | `config.toml` was written by a newer Noeul (`schema_version` above 1); it is read-only and never rewritten (Step 51). |

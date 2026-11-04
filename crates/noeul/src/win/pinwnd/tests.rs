@@ -567,12 +567,22 @@ fn shift_double_click_and_ctrl_drop_are_reported() {
         SetKeyboardState(saved.as_ptr());
         SendMessageW(hwnd, WM_NCLBUTTONDBLCLK, HTCAPTION as usize, 0);
         SendMessageW(hwnd, WM_EXITSIZEMOVE, 0, 0);
+        // The debug-build test hook's instance reads no key state: a Shift and Ctrl the user
+        // holds elsewhere change nothing.
+        ignore_key_state(true);
+        keys[usize::from(VK_SHIFT)] = 0x80;
+        SetKeyboardState(keys.as_ptr());
+        SendMessageW(hwnd, WM_NCLBUTTONDBLCLK, HTCAPTION as usize, 0);
+        SendMessageW(hwnd, WM_EXITSIZEMOVE, 0, 0);
+        ignore_key_state(false);
+        SetKeyboardState(saved.as_ptr());
     }
     assert_eq!(
         take_events(),
         [
             PinEvent::ShiftDoubleClick(PinId(403)),
             PinEvent::Dropped(PinId(403), r.x, r.y),
+            PinEvent::Moved(PinId(403), r.x, r.y),
             PinEvent::Moved(PinId(403), r.x, r.y),
         ]
     );
@@ -673,4 +683,61 @@ fn the_outline_surrounds_the_exact_picture_on_screen() {
         assert_eq!(m, (dpi / 96).max(1), "one outline pixel per 100 % of scale");
         drop(pin);
     }
+}
+
+/// A drop on a pin (Step 55, NOEUL-FR-073) through the real drop handler, with a synthetic
+/// `HDROP` built in memory (a `DROPFILES` header and the wide paths): no drag, no input. The
+/// handler reports every path and the drop point in screen coordinates, and frees the drop.
+#[test]
+fn files_dropped_on_a_pin_are_reported_with_the_point() {
+    use windows_sys::Win32::System::Memory::{
+        GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock,
+    };
+    let ledger = Ledger::new();
+    let r = Rect::new(FAR, FAR + 1200, 40, 30);
+    let frame = Frame::solid(&ledger, r, [5, 6, 7, 255]).unwrap();
+    let pin = create(PinId(405), &frame, &spec(r), Style::OFF_SCREEN_TEST).unwrap();
+    let hwnd = pin.hwnd();
+    // SAFETY: a query on our own window.
+    assert_ne!(
+        ex_style(hwnd) & windows_sys::Win32::UI::WindowsAndMessaging::WS_EX_ACCEPTFILES,
+        0
+    );
+    let _ = take_events();
+    let files = [r"C:\shots\a.png", r"C:\shots\노을 b.gif"];
+    let mut wide: Vec<u16> = Vec::new();
+    for f in files {
+        wide.extend(f.encode_utf16());
+        wide.push(0);
+    }
+    wide.push(0);
+    // DROPFILES: pFiles, pt, fNC, fWide.
+    let mut bytes: Vec<u8> = Vec::new();
+    bytes.extend_from_slice(&20u32.to_le_bytes());
+    bytes.extend_from_slice(&7i32.to_le_bytes());
+    bytes.extend_from_slice(&9i32.to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    bytes.extend_from_slice(&1u32.to_le_bytes());
+    for u in &wide {
+        bytes.extend_from_slice(&u.to_le_bytes());
+    }
+    // SAFETY: a movable block of our own, filled while locked, handed to our own window, which
+    // frees it with DragFinish.
+    unsafe {
+        let h = GlobalAlloc(GMEM_MOVEABLE, bytes.len());
+        assert!(!h.is_null());
+        let p = GlobalLock(h);
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), p.cast::<u8>(), bytes.len());
+        GlobalUnlock(h);
+        SendMessageW(hwnd, WM_DROPFILES, h as usize, 0);
+    }
+    assert_eq!(
+        take_events(),
+        [PinEvent::Files(
+            PinId(405),
+            files.iter().map(std::path::PathBuf::from).collect(),
+            (r.x + 7, r.y + 9),
+        )]
+    );
+    drop(pin);
 }

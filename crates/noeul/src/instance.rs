@@ -529,16 +529,46 @@ pub fn pin_list(ctx: &Ctx) -> Result<Outcome> {
     }
 }
 
-/// `noeul pin --clipboard`: the instance reads the clipboard once and pins its image, as `F3`
-/// does but without focus (NOEUL-SEC-002: an explicit paste). A dry run reads nothing.
+/// `noeul pin --clipboard [--as <kind>]` and `noeul pin <file>`: the instance reads the clipboard
+/// once, or the image file, and pins what it holds, as `F3` does but without focus (NOEUL-SEC-002:
+/// an explicit paste by the user at their own unlocked desktop, announced by a notice of the
+/// running Noeul, NOEUL-SEC-010). A dry run reads nothing. The path is made absolute here and
+/// must be on a local drive; the result never names it (NOEUL-SEC-008).
 pub fn pin_create(ctx: &Ctx, a: &crate::PinCreateArgs) -> Result<Outcome> {
-    if !a.clipboard {
+    if !a.clipboard && a.file.is_none() {
         return Err(NoeulError::new(
             Code::Usage,
-            "nothing to pin: add --clipboard, or use a subcommand (list, hide, show, close, reopen)",
+            "nothing to pin: give an image file, add --clipboard, or use a subcommand (list, hide, show, close, reopen)",
         )
-        .hint("a screen region is pinned with `noeul capture --region x,y,w,h --pin`; `noeul pin <file>` is planned"));
+        .hint("a screen region is pinned with `noeul capture --region x,y,w,h --pin`"));
     }
+    let kind = match &a.as_kind {
+        None => None,
+        Some(k) => Some(noeul::paste::Kind::parse(k).ok_or_else(|| {
+            NoeulError::new(Code::Usage, format!("`{k}` is not a kind to pin"))
+                .hint("--as takes image, image_file, color, html, text or files")
+        })?),
+    };
+    let file = match &a.file {
+        None => None,
+        Some(f) => {
+            let abs = if f.is_absolute() {
+                f.clone()
+            } else {
+                std::env::current_dir()
+                    .map_err(|e| NoeulError::io("the current folder", &e))?
+                    .join(f)
+            };
+            if !noeul::paste::is_local_path(&abs) {
+                return Err(NoeulError::new(
+                    Code::Usage,
+                    "the file must be on a local drive (C:\\…)",
+                )
+                .hint("network paths (\\\\server\\share) are never opened"));
+            }
+            Some(abs)
+        }
+    };
     let at = match &a.at {
         None => None,
         Some(text) => Some(parse_point(text).ok_or_else(|| {
@@ -549,24 +579,55 @@ pub fn pin_create(ctx: &Ctx, a: &crate::PinCreateArgs) -> Result<Outcome> {
     #[cfg(windows)]
     {
         let mut s = session_or_start(ctx, a.start && !a.dry_run)?;
-        let mut params = json!({"source": "clipboard", "dry_run": a.dry_run});
+        let mut params = match &file {
+            Some(p) => {
+                json!({"source": "file", "path": p.display().to_string(), "dry_run": a.dry_run})
+            }
+            None => json!({"source": "clipboard", "dry_run": a.dry_run}),
+        };
         if let Some(at) = at {
             params["at"] = at;
         }
+        if let Some(k) = kind {
+            params["as"] = json!(k.as_str());
+        }
         let v = s.request("pin.create", params)?;
+        let what = match v["kind"].as_str() {
+            Some("image") => "the clipboard image",
+            Some("image_file") if file.is_some() => "the image file",
+            Some("image_file") => "the copied image file(s)",
+            Some("color") => "the colour value as a swatch card",
+            Some("html") => "the HTML as a card",
+            Some("text") => "the text as a card",
+            Some("files") => "the copied file names as a card",
+            _ => "the clipboard",
+        };
+        let count = v["pins"].as_array().map_or(0, Vec::len);
         let human = match (v["pin"]["id"].as_str(), Rect::from_json(&v["pin"]["rect"])) {
-            (Some(id), Some(r)) => format!(
-                "Pinned the clipboard image as {id} at {r} ({} %).\n",
-                v["pin"]["zoom"]
-            ),
-            _ => "Would read the clipboard once and pin its image (dry run: nothing was read).\n"
-                .to_string(),
+            (Some(id), Some(r)) => {
+                let more = if count > 1 {
+                    format!(" and {} more pin(s)", count - 1)
+                } else {
+                    String::new()
+                };
+                format!(
+                    "Pinned {what} as {id} at {r} ({} %){more}.\n",
+                    v["pin"]["zoom"]
+                )
+            }
+            _ if file.is_some() => {
+                "Would read the file once and pin it (dry run: nothing was read).\n".to_string()
+            }
+            _ => {
+                "Would read the clipboard once and pin what it holds (dry run: nothing was read).\n"
+                    .to_string()
+            }
         };
         Ok(Outcome::new(v, human))
     }
     #[cfg(not(windows))]
     {
-        let _ = (ctx, at);
+        let _ = (ctx, at, kind, file);
         Err(unsupported())
     }
 }
@@ -926,7 +987,7 @@ pub fn config_show() -> Result<Outcome> {
         "off".to_string()
     };
     let human = format!(
-        "Settings: {} ({})\n  general.tray_icon = {}\n  capture.keyboard_help = {}\n  capture.quick_save_folder = {}\n  capture.detection = {}\n  capture.magnifier = {}\n  gestures.double_click = {}\n  gestures.middle_click = {}\n  gestures.preset = {} (Snipaste-style gestures: {preset})\nShortcuts: {}\nData folder (ui-state.json only, never pictures): {}\nChange a setting: noeul config set <key> <value>; reset: noeul config reset [<section>] --yes\n",
+        "Settings: {} ({})\n  general.tray_icon = {}\n  capture.keyboard_help = {}\n  capture.quick_save_folder = {}\n  capture.detection = {}\n  capture.magnifier = {}\n  gestures.double_click = {}\n  gestures.middle_click = {}\n  gestures.preset = {} (Snipaste-style gestures: {preset})\n  paste.paths = {}\n  paste.file_cards = {}\nShortcuts: {}\nData folder (ui-state.json only, never pictures): {}\nChange a setting: noeul config set <key> <value>; reset: noeul config reset [<section>] --yes\n",
         paths.config_file().display(),
         s.state.as_str(),
         st.tray_icon,
@@ -940,6 +1001,8 @@ pub fn config_show() -> Result<Outcome> {
         st.gestures.double_click.as_str(),
         st.gestures.middle_click.as_str(),
         st.preset.as_str(),
+        if st.paste.paths { "on" } else { "off" },
+        if st.paste.file_cards { "on" } else { "off" },
         paths.hotkeys_file().display(),
         paths.data_dir.display()
     );

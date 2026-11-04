@@ -37,6 +37,14 @@ pub enum Action {
     RenameTerminal,
     Copy,
     Paste,
+    /// Step 19: copy with colours, paste as one line, select all, keyboard selection, search,
+    /// save the output.
+    CopyHtml,
+    PasteOneLine,
+    SelectAll,
+    MarkMode,
+    FindOpen,
+    SaveOutput,
     ZoomIn,
     ZoomOut,
     ZoomReset,
@@ -58,7 +66,7 @@ pub enum Action {
 
 impl Action {
     /// Every action with its manifest ID, in manifest order ([`crate::hotkeys::IMPLEMENTED`]).
-    pub const ALL: [(Action, &'static str); 26] = [
+    pub const ALL: [(Action, &'static str); 32] = [
         (Action::NewTerminal, "terminal.new"),
         (Action::CloseTerminal, "terminal.close"),
         (Action::NextTab, "tab.next"),
@@ -69,6 +77,12 @@ impl Action {
         (Action::RenameTerminal, "terminal.rename"),
         (Action::Copy, "clipboard.copy"),
         (Action::Paste, "clipboard.paste"),
+        (Action::CopyHtml, "clipboard.copy-html"),
+        (Action::PasteOneLine, "clipboard.paste-one-line"),
+        (Action::SelectAll, "selection.all"),
+        (Action::MarkMode, "selection.mark"),
+        (Action::FindOpen, "search.open"),
+        (Action::SaveOutput, "output.save"),
         (Action::ZoomIn, "view.zoom-in"),
         (Action::ZoomOut, "view.zoom-out"),
         (Action::ZoomReset, "view.zoom-reset"),
@@ -614,6 +628,7 @@ pub mod vk {
     pub const RWIN: u32 = 0x5C;
     pub const APPS: u32 = 0x5D;
     pub const F1: u32 = 0x70;
+    pub const F3: u32 = 0x72;
     pub const F4: u32 = 0x73;
     pub const F10: u32 = 0x79;
     pub const F12: u32 = 0x7B;
@@ -894,7 +909,7 @@ mod tests {
             "kinds",
             json!({"schema": "kim.hotkeys", "schema_version": 1, "tool": "subak",
             "overrides": [
-                {"action": "tab.move-left", "bindings": ["Ctrl+Shift+code:KeyQ"]},
+                {"action": "tab.move-left", "bindings": ["Alt+Shift+code:KeyQ"]},
                 {"action": "tab.move-right", "bindings": ["Ctrl+K char:?"]},
                 {"action": "tab.hide", "bindings": [{"keys": "F9", "trigger": "release"}]},
                 {"action": "terminal.rename", "bindings": [{"keys": "F8", "trigger": "hold", "hold_ms": 700}]},
@@ -903,8 +918,14 @@ mod tests {
         );
         let mut s = Matcher::load(Some(&dir), None);
         assert!(s.wants_chars());
-        // `code:KeyQ` is the key in Q's position whatever the layout says (AZERTY: A).
-        let mut p = press(u32::from(b'A'), CS);
+        // `code:KeyQ` is the key in Q's position whatever the layout says (AZERTY: A). (Not
+        // Ctrl+Shift: on AZERTY that is also the logical Ctrl+Shift+A, Select all since Step 19.)
+        let alt_shift = Mods {
+            ctrl: false,
+            shift: true,
+            alt: true,
+        };
+        let mut p = press(u32::from(b'A'), alt_shift);
         p.scan = 0x10;
         assert_eq!(s.press(&p), Outcome::Fire(Action::MoveTabLeft));
         // `char:?` after Ctrl+K: whatever produces `?` on this layout.

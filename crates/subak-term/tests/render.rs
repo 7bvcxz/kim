@@ -269,6 +269,43 @@ fn selection_reverse_video_and_themes() {
     assert_eq!(r.frame().pixel(0, 0), Rgb(0, 0, 0));
 }
 
+/// Step 19: search matches are tinted, the current one is dark text on a light fill (it wins
+/// over the selection), and changing the highlights redraws only the rows involved.
+#[test]
+fn search_highlights_and_the_current_match() {
+    let t = Theme::kim_dark();
+    let mut v = view(12, 3, b"foo bar foo\r\nnext foo\x1b[?25l");
+    let s = subak_term::search::Search::new(
+        &v,
+        &subak_term::search::Query {
+            text: "foo".into(),
+            ..Default::default()
+        },
+        subak_term::search::Budget::default(),
+    )
+    .unwrap();
+    assert_eq!(s.matches().len(), 3);
+    let mut r = builtin(1.0);
+    r.render(&v);
+    v.set_highlights(s.matches().to_vec(), Some(1));
+    v.select_span(s.matches()[1]);
+    let d = r.render(&v);
+    assert_eq!(d.rows, vec![(0, 2)], "only the rows with matches");
+    assert_eq!(cell_colors(&r, 0, 0).0, t.search_match);
+    assert_eq!(cell_colors(&r, 3, 0).0, t.background, "between matches");
+    assert_eq!(
+        cell_colors(&r, 8, 0),
+        (t.search_current, Some(t.search_current_text)),
+        "the current match over the selection"
+    );
+    assert_eq!(cell_colors(&r, 5, 1).0, t.search_match);
+    v.clear_highlights();
+    v.clear_selection();
+    let d = r.render(&v);
+    assert_eq!(d.rows, vec![(0, 2)]);
+    assert_eq!(cell_colors(&r, 0, 0).0, t.background);
+}
+
 #[test]
 fn only_changed_rows_are_drawn() {
     let mut v = view(20, 5, b"one\r\ntwo\r\nthree");

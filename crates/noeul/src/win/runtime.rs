@@ -28,7 +28,9 @@
 //! the clipboard; `NOEUL_DEV_CLIPBOARD=busy` makes it fail like a held clipboard), the
 //! selection's context menu is recorded instead of shown, the save dialog is answered with a new
 //! file in the configured quick-save folder (never shown), and quick save never falls back to
-//! the user's Pictures folder.
+//! the user's Pictures folder. Since Step 55 a paste reads only the stand-in too: the formats a
+//! test synthesized in the folder `NOEUL_DEV_CLIPBOARD_DIR` (empty without it), never the user's
+//! clipboard, and the pins read no key state (a modifier held elsewhere changes nothing).
 //!
 //! **Detection** (Step 52, ADR 0035): the window list is read on the UI thread when a capture
 //! starts ([`crate::win::detect::snapshot`]); element lookups run on a UI Automation worker that
@@ -46,7 +48,7 @@ use crate::app::{App, Identity, OverlayEvent, OverlayWindow, Shell};
 use crate::capture::{CaptureBackend, Synthetic};
 use crate::detect::{ElementRequest, Snapshot};
 use crate::error::{Code, NoeulError, Result};
-use crate::frame::{Ledger, Rect};
+use crate::frame::Rect;
 use crate::hotkeys::{self, Manager};
 use crate::ipc;
 use crate::paths::Paths;
@@ -119,14 +121,19 @@ thread_local! {
     static MENU_OPEN: Cell<bool> = const { Cell::new(false) };
 }
 
-/// Where Copy writes.
+/// Where Copy writes and a paste reads.
 enum CopyTarget {
     /// The Windows clipboard, owned by the control window.
     System,
     /// The debug-build test hook: an in-memory stand-in, so automated runs never touch the
-    /// user's clipboard; `busy` (`NOEUL_DEV_CLIPBOARD=busy`) makes every write fail as a
-    /// clipboard held by another program does.
-    Synthetic { busy: bool },
+    /// user's clipboard; `busy` (`NOEUL_DEV_CLIPBOARD=busy`) makes every read and write fail as a
+    /// clipboard held by another program does. A paste reads the formats a test synthesized in
+    /// the folder `NOEUL_DEV_CLIPBOARD_DIR` ([`crate::paste::Snapshot::from_dir`]); without it the
+    /// stand-in is empty.
+    Synthetic {
+        busy: bool,
+        dir: Option<std::path::PathBuf>,
+    },
 }
 
 /// The Win32 [`Shell`]: pin windows, the overlay, clipboard, pointer, tray notices, detection.
@@ -139,6 +146,8 @@ struct WinShell {
     detect_scope: Scope,
     /// The UI Automation worker of the open overlay, while it uses element detection.
     uia: Option<ElementWorker>,
+    /// The cards' text engine, made on the first card (Step 55).
+    text: Option<crate::win::card::GdiText>,
 }
 
 impl WinShell {
@@ -156,8 +165,45 @@ impl Shell for WinShell {
         &mut self.windows
     }
 
-    fn clipboard_image(&mut self, ledger: &Arc<Ledger>) -> Result<crate::app::Pasted> {
-        crate::win::clipboard::read_image(ledger)
+    fn clipboard_take(
+        &mut self,
+        want: Option<crate::paste::Kind>,
+        opts: crate::paste::Options,
+    ) -> Result<crate::paste::Taken> {
+        match &self.copy {
+            CopyTarget::System => crate::win::clipboard::take(want, opts),
+            CopyTarget::Synthetic { busy: true, .. } => Err(NoeulError::new(
+                Code::ClipboardUnavailable,
+                "another program keeps the clipboard open (test hook)",
+            )),
+            CopyTarget::Synthetic { busy: false, dir } => {
+                let mut snap = dir
+                    .as_deref()
+                    .map(crate::paste::Snapshot::from_dir)
+                    .unwrap_or_default();
+                crate::paste::take(&mut snap, want, opts)
+                    .map_err(|r| crate::paste::refusal_error(&r))
+            }
+        }
+    }
+
+    fn clipboard_write_text(&mut self, text: &str) -> Result<()> {
+        match self.copy {
+            CopyTarget::System => crate::win::clipboard::write_text(CONTROL.get() as HWND, text),
+            CopyTarget::Synthetic { busy: true, .. } => Err(NoeulError::new(
+                Code::ClipboardUnavailable,
+                "another program keeps the clipboard open (test hook)",
+            )),
+            CopyTarget::Synthetic { busy: false, .. } => Ok(()),
+        }
+    }
+
+    fn read_image_file(&mut self, path: &std::path::Path, max: u64) -> Result<Vec<u8>> {
+        crate::win::files::read_local_image(path, max)
+    }
+
+    fn text_engine(&mut self) -> &mut dyn crate::card::TextEngine {
+        self.text.get_or_insert_with(crate::win::card::GdiText::new)
     }
 
     fn clipboard_write(&mut self, png: &[u8], dib: &[u8]) -> Result<()> {
@@ -165,11 +211,11 @@ impl Shell for WinShell {
             CopyTarget::System => {
                 crate::win::clipboard::write_image(CONTROL.get() as HWND, png, dib)
             }
-            CopyTarget::Synthetic { busy: true } => Err(NoeulError::new(
+            CopyTarget::Synthetic { busy: true, .. } => Err(NoeulError::new(
                 Code::ClipboardUnavailable,
                 "another program keeps the clipboard open (test hook)",
             )),
-            CopyTarget::Synthetic { busy: false } => Ok(()),
+            CopyTarget::Synthetic { busy: false, .. } => Ok(()),
         }
     }
 
@@ -758,12 +804,14 @@ pub fn run(opts: &RunOpts) -> Result<Value> {
             copy: if dev {
                 CopyTarget::Synthetic {
                     busy: std::env::var_os("NOEUL_DEV_CLIPBOARD").is_some_and(|v| v == "busy"),
+                    dir: std::env::var_os("NOEUL_DEV_CLIPBOARD_DIR").map(std::path::PathBuf::from),
                 }
             } else {
                 CopyTarget::System
             },
             detect_scope: if dev { dev_detect_scope() } else { Scope::All },
             uia: None,
+            text: None,
         },
         backend,
         mgr,
@@ -786,6 +834,7 @@ pub fn run(opts: &RunOpts) -> Result<Value> {
     });
     APP.with(|a| *a.borrow_mut() = Some(app));
     pinwnd::set_waker(Some(Box::new(wake)));
+    pinwnd::ignore_key_state(dev);
     overlay::set_waker(Some(Box::new(wake)));
 
     // IPC acceptor.

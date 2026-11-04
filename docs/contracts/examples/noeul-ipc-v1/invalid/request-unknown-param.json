@@ -10,6 +10,6 @@
       "height": 300
     },
     "pin": true,
-    "path": "C:\\leak.png"
+    "output_file": "C:\\leak.png"
   }
 }

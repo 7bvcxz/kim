@@ -44,9 +44,19 @@ pub struct Theme {
     pub background: Rgb,
     pub cursor: Rgb,
     pub selection: Rgb,
+    /// The background of search matches (Step 19), and of the current match with its text
+    /// colour (a light fill under dark text, so it differs from the others in lightness, not
+    /// only in hue).
+    pub search_match: Rgb,
+    pub search_current: Rgb,
+    pub search_current_text: Rgb,
     /// ANSI 0–7 and their bright variants 8–15.
     pub ansi: [Rgb; 16],
 }
+
+/// The `kim-dark` search tokens (`terminal.search-match`, `terminal.search-current`; checked
+/// against design/tokens.json by a test).
+const KIM_DARK_SEARCH: [&str; 2] = ["#4D3F1C", "#E8C27A"];
 
 /// The `kim-dark` terminal tokens in `design/tokens.json` order (checked against the file by a
 /// test): foreground, background, cursor, selection, then black … bright-white.
@@ -70,6 +80,9 @@ impl Theme {
             background: c(1),
             cursor: c(2),
             selection: c(3),
+            search_match: Rgb::hex(KIM_DARK_SEARCH[0]).unwrap_or(Rgb(0, 0, 0)),
+            search_current: Rgb::hex(KIM_DARK_SEARCH[1]).unwrap_or(Rgb(0, 0, 0)),
+            search_current_text: c(1),
             ansi,
         }
     }
@@ -92,6 +105,10 @@ impl Theme {
             background: window,
             cursor: text,
             selection: highlight,
+            // Matches in the highlight colour; the current one in reverse video.
+            search_match: highlight,
+            search_current: text,
+            search_current_text: window,
             ansi,
         }
     }
@@ -135,6 +152,9 @@ mod tests {
         assert_eq!(t.background, get("terminal.background"));
         assert_eq!(t.cursor, get("terminal.cursor"));
         assert_eq!(t.selection, get("terminal.selection"));
+        assert_eq!(t.search_match, get("terminal.search-match"));
+        assert_eq!(t.search_current, get("terminal.search-current"));
+        assert_eq!(t.search_current_text, get("terminal.background"));
         let names = [
             "black", "red", "green", "yellow", "blue", "magenta", "cyan", "white",
         ];

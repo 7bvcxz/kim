@@ -1,0 +1,9 @@
+{
+  "type": "request",
+  "id": 18,
+  "method": "pin.create",
+  "params": {
+    "source": "clipboard",
+    "as": "rtf"
+  }
+}

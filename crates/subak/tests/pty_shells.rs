@@ -762,6 +762,48 @@ fn explicit_programs_get_their_arguments_exactly_and_report_exit_codes() {
     );
 }
 
+/// Regression (found under build load in Step 73's CI run, fixed in Step 19): Windows takes an
+/// exiting process out of its job only after waking the threads that wait for its exit, so the
+/// Host saw the root of `cmd /c exit 42` still counted in its job, terminated the (empty) job and
+/// reported `forced: true`. Many short programs ending together must all be reported as ended by
+/// themselves, with their exit codes. (The race needs heavy contention to show here; the
+/// lagging count itself is reproduced deterministically by `host::tests`.)
+#[test]
+fn programs_that_end_by_themselves_are_never_reported_forced() {
+    let lab = Lab::start("settle");
+    let n = 24u64;
+    let names: Vec<String> = (0..n).map(|i| format!("quick{i}")).collect();
+    std::thread::scope(|s| {
+        for (i, name) in names.iter().enumerate() {
+            let lab = &lab;
+            s.spawn(move || {
+                let code = format!("exit {}", 40 + i);
+                let (c, doc) = lab.cli(&[
+                    "new",
+                    name,
+                    "--remain-on-exit",
+                    "--",
+                    "cmd.exe",
+                    "/d",
+                    "/c",
+                    &code,
+                ]);
+                assert_eq!(c, 0, "{doc}");
+            });
+        }
+    });
+    for name in &names {
+        wait_until(name, PS_START, || lab.info(name)["state"] == "stopped");
+    }
+    for (i, name) in names.iter().enumerate() {
+        let t = lab.info(name);
+        assert_eq!(t["last_exit"]["exit_code"], 40 + i as u64, "{name}: {t}");
+        assert_eq!(t["last_exit"]["cause"], "exited", "{name}");
+        assert_eq!(t["last_exit"]["forced"], false, "{name}: {t}");
+    }
+    eprintln!("EVIDENCE settle: {n} programs ended together, none reported forced");
+}
+
 #[test]
 fn startup_failures_are_precise_and_leave_nothing_behind() {
     let lab = Lab::start("fail");

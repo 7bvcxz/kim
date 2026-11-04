@@ -1,7 +1,9 @@
 # Subak scrollback and replay
 
-Status: **current** (implemented in Step 13; Windows only) · Decision:
-[ADR 0030](adr/0030-host-terminal-model-scrollback-and-replay.md), refining
+Status: **current** (implemented in Step 13; Windows only; searched and saved by the Subak
+window since Step 19, §4.1) · Decisions:
+[ADR 0030](adr/0030-host-terminal-model-scrollback-and-replay.md),
+[ADR 0048](adr/0048-subak-search-clipboard-and-links.md) (search, export), refining
 [ADR 0008](adr/0008-attach-replay-and-backpressure.md) · Requirements: `SUBAK-FR-001`,
 `SUBAK-FR-004`, `SUBAK-FR-012`, `SUBAK-FR-015`, `SUBAK-FR-042`, `SUBAK-SEC-010`, `SUBAK-SEC-011`,
 `KIM-SEC-013`, `KIM-NFR-001`
@@ -128,6 +130,25 @@ with their alternate screen.
   Measured: `hook` and `mcp` connections are refused all three with `unauthorized` (§8). Every
   connection is the Host's own user (the pipe's DACL and the token check, ADR 0019).
 
+### 4.1 Search and "Save output…" in the window (Step 19)
+
+The Subak window's view of a pane holds what this section's snapshot gave it — the screen and
+every retained history row — and keeps it current with the live stream, so the window searches
+that copy ([SUBAK_GUI §12](SUBAK_GUI.md), ADR 0048). There is no IPC method for searching: a
+search needs no round trip, sees exactly what the Host retained (including output printed while
+no window was attached), and the same access rules apply (only a `cli` or `gui` client ever
+receives history). The search reads history rows as text straight from their compact form
+(`Screen::history_text`, no cell decoding), joins soft-wrapped rows, matches with the `regex`
+crate under size, match-count and time caps (newest first), and keeps only the matches; nothing
+is copied into GPU memory. New output refreshes it incrementally: history rows never change, so
+only rows that entered the history since, and the screen, are searched again. The Host itself
+never searches (`crates/subak/tests/search_boundary.rs`). Measured: 15 006 rows searched in
+19.7 ms by the debug window; a 4 MiB history (37 108 rows) in 87 ms (debug), see SUBAK_GUI §12.7.
+
+"Save output…" writes the same rows to a file only on the user's request, after a question that
+reports what the secret detector of §6 found, with those values hidden unless the user chose to
+save exactly (§6, rule 2).
+
 ## 5. Load: slow clients, high volume, disconnect, idle
 
 - **The pane never waits.** The reader drains ConPTY continuously and only queues output.
@@ -157,8 +178,12 @@ where echo was not disabled, keys printed by mistake). The rules:
 
 1. **What is kept:** the screen(s) and at most `history_limit` rows / 4 MiB of history per pane
    (§1), and nothing else of the output.
-2. **Where:** only in the memory of the user's own Host process. Nothing of it is written to
-   disk, to a log, to the event stream or to any JSON document except an explicit capture. (Like
+2. **Where:** only in the memory of the user's own Host process (and the views of attached
+   clients). Nothing of it is written to disk, to a log, to the event stream or to any JSON
+   document except an explicit capture, or an explicit "Save output…" in the window (Step 19):
+   asked first, reporting the secret-looking values the detector of rule 5 found and hiding them
+   unless the user chose to save exactly, written only to the path the user chose. No output is
+   ever sent to a network service. (Like
    any process memory it can reach the Windows page file or a crash dump the user configured;
    the Host does not lock its pages.)
 3. **For how long:** until the row is evicted by newer output, the history is cleared
@@ -206,8 +231,8 @@ where echo was not disabled, keys printed by mistake). The rules:
   between pages (§4).
 - **Totals are per pane:** 256 Terminals × 4 MiB of history is the worst case (~1 GiB); there is
   no Host-wide cap (ADR 0030).
-- **No search** in history and no GUI scrollbar yet (Steps 16–25); `capture` piped to `findstr`
-  works today.
+- **Search** is the window's (Step 19, §4.1); the CLI has none of its own (`capture` piped to
+  `findstr` works), and tmux's copy-mode search is Step 24's. No GUI scrollbar yet.
 
 ## 8. Evidence
 

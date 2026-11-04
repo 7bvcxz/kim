@@ -1,0 +1,39 @@
+{
+  "type": "response",
+  "id": 17,
+  "result": {
+    "dry_run": false,
+    "source": "clipboard",
+    "pin": {
+      "id": "pin-9",
+      "rect": {
+        "x": 640,
+        "y": 120,
+        "width": 584,
+        "height": 212
+      },
+      "source": "clipboard",
+      "zoom": 100
+    },
+    "kind": "html",
+    "offered": [
+      "html",
+      "text"
+    ],
+    "pins": [
+      {
+        "id": "pin-9",
+        "rect": {
+          "x": 640,
+          "y": 120,
+          "width": 584,
+          "height": 212
+        },
+        "source": "clipboard",
+        "zoom": 100
+      }
+    ],
+    "skipped": 0,
+    "failed": 0
+  }
+}

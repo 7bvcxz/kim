@@ -1,6 +1,6 @@
 # Noeul UX specification
 
-Status: **current** (specification; Step 49 implemented the app foundation, [ADR 0023](adr/0023-noeul-app-foundation.md); Step 50 the `F1` selection overlay with `Enter` to pin, [ADR 0026](adr/0026-noeul-capture-overlay.md), see §4.5; Step 53 the floating pin engine, [ADR 0029](adr/0029-noeul-pin-engine.md), see §4.6; Step 51 the double-click-to-pin gesture, the toolbar, the selection menu, copy, save and the gesture settings, [ADR 0032](adr/0032-noeul-double-click-pin-and-outputs.md), see §4.7; Step 52 window and element detection, the magnifier, the precision keys, snapping and the rectangle history, [ADR 0035](adr/0035-noeul-smart-selection-and-precision.md), see §4.8; Step 56 annotation in the overlay and on pins, [ADR 0038](adr/0038-noeul-annotation.md), see §4.9; Step 57 mosaic, blur, the eraser and the solid redaction, [ADR 0041](adr/0041-noeul-privacy-tools.md), see §4.10; Step 54 the pin transforms, border resizing, outline and shadow, click-through with its ways back, thumbnails and groups, [ADR 0044](adr/0044-noeul-pin-transforms-and-control.md), see §4.11) · Step 48 ·
+Status: **current** (specification; Step 49 implemented the app foundation, [ADR 0023](adr/0023-noeul-app-foundation.md); Step 50 the `F1` selection overlay with `Enter` to pin, [ADR 0026](adr/0026-noeul-capture-overlay.md), see §4.5; Step 53 the floating pin engine, [ADR 0029](adr/0029-noeul-pin-engine.md), see §4.6; Step 51 the double-click-to-pin gesture, the toolbar, the selection menu, copy, save and the gesture settings, [ADR 0032](adr/0032-noeul-double-click-pin-and-outputs.md), see §4.7; Step 52 window and element detection, the magnifier, the precision keys, snapping and the rectangle history, [ADR 0035](adr/0035-noeul-smart-selection-and-precision.md), see §4.8; Step 56 annotation in the overlay and on pins, [ADR 0038](adr/0038-noeul-annotation.md), see §4.9; Step 57 mosaic, blur, the eraser and the solid redaction, [ADR 0041](adr/0041-noeul-privacy-tools.md), see §4.10; Step 54 the pin transforms, border resizing, outline and shadow, click-through with its ways back, thumbnails and groups, [ADR 0044](adr/0044-noeul-pin-transforms-and-control.md), see §4.11; Step 55 `F3` paste of images, image files, colours, HTML and text cards, drops and `noeul pin <file>`, [ADR 0047](adr/0047-noeul-clipboard-paste-and-rich-sources.md), see §4.12) · Step 48 ·
 Philosophy: [NOEUL_PHILOSOPHY](NOEUL_PHILOSOPHY.md) · Requirements: [NOEUL_REQUIREMENTS](NOEUL_REQUIREMENTS.md) ·
 Parity: [NOEUL_SNIPASTE_MATRIX](NOEUL_SNIPASTE_MATRIX.md) · Shortcuts: [HOTKEY_CONTRACT §13.3](HOTKEY_CONTRACT.md) ·
 Decision: [ADR 0021](adr/0021-noeul-product-definition.md)
@@ -150,7 +150,11 @@ neither the tray icon nor a `pins.clickable` key offers a way back) and "Move to
 (the sketch's Group submenu; joining another group is a `Ctrl`-drop onto one of its pins);
 "Zoom 100 %" became "Zoom 100 %, opaque". A pin made from an animated GIF ends the menu with a
 greyed "Animated GIF: first of N frames only". The pin's outline and shadow of §10 are drawn; the
-click-through marker is a badge in the picture's top-right corner.
+click-through marker is a badge in the picture's top-right corner. Step 55
+([ADR 0047](adr/0047-noeul-clipboard-paste-and-rich-sources.md), §4.12) added Copy text
+(`pin.copy-text`, `Ctrl+Shift+C`) on cards only, and, on a pin pasted from a clipboard that offered
+several kinds, one "Pin clipboard as: …" entry per other kind (Image, Image file, Color swatch,
+Formatted text (HTML), Plain text, File names) at the end of the menu.
 
 ### 3.4 Tray menu (optional tray icon)
 
@@ -219,7 +223,14 @@ and is not a setting yet.
 Small non-modal toasts near the pointer's monitor corner, 2 s, never stealing focus, announced to
 screen readers: "Pinned", "Copied", "Saved to Pictures\Noeul", "Nothing to pin", "F3 is used by
 another program". A capture requested by the CLI or an agent shows "Noeul captured a region
-(command line)" (NOEUL-SEC-010).
+(command line)" (NOEUL-SEC-010). Since Step 55 a paste that pins nothing says why without naming
+the content: "Nothing to pin.", "Nothing pinned: the copied content is marked private (for example
+by a password manager).", "The clipboard is in use by another program; try again.", "The picture
+could not be read (malformed or too large).", "That file is not on this PC; Noeul pins local files
+only."; a paste that pinned something may add "Pinned N of M files…", "This TIFF has N pages…",
+"This GIF has N frames…", "The text is long: the card shows its beginning…" or "Images in the
+copied HTML are shown as placeholders: Noeul never downloads anything." Notices are tray balloons:
+**with the tray icon off they are not shown in this build** (a toast window is not implemented).
 
 ## 4. The signature flow: precise rules
 
@@ -863,6 +874,115 @@ Evidence column). None of them was run by the Step 54 worker:
 - [ ] 15. `noeul config set pins.shadow off`: every pin loses its shadow at once (and can then only
   be resized by the 4 pixels inside its edge); `noeul config reset pins --yes` restores it.
 
+### 4.12 Step 55: clipboard paste, cards and file sources — rules and the manual check
+
+Step 55 ([ADR 0047](adr/0047-noeul-clipboard-paste-and-rich-sources.md)) makes `F3`
+(`paste.float`, also the tray's middle click) pin what the clipboard holds.
+
+**Rules.**
+
+1. **One read, only on a paste.** `F3`, "Pin clipboard as…" and `noeul pin --clipboard` read the
+   clipboard once, at that moment (retried for at most 500 ms when another program holds it);
+   nothing listens or polls. While the capture overlay is open, `F3` does nothing.
+2. **What is pinned, in this order:** an **image** (`PNG`, `CF_DIBV5`, `CF_DIB`, `GIF`, `JFIF`),
+   **image files** (copied in Explorer, or the text of one copied local path such as Explorer's
+   "Copy as path"; `[paste] paths`, on), a **colour value** (`#RGB`, `#RGBA`, `#RRGGBB`,
+   `#RRGGBBAA`, `rgb(…)`, `rgba(…)`, three integers 0–255, three numbers 0–1), **HTML**, **plain
+   text**, and the **names of copied non-image files** (`[paste] file_cards`, off). The pin's
+   menu offers the other kinds the clipboard had ("Pin clipboard as: …"), and
+   `noeul pin --clipboard --as text|html|color|image|image_file|files` chooses one from a script;
+   both read the clipboard again, once. HTML above 4 MiB (a whole document) is pinned as its
+   plain text unless HTML was asked for.
+3. **Pictures** are decoded by Noeul itself (PNG, JPEG, GIF, BMP, ICO, TIFF, TGA): alpha kept, an
+   embedded colour profile converted to sRGB, a photo's EXIF orientation applied; at most
+   128 MiB, 32767 pixels a side and 40 million pixels; a malformed or oversized picture pins
+   nothing ("could not be read"). An animated GIF shows its first frame, a TIFF its first page,
+   an icon its largest size, and a notice says so; GIFs do not play.
+4. **Cards** (text, HTML, colours, file names) are pictures made once, at the scale of the
+   monitor they land on, on the Kim surface (or the HTML's own background); they move, zoom,
+   turn, flip, fade, become thumbnails, copy and save as images, close and reopen like any pin.
+   `Ctrl+Shift+C` (`pin.copy-text`) copies a card's text back (all of it; a colour card copies its
+   HEX value). Content is at most 560 logical pixels wide; a long text ends with "… more is not
+   shown" after 240 lines.
+5. **HTML is rendered by Noeul's own sanitizer**: text and basic formatting, an editor's syntax
+   colours; no script, no style sheet, no frame, no form; every image is a placeholder
+   ("[image: alt]") and **nothing is ever downloaded**; a colour that would hide text (white on
+   white, transparent) is drawn in the card's text colour.
+6. **Files** — `noeul pin <file>`, copied image files, image files dropped on a pin — are read only
+   from local drives: never a network path or network drive, never a cloud placeholder whose data
+   is not on this PC (OneDrive "online-only"), never a link or a folder. At most 16 files of one
+   paste or drop are pinned, 24 logical pixels apart; the others are counted in a notice.
+7. **Private content is never pinned**: when the program that copied it (a password manager)
+   marked it for exclusion from clipboard history and monitors, Noeul pins nothing and says so.
+8. **Reports never contain content**: notices, `pin.list`, `noeul status` and every `--json`
+   result name kinds, pin IDs and error codes, never text, file names or paths.
+9. **From the command line** a clipboard paste works only through the running instance on the
+   caller's own unlocked interactive desktop (`desktop_unavailable` otherwise), never takes focus,
+   and is announced by a notice of the running Noeul ("Noeul pinned the clipboard (command
+   line)."); a dry run reads nothing. The setting to allow it silently or deny it is Step 62
+   (NOEUL-SEC-010).
+
+**Automated evidence** (nothing touches the user's clipboard: unit tests use in-memory snapshots;
+the real binary runs under the debug-build test hook, whose paste reads only the stand-in folder a
+test fills with synthesized formats; every picture and file is generated by the tests):
+
+| Area | Automated evidence |
+| --- | --- |
+| Each format, alpha, ICC, orientation | `crates/noeul/src/decode/tests.rs` every_format_decodes_with_its_alpha, formats_are_recognised_by_their_bytes_not_their_names, an_embedded_icc_profile_is_converted_to_srgb |
+| Invalid, oversized and decompression-bomb pictures | `crates/noeul/src/decode/tests.rs` oversized_pictures_and_decompression_bombs_are_refused_from_their_headers, malformed_pictures_fail_cleanly_in_every_format; `crates/noeul/src/app/paste_tests.rs` invalid_and_oversized_pictures_pin_nothing_and_leak_nothing; `crates/noeul/tests/paste.rs` bad_sources_fail_with_their_codes_and_leave_nothing |
+| Format priority, Pin clipboard as | `crates/noeul/src/paste/tests.rs` the_format_priority_is_image_file_color_html_text; `crates/noeul/src/app/paste_tests.rs` the_format_priority_and_pin_clipboard_as; `crates/noeul/tests/paste.rs` every_kind_pins_from_the_stand_in_clipboard |
+| Multi-image data (GIF frames, TIFF pages, ICO sizes, several files) | `crates/noeul/src/decode/tests.rs` multi_image_data_is_counted_without_decoding; `crates/noeul/src/paste/tests.rs` multi_file_pastes_are_bounded_and_local; `crates/noeul/src/app/paste_tests.rs` copied_image_files_are_pinned_and_others_counted |
+| File drop and path paste | `crates/noeul/src/win/pinwnd/tests.rs` files_dropped_on_a_pin_are_reported_with_the_point (a synthetic `HDROP` sent to a real off-screen pin); `crates/noeul/src/app/paste_tests.rs` files_dropped_on_a_pin_are_pinned_there, a_copied_path_pins_its_image_file_and_network_paths_are_text, pin_create_from_a_file; `crates/noeul/src/win/files.rs` only_local_image_files_are_read |
+| Empty, held and private clipboards | `crates/noeul/src/paste/tests.rs` an_empty_clipboard_or_one_with_nothing_pinnable_takes_nothing, private_content_is_refused_before_anything_is_read; `crates/noeul/src/app/paste_tests.rs` empty_busy_and_private_clipboards_pin_nothing |
+| Malicious HTML: script, remote images, CSS tricks, huge nesting | `crates/noeul/src/html/tests.rs` (9 tests); `crates/noeul/src/card/tests.rs` illegible_colours_fall_back_to_the_text_colour; `crates/noeul/tests/paste.rs` html_with_remote_resources_makes_no_request (a 127.0.0.1 listener never sees a connection) |
+| Colour parsing | `crates/noeul/src/paste/tests.rs` colors_parse_in_every_documented_notation_and_nothing_else; `crates/noeul/src/html/tests.rs` colours_parse_like_css_but_never_translucent |
+| Secrets never in reports | `crates/noeul/src/app/paste_tests.rs` pasted_content_never_appears_in_reports |
+| Cards transform and close like pins; Copy text | `crates/noeul/src/app/paste_tests.rs` cards_transform_and_close_like_pins, copy_text_returns_the_cards_text; `crates/noeul/tests/paste.rs` a_card_turns_copies_its_text_and_reopens; `crates/noeul/src/win/card.rs` gdi_draws_every_script_with_fallback, a_card_renders_with_gdi |
+| e2e | `e2e/tests/step55_noeul_clipboard.rs` (runs only through `cargo xtask e2e`) |
+
+These steps need the maintainer, on the real desktop with real applications and the real
+clipboard (record the Windows build, the applications and their versions, and the date in the
+Step report and the matrix Evidence column). **None of them was run by the Step 55 worker**: the
+automated runs never touch the user's clipboard.
+
+- [ ] 1. `cargo build --release -p noeul`, then `target\release\noeul.exe start` (default profile,
+  tray icon on, `F3` free).
+- [ ] 2. In a browser, right-click an image → Copy image; press `F3`: the image is pinned at the
+  pointer at 100 % (zoomed out when larger than the screen) with its transparency. Right-click
+  the pin: "Pin clipboard as: Formatted text (HTML)" exists when the browser also offered HTML;
+  choosing it pins a card whose image is a placeholder.
+- [ ] 3. Select a paragraph with a link and bold text on a web page, `Ctrl+C`, `F3`: an HTML card
+  with the bold text and the underlined link, no image loaded (with a network monitor such as
+  Resource Monitor open, `noeul.exe` makes no network connection). `Ctrl+Shift+C` on the card,
+  paste into Notepad: the paragraph's text.
+- [ ] 4. In Visual Studio Code, copy a few lines of code, `F3`: a card with the editor's
+  background and syntax colours, indentation kept, in Consolas.
+- [ ] 5. In Excel, copy a range of cells, `F3`: Excel offers a picture of the cells, which is
+  pinned; the menu offers "Pin clipboard as: Formatted text (HTML)" and "Plain text".
+- [ ] 6. In Explorer, select three image files (PNG, JPEG, GIF) and a `.docx`, `Ctrl+C`, `F3`:
+  three pins, cascading from the pointer; a notice "Pinned 3 of 4 files…". Shift+right-click
+  one image → Copy as path, `F3`: that image is pinned.
+- [ ] 7. Drag an image file from Explorer onto a pin: it is pinned where it was dropped.
+- [ ] 8. In Paint, select part of a picture, `Ctrl+C`, `F3`: the same pixels are pinned.
+- [ ] 9. Type `#1E90FF` in Notepad, copy it, `F3`: a swatch card with `#1E90FF` and
+  `rgb(30, 144, 255)`; `Ctrl+Shift+C` copies `#1E90FF`. Try `255, 136, 0` and `0.5 0.5 1.0`.
+- [ ] 10. Copy Korean text from Notepad (`노을 카드 테스트`), `F3`: a text card in Malgun Gothic,
+  no boxes or question marks.
+- [ ] 11. Copy a password from a password manager (KeePass, 1Password, Bitwarden), `F3`: nothing
+  is pinned and the notice says the content is marked private. (Note the program and version;
+  not every password manager marks its copies.)
+- [ ] 12. Empty the clipboard (copy nothing after a restart, or Win+V → Clear all) and press `F3`:
+  "Nothing to pin."; a held clipboard (another program keeping it open) gives "in use by another
+  program".
+- [ ] 13. With a OneDrive file that is "online-only" (cloud icon), Copy as path, `F3`: nothing is
+  pinned and nothing is downloaded (the cloud icon stays); the notice says the file is not on this
+  PC.
+- [ ] 14. Turn, fade and thumbnail a text card (`1`, `Ctrl+Minus`, `T`), close it with `Esc` and
+  reopen it from the tray: it comes back as the same card; `Ctrl+Shift+C` still copies its text.
+- [ ] 15. `noeul pin C:\path\to\picture.png` and `noeul pin --clipboard --as text --json` in a
+  console: pinned without taking focus, a notice "Noeul pinned … (command line)" appears, and the
+  JSON names kinds and pin IDs only.
+
 ## 5. Toolbar, menus and the tray
 
 - **Toolbar order** (tab order): Pin · Copy · Save · tools (N3) · Undo · Redo · Cancel. Pin is the
@@ -888,7 +1008,7 @@ disabled and reset (HOTKEY_CONTRACT §8–§12).
 | Action | Default | Scope | What it does |
 | --- | --- | --- | --- |
 | `capture.region` | `F1` | global (or app) | Start a region capture |
-| `paste.float` | `F3` | global (or app) | Pin the clipboard |
+| `paste.float` | `F3` | global (or app) | Pin the clipboard (an image, image files, a colour, HTML or text; Step 55) |
 | `settings.open` | `Ctrl+Comma` | app | Open settings |
 
 Planned global actions without defaults (show or hide all pins, make all pins clickable, reopen

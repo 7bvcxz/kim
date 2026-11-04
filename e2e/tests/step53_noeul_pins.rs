@@ -235,9 +235,11 @@ fn a_the_pin_engine_is_discoverable_headlessly() {
     ] {
         assert!(ids.contains(&id), "{id} is listed: {ids:?}");
     }
-    for planned in ["pin.thumbnail", "pin.click-through", "pin.opacity-up"] {
-        assert!(!ids.contains(&planned), "{planned} is not in this build");
-    }
+    // The transforms shipped in Step 54; a text card's copy-text is still planned (Step 55).
+    assert!(
+        !ids.contains(&"pin.copy-text"),
+        "pin.copy-text is not in this build"
+    );
     for args in [
         &["pin", "hide", "--all"][..],
         &["pin", "show", "--all", "--on-screen"],

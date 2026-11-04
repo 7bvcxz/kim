@@ -1,0 +1,12 @@
+{
+  "type": "response",
+  "id": 3,
+  "result": {
+    "dry_run": true,
+    "closed": [
+      "pin-1",
+      "pin-3"
+    ],
+    "reopenable": "pin-3"
+  }
+}

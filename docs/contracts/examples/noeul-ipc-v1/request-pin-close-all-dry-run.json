@@ -1,0 +1,9 @@
+{
+  "type": "request",
+  "id": 3,
+  "method": "pin.close",
+  "params": {
+    "all": true,
+    "dry_run": true
+  }
+}

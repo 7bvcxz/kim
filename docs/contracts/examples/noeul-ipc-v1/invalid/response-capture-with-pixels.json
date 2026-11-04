@@ -1,0 +1,25 @@
+{
+  "type": "response",
+  "id": 2,
+  "result": {
+    "dry_run": false,
+    "region": {
+      "x": 0,
+      "y": 0,
+      "width": 400,
+      "height": 300
+    },
+    "pin": {
+      "id": "pin-1",
+      "rect": {
+        "x": 0,
+        "y": 0,
+        "width": 400,
+        "height": 300
+      },
+      "source": "capture"
+    },
+    "desktop": "available",
+    "pixels": "iVBORw0KGgo="
+  }
+}

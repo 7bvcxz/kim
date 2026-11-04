@@ -1,0 +1,8 @@
+{
+  "type": "response",
+  "id": 2,
+  "error": {
+    "code": "screen_on_fire",
+    "message": "?"
+  }
+}

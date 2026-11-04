@@ -1,0 +1,422 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/hellomouv/kim/blob/main/docs/contracts/schemas/noeul-ipc-v1.schema.json",
+  "title": "Noeul IPC v1 message",
+  "description": "One JSON frame between the noeul CLI and the running Noeul instance (4-byte little-endian length, then the UTF-8 JSON object; at most 65536 bytes). See docs/adr/0023-noeul-app-foundation.md §4 and crates/noeul/src/ipc.rs. Errors carry registered CLI error codes (docs/CLI_CONTRACT.md §6). Pictures never cross the pipe; results carry IDs, geometry and counts only (NOEUL-SEC-008).",
+  "oneOf": [
+    { "$ref": "#/$defs/hello" },
+    { "$ref": "#/$defs/welcome" },
+    { "$ref": "#/$defs/connection_error" },
+    { "$ref": "#/$defs/request" },
+    { "$ref": "#/$defs/response_ok" },
+    { "$ref": "#/$defs/response_err" }
+  ],
+  "$defs": {
+    "u64": { "type": "integer", "minimum": 0 },
+    "version_string": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+([-+][0-9A-Za-z.-]+)?$" },
+    "timestamp": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" },
+    "pin_id": { "type": "string", "pattern": "^pin-[1-9][0-9]*$" },
+    "action_id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)+$" },
+    "error_code": {
+      "description": "Registered CLI error codes the instance may answer with.",
+      "enum": [
+        "io", "internal", "permission_denied", "usage", "protocol_error", "busy", "timeout",
+        "unsupported_platform", "confirmation_required", "cancelled",
+        "noeul_incompatible", "pin_not_found", "nothing_to_pin", "image_invalid",
+        "desktop_unavailable", "clipboard_unavailable", "noeul_unresponsive",
+        "hotkeys_invalid", "hotkeys_from_newer_version"
+      ]
+    },
+    "error": {
+      "type": "object",
+      "required": ["code", "message"],
+      "additionalProperties": false,
+      "properties": {
+        "code": { "$ref": "#/$defs/error_code" },
+        "message": { "type": "string", "minLength": 1 },
+        "hint": { "type": "string" },
+        "details": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "rect": {
+      "description": "Device pixels of the virtual desktop.",
+      "type": "object",
+      "required": ["x", "y", "width", "height"],
+      "additionalProperties": false,
+      "properties": {
+        "x": { "type": "integer", "minimum": -1000000, "maximum": 1000000 },
+        "y": { "type": "integer", "minimum": -1000000, "maximum": 1000000 },
+        "width": { "type": "integer", "minimum": 1, "maximum": 32767 },
+        "height": { "type": "integer", "minimum": 1, "maximum": 32767 }
+      }
+    },
+    "hello": {
+      "type": "object",
+      "required": ["type", "protocol", "client"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "hello" },
+        "protocol": {
+          "type": "object",
+          "required": ["min", "max"],
+          "additionalProperties": false,
+          "properties": {
+            "min": { "type": "integer", "minimum": 1 },
+            "max": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "client": {
+          "type": "object",
+          "required": ["name", "version"],
+          "additionalProperties": false,
+          "properties": {
+            "name": { "type": "string", "minLength": 1, "maxLength": 64 },
+            "version": { "$ref": "#/$defs/version_string" },
+            "pid": { "$ref": "#/$defs/u64" }
+          }
+        }
+      }
+    },
+    "welcome": {
+      "type": "object",
+      "required": ["type", "protocol", "instance"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "welcome" },
+        "protocol": { "type": "integer", "minimum": 1 },
+        "instance": {
+          "type": "object",
+          "required": ["pid", "version", "started_at"],
+          "additionalProperties": false,
+          "properties": {
+            "pid": { "$ref": "#/$defs/u64" },
+            "version": { "$ref": "#/$defs/version_string" },
+            "started_at": { "$ref": "#/$defs/timestamp" }
+          }
+        }
+      }
+    },
+    "connection_error": {
+      "description": "Sent instead of a welcome (refused handshake) or after a malformed frame; the sender closes the connection.",
+      "type": "object",
+      "required": ["type", "error"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "error" },
+        "error": { "$ref": "#/$defs/error" }
+      }
+    },
+    "request": {
+      "type": "object",
+      "required": ["type", "id", "method"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "request" },
+        "id": { "type": "integer", "minimum": 1 },
+        "method": { "enum": ["status", "activate", "capture", "pin.list", "pin.close", "pin.reopen", "hotkeys.reload", "quit"] },
+        "params": { "$ref": "#/$defs/params" }
+      }
+    },
+    "params": {
+      "description": "Parameters of every method (absent flags are false). capture: region and pin (required); pin.close: id or all; quit: force.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "dry_run": { "type": "boolean" },
+        "region": { "$ref": "#/$defs/rect" },
+        "pin": { "type": "boolean" },
+        "id": { "$ref": "#/$defs/pin_id" },
+        "all": { "type": "boolean" },
+        "force": { "type": "boolean" },
+        "reason": { "enum": ["start"] }
+      }
+    },
+    "response_ok": {
+      "type": "object",
+      "required": ["type", "id", "result"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "response" },
+        "id": { "type": "integer", "minimum": 1 },
+        "result": {
+          "oneOf": [
+            { "$ref": "#/$defs/status_result" },
+            { "$ref": "#/$defs/activate_result" },
+            { "$ref": "#/$defs/capture_result" },
+            { "$ref": "#/$defs/pin_list_result" },
+            { "$ref": "#/$defs/pin_close_result" },
+            { "$ref": "#/$defs/pin_reopen_result" },
+            { "$ref": "#/$defs/reload_result" },
+            { "$ref": "#/$defs/quit_result" }
+          ]
+        }
+      }
+    },
+    "response_err": {
+      "type": "object",
+      "required": ["type", "id", "error"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "response" },
+        "id": { "type": "integer", "minimum": 0 },
+        "error": { "$ref": "#/$defs/error" }
+      }
+    },
+    "desktop": {
+      "type": "object",
+      "required": ["state", "virtual_rect", "monitors"],
+      "additionalProperties": false,
+      "properties": {
+        "state": { "enum": ["available", "locked", "disconnected", "non_interactive", "no_display", "unsupported_platform"] },
+        "virtual_rect": { "oneOf": [{ "$ref": "#/$defs/rect" }, { "type": "null" }] },
+        "monitors": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["rect", "primary"],
+            "additionalProperties": false,
+            "properties": { "rect": { "$ref": "#/$defs/rect" }, "primary": { "type": "boolean" } }
+          }
+        }
+      }
+    },
+    "hotkeys_state": {
+      "description": "Global shortcut state of the running instance (or, offline, from the files). Conflicts are hotkeys-cli-v1 conflict objects.",
+      "type": "object",
+      "required": ["enabled", "config", "problem", "registrations"],
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "off_reason": { "oneOf": [{ "enum": ["--no-hotkeys", "KIM_NO_HOTKEYS", "safe_mode", "disabled"] }, { "type": "null" }] },
+        "config": {
+          "type": "object",
+          "required": ["path", "state"],
+          "additionalProperties": false,
+          "properties": {
+            "path": { "type": "string", "minLength": 1 },
+            "state": { "enum": ["default", "user", "invalid", "newer_version"] }
+          }
+        },
+        "problem": { "type": ["string", "null"] },
+        "registrations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["action", "keys", "status", "message"],
+            "additionalProperties": false,
+            "properties": {
+              "action": { "$ref": "#/$defs/action_id" },
+              "keys": { "type": "string", "minLength": 1 },
+              "status": { "enum": ["registered", "taken", "unsupported", "failed"] },
+              "message": { "type": ["string", "null"] }
+            }
+          }
+        },
+        "conflicts": { "type": "array", "items": { "type": "object" } },
+        "planned": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["action", "default", "step"],
+            "additionalProperties": false,
+            "properties": {
+              "action": { "$ref": "#/$defs/action_id" },
+              "default": { "type": "string" },
+              "step": { "type": "integer", "minimum": 50 }
+            }
+          }
+        }
+      }
+    },
+    "settings_state": {
+      "type": "object",
+      "required": ["path", "state", "tray_icon", "problems"],
+      "additionalProperties": false,
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "state": { "enum": ["default", "user", "invalid", "newer_version"] },
+        "tray_icon": { "type": "boolean" },
+        "problems": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "status_result": {
+      "description": "`status`. Also the `data` of `noeul status --json` while Noeul runs.",
+      "type": "object",
+      "required": ["running", "instance", "desktop", "capture_backend", "pins", "captures", "memory", "hotkeys", "tray", "settings", "last_action"],
+      "additionalProperties": false,
+      "properties": {
+        "running": { "const": true },
+        "instance": {
+          "type": "object",
+          "required": ["pid", "version", "started_at", "uptime_s", "endpoint", "session"],
+          "additionalProperties": false,
+          "properties": {
+            "pid": { "$ref": "#/$defs/u64" },
+            "version": { "$ref": "#/$defs/version_string" },
+            "started_at": { "$ref": "#/$defs/timestamp" },
+            "uptime_s": { "$ref": "#/$defs/u64" },
+            "endpoint": { "type": "string", "pattern": "^\\\\\\\\\\.\\\\pipe\\\\[^\\\\/]{1,200}$" },
+            "session": { "$ref": "#/$defs/u64" }
+          }
+        },
+        "desktop": { "$ref": "#/$defs/desktop" },
+        "capture_backend": { "enum": ["gdi", "unsupported"] },
+        "pins": {
+          "type": "object",
+          "required": ["open", "reopenable"],
+          "additionalProperties": false,
+          "properties": {
+            "open": { "$ref": "#/$defs/u64" },
+            "reopenable": { "oneOf": [{ "$ref": "#/$defs/pin_id" }, { "type": "null" }] }
+          }
+        },
+        "captures": {
+          "type": "object",
+          "required": ["started", "pinned", "cancelled", "open"],
+          "additionalProperties": false,
+          "properties": {
+            "started": { "$ref": "#/$defs/u64" },
+            "pinned": { "$ref": "#/$defs/u64" },
+            "cancelled": { "$ref": "#/$defs/u64" },
+            "open": { "type": "boolean" }
+          }
+        },
+        "memory": {
+          "description": "Image buffers the instance holds (frames and bytes), a local metric (ADR 0012).",
+          "type": "object",
+          "required": ["frames", "bytes", "peak_bytes"],
+          "additionalProperties": false,
+          "properties": {
+            "frames": { "$ref": "#/$defs/u64" },
+            "bytes": { "$ref": "#/$defs/u64" },
+            "peak_bytes": { "$ref": "#/$defs/u64" }
+          }
+        },
+        "hotkeys": { "$ref": "#/$defs/hotkeys_state" },
+        "tray": {
+          "type": "object",
+          "required": ["enabled", "shown"],
+          "additionalProperties": false,
+          "properties": { "enabled": { "type": "boolean" }, "shown": { "type": "boolean" } }
+        },
+        "settings": { "$ref": "#/$defs/settings_state" },
+        "last_action": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "required": ["action", "result"],
+              "additionalProperties": false,
+              "properties": { "action": { "type": "string" }, "result": { "type": "string" } }
+            }
+          ]
+        }
+      }
+    },
+    "offline_status": {
+      "description": "The `data` of `noeul status --json` when no instance runs (not an IPC message).",
+      "type": "object",
+      "required": ["running", "desktop", "capture_backend", "hotkeys", "settings"],
+      "additionalProperties": false,
+      "properties": {
+        "running": { "const": false },
+        "desktop": { "$ref": "#/$defs/desktop" },
+        "capture_backend": { "enum": ["gdi", "unsupported"] },
+        "hotkeys": { "$ref": "#/$defs/hotkeys_state" },
+        "settings": { "$ref": "#/$defs/settings_state" }
+      }
+    },
+    "activate_result": {
+      "type": "object",
+      "required": ["activated", "pid", "settings_window"],
+      "additionalProperties": false,
+      "properties": {
+        "activated": { "const": true },
+        "pid": { "$ref": "#/$defs/u64" },
+        "settings_window": { "enum": ["planned", "opened"] }
+      }
+    },
+    "pin_ref": {
+      "type": "object",
+      "required": ["id", "rect", "source"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/pin_id" },
+        "rect": { "$ref": "#/$defs/rect" },
+        "source": { "enum": ["capture", "clipboard"] }
+      }
+    },
+    "capture_result": {
+      "type": "object",
+      "required": ["dry_run", "region", "pin", "desktop"],
+      "additionalProperties": false,
+      "properties": {
+        "dry_run": { "type": "boolean" },
+        "region": { "$ref": "#/$defs/rect" },
+        "pin": { "oneOf": [{ "$ref": "#/$defs/pin_ref" }, { "type": "null" }] },
+        "desktop": { "const": "available" }
+      }
+    },
+    "pin_list_result": {
+      "type": "object",
+      "required": ["pins", "reopenable"],
+      "additionalProperties": false,
+      "properties": {
+        "pins": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "rect", "source", "created_at"],
+            "additionalProperties": false,
+            "properties": {
+              "id": { "$ref": "#/$defs/pin_id" },
+              "rect": { "$ref": "#/$defs/rect" },
+              "source": { "enum": ["capture", "clipboard"] },
+              "created_at": { "$ref": "#/$defs/timestamp" }
+            }
+          }
+        },
+        "reopenable": { "oneOf": [{ "$ref": "#/$defs/pin_id" }, { "type": "null" }] }
+      }
+    },
+    "pin_close_result": {
+      "type": "object",
+      "required": ["dry_run", "closed", "reopenable"],
+      "additionalProperties": false,
+      "properties": {
+        "dry_run": { "type": "boolean" },
+        "closed": { "type": "array", "items": { "$ref": "#/$defs/pin_id" } },
+        "reopenable": { "oneOf": [{ "$ref": "#/$defs/pin_id" }, { "type": "null" }] }
+      }
+    },
+    "pin_reopen_result": {
+      "type": "object",
+      "required": ["dry_run", "pin"],
+      "additionalProperties": false,
+      "properties": {
+        "dry_run": { "type": "boolean" },
+        "pin": { "$ref": "#/$defs/pin_id" }
+      }
+    },
+    "reload_result": {
+      "type": "object",
+      "required": ["reloaded", "problem", "hotkeys"],
+      "additionalProperties": false,
+      "properties": {
+        "reloaded": { "type": "boolean" },
+        "problem": { "type": ["string", "null"] },
+        "hotkeys": { "$ref": "#/$defs/hotkeys_state" }
+      }
+    },
+    "quit_result": {
+      "type": "object",
+      "required": ["dry_run", "quitting", "closed_pins"],
+      "additionalProperties": false,
+      "properties": {
+        "dry_run": { "type": "boolean" },
+        "quitting": { "type": "boolean" },
+        "closed_pins": { "$ref": "#/$defs/u64" }
+      }
+    }
+  }
+}

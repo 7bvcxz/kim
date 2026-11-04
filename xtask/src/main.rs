@@ -27,7 +27,7 @@ COMMANDS:
                       pass, examples/<name>/invalid/ must fail) and recompute the hotkey
                       conflict scenarios with the reference checker; cross-check the
                       Ddalgak rule examples (DDALGAK_RULE_MODEL §8)
-    deps-check        Fail if a headless package (kim, subak) depends on GUI crates (ADR 0014)
+    deps-check        Fail if kim, kim-hotkeys, noeul or subak depends on GUI crates (ADR 0014, 0023)
     design-check [--verbose]
                       Check design/tokens.json: colors and declared WCAG contrast pairs
     catalog-keygen --out <file>
@@ -255,6 +255,8 @@ fn run_e2e(root: &Path, force: bool) -> Result<(), String> {
             "--package",
             "subak",
             "--package",
+            "noeul",
+            "--package",
             "ddalgak",
         ],
     )?;
@@ -263,12 +265,14 @@ fn run_e2e(root: &Path, force: bool) -> Result<(), String> {
     cargo(root, &["build", "--package", "kim", "--package", "ddalgak"])?;
     let bin_dir = root.join("target").join("release");
     let cargo_bin = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-    println!("$ cargo test --package kim-e2e -- --ignored --test-threads=1");
+    // --no-fail-fast: one failing scenario file must not hide the results of the others.
+    println!("$ cargo test --package kim-e2e --no-fail-fast -- --ignored --test-threads=1");
     let status = Command::new(cargo_bin)
         .args([
             "test",
             "--package",
             "kim-e2e",
+            "--no-fail-fast",
             "--",
             "--ignored",
             "--test-threads=1",

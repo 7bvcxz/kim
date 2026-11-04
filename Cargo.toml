@@ -1,8 +1,8 @@
 [workspace]
 resolver = "3"
-members = ["crates/ddalgak", "crates/kim", "crates/kim-hotkeys", "crates/kim-manager", "crates/subak", "xtask", "e2e"]
+members = ["crates/ddalgak", "crates/kim", "crates/kim-hotkeys", "crates/kim-manager", "crates/noeul", "crates/subak", "xtask", "e2e"]
 # `cargo build` / `cargo test` at the root never touch the e2e suite (AGENTS.md §4).
-default-members = ["crates/ddalgak", "crates/kim", "crates/kim-hotkeys", "crates/kim-manager", "crates/subak", "xtask"]
+default-members = ["crates/ddalgak", "crates/kim", "crates/kim-hotkeys", "crates/kim-manager", "crates/noeul", "crates/subak", "xtask"]
 
 [workspace.package]
 edition = "2024"

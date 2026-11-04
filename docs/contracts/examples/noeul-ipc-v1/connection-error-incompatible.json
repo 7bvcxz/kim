@@ -1,0 +1,7 @@
+{
+  "type": "error",
+  "error": {
+    "code": "noeul_incompatible",
+    "message": "this Noeul speaks IPC v1..v1, the client v2..v3"
+  }
+}

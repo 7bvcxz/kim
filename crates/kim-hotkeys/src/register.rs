@@ -193,7 +193,17 @@ impl Registrar {
     /// Starts the registration thread. Registers nothing.
     pub fn start() -> Result<Registrar, RegisterError> {
         Ok(Registrar {
-            inner: imp::Inner::start()?,
+            inner: imp::Inner::start(None)?,
+        })
+    }
+
+    /// Like [`Registrar::start`], and `waker` runs on the registration thread right after each
+    /// press is queued, so an event loop that also waits for other things (a GUI message loop)
+    /// learns about a press without polling and then takes it with
+    /// `next_press(Duration::ZERO)`. The waker must not block.
+    pub fn start_with_waker(waker: Box<dyn Fn() + Send>) -> Result<Registrar, RegisterError> {
+        Ok(Registrar {
+            inner: imp::Inner::start(Some(waker))?,
         })
     }
 
@@ -334,13 +344,13 @@ mod imp {
     const REPLY: Duration = Duration::from_secs(5);
 
     impl Inner {
-        pub(super) fn start() -> Result<Inner, RegisterError> {
+        pub(super) fn start(waker: Option<Box<dyn Fn() + Send>>) -> Result<Inner, RegisterError> {
             let (cmd_tx, cmd_rx) = channel::<Cmd>();
             let (press_tx, press_rx) = channel::<i32>();
             let (ready_tx, ready_rx) = channel::<u32>();
             let join = std::thread::Builder::new()
                 .name("kim-hotkeys".into())
-                .spawn(move || run(&cmd_rx, &press_tx, &ready_tx))
+                .spawn(move || run(&cmd_rx, &press_tx, &ready_tx, waker.as_deref()))
                 .map_err(|_| RegisterError::Stopped)?;
             let thread_id = ready_rx
                 .recv_timeout(REPLY)
@@ -404,7 +414,12 @@ mod imp {
 
     /// The registration thread: a plain message loop that sleeps in `GetMessageW` (no polling,
     /// no idle wake-ups, `KIM-NFR-020`).
-    fn run(cmds: &Receiver<Cmd>, presses: &Sender<i32>, ready: &Sender<u32>) {
+    fn run(
+        cmds: &Receiver<Cmd>,
+        presses: &Sender<i32>,
+        ready: &Sender<u32>,
+        waker: Option<&(dyn Fn() + Send)>,
+    ) {
         // SAFETY: MSG is plain data; all-zero is a valid value for an out-parameter.
         let mut msg: MSG = unsafe { std::mem::zeroed() };
         // SAFETY: creates this thread's message queue (documented PeekMessage behavior) so that
@@ -423,6 +438,9 @@ mod imp {
             match msg.message {
                 WM_HOTKEY => {
                     let _ = presses.send(i32::try_from(msg.wParam).unwrap_or(-1));
+                    if let Some(w) = waker {
+                        w();
+                    }
                 }
                 WM_KIM_COMMAND => {
                     while let Ok(cmd) = cmds.try_recv() {
@@ -491,7 +509,7 @@ mod imp {
     pub(super) struct Inner;
 
     impl Inner {
-        pub(super) fn start() -> Result<Inner, RegisterError> {
+        pub(super) fn start(_waker: Option<Box<dyn Fn() + Send>>) -> Result<Inner, RegisterError> {
             Err(RegisterError::PlatformUnsupported)
         }
         pub(super) fn register(

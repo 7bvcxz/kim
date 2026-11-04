@@ -1,0 +1,9 @@
+{
+  "type": "response",
+  "id": 4,
+  "error": {
+    "code": "confirmation_required",
+    "message": "2 pin(s) are open; quitting closes them, and pins are not backed up",
+    "hint": "re-run with --yes, or --dry-run to preview"
+  }
+}

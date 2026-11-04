@@ -49,6 +49,7 @@ flowchart LR
 | Subak Host | `subak.exe host serve` | Owns Terminals/Windows/Panes, ConPTYs, jobs, VT state, history, state store, IPC server, metrics | SUBAK-FR-001…004, SUBAK-FR-016, SUBAK-FR-040 |
 | Subak GUI | `subak-gui.exe` (Steps 16–18) | Tabbed terminal window, floating icon/tray, session manager; pure client | SUBAK-FR-030…035 |
 | Subak MCP | later (Step 37) | Opt-in local MCP adapter over the same IPC | SUBAK-FR-062 |
+| Noeul | `noeul.exe` / `crates/noeul` (Step 49 foundation, [ADR 0023](adr/0023-noeul-app-foundation.md)) | Screenshot and floating-pin tool: one per-user instance (`noeul start`) owning pins, the optional tray icon and its global hotkeys; headless CLI that controls it over its own identity-checked pipe (Noeul IPC v1); plain Win32, GDI capture on request | NOEUL-FR-001…003, NOEUL-FR-110…114, NOEUL-SEC-001…012 |
 
 ### 2.1 Host internals
 
@@ -108,10 +109,17 @@ stateDiagram-v2
 
 ### 4.2 Terminal
 
+The implemented state machine (Step 10: `starting`, `running`, `stopping`, `stopped`, `failed`)
+and its transitions are in [SESSION_MODEL §2](SESSION_MODEL.md); `restorable` and `unknown` below
+arrive with persistence and recovery (Steps 29–30), and "start (respawn)" of a stopped Terminal
+with Step 30.
+
 | State | Meaning | How it is entered | Allowed operations |
 | --- | --- | --- | --- |
+| `starting` | Ids and name reserved, pane process being started | create | info, rename |
 | `running` | ≥ 1 pane process alive | create, start, restore | attach, input, rename, split, stop, kill |
-| `stopped` | Terminal kept, no live process (all exited with remain-on-exit, or `subak stop`) | last process ends while kept; explicit stop | start (respawn panes), rename, delete |
+| `stopping` | Its processes are being ended | stop, kill, host stop, or its program exited | info, rename (a kill escalates a stop) |
+| `stopped` | Terminal kept, no live process (all exited with remain-on-exit, or `subak terminal stop`) | last process ends while kept; explicit stop | start (respawn panes; Step 30), rename, delete |
 | `restorable` | Loaded from state after a Host restart/reboot; old processes are gone | Host start with persisted Terminals | restore (dry-run or confirmed), rename, delete |
 | `failed` | Last start/restore failed; reason kept | spawn failure | retry, edit profile, delete |
 | `unknown` | State cannot be trusted (e.g. written by a newer Subak version) | Host start with unreadable/newer state | inspect, delete only with `--force` |
@@ -147,17 +155,25 @@ pane's size owner, the next most recently active client becomes owner
 
 | Intent | CLI | GUI | Processes | Stored Terminal |
 | --- | --- | --- | --- | --- |
-| Stop looking | `subak detach`, `Ctrl+B d`, close console window | close window / quit / `Ctrl+B d` / crash | unaffected | unaffected |
-| Look again | `subak attach <target>` | open tab / session manager | unaffected | unaffected |
-| Hide one tab | — | tab menu "Hide tab" | unaffected | unaffected |
-| End processes, keep Terminal | `subak stop <t>` (graceful, then forced after timeout) | session manager "Stop" | ended | kept as `stopped` |
-| End Terminal (tmux kill-session) | `subak kill <t>` (`--force` needed non-interactively when busy) | `Ctrl+W` / "Close Terminal" (confirms when busy) | ended | removed |
-| Remove a dead Terminal record | `subak rm <t>` (only `stopped`/`restorable`/`failed`) | session manager "Delete" | none running | removed |
-| Kill pane / window | `subak kill <t:w.p>` | `Ctrl+B x` / `Ctrl+B &` (confirm) | that pane/window only | topology updated |
+Implemented in Step 10 for Terminals; the full rules (consent, the busy guard, races) are in
+[SESSION_MODEL §4](SESSION_MODEL.md) and [ADR 0020](adr/0020-terminal-session-lifecycle.md).
+There is no `close` verb: every "close" in a UI is one of these rows.
+
+| Intent | CLI | GUI (Steps 16–18) | Processes | Stored Terminal |
+| --- | --- | --- | --- | --- |
+| Stop looking | `Ctrl+B d`, end of piped input, close the console window (`subak detach` in Step 12) | close window / quit / `Ctrl+B d` / crash | unaffected | unaffected |
+| Look again | `subak terminal attach <target>` | open tab / session manager | unaffected | unaffected |
+| Hide one tab | — | the tab's × button, tab menu "Hide tab" | unaffected | unaffected |
+| End processes, keep Terminal | `subak terminal stop <t>` (graceful, then forced after 5 s; asks or `--yes`) | session manager "Stop" | ended | kept as `stopped` |
+| End Terminal (tmux kill-session) | `subak terminal kill <t>` (at once; asks or `--yes`) | `Ctrl+W` / "Close Terminal" (confirms when busy) | ended | removed |
+| Remove a dead Terminal record | `subak terminal rm <t>` (only `stopped`/`failed`, later `restorable`; `--force` also ends a running one) | session manager "Delete" | none running | removed |
+| Kill pane / window | `subak kill <t:w.p>` (Step 21) | `Ctrl+B x` / `Ctrl+B &` (confirm) | that pane/window only | topology updated |
 
 "Graceful" = `ClosePseudoConsole` (processes receive `CTRL_CLOSE_EVENT`), wait up to 5 s,
-then `TerminateJobObject`. "Force" skips the wait. Every destructive CLI command supports
-`--dry-run` (prints exactly which objects and how many processes would end).
+then `TerminateJobObject`. A kill terminates the job first. The IPC `force` flag is the client's
+statement that the user consented to ending a *busy* Terminal; without it the Host refuses one
+(`busy`). Every destructive CLI command supports `--dry-run` (prints exactly which objects and
+how many processes would end).
 
 ## 6. Disconnect, restart and version behavior
 
@@ -189,10 +205,13 @@ sequenceDiagram
   Note over C,H: client closes window → pipe breaks → Host drops subscription only
 ```
 
-Create Terminal: `terminal.create {name?, profile?, command?, cwd?, env?}` → session manager
-validates name → allocates IDs → spawns pane (state `starting`) → persists → emits
-`terminal.created` → responds with IDs. Failure to spawn yields `failed` with a structured
-`spawn_failed` error; no half-created Terminal remains unless `--keep-on-failure`.
+Create Terminal: `terminal.create {name?, command?, cwd?, size?, …}` → under the session lock the
+session manager validates the name, checks it is free, allocates IDs and records the Terminal as
+`starting` (emitting `terminal.created`) → spawns the pane outside the lock → `running`
+(`terminal.state_changed`) → responds with IDs and the Terminal. Failure to spawn yields a
+structured `spawn_failed` error and `terminal.removed`; no half-created Terminal, pseudo console
+or job remains unless `--keep-on-failure` keeps a `failed` record. Persisting (Step 29) will
+follow the create.
 
 ## 8. Performance telemetry (local only)
 
@@ -234,8 +253,9 @@ they return `unsupported_platform` until milestone M4.
 | Ddalgak specification: philosophy, requirements, rule model and schemas (`ddalgak-rules-v1`, `ddalgak-simulation-v1`), GUI journeys, safety scope, AutoHotkey matrix, final hotkey manifest ([DDALGAK_RULE_MODEL](DDALGAK_RULE_MODEL.md), ADR 0022) | current (design; Ddalgak itself planned, Steps 66–83) | 65 |
 | Ddalgak engine: `ddalgak-gui.exe` tray app owning a `WH_KEYBOARD_LL` engine (event model, decision core, worker, lifecycle, emergency chord, held-key ledger, stepping aside), `RegisterHotKey` shortcuts, the headless `ddalgak` CLI over an identity-checked pipe, opt-in sign-in start; engine-control rules only ([DDALGAK_ENGINE](DDALGAK_ENGINE.md), ADR 0024) | implemented (Windows) | 66 |
 | ConPTY + detached Host proof: `subak host start\|status\|attach\|stop` prototype (one shell per Host, prototype pipe; [CONPTY_PROOF](CONPTY_PROOF.md), ADR 0016) | implemented (prototype) | 08 |
-| Host supervisor and IPC v1: identity-checked per-user pipe, version negotiation, authorization by client kind, start on demand under a start lock, idle exit, health, user logon environment ([IPC_PROTOCOL](contracts/IPC_PROTOCOL.md), ADR 0019); still one prototype pane per Host | implemented | 09 |
-| Session lifecycle, PTY management, CLI, replay | planned | 10–14 |
+| Host supervisor and IPC v1: identity-checked per-user pipe, version negotiation, authorization by client kind, start on demand under a start lock, idle exit, health, user logon environment ([IPC_PROTOCOL](contracts/IPC_PROTOCOL.md), ADR 0019) | implemented | 09 |
+| Terminal session lifecycle: named Terminals (Terminal → Window → Pane, one window and pane each), the state machine, names and targets, create/list/info/rename/stop/kill/remove over IPC and `subak terminal …`, `host stop --kill-terminals` ([SESSION_MODEL](SESSION_MODEL.md), ADR 0020) | implemented (no persistence before Step 29) | 10 |
+| PTY management, CLI, replay | planned | 11–14 |
 | GUI, tabs, floating icon | planned | 15–20 |
 | Windows/panes, layout, tmux engine | planned | 21–26 |
 | Claude integration, persistence, recovery | planned | 27–31 |

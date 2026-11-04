@@ -1,0 +1,9 @@
+{
+  "type": "response",
+  "id": 4,
+  "result": {
+    "dry_run": false,
+    "quitting": true,
+    "closed_pins": 2
+  }
+}

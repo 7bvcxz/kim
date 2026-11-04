@@ -611,7 +611,14 @@ impl HostGuard {
 impl Drop for HostGuard {
     fn drop(&mut self) {
         if self.host.alive() {
-            let _ = run(&["host", "stop", "--endpoint", &self.ep, "--yes"]);
+            let _ = run(&[
+                "host",
+                "stop",
+                "--endpoint",
+                &self.ep,
+                "--kill-terminals",
+                "--yes",
+            ]);
             if !self.host.wait(Duration::from_secs(15)) {
                 self.host.kill();
             }
@@ -738,7 +745,21 @@ fn stop_needs_consent_and_ends_host_shell_and_console_host() {
     let consoles = h.conpty_host();
     assert_eq!(consoles.len(), 1, "one pseudo console host per Host");
 
+    // Step 10 (ADR 0003 §7): live Terminals end only with --kill-terminals, and then only with
+    // consent.
     let (code, doc) = run(&["host", "stop", "--endpoint", &h.ep]);
+    assert_eq!(
+        (code, doc["error"]["code"].as_str()),
+        (7, Some("terminals_running")),
+        "{doc}"
+    );
+    let (code, doc) = run(&["host", "stop", "--endpoint", &h.ep, "--yes"]);
+    assert_eq!(
+        (code, doc["error"]["code"].as_str()),
+        (7, Some("terminals_running")),
+        "--yes alone is not --kill-terminals: {doc}"
+    );
+    let (code, doc) = run(&["host", "stop", "--endpoint", &h.ep, "--kill-terminals"]);
     assert_eq!(
         (code, doc["error"]["code"].as_str()),
         (7, Some("confirmation_required"))
@@ -752,7 +773,14 @@ fn stop_needs_consent_and_ends_host_shell_and_console_host() {
     h.assert_alive("after refused and dry-run stops");
 
     let mut watcher = Child::attach(&h.ep, "80x25", false);
-    let (code, doc) = run(&["host", "stop", "--endpoint", &h.ep, "--yes"]);
+    let (code, doc) = run(&[
+        "host",
+        "stop",
+        "--endpoint",
+        &h.ep,
+        "--kill-terminals",
+        "--yes",
+    ]);
     assert_eq!(code, 0, "{doc}");
     let d = &doc["data"];
     assert_eq!(d["stopped"], true);
@@ -780,7 +808,7 @@ fn stop_needs_consent_and_ends_host_shell_and_console_host() {
     );
     for args in [
         &["host", "status"][..],
-        &["host", "stop", "--yes"],
+        &["host", "stop", "--kill-terminals", "--yes"],
         &["host", "attach", "--dry-run"],
     ] {
         let mut a = args.to_vec();

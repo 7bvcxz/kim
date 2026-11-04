@@ -1,0 +1,14 @@
+{
+  "type": "request",
+  "id": 2,
+  "method": "capture",
+  "params": {
+    "region": {
+      "x": 0,
+      "y": 0,
+      "width": 0,
+      "height": 5
+    },
+    "pin": true
+  }
+}

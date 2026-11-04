@@ -19,6 +19,9 @@ workspace = true
 [dependencies]
 # The --json envelope (docs/CLI_CONTRACT.md §7) and the prototype IPC control messages.
 serde_json = "1.0.154"
+# Terminal names are compared after Unicode NFC normalization (ADR 0007, docs/SESSION_MODEL.md),
+# so a Hangul or accented name typed as composed or decomposed text is the same name.
+unicode-normalization = "0.1.25"
 
 [target."cfg(windows)".dependencies]
 # The Host and its clients: pseudo console, job objects, named pipes and peer identity, detached

@@ -67,3 +67,15 @@ agents need unambiguous targets. tmux users expect `session:window.pane`.
 ## Requirements
 
 `SUBAK-FR-010`, `SUBAK-FR-011`, `SUBAK-FR-012`, `SUBAK-FR-013`, `SUBAK-FR-060`.
+
+## Notes
+
+- 2026-11-04 (Step 10): implemented for Terminals ([SESSION_MODEL §3](../SESSION_MODEL.md),
+  [ADR 0020](0020-terminal-session-lifecycle.md)). Precisions: the comparison key is NFC, then the
+  locale-independent Unicode lowercase mapping, then NFC again; invisible formatting characters
+  (bidirectional overrides, zero-width characters, BOM, line and paragraph separators, soft
+  hyphen) are refused like control characters; the ID check rejects ID-shaped names in any case.
+  A Host never reissues an id it issued; across Host restarts uniqueness rests on the 48 random
+  bits until Step 29 persists the issued ids. Ids come from `std`'s OS-randomly keyed SipHash, not
+  from a direct CSPRNG call. "Exact" target names compare by that key (case and composition
+  ignored), never by prefix. `terminal.*` operations take only Terminal targets.

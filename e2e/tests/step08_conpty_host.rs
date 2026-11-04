@@ -121,7 +121,14 @@ impl Drop for Cleanup<'_> {
     fn drop(&mut self) {
         let _ = run_sandboxed(
             self.exe,
-            &["host", "stop", "--endpoint", &self.ep, "--yes"],
+            &[
+                "host",
+                "stop",
+                "--endpoint",
+                &self.ep,
+                "--kill-terminals",
+                "--yes",
+            ],
             self.sb,
         );
         if let Some(pid) = self.host_pid.filter(|p| running(*p)) {
@@ -176,6 +183,7 @@ fn host_and_shell_outlive_a_killed_client_and_reattach_until_an_explicit_stop() 
     let status = b.child.wait().unwrap();
     assert!(status.success(), "Ctrl+B d detaches with exit 0");
 
+    // Step 10 (ADR 0003 §7): live Terminals end only with --kill-terminals and consent.
     let (code, doc) = json(
         &subak,
         &["host", "stop", "--endpoint", &ep, "--no-input"],
@@ -183,9 +191,36 @@ fn host_and_shell_outlive_a_killed_client_and_reattach_until_an_explicit_stop() 
     );
     assert_eq!(
         (code, doc["error"]["code"].as_str()),
+        (7, Some("terminals_running"))
+    );
+    let (code, doc) = json(
+        &subak,
+        &[
+            "host",
+            "stop",
+            "--endpoint",
+            &ep,
+            "--kill-terminals",
+            "--no-input",
+        ],
+        &sb,
+    );
+    assert_eq!(
+        (code, doc["error"]["code"].as_str()),
         (7, Some("confirmation_required"))
     );
-    let (code, doc) = json(&subak, &["host", "stop", "--endpoint", &ep, "--yes"], &sb);
+    let (code, doc) = json(
+        &subak,
+        &[
+            "host",
+            "stop",
+            "--endpoint",
+            &ep,
+            "--kill-terminals",
+            "--yes",
+        ],
+        &sb,
+    );
     assert_eq!(code, 0, "{doc}");
     assert_eq!(doc["data"]["host"]["exited"], true);
     let (code, _) = json(&subak, &["host", "status", "--endpoint", &ep], &sb);

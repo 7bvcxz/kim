@@ -27,12 +27,25 @@
 //!   (GDI with per-character font fallback on Windows, `win::typeset`; [`BlockType`] in tests).
 //!   Alpha is straight, and source-over keeps the picture's transparency where nothing is drawn.
 //!   The overlay shows exactly what [`flatten`] exports: both run [`draw`] over the same pixels.
+//! - **Privacy tools** (Step 57; NOEUL-FR-082; ADR 0041). Mosaic, blur, the eraser and the solid
+//!   redaction are objects too ([`Shape::Effect`]): a box dragged corner to corner, or a brush
+//!   stroke (`Ctrl` switches the form). Their pixels ([`effects`]) are made from the picture at
+//!   output time, in drawing order, and **every solid redaction is applied to the picture before
+//!   anything else is drawn**: no blur, mosaic or eraser ever reads a pixel a redaction covers, and
+//!   an output holds the opaque fill there and nothing else. Mosaic and blur are visual only (weak
+//!   protection; the overlay says so); the original stays in memory under every effect until an
+//!   output, so undo, delete or cancel restore it — only the user, only before export.
 
 use crate::capture::scale_px;
 use crate::frame::{Frame, Rect};
 use std::sync::Arc;
 
-/// Whether annotation exists in this build (Step 56: shapes, pen, marker, text).
+mod effects;
+
+pub use effects::effect_passes;
+
+/// Whether annotation exists in this build (Step 56: shapes, pen, marker, text; Step 57: mosaic,
+/// blur, eraser and solid redaction).
 pub const IMPLEMENTED: bool = true;
 
 /// A colour, straight (not premultiplied) alpha.
@@ -73,8 +86,17 @@ pub const DEFAULT_LEVEL: u8 = 2;
 pub const MARKER_ALPHA: u8 = 102;
 /// Undo steps kept per picture (older ones are dropped).
 pub const UNDO_LIMIT: usize = 200;
+/// The privacy tools' brush widths in logical pixels, by level (Step 57).
+pub const BRUSH_WIDTHS: [u32; 7] = [8, 12, 16, 24, 32, 44, 60];
+/// The mosaic's cell size in logical pixels, by level: its strength.
+pub const MOSAIC_CELLS: [u32; 7] = [4, 6, 8, 12, 16, 22, 30];
+/// The blur's strength: the Gaussian's standard deviation in logical pixels, by level.
+pub const BLUR_SIGMAS: [u32; 7] = [2, 3, 4, 6, 8, 11, 15];
+/// The colour a solid redaction starts with: black of the [`PALETTE`] (the colour button, while
+/// the redaction tool is active, chooses another opaque one).
+pub const REDACT_COLOR: usize = 6;
 
-/// A drawing tool (UX spec §3.1; mosaic, blur, eraser and redaction are Step 57).
+/// A drawing tool (UX spec §3.1; the privacy tools since Step 57).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tool {
     Rectangle,
@@ -84,10 +106,18 @@ pub enum Tool {
     Pen,
     Marker,
     Text,
+    /// Pixelation (visual only, weak protection).
+    Mosaic,
+    /// A Gaussian blur (visual only, weak protection).
+    Blur,
+    /// Wipes annotations back to the picture, never through a solid redaction.
+    Eraser,
+    /// An opaque fill: irreversible in every output.
+    Redact,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 7] = [
+    pub const ALL: [Tool; 11] = [
         Tool::Rectangle,
         Tool::Ellipse,
         Tool::Line,
@@ -95,6 +125,10 @@ impl Tool {
         Tool::Pen,
         Tool::Marker,
         Tool::Text,
+        Tool::Mosaic,
+        Tool::Blur,
+        Tool::Eraser,
+        Tool::Redact,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -106,6 +140,10 @@ impl Tool {
             Tool::Pen => "pen",
             Tool::Marker => "marker",
             Tool::Text => "text",
+            Tool::Mosaic => "mosaic",
+            Tool::Blur => "blur",
+            Tool::Eraser => "eraser",
+            Tool::Redact => "redact",
         }
     }
 
@@ -119,6 +157,10 @@ impl Tool {
             Tool::Pen => "annotate.pen",
             Tool::Marker => "annotate.marker",
             Tool::Text => "annotate.text",
+            Tool::Mosaic => "annotate.mosaic",
+            Tool::Blur => "annotate.blur",
+            Tool::Eraser => "annotate.eraser",
+            Tool::Redact => "annotate.redact",
         }
     }
 
@@ -136,8 +178,75 @@ impl Tool {
             Tool::Pen => "Pen",
             Tool::Marker => "Marker",
             Tool::Text => "Text",
+            Tool::Mosaic => "Mosaic",
+            Tool::Blur => "Blur",
+            Tool::Eraser => "Eraser",
+            Tool::Redact => "Redact",
         }
     }
+
+    /// The effect of a privacy tool (Step 57).
+    pub fn effect(self) -> Option<Effect> {
+        match self {
+            Tool::Mosaic => Some(Effect::Mosaic),
+            Tool::Blur => Some(Effect::Blur),
+            Tool::Eraser => Some(Effect::Erase),
+            Tool::Redact => Some(Effect::Redact),
+            _ => None,
+        }
+    }
+
+    /// What the overlay's size chip says while this tool is active or its object is drawn or
+    /// selected (NOEUL-FR-082: the UI says which protection is weak).
+    pub fn privacy_note(self) -> Option<&'static str> {
+        match self {
+            Tool::Mosaic | Tool::Blur => Some(WEAK_NOTE),
+            Tool::Redact => Some(REDACT_NOTE),
+            Tool::Eraser => Some(ERASER_NOTE),
+            _ => None,
+        }
+    }
+}
+
+/// The overlay's note for mosaic and blur.
+pub const WEAK_NOTE: &str = "Visual only, weak protection: use Redact to hide for good";
+/// The overlay's note for the solid redaction.
+pub const REDACT_NOTE: &str = "Solid fill: nothing under it is copied or saved";
+/// The overlay's note for the eraser.
+pub const ERASER_NOTE: &str = "Erases drawings, never a redaction";
+
+/// What a privacy object does to the picture (Step 57; ADR 0041).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Effect {
+    /// Every cell of the area takes its average colour (strength: the cell size).
+    Mosaic,
+    /// A Gaussian blur of the area (strength: the standard deviation).
+    Blur,
+    /// The picture comes back under it — the picture with every redaction applied, so it never
+    /// reveals what a redaction covers.
+    Erase,
+    /// An opaque fill of the object's colour.
+    Redact,
+}
+
+impl Effect {
+    pub fn tool(self) -> Tool {
+        match self {
+            Effect::Mosaic => Tool::Mosaic,
+            Effect::Blur => Tool::Blur,
+            Effect::Erase => Tool::Eraser,
+            Effect::Redact => Tool::Redact,
+        }
+    }
+}
+
+/// Where an effect applies.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Area {
+    /// A box of whole pixels, dragged corner to corner (mosaic, blur and redaction by default).
+    Box(Bounds),
+    /// A brush stroke as wide as the object's brush (the eraser by default).
+    Brush(Vec<P>),
 }
 
 /// A point in device pixels of the picture; pixel `(x, y)` has its centre at `(x + 0.5, y + 0.5)`.
@@ -361,6 +470,8 @@ pub enum Shape {
     Pen(Vec<P>),
     Marker(Vec<P>),
     Text(Text),
+    /// A privacy tool's mosaic, blur, eraser or solid redaction (Step 57).
+    Effect(Effect, Area),
 }
 
 impl Shape {
@@ -373,7 +484,13 @@ impl Shape {
             Shape::Pen(_) => Tool::Pen,
             Shape::Marker(_) => Tool::Marker,
             Shape::Text(_) => Tool::Text,
+            Shape::Effect(e, _) => e.tool(),
         }
+    }
+
+    /// Whether it is a solid redaction.
+    pub fn is_redaction(&self) -> bool {
+        matches!(self, Shape::Effect(Effect::Redact, _))
     }
 }
 
@@ -400,7 +517,19 @@ pub fn stroke_px(kind: Tool, level: u8, dpi: u32) -> u32 {
     match kind {
         Tool::Marker => scale_px(MARKER_WIDTHS[i], dpi),
         Tool::Text => scale_px(TEXT_SIZES[i], dpi),
+        Tool::Mosaic | Tool::Blur | Tool::Eraser | Tool::Redact => scale_px(BRUSH_WIDTHS[i], dpi),
         _ => scale_px(WIDTHS[i], dpi),
+    }
+}
+
+/// The strength of a mosaic (its cell size) or a blur (its standard deviation) at `level` and
+/// `dpi`, in device pixels; 0 for the other tools.
+pub fn strength_px(kind: Tool, level: u8, dpi: u32) -> u32 {
+    let i = level_of(level);
+    match kind {
+        Tool::Mosaic => scale_px(MOSAIC_CELLS[i], dpi).max(2),
+        Tool::Blur => scale_px(BLUR_SIGMAS[i], dpi).max(1),
+        _ => 0,
     }
 }
 
@@ -420,10 +549,20 @@ impl Object {
         stroke_px(Tool::Text, self.level, self.dpi)
     }
 
-    /// Every pixel it may touch (anti-aliasing included).
+    /// A mosaic's cell size or a blur's standard deviation in device pixels (Step 57).
+    pub fn strength(&self) -> u32 {
+        strength_px(self.shape.kind(), self.level, self.dpi)
+    }
+
+    /// Every pixel it may touch (anti-aliasing included). An effect also reads only these pixels
+    /// (a blur or mosaic never pulls in what lies outside it).
     pub fn bounds(&self) -> Bounds {
         let w = self.width();
         match &self.shape {
+            Shape::Effect(_, Area::Box(b)) => *b,
+            Shape::Effect(_, Area::Brush(pts)) => Bounds::around(pts)
+                .unwrap_or(Bounds::new(0.0, 0.0, 0.0, 0.0))
+                .grow(w / 2.0 + 1.0),
             Shape::Rectangle(b) | Shape::Ellipse(b) => b.grow(1.0),
             Shape::Line(a, b) => Bounds::new(a.x, a.y, b.x, b.y).grow(w / 2.0 + 1.0),
             Shape::Arrow(a, b) => {
@@ -468,6 +607,15 @@ impl Object {
             }
             Shape::Pen(pts) | Shape::Marker(pts) => polyline_distance(p, pts) <= half,
             Shape::Text(_) => self.bounds().grow(tol).contains(p),
+            // An eraser stroke shows nothing of its own: it is picked by keyboard only.
+            Shape::Effect(Effect::Erase, _) => false,
+            // A box is picked on its edge (a press inside draws another one over it).
+            Shape::Effect(_, Area::Box(b)) => {
+                let inner = b.grow(-tol);
+                b.grow(tol).contains(p)
+                    && !(inner.width() > 0.0 && inner.height() > 0.0 && inner.contains(p))
+            }
+            Shape::Effect(_, Area::Brush(pts)) => polyline_distance(p, pts) <= half,
         }
     }
 
@@ -488,6 +636,10 @@ impl Object {
                 text: t.text.clone(),
                 glyphs: t.glyphs.clone(),
             }),
+            Shape::Effect(e, Area::Box(b)) => Shape::Effect(*e, Area::Box(b.translate(fx, fy))),
+            Shape::Effect(e, Area::Brush(pts)) => {
+                Shape::Effect(*e, Area::Brush(pts.iter().map(mv).collect()))
+            }
         };
         Object {
             shape,
@@ -499,7 +651,7 @@ impl Object {
     /// box of a shape, the length and angle of a line.
     pub fn measure(&self) -> String {
         match &self.shape {
-            Shape::Rectangle(b) | Shape::Ellipse(b) => {
+            Shape::Rectangle(b) | Shape::Ellipse(b) | Shape::Effect(_, Area::Box(b)) => {
                 format!("{} \u{d7} {}", b.width().round(), b.height().round())
             }
             Shape::Line(a, b) | Shape::Arrow(a, b) => {
@@ -507,7 +659,10 @@ impl Object {
                 let deg = (-d.y).atan2(d.x).to_degrees();
                 format!("{:.0} px  {:.1}\u{b0}", d.len(), deg)
             }
-            Shape::Pen(_) | Shape::Marker(_) | Shape::Text(_) => {
+            Shape::Pen(_)
+            | Shape::Marker(_)
+            | Shape::Text(_)
+            | Shape::Effect(_, Area::Brush(_)) => {
                 let b = self.bounds();
                 format!("{} \u{d7} {}", b.width().round(), b.height().round())
             }
@@ -792,6 +947,9 @@ pub struct Editor {
     doc: Doc,
     tool: Option<Tool>,
     color: usize,
+    /// The solid redaction's own colour (black until the user picks another one with the
+    /// redaction tool active; Step 57).
+    redact_color: usize,
     level: u8,
     selected: Option<u32>,
     gesture: Option<Gesture>,
@@ -832,6 +990,7 @@ impl Editor {
             doc,
             tool: None,
             color: 0,
+            redact_color: REDACT_COLOR,
             level: DEFAULT_LEVEL,
             selected: None,
             gesture: None,
@@ -857,8 +1016,18 @@ impl Editor {
         self.tool
     }
 
+    /// The colour new objects of the current tool get (the redaction tool has its own, black
+    /// until changed).
     pub fn color(&self) -> (&'static str, Rgba) {
-        PALETTE[self.color % PALETTE.len()]
+        PALETTE[self.color_index() % PALETTE.len()]
+    }
+
+    fn color_index(&self) -> usize {
+        if self.tool == Some(Tool::Redact) {
+            self.redact_color
+        } else {
+            self.color
+        }
     }
 
     pub fn level(&self) -> u8 {
@@ -974,8 +1143,14 @@ impl Editor {
 
     /// The colour as an index into [`PALETTE`]; applies to the selected object too.
     pub fn set_color(&mut self, index: usize) {
-        self.color = index % PALETTE.len();
-        let c = PALETTE[self.color].1;
+        let index = index % PALETTE.len();
+        if self.tool == Some(Tool::Redact) {
+            self.redact_color = index;
+        } else {
+            self.color = index;
+        }
+        // Every palette colour is opaque, so a recoloured redaction stays solid.
+        let c = PALETTE[index].1;
         if let Some(id) = self.selected().filter(|_| self.gesture.is_none()) {
             self.doc.modify(id, |o| o.color = c);
             self.mark_object(id);
@@ -985,11 +1160,8 @@ impl Editor {
     /// The next (or previous) colour of the palette.
     pub fn step_color(&mut self, forward: bool) {
         let n = PALETTE.len();
-        self.set_color(if forward {
-            self.color + 1
-        } else {
-            self.color + n - 1
-        });
+        let i = self.color_index();
+        self.set_color(if forward { i + 1 } else { i + n - 1 });
     }
 
     /// One width level thinner or thicker (`[`, `]`, the wheel); applies to the selected object.
@@ -1013,10 +1185,15 @@ impl Editor {
     }
 
     fn new_object(&self, shape: Shape, dpi: u32) -> Object {
+        let color = if shape.is_redaction() {
+            self.redact_color
+        } else {
+            self.color
+        };
         Object {
             id: 0,
             shape,
-            color: PALETTE[self.color].1,
+            color: PALETTE[color % PALETTE.len()].1,
             level: self.level,
             dpi,
         }
@@ -1025,6 +1202,12 @@ impl Editor {
     /// A left press at pixel `at` with the current tool, on a monitor at `dpi`. Returns `false`
     /// when there is no tool and nothing was picked (the press belongs to the selection then).
     pub fn press(&mut self, at: (i32, i32), dpi: u32) -> bool {
+        self.press_with(at, dpi, false)
+    }
+
+    /// [`Editor::press`] with `Ctrl` held: a privacy tool draws its other form (a brush stroke
+    /// for mosaic, blur and redaction; a box for the eraser) and never picks an object.
+    pub fn press_with(&mut self, at: (i32, i32), dpi: u32, other_form: bool) -> bool {
         self.keyboard = false;
         let tol = scale_px(4, dpi) as f32;
         let p = P::of_pixel(at);
@@ -1053,7 +1236,8 @@ impl Editor {
         }
         // Freehand tools always draw (a stroke may start on another one); the other tools, and
         // no tool, pick the object under the press.
-        let picks = !matches!(self.tool, Some(Tool::Pen | Tool::Marker));
+        let picks = !matches!(self.tool, Some(Tool::Pen | Tool::Marker | Tool::Eraser))
+            && !(other_form && self.tool.and_then(Tool::effect).is_some());
         if let Some(id) = self.doc.hit(p, tol).filter(|_| picks) {
             if self.tool == Some(Tool::Text)
                 && matches!(self.doc.get(id).map(|o| &o.shape), Some(Shape::Text(_)))
@@ -1080,7 +1264,7 @@ impl Editor {
             self.start_text(self.clamp(at), dpi);
             return true;
         }
-        self.start_draw(tool, at, dpi)
+        self.start_draw(tool, at, dpi, other_form)
     }
 
     fn begin(&mut self, g: Gesture) {
@@ -1102,7 +1286,9 @@ impl Editor {
                 if let Some(i) = self.doc.index(id) {
                     let o = &mut self.doc.objects[i];
                     match &mut o.shape {
-                        Shape::Rectangle(b) | Shape::Ellipse(b) => {
+                        Shape::Rectangle(b)
+                        | Shape::Ellipse(b)
+                        | Shape::Effect(_, Area::Box(b)) => {
                             let mut to = at;
                             if shift {
                                 let d = (at.0 - from.0).abs().max((at.1 - from.1).abs());
@@ -1116,7 +1302,9 @@ impl Editor {
                         Shape::Line(_, b) | Shape::Arrow(_, b) => {
                             *b = if shift { snap45(fp, tp) } else { tp };
                         }
-                        Shape::Pen(pts) | Shape::Marker(pts) => {
+                        Shape::Pen(pts)
+                        | Shape::Marker(pts)
+                        | Shape::Effect(_, Area::Brush(pts)) => {
                             if pts.last() != Some(&tp) {
                                 pts.push(tp);
                             }
@@ -1165,7 +1353,9 @@ impl Editor {
         if let Gesture::Draw { id, .. } = g {
             // A click without a drag draws nothing for a box or a line (a dot for the pen).
             let keep = self.doc.get(id).is_some_and(|o| match &o.shape {
-                Shape::Rectangle(b) | Shape::Ellipse(b) => b.width() > 1.0 || b.height() > 1.0,
+                Shape::Rectangle(b) | Shape::Ellipse(b) | Shape::Effect(_, Area::Box(b)) => {
+                    b.width() > 1.0 || b.height() > 1.0
+                }
                 Shape::Line(a, b) | Shape::Arrow(a, b) => a != b,
                 _ => true,
             });
@@ -1217,12 +1407,12 @@ impl Editor {
         }
         // A mark always starts a new shape, even over another object.
         self.deselect();
-        let ok = self.start_draw(tool, at, dpi);
+        let ok = self.start_draw(tool, at, dpi, false);
         self.keyboard = ok;
         ok
     }
 
-    fn start_draw(&mut self, tool: Tool, at: (i32, i32), dpi: u32) -> bool {
+    fn start_draw(&mut self, tool: Tool, at: (i32, i32), dpi: u32, other_form: bool) -> bool {
         let at = self.clamp(at);
         let p = P::of_pixel(at);
         let shape = match tool {
@@ -1233,6 +1423,21 @@ impl Editor {
             Tool::Pen => Shape::Pen(vec![p]),
             Tool::Marker => Shape::Marker(vec![p]),
             Tool::Text => return false,
+            Tool::Mosaic | Tool::Blur | Tool::Eraser | Tool::Redact => {
+                let Some(e) = tool.effect() else {
+                    return false;
+                };
+                // The eraser is a brush by default, the others a box; `Ctrl` swaps.
+                let brush = (tool == Tool::Eraser) != other_form;
+                Shape::Effect(
+                    e,
+                    if brush {
+                        Area::Brush(vec![p])
+                    } else {
+                        Area::Box(Bounds::of_pixels(at, at))
+                    },
+                )
+            }
         };
         let before = self.doc.objects.clone();
         let mut o = self.new_object(shape, dpi);
@@ -1276,15 +1481,32 @@ impl Editor {
             .map(Object::bounds)
     }
 
-    /// The readout of the object drawn or selected now (NOEUL-FR-083).
-    pub fn measure(&self) -> Option<String> {
+    /// The object drawn, moved, resized or selected now.
+    fn measured(&self) -> Option<&Object> {
         let id = match &self.gesture {
             Some(
                 Gesture::Draw { id, .. } | Gesture::Move { id, .. } | Gesture::Resize { id, .. },
             ) => Some(*id),
             None => self.selected(),
         }?;
-        self.doc.get(id).map(Object::measure)
+        self.doc.get(id)
+    }
+
+    /// The readout of the object drawn or selected now (NOEUL-FR-083).
+    pub fn measure(&self) -> Option<String> {
+        self.measured().map(Object::measure)
+    }
+
+    /// The size chip's second line: the readout, and — while a privacy tool is active or its
+    /// object is drawn or selected — what that protection is worth (NOEUL-FR-082: mosaic and blur
+    /// are visual only; a solid redaction hides for good).
+    pub fn note(&self) -> Option<String> {
+        let kind = self.measured().map(|o| o.shape.kind()).or(self.tool);
+        let privacy = kind.and_then(Tool::privacy_note);
+        match (self.measure(), privacy) {
+            (Some(m), Some(p)) => Some(format!("{m}  {p}")),
+            (m, p) => m.or(p.map(str::to_string)),
+        }
     }
 
     /// Undo (`annotate.undo`): the last edit; a running gesture or text edit ends first.
@@ -1881,8 +2103,8 @@ impl Object {
     /// The box of a box-like shape (the outline's outer edge; the points' box for strokes).
     fn bounds_of_shape(&self) -> Bounds {
         match &self.shape {
-            Shape::Rectangle(b) | Shape::Ellipse(b) => *b,
-            Shape::Pen(p) | Shape::Marker(p) => {
+            Shape::Rectangle(b) | Shape::Ellipse(b) | Shape::Effect(_, Area::Box(b)) => *b,
+            Shape::Pen(p) | Shape::Marker(p) | Shape::Effect(_, Area::Brush(p)) => {
                 Bounds::around(p).unwrap_or(Bounds::new(0.0, 0.0, 0.0, 0.0))
             }
             Shape::Line(a, b) | Shape::Arrow(a, b) => Bounds::new(a.x, a.y, b.x, b.y),
@@ -1943,6 +2165,11 @@ fn reshaped(o: &Object, from: Bounds, to: Bounds) -> Object {
         Shape::Ellipse(_) => Shape::Ellipse(round(to)),
         Shape::Pen(p) => Shape::Pen(p.iter().map(map).collect()),
         Shape::Marker(p) => Shape::Marker(p.iter().map(map).collect()),
+        // A box keeps whole-pixel edges (a redaction covers exactly the pixels it shows).
+        Shape::Effect(e, Area::Box(_)) => Shape::Effect(*e, Area::Box(round(to))),
+        Shape::Effect(e, Area::Brush(p)) => {
+            Shape::Effect(*e, Area::Brush(p.iter().map(map).collect()))
+        }
         other => other.clone(),
     };
     Object { shape, ..o.clone() }
@@ -2265,6 +2492,8 @@ fn mask_of(o: &Object, clip: Rect) -> Option<Mask> {
                 m.glyphs(t.at, g);
             }
         }
+        // Effects are made from the picture, not from a coverage of their own (`effects`).
+        Shape::Effect(..) => return None,
     }
     Some(m)
 }
@@ -2305,7 +2534,9 @@ fn over(dst: &mut [u8; 4], c: Rgba, cov: u8) {
 }
 
 /// Draws `objects` (in order) into `buf`, a straight-alpha BGRA buffer of the picture part
-/// `rect`, only inside `clip`.
+/// `rect`, only inside `clip`. `buf` holds the picture there when it is called (the privacy
+/// effects are made from it); every solid redaction is filled before anything else, so nothing
+/// drawn afterwards can bring back or spread a pixel it covers (Step 57, ADR 0041).
 pub fn draw(objects: &[Object], buf: &mut [u8], rect: Rect, clip: Rect) {
     let Some(clip) = crate::overlay::intersection(clip, rect) else {
         return;
@@ -2314,7 +2545,30 @@ pub fn draw(objects: &[Object], buf: &mut [u8], rect: Rect, clip: Rect) {
         return;
     }
     let stride = rect.width as usize * 4;
+    let effects = objects.iter().any(|o| matches!(o.shape, Shape::Effect(..)));
+    let restore = if effects {
+        let mut c = effects::Canvas {
+            buf: &mut *buf,
+            rect,
+        };
+        for o in objects {
+            if let Shape::Effect(Effect::Redact, a) = &o.shape {
+                effects::redact(&mut c, o, a, clip);
+            }
+        }
+        effects::restore(&c, objects, clip)
+    } else {
+        None
+    };
     for o in objects {
+        if let Shape::Effect(e, a) = &o.shape {
+            let mut c = effects::Canvas {
+                buf: &mut *buf,
+                rect,
+            };
+            effects::apply(&mut c, o, *e, a, clip, restore.as_ref());
+            continue;
+        }
         let Some(m) = mask_of(o, clip) else {
             continue;
         };
@@ -2357,14 +2611,13 @@ pub fn flatten(base: &Frame, objects: &[Object], area: Rect) -> Option<Frame> {
 
 /// Re-renders `area` of `layer` (a part of `base` with `objects` drawn on it, as [`flatten`]
 /// made it): the picture's pixels there again, then the objects over them. The overlay calls it
-/// with the pixels an edit changed.
-pub fn refresh(layer: &mut Frame, base: &Frame, objects: &[Object], area: Rect) {
+/// with the pixels an edit changed. A mosaic or blur the area touches is re-rendered whole (it is
+/// made from all of its pixels), so the area may grow; returns the pixels re-rendered.
+pub fn refresh(layer: &mut Frame, base: &Frame, objects: &[Object], area: Rect) -> Option<Rect> {
     let lr = layer.rect();
-    let Some(a) = crate::overlay::intersection(area, lr)
-        .and_then(|a| crate::overlay::intersection(a, base.rect()))
-    else {
-        return;
-    };
+    let within = crate::overlay::intersection(lr, base.rect())?;
+    let a = crate::overlay::intersection(area, within)?;
+    let a = effects::reach(objects, a, within);
     let br = base.rect();
     let (ls, bs) = (lr.width as usize * 4, br.width as usize * 4);
     let row = a.width as usize * 4;
@@ -2378,6 +2631,7 @@ pub fn refresh(layer: &mut Frame, base: &Frame, objects: &[Object], area: Rect) 
         dst[li..li + row].copy_from_slice(&src[bi..bi + row]);
     }
     draw(objects, layer.pixels_mut(), lr, a);
+    Some(a)
 }
 
 /// `objects` moved by `(dx, dy)`: from screen pixels to a pin's image and back.
@@ -2398,5 +2652,7 @@ pub fn inside(objects: &[Object], area: Rect) -> Vec<Object> {
         .collect()
 }
 
+#[cfg(test)]
+mod privacy_tests;
 #[cfg(test)]
 mod tests;

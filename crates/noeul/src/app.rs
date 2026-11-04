@@ -2424,8 +2424,11 @@ fn update_layer(
                 extra.push(sel);
             } else if let (Some(l), Some(c)) = (layer.as_mut(), changed)
                 && let Some(area) = overlay::intersection(c, sel)
+                && let Some(done) = annotation::refresh(l, f, objects, area)
+                && done != area
             {
-                annotation::refresh(l, f, objects, area);
+                // A mosaic or blur the edit touched was re-rendered whole (Step 57).
+                extra.push(done);
             }
         }
         _ => {
@@ -2944,7 +2947,9 @@ pub(crate) mod tests {
                     l.buffer[i + 3],
                 ]
             };
-            assert_eq!(at(0, 150), Synthetic::pixel(0, 150), "plain inside");
+            // (Below the first-run help, which stays at the top of the small 150 % monitor now that
+            // the toolbar takes two rows at its bottom, Step 57.)
+            assert_eq!(at(0, 200), Synthetic::pixel(0, 200), "plain inside");
             assert_eq!(at(-101, 150), color::ACCENT, "border outside the left edge");
             assert_eq!(
                 at(-600, 300),

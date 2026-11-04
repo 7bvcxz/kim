@@ -1,0 +1,9 @@
+{
+  "type": "request",
+  "id": 22,
+  "method": "pin.set",
+  "params": {
+    "all": true,
+    "click_through": false
+  }
+}

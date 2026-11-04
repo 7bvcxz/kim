@@ -11,6 +11,10 @@
       "quick_save_folder": "C:\\Users\\me\\Pictures\\Shots",
       "detection": "window",
       "magnifier": "on",
+      "pins": {
+        "border": "on",
+        "shadow": "on"
+      },
       "gestures": {
         "double_click": "copy",
         "middle_click": "pin",

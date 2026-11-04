@@ -44,11 +44,7 @@ fn a_4k_pin_costs_its_picture_once_and_leaves_nothing_behind() {
         pinwnd::create(
             PinId(1),
             &small,
-            &WindowSpec {
-                rect: small.rect(),
-                focus: false,
-                guard: None,
-            },
+            &WindowSpec::plain(small.rect()),
             Style::OFF_SCREEN_TEST,
         )
         .unwrap(),
@@ -60,11 +56,7 @@ fn a_4k_pin_costs_its_picture_once_and_leaves_nothing_behind() {
     let mut pin = pinwnd::create(
         PinId(2),
         &frame,
-        &WindowSpec {
-            rect: frame.rect(),
-            focus: false,
-            guard: None,
-        },
+        &WindowSpec::plain(frame.rect()),
         Style::OFF_SCREEN_TEST,
     )
     .unwrap();
@@ -84,8 +76,11 @@ fn a_4k_pin_costs_its_picture_once_and_leaves_nothing_behind() {
         "NOEUL-NFR-002: at most twice the pixel bytes plus 2 MB, got {cost}"
     );
     // Zooming renders a temporary surface of the new size and frees it again.
-    pin.present(&frame, Rect::new(-20_000, -20_000, w * 2, h * 2))
-        .unwrap();
+    pin.present(
+        &frame,
+        &noeul::transform::View::plain(Rect::new(-20_000, -20_000, w * 2, h * 2)),
+    )
+    .unwrap();
     let zoomed = private_bytes();
     assert!(
         zoomed <= with + 2 * MIB,

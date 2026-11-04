@@ -286,8 +286,8 @@ fn a_double_click_inside_pins_and_nothing_else_does() {
     assert_eq!(pins.len(), 1);
     assert_eq!(
         pins[0].rect,
-        (X0 + 100, Y0 + 100, 300, 200),
-        "the window is the selection"
+        common::framed((X0 + 100, Y0 + 100, 300, 200)),
+        "the window is the selection with its outline and shadow around it"
     );
     assert!(
         of_class(pid, "NoeulOverlay").is_empty(),

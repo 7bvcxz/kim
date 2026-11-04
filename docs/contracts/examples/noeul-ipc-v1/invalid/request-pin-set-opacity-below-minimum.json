@@ -1,0 +1,9 @@
+{
+  "type": "request",
+  "id": 26,
+  "method": "pin.set",
+  "params": {
+    "id": "pin-1",
+    "opacity": 5
+  }
+}

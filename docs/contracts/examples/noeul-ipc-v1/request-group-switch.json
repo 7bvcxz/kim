@@ -1,0 +1,8 @@
+{
+  "type": "request",
+  "id": 24,
+  "method": "group.switch",
+  "params": {
+    "group": "research"
+  }
+}

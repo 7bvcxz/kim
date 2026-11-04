@@ -1,0 +1,24 @@
+{
+  "type": "response",
+  "id": 25,
+  "result": {
+    "current": "research",
+    "groups": [
+      {
+        "name": "default",
+        "pins": 2,
+        "hidden": 2
+      },
+      {
+        "name": "research",
+        "pins": 1,
+        "hidden": 0
+      },
+      {
+        "name": "노을 2",
+        "pins": 1,
+        "hidden": 1
+      }
+    ]
+  }
+}

@@ -235,9 +235,11 @@ fn a_the_pin_engine_is_discoverable_headlessly() {
     ] {
         assert!(ids.contains(&id), "{id} is listed: {ids:?}");
     }
-    for planned in ["pin.thumbnail", "pin.click-through", "pin.opacity-up"] {
-        assert!(!ids.contains(&planned), "{planned} is not in this build");
-    }
+    // The transforms shipped in Step 54; a text card's copy-text is still planned (Step 55).
+    assert!(
+        !ids.contains(&"pin.copy-text"),
+        "pin.copy-text is not in this build"
+    );
     for args in [
         &["pin", "hide", "--all"][..],
         &["pin", "show", "--all", "--on-screen"],
@@ -323,7 +325,7 @@ fn b_scripts_drive_independent_off_screen_pins_and_a_restart_restores_nothing() 
     n.start();
     assert_eq!(
         n.list(),
-        json!({"pins": [], "reopenable": null}),
+        json!({"pins": [], "reopenable": null, "group": "default"}),
         "pins live in memory only"
     );
     assert_eq!(n.files("Temp"), 0, "no temporary files");

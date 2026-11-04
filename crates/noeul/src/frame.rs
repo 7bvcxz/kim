@@ -285,6 +285,12 @@ impl Frame {
         self.rect.y = y;
     }
 
+    /// A new frame made from this one (e.g. its shown orientation, Step 54), accounted to the
+    /// same ledger.
+    pub fn derived(&self, rect: Rect, pixels: Vec<u8>) -> Result<Frame, FrameError> {
+        Frame::new(&self.ledger, rect, pixels)
+    }
+
     /// A new frame with the part of this one inside `area` (absolute device pixels). `None` when
     /// `area` is empty or not inside this frame. The original stays untouched.
     pub fn crop(&self, area: Rect) -> Option<Frame> {

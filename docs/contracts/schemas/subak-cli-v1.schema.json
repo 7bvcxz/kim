@@ -2239,7 +2239,7 @@
               }
             },
             "profile": {
-              "description": "Step 20: the shell profile of config.toml that was used (--profile or the default profile), or null.",
+              "description": "Step 20: the shell profile of config.toml that was used (--profile or the default profile); absent when none was.",
               "type": [
                 "string",
                 "null"
@@ -2266,7 +2266,7 @@
               "type": "boolean"
             },
             "profile": {
-              "description": "Step 20: the shell profile of config.toml that was used (--profile or the default profile), or null.",
+              "description": "Step 20: the shell profile of config.toml that was used (--profile or the default profile); absent when none was.",
               "type": [
                 "string",
                 "null"

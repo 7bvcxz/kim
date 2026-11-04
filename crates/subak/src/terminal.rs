@@ -218,9 +218,11 @@ pub fn new(a: &Args, endpoint: &str) -> Result<Value, CliError> {
     let profile_name = profile.as_ref().map(|p| p.name.clone());
     let eff = with_profile(a, profile.as_ref());
     let a = &eff;
+    // `profile` is added only when a profile was used, so the result of a plain `new` stays the
+    // `terminal.create` result it always was (additive, CLI_CONTRACT §8).
     let with_name = |mut v: Value| {
-        if let Some(o) = v.as_object_mut() {
-            o.insert("profile".into(), json!(profile_name));
+        if let (Some(o), Some(p)) = (v.as_object_mut(), &profile_name) {
+            o.insert("profile".into(), json!(p));
         }
         v
     };

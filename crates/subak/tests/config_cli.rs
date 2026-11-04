@@ -523,6 +523,32 @@ fn a_profile_launches_its_exact_argv_cwd_and_env_and_settings_never_touch_runnin
         assert_eq!(before[k], after[k], "{k} of a running pane");
     }
     assert_eq!(after["state"], before["state"]);
+    // A broken settings file: `new` runs the Host's shell and says why; `--profile` refuses.
+    std::fs::write(dir.join("config.toml"), "[terminal\ndefault_profile = ").unwrap();
+    let (code, doc) = sub(&appdata, &["new", "p6", "--dry-run", "--endpoint", &ep]);
+    assert_eq!(code, 0, "{doc}");
+    assert_eq!(doc["data"]["profile"], Value::Null);
+    assert!(
+        doc["warnings"][0]
+            .as_str()
+            .unwrap()
+            .contains("no default profile is used"),
+        "{doc}"
+    );
+    let (code, doc) = sub(
+        &appdata,
+        &[
+            "new",
+            "p7",
+            "--profile",
+            "echo",
+            "--dry-run",
+            "--endpoint",
+            &ep,
+        ],
+    );
+    assert_eq!(code, 4, "{doc}");
+    assert_eq!(doc["error"]["code"], "config_invalid");
     println!(
         "EVIDENCE profile: argv {} words exact, cwd {}, env set/unset; running pane pid {} unchanged",
         tricky.len(),

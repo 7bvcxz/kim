@@ -457,8 +457,8 @@ struct App {
     /// The tab under the pointer, and whether `WM_MOUSELEAVE` is requested.
     hover: Option<usize>,
     leave_tracked: bool,
-    /// The notice is a toast: it hides by itself after 4 s.
-    toast: bool,
+    /// The toast shown (a notice that hides by itself after 4 s, unless another replaced it).
+    toast: Option<String>,
     /// The settings menu's choices by command (`CMD_SET + k`): key and value.
     menu_choices: Vec<(String, String)>,
     /// The terminal families of [`MENU_FONTS`] that are installed (asked once).
@@ -665,11 +665,11 @@ impl App {
 
     /// VT text of the window's own parts (written in `kim-dark` tokens) in the theme in use:
     /// reverse video in the system colours for High Contrast, the light tokens for `kim-light`.
-    fn themed_vt(&self, vt: Vec<u8>) -> Vec<u8> {
+    fn themed_vt(&self, vt: &[u8]) -> Vec<u8> {
         if self.hc_theme() {
-            screens::high_contrast(&vt)
+            screens::high_contrast(vt)
         } else {
-            self.chrome().retint(&vt)
+            self.chrome().retint(vt)
         }
     }
 
@@ -782,7 +782,7 @@ impl App {
         if let Some(vt) =
             screens::screen(&self.model.phase, &self.endpoint, cols, rows, &self.hints())
         {
-            v.feed(&self.themed_vt(vt));
+            v.feed(&self.themed_vt(&vt));
         }
         self.state_view = v;
     }
@@ -854,7 +854,7 @@ impl App {
             self.bar_active = active_id;
         }
         let mut view = TermView::new(cols, 1, 0);
-        view.feed(&self.themed_vt(bar.vt.clone()));
+        view.feed(&self.themed_vt(&bar.vt));
         r.render(&view);
         let style = if hc {
             compose::BarStyle {
@@ -1026,7 +1026,7 @@ impl App {
             }
             Content::Text(b) => (screens::banner_vt(&b, cols), b),
         };
-        view.feed(&self.themed_vt(vt));
+        view.feed(&self.themed_vt(&vt));
         r.render(&view);
         self.banner = Some((b, Overlay { renderer: r }));
         // Step 20: a banner that appears fades in and rises 4 px.
@@ -1490,7 +1490,7 @@ impl App {
         match notice {
             Some(n) => {
                 self.notice = Some(n);
-                self.toast = false;
+                self.toast = None;
             }
             None if forced => self.toast("Settings reloaded from config.toml"),
             None => {}
@@ -1577,8 +1577,8 @@ impl App {
     fn toast(&mut self, text: impl Into<String>) {
         let text = text.into();
         self.event(&json!({"event": "toast", "text": text}));
+        self.toast = Some(text.clone());
         self.notice = Some(text);
-        self.toast = true;
         // SAFETY: a one-shot timer of our own window.
         unsafe { SetTimer(self.hwnd, TIMER_TOAST, 4000, None) };
         self.rebuild_banner();
@@ -2223,7 +2223,7 @@ impl App {
             return false;
         }
         if self.notice.take().is_some() {
-            self.toast = false;
+            self.toast = None;
             self.rebuild_banner();
         }
         // The window's modal parts take the keyboard: nothing reaches the program, no shortcut
@@ -2593,13 +2593,13 @@ impl App {
             Action::FindOpen => self.open_find(),
             Action::SaveOutput => self.ask_export(),
             Action::ZoomIn => {
-                self.set_font_size(Prefs::zoomed(self.settings.appearance.font_size, 1))
+                self.set_font_size(Prefs::zoomed(self.settings.appearance.font_size, 1));
             }
             Action::ZoomOut => {
-                self.set_font_size(Prefs::zoomed(self.settings.appearance.font_size, -1))
+                self.set_font_size(Prefs::zoomed(self.settings.appearance.font_size, -1));
             }
             Action::ZoomReset => {
-                self.set_font_size(Prefs::zoomed(self.settings.appearance.font_size, 0))
+                self.set_font_size(Prefs::zoomed(self.settings.appearance.font_size, 0));
             }
             Action::ScrollPageUp => self.scroll(rows),
             Action::ScrollPageDown => self.scroll(-rows),
@@ -3901,7 +3901,7 @@ impl App {
             },
             "hover": self.hover,
             "icon": icon,
-            "toast": self.toast,
+            "toast": self.toast.is_some(),
         })
     }
 
@@ -4865,8 +4865,10 @@ fn handle(app: &mut App, hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> Option
                 TIMER_TOAST => {
                     // SAFETY: our own one-shot timer.
                     unsafe { KillTimer(hwnd, TIMER_TOAST) };
-                    if app.toast {
-                        app.toast = false;
+                    // Only the toast itself hides: a notice that replaced it meanwhile stays.
+                    if let Some(t) = app.toast.take()
+                        && app.notice.as_deref() == Some(t.as_str())
+                    {
                         app.notice = None;
                         app.rebuild_banner();
                     }
@@ -5164,7 +5166,7 @@ pub fn run(o: Options) -> ExitCode {
         bar_active: None,
         hover: None,
         leave_tracked: false,
-        toast: false,
+        toast: None,
         menu_choices: Vec::new(),
         fonts: None,
         face: String::new(),

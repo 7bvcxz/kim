@@ -113,9 +113,9 @@ fn changes_text(c: &[Change]) -> String {
 /// Writes an edit (unless `--dry-run`), and reports it.
 fn finish(
     l: &Loaded,
-    edited: Edited,
+    edited: &Edited,
     a: &Args,
-    backup: Option<PathBuf>,
+    backup: Option<&Path>,
     verb: &str,
 ) -> Result<Outcome, CliError> {
     let write = !a.dry_run && !edited.changes.is_empty();
@@ -146,7 +146,7 @@ fn finish(
         format!("{} {}:\n", capitalized(verb), path_text(&l.path))
     };
     human.push_str(&changes_text(&edited.changes));
-    if let Some(b) = &backup {
+    if let Some(b) = backup {
         human.push_str(&format!("Backup: {}\n", path_text(b)));
     }
     Ok(Outcome {
@@ -155,7 +155,7 @@ fn finish(
             "changes": changes_json(&edited.changes),
             "dry_run": a.dry_run,
             "written": write,
-            "backup": backup.as_deref().map(path_text),
+            "backup": backup.map(path_text),
         }),
         human,
         warnings,
@@ -350,7 +350,7 @@ fn set(dir: &Path, a: &Args) -> Result<Outcome, CliError> {
     };
     let l = config::load(dir);
     let edited = config::set(&l, &[(key, value)]).map_err(|e| edit_error(&l, &e))?;
-    finish(&l, edited, a, None, "set")
+    finish(&l, &edited, a, None, "set")
 }
 
 /// `subak config reset (<key>|<section>|--all)`: the keys go back to their defaults (their
@@ -390,7 +390,7 @@ fn reset(dir: &Path, a: &Args) -> Result<Outcome, CliError> {
             )
         })?;
     }
-    finish(&l, edited, a, backup, "reset")
+    finish(&l, &edited, a, backup.as_deref(), "reset")
 }
 
 /// `subak config export`: the file (or, without one, the defaults' document) with every
@@ -530,7 +530,7 @@ fn import(dir: &Path, a: &Args) -> Result<Outcome, CliError> {
             )
         })?;
     }
-    let mut out = finish(&l, edited, a, backup, "import")?;
+    let mut out = finish(&l, &edited, a, backup.as_deref(), "import")?;
     out.data["from"] = json!(path_text(&from));
     Ok(out)
 }
@@ -653,6 +653,17 @@ pub fn profile_for_new(a: &Args) -> Result<(Option<config::Profile>, Vec<String>
     }
     if a.no_profile || !a.command.is_empty() || a.command_line.is_some() {
         return Ok((None, Vec::new()));
+    }
+    if !l.state().editable() {
+        // A default profile, if the file names one, cannot be read: say so instead of guessing.
+        return Ok((
+            None,
+            vec![format!(
+                "{} is {}, so no default profile is used; the Host's default shell runs (`subak config check`)",
+                config::FILE,
+                l.state().as_str()
+            )],
+        ));
     }
     let d = l.settings().terminal.default_profile.trim().to_string();
     if d.is_empty() {

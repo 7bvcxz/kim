@@ -374,9 +374,9 @@ warned about by name and never printed.
 or `--command-line` is given), its folder (unless `--cwd`), and its environment overrides (an
 `--env`/`--unset-env` of the same variable wins). Without a program, `subak new` uses
 `terminal.default_profile` unless `--no-profile`. The Host receives the explicit command, folder
-and environment; it never reads profiles. `--json` adds `profile` (the name, or `null`) to the
+and environment; it never reads profiles. `--json` adds `profile` (its name) when a profile was used, to the
 result and to dry runs. `profile_not_found` (exit 3) names the profiles there are; an invalid
-settings file is `config_invalid`. A default profile that is missing only warns (the Host's
+settings file is `config_invalid`. A default profile that is missing, or a settings file that is invalid or newer, only warns when no `--profile` is given (the Host's
 shell runs).
 
 ```console

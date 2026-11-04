@@ -17,20 +17,31 @@
 //! and are tested everywhere.
 
 pub mod core;
+pub mod edit;
 pub mod event;
 pub mod inject;
 pub mod ipc;
 pub mod lifecycle;
+pub mod model;
 pub mod paths;
 pub mod rules;
+pub mod schema;
 pub mod shortcuts;
 pub mod startup;
 pub mod stats;
+pub mod store;
 pub mod table;
 pub mod time;
 pub mod trigger;
+pub mod validate;
 pub mod vk;
 pub mod worker;
+
+/// The JSON Schema validator of `cargo xtask schema-check` (ADR 0015), compiled into Ddalgak so
+/// rules are checked by the very same code as the contract examples (ADR 0028).
+#[path = "../../../xtask/src/jsonschema.rs"]
+#[allow(dead_code, unused_qualifications, missing_debug_implementations)]
+pub(crate) mod jsonschema;
 
 #[cfg(windows)]
 #[allow(unsafe_code)]

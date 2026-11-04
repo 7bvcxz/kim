@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/hellomouv/kim/blob/main/docs/contracts/schemas/ddalgak-cli-v1.schema.json",
-  "title": "ddalgak --json output, schema_version 1 (Step 66 engine commands)",
-  "description": "Every document `ddalgak ... --json` prints in Step 66: the cli-envelope-v1 envelope, the `data` of each command (selected by `command`), and Ddalgak's error codes with their exit codes (docs/CLI_CONTRACT.md §6, docs/DDALGAK_ENGINE.md §6). Objects are closed so regression tests notice any change; consumers must still ignore unknown fields and tolerate new enum values (CLI_CONTRACT §8). Privacy is part of the contract: activity entries carry rule IDs and outcome codes only, and no field ever carries keys, typed text, window titles, paths of other programs or rule content (DDALGAK-SEC-001, DDALGAK-SEC-011).",
+  "title": "ddalgak --json output, schema_version 1 (Step 66 engine commands, Step 67 rule commands)",
+  "description": "Every document `ddalgak ... --json` prints: the cli-envelope-v1 envelope, the `data` of each command (selected by `command`), and Ddalgak's error codes with their exit codes (docs/CLI_CONTRACT.md §6, docs/DDALGAK_ENGINE.md §6, docs/DDALGAK_RULE_MODEL.md §13). Objects are closed so regression tests notice any change; consumers must still ignore unknown fields and tolerate new enum values (CLI_CONTRACT §8). Privacy is part of the contract: activity entries carry rule IDs and outcome codes only, and no engine or status field ever carries keys, typed text, window titles, paths of other programs or rule content (DDALGAK-SEC-001, DDALGAK-SEC-011). The rule commands show what the user asked for: `rule list` titles, triggers and step types, `rule show` the one requested rule as stored in rules.json, and problem messages name rules, triggers and step fields (never typed text, URLs or arguments).",
   "oneOf": [
     { "$ref": "#/$defs/failure" },
     { "$ref": "#/$defs/ok_capabilities" },
@@ -11,7 +11,18 @@
     { "$ref": "#/$defs/ok_engine" },
     { "$ref": "#/$defs/ok_quit" },
     { "$ref": "#/$defs/ok_startup_status" },
-    { "$ref": "#/$defs/ok_startup_change" }
+    { "$ref": "#/$defs/ok_startup_change" },
+    { "$ref": "#/$defs/ok_rule_list" },
+    { "$ref": "#/$defs/ok_rule_show" },
+    { "$ref": "#/$defs/ok_rule_check" },
+    { "$ref": "#/$defs/ok_rule_write" },
+    { "$ref": "#/$defs/ok_rules_history" },
+    { "$ref": "#/$defs/ok_rules_backup" },
+    { "$ref": "#/$defs/ok_rules_restore" },
+    { "$ref": "#/$defs/ok_rules_reload" },
+    { "$ref": "#/$defs/ok_rules_draft" },
+    { "$ref": "#/$defs/ok_rules_draft_apply" },
+    { "$ref": "#/$defs/ok_rules_draft_discard" }
   ],
   "$defs": {
     "rule_id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,47}$" },
@@ -88,8 +99,9 @@
       ]
     },
     "rules": {
+      "description": "The active rules (what the engine runs or will run), counted, plus the saved file and the draft as separate states (Step 67). Without the app, the counts describe the saved file and `active_set`, `in_sync` and `last_reload` are null.",
       "type": "object",
-      "required": ["file", "problem", "revision", "engine_on_start", "total", "active", "active_rules", "disabled", "other_modes", "inactive"],
+      "required": ["file", "problem", "revision", "engine_on_start", "total", "active", "active_rules", "disabled", "other_modes", "inactive", "saved", "active_set", "in_sync", "last_reload", "draft"],
       "additionalProperties": false,
       "properties": {
         "file": { "enum": ["missing", "loaded", "invalid", "newer_version"] },
@@ -109,15 +121,85 @@
             "additionalProperties": false,
             "properties": {
               "rule": { "$ref": "#/$defs/rule_id" },
-              "code": {
-                "description": "Validation codes of DDALGAK_RULE_MODEL §8 (rule_invalid: a value this version's loader refuses).",
-                "enum": ["trigger_invalid", "trigger_reserved", "step_invalid", "step_unsupported", "condition_unsupported", "rule_unsupported", "rule_invalid", "duplicate_rule_id", "duplicate_trigger"]
-              },
+              "code": { "$ref": "#/$defs/inactive_code" },
               "reason": { "type": "string", "minLength": 1 }
             }
           }
-        }
+        },
+        "saved": { "$ref": "#/$defs/saved_file" },
+        "active_set": { "$ref": "#/$defs/active_set" },
+        "in_sync": { "description": "The active rules equal the saved file (null without the app).", "type": ["boolean", "null"] },
+        "last_reload": { "$ref": "#/$defs/last_reload" },
+        "draft": { "$ref": "#/$defs/draft_state" }
       }
+    },
+    "inactive_code": {
+      "description": "Codes of DDALGAK_RULE_MODEL §8 that keep a rule inactive: errors, and the *_unsupported infos of this version.",
+      "enum": ["trigger_invalid", "trigger_reserved", "output_reserved", "step_invalid", "recursion_risk", "consent_missing", "rule_invalid", "duplicate_profile_id", "duplicate_rule_id", "unknown_mode", "output_is_trigger", "duplicate_trigger", "duplicate_binding", "consent_stale", "run_too_long", "step_unsupported", "condition_unsupported", "rule_unsupported"]
+    },
+    "revision": { "type": "integer", "minimum": 0 },
+    "saved_file": {
+      "description": "rules.json as last read. `interrupted_save`: a crash left rules.json.tmp behind; rules.json itself is intact (the next save replaces the temporary file).",
+      "type": "object",
+      "required": ["file", "revision", "problem", "interrupted_save"],
+      "additionalProperties": false,
+      "properties": {
+        "file": { "enum": ["missing", "loaded", "invalid", "newer_version"] },
+        "revision": { "type": ["integer", "null"], "minimum": 0 },
+        "problem": { "type": ["string", "null"] },
+        "interrupted_save": { "type": "boolean" }
+      }
+    },
+    "active_set": {
+      "description": "The rules the running app holds (the last usable file); null without the app.",
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["revision", "loaded_at"],
+          "additionalProperties": false,
+          "properties": { "revision": { "type": ["integer", "null"], "minimum": 0 }, "loaded_at": { "type": "string", "format": "date-time" } }
+        }
+      ]
+    },
+    "last_reload": {
+      "description": "The last reload that changed something or failed: `applied` (the new file is active) or `kept_previous` (the file is not usable; the previous rules stay active and the code says why).",
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["at", "origin", "outcome", "revision", "code", "reason"],
+          "additionalProperties": false,
+          "properties": {
+            "at": { "type": "string", "format": "date-time" },
+            "origin": { "enum": ["watcher", "cli"] },
+            "outcome": { "enum": ["applied", "kept_previous"] },
+            "revision": { "type": ["integer", "null"], "minimum": 0 },
+            "code": { "enum": [null, "rules_invalid", "rules_from_newer_version"] },
+            "reason": { "type": ["string", "null"] }
+          },
+          "oneOf": [
+            { "properties": { "outcome": { "const": "applied" }, "code": { "type": "null" } } },
+            { "properties": { "outcome": { "const": "kept_previous" }, "code": { "type": "string" } } }
+          ]
+        }
+      ]
+    },
+    "draft_state": {
+      "description": "An unsaved draft (rules.draft.json) and the saved revision it is based on; stale when the saved rules changed since.",
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["base_revision", "stale"],
+          "additionalProperties": false,
+          "properties": {
+            "base_revision": { "type": ["integer", "null"], "minimum": 0 },
+            "stale": { "type": "boolean" },
+            "problem": { "type": "string" }
+          }
+        }
+      ]
     },
     "shortcuts": {
       "type": "object",
@@ -239,14 +321,21 @@
               },
               "allOf": [
                 {
-                  "description": "Without the app the engine is off for that reason, and there is no activity.",
+                  "description": "Without the app the engine is off for that reason, there is no activity and there are no active rules apart from the saved file; with the app, saved and active rules are compared.",
                   "anyOf": [
-                    { "properties": { "app": { "properties": { "running": { "const": true } } } }, "required": ["start", "session"] },
+                    {
+                      "properties": {
+                        "app": { "properties": { "running": { "const": true } } },
+                        "rules": { "properties": { "in_sync": { "type": "boolean" } } }
+                      },
+                      "required": ["start", "session"]
+                    },
                     {
                       "properties": {
                         "app": { "properties": { "running": { "const": false } } },
                         "engine": { "properties": { "off_reason": { "const": "app_not_running" } } },
-                        "activity": { "maxItems": 0 }
+                        "activity": { "maxItems": 0 },
+                        "rules": { "properties": { "active_set": { "type": "null" }, "in_sync": { "type": "null" }, "last_reload": { "type": "null" } } }
                       }
                     }
                   ]
@@ -477,8 +566,411 @@
         }
       ]
     },
+    "source": { "description": "What a rule command read: the saved rules.json or the draft (--draft).", "enum": ["saved", "draft"] },
+    "file_state": { "enum": ["missing", "loaded", "invalid", "newer_version"] },
+    "summary": {
+      "type": "object",
+      "required": ["errors", "warnings", "infos"],
+      "additionalProperties": false,
+      "properties": { "errors": { "$ref": "#/$defs/count" }, "warnings": { "$ref": "#/$defs/count" }, "infos": { "$ref": "#/$defs/count" } }
+    },
+    "offer": {
+      "description": "A non-destructive resolution in the hotkey contract's style (HOTKEY_CONTRACT §9.5); never applied automatically.",
+      "oneOf": [
+        { "type": "object", "required": ["kind", "keys"], "additionalProperties": false, "properties": { "kind": { "const": "rebind" }, "keys": { "type": "string", "minLength": 1 } } },
+        { "type": "object", "required": ["kind", "permission"], "additionalProperties": false, "properties": { "kind": { "const": "allow" }, "permission": { "enum": ["input-injection", "launch-programs", "clipboard"] } } },
+        { "type": "object", "required": ["kind"], "additionalProperties": false, "properties": { "kind": { "enum": ["disable", "keep"] } } }
+      ]
+    },
+    "problem": {
+      "description": "One validation finding (DDALGAK_RULE_MODEL §8). Errors and warnings carry offers, infos none.",
+      "type": "object",
+      "required": ["code", "severity", "profile", "rule", "at", "message", "with", "offers"],
+      "additionalProperties": false,
+      "properties": {
+        "code": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+        "severity": { "enum": ["error", "warning", "info"] },
+        "profile": { "type": ["string", "null"] },
+        "rule": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/rule_id" }] },
+        "at": { "type": "string" },
+        "message": { "type": "string" },
+        "with": { "type": ["object", "null"] },
+        "offers": { "type": "array", "items": { "$ref": "#/$defs/offer" } }
+      },
+      "anyOf": [
+        { "properties": { "severity": { "enum": ["error", "warning"] } } },
+        { "properties": { "severity": { "const": "info" }, "offers": { "maxItems": 0 } } }
+      ]
+    },
+    "app_after_write": {
+      "description": "A running app asked to reload after a saved change: whether the active rules now equal the saved ones. null for dry runs and drafts; `running: false` when no app runs (it reads the file when it starts).",
+      "oneOf": [
+        { "type": "null" },
+        { "type": "object", "required": ["running"], "additionalProperties": false, "properties": { "running": { "const": false } } },
+        {
+          "type": "object",
+          "required": ["running", "outcome", "in_sync", "active_revision"],
+          "additionalProperties": false,
+          "properties": {
+            "running": { "const": true },
+            "outcome": { "enum": ["applied", "unchanged", "kept_previous", null] },
+            "in_sync": { "type": ["boolean", "null"] },
+            "active_revision": { "type": ["integer", "null"], "minimum": 0 },
+            "error": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "revision_change": {
+      "type": "object",
+      "required": ["from", "to"],
+      "additionalProperties": false,
+      "properties": { "from": { "$ref": "#/$defs/revision" }, "to": { "type": ["integer", "null"], "minimum": 0 } }
+    },
+    "rule_diff": {
+      "type": "object",
+      "required": ["added", "removed", "changed"],
+      "additionalProperties": false,
+      "properties": {
+        "added": { "type": "array", "items": { "$ref": "#/$defs/rule_id" } },
+        "removed": { "type": "array", "items": { "$ref": "#/$defs/rule_id" } },
+        "changed": { "type": "array", "items": { "$ref": "#/$defs/rule_id" } }
+      }
+    },
+    "rule_state": { "enum": ["active", "disabled", "inactive", "other_mode", "other_profile"] },
+    "ok_rule_list": {
+      "allOf": [
+        { "$ref": "#/$defs/envelope_ok" },
+        {
+          "properties": {
+            "command": { "const": "rule.list" },
+            "data": {
+              "type": "object",
+              "required": ["source", "file", "revision", "active_profile", "profiles", "rules", "summary"],
+              "additionalProperties": false,
+              "properties": {
+                "source": { "$ref": "#/$defs/source" },
+                "file": { "enum": ["missing", "loaded"] },
+                "revision": { "$ref": "#/$defs/revision" },
+                "active_profile": { "type": "string" },
+                "profiles": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": ["id", "title", "default_mode", "modes", "rules"],
+                    "additionalProperties": false,
+                    "properties": {
+                      "id": { "type": "string" },
+                      "title": { "type": "string" },
+                      "default_mode": { "type": "string" },
+                      "modes": { "type": "array", "items": { "type": "string" } },
+                      "rules": { "$ref": "#/$defs/count" }
+                    }
+                  }
+                },
+                "rules": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": ["id", "title", "profile", "position", "enabled", "trigger", "on", "modes", "priority", "steps", "state", "code", "problems"],
+                    "additionalProperties": false,
+                    "properties": {
+                      "id": { "$ref": "#/$defs/rule_id" },
+                      "title": { "type": ["string", "null"] },
+                      "profile": { "type": "string" },
+                      "position": { "$ref": "#/$defs/count" },
+                      "enabled": { "type": "boolean" },
+                      "trigger": { "type": ["string", "null"] },
+                      "on": { "enum": ["press", "release", "hold", null] },
+                      "modes": { "type": ["array", "null"], "items": { "type": "string" } },
+                      "priority": { "type": "integer" },
+                      "steps": { "type": "array", "items": { "type": "string" } },
+                      "state": { "$ref": "#/$defs/rule_state" },
+                      "code": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/inactive_code" }] },
+                      "problems": { "$ref": "#/$defs/count" }
+                    },
+                    "oneOf": [
+                      { "properties": { "state": { "const": "inactive" }, "code": { "type": "string" } } },
+                      { "properties": { "state": { "enum": ["active", "disabled", "other_mode", "other_profile"] }, "code": { "type": "null" } } }
+                    ]
+                  }
+                },
+                "summary": { "$ref": "#/$defs/summary" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ok_rule_show": {
+      "allOf": [
+        { "$ref": "#/$defs/envelope_ok" },
+        {
+          "properties": {
+            "command": { "const": "rule.show" },
+            "data": {
+              "type": "object",
+              "required": ["source", "revision", "profile", "position", "state", "code", "rule", "problems"],
+              "additionalProperties": false,
+              "properties": {
+                "source": { "$ref": "#/$defs/source" },
+                "revision": { "$ref": "#/$defs/revision" },
+                "profile": { "type": "string" },
+                "position": { "$ref": "#/$defs/count" },
+                "state": { "$ref": "#/$defs/rule_state" },
+                "code": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/inactive_code" }] },
+                "rule": { "description": "The rule as stored (ddalgak-rules-v1 `rule`, unknown fields included).", "type": "object", "required": ["id"] },
+                "problems": { "type": "array", "items": { "$ref": "#/$defs/problem" } }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ok_rule_check": {
+      "allOf": [
+        { "$ref": "#/$defs/envelope_ok" },
+        {
+          "properties": {
+            "command": { "const": "rule.check" },
+            "data": {
+              "type": "object",
+              "required": ["source", "file", "revision", "ok", "summary", "problems"],
+              "additionalProperties": false,
+              "properties": {
+                "source": { "$ref": "#/$defs/source" },
+                "file": { "$ref": "#/$defs/file_state" },
+                "revision": { "type": ["integer", "null"], "minimum": 0 },
+                "ok": { "description": "No errors (warnings and infos never block).", "type": "boolean" },
+                "summary": { "$ref": "#/$defs/summary" },
+                "problems": { "type": "array", "items": { "$ref": "#/$defs/problem" } }
+              },
+              "oneOf": [
+                { "properties": { "ok": { "const": true }, "summary": { "properties": { "errors": { "const": 0 } } } } },
+                { "properties": { "ok": { "const": false }, "summary": { "properties": { "errors": { "minimum": 1 } } } } }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "ok_rule_write": {
+      "allOf": [
+        { "$ref": "#/$defs/envelope_ok" },
+        {
+          "properties": {
+            "command": { "enum": ["rule.add", "rule.edit", "rule.delete", "rule.duplicate", "rule.enable", "rule.disable", "rule.move", "rule.revoke"] },
+            "data": {
+              "type": "object",
+              "required": ["dry_run", "target", "changed", "revision", "rules", "created", "notes", "problems", "backup", "snapshot", "app"],
+              "additionalProperties": false,
+              "properties": {
+                "dry_run": { "type": "boolean" },
+                "target": { "$ref": "#/$defs/source" },
+                "changed": { "type": "boolean" },
+                "revision": { "$ref": "#/$defs/revision_change" },
+                "rules": { "type": "array", "items": { "$ref": "#/$defs/rule_id" } },
+                "created": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/rule_id" }] },
+                "notes": { "type": "array", "items": { "type": "string" } },
+                "problems": { "description": "Findings on the rules the change touched (errors there are ones it did not introduce).", "type": "array", "items": { "$ref": "#/$defs/problem" } },
+                "backup": { "type": ["string", "null"] },
+                "snapshot": { "type": ["string", "null"] },
+                "app": { "$ref": "#/$defs/app_after_write" }
+              },
+              "anyOf": [
+                {
+                  "description": "A dry run writes nothing and asks no app.",
+                  "properties": { "dry_run": { "const": true }, "revision": { "properties": { "to": { "type": "null" } } }, "backup": { "type": "null" }, "snapshot": { "type": "null" }, "app": { "type": "null" } }
+                },
+                {
+                  "description": "A draft change leaves the saved and active rules alone.",
+                  "properties": { "dry_run": { "const": false }, "target": { "const": "draft" }, "backup": { "type": "null" }, "snapshot": { "type": "null" }, "app": { "type": "null" } }
+                },
+                { "properties": { "dry_run": { "const": false }, "target": { "const": "saved" }, "changed": { "const": false }, "revision": { "properties": { "to": { "type": "null" } } }, "app": { "type": "null" } } },
+                { "properties": { "dry_run": { "const": false }, "target": { "const": "saved" }, "changed": { "const": true }, "revision": { "properties": { "to": { "type": "integer" } } } } }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "ok_rules_history": {
+      "allOf": [
+        { "$ref": "#/$defs/envelope_ok" },
+        {
+          "properties": {
+            "command": { "const": "rules.history" },
+            "data": {
+              "type": "object",
+              "required": ["file", "revision", "backup", "snapshots"],
+              "additionalProperties": false,
+              "properties": {
+                "file": { "$ref": "#/$defs/file_state" },
+                "revision": { "type": ["integer", "null"], "minimum": 0 },
+                "backup": {
+                  "type": "object",
+                  "required": ["exists", "revision", "usable"],
+                  "additionalProperties": false,
+                  "properties": { "exists": { "type": "boolean" }, "revision": { "type": ["integer", "null"], "minimum": 0 }, "usable": { "type": "boolean" } }
+                },
+                "snapshots": {
+                  "description": "Newest first; at most 50 are kept (DDALGAK_RULE_MODEL §10).",
+                  "type": "array",
+                  "maxItems": 50,
+                  "items": {
+                    "type": "object",
+                    "required": ["name", "revision", "at", "origin", "command"],
+                    "additionalProperties": false,
+                    "properties": {
+                      "name": { "type": "string", "pattern": "^[0-9]{8}T[0-9]{6}Z-r[0-9]+(-[a-z0-9]+)?\\.json$" },
+                      "revision": { "type": ["integer", "null"], "minimum": 0 },
+                      "at": { "type": ["string", "null"] },
+                      "origin": { "type": ["string", "null"] },
+                      "command": { "type": ["string", "null"] }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ok_rules_backup": {
+      "allOf": [
+        { "$ref": "#/$defs/envelope_ok" },
+        {
+          "properties": {
+            "command": { "const": "rules.backup" },
+            "data": {
+              "type": "object",
+              "required": ["dry_run", "revision", "snapshot"],
+              "additionalProperties": false,
+              "properties": { "dry_run": { "type": "boolean" }, "revision": { "type": ["integer", "null"], "minimum": 0 }, "snapshot": { "type": ["string", "null"] } }
+            }
+          }
+        }
+      ]
+    },
+    "ok_rules_restore": {
+      "allOf": [
+        { "$ref": "#/$defs/envelope_ok" },
+        {
+          "properties": {
+            "command": { "const": "rules.restore" },
+            "data": {
+              "type": "object",
+              "required": ["dry_run", "source", "restored_revision", "revision", "kept", "snapshot", "app"],
+              "additionalProperties": false,
+              "properties": {
+                "dry_run": { "type": "boolean" },
+                "source": { "type": "string", "minLength": 1 },
+                "restored_revision": { "$ref": "#/$defs/revision" },
+                "revision": { "$ref": "#/$defs/revision_change" },
+                "kept": { "description": "rules.json.bak (the replaced version), or rules.corrupt-<time>.json when the replaced file was not usable.", "type": ["string", "null"] },
+                "snapshot": { "type": ["string", "null"] },
+                "app": { "$ref": "#/$defs/app_after_write" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ok_rules_reload": {
+      "allOf": [
+        { "$ref": "#/$defs/envelope_ok" },
+        {
+          "properties": {
+            "command": { "const": "rules.reload" },
+            "data": {
+              "type": "object",
+              "required": ["dry_run", "outcome", "code", "reason", "saved", "active_set", "in_sync", "engine", "active_rules"],
+              "additionalProperties": false,
+              "properties": {
+                "dry_run": { "type": "boolean" },
+                "outcome": { "enum": ["applied", "unchanged", "kept_previous"] },
+                "code": { "enum": [null, "rules_invalid", "rules_from_newer_version"] },
+                "reason": { "type": ["string", "null"] },
+                "saved": { "$ref": "#/$defs/saved_file" },
+                "active_set": { "$ref": "#/$defs/active_set" },
+                "in_sync": { "type": "boolean" },
+                "engine": { "$ref": "#/$defs/engine" },
+                "active_rules": { "type": "array", "items": { "$ref": "#/$defs/rule_id" } }
+              },
+              "oneOf": [
+                { "properties": { "outcome": { "enum": ["applied", "unchanged"] }, "code": { "type": "null" } } },
+                { "properties": { "outcome": { "const": "kept_previous" }, "code": { "type": "string" }, "in_sync": { "const": false } } }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "ok_rules_draft": {
+      "allOf": [
+        { "$ref": "#/$defs/envelope_ok" },
+        {
+          "properties": {
+            "command": { "const": "rules.draft" },
+            "data": {
+              "type": "object",
+              "required": ["exists", "base_revision", "saved_revision", "stale", "changes", "summary"],
+              "additionalProperties": false,
+              "properties": {
+                "exists": { "type": "boolean" },
+                "base_revision": { "type": ["integer", "null"], "minimum": 0 },
+                "saved_revision": { "type": ["integer", "null"], "minimum": 0 },
+                "stale": { "type": "boolean" },
+                "changes": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/rule_diff" }] },
+                "summary": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/summary" }] }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ok_rules_draft_apply": {
+      "allOf": [
+        { "$ref": "#/$defs/envelope_ok" },
+        {
+          "properties": {
+            "command": { "const": "rules.draft.apply" },
+            "data": {
+              "type": "object",
+              "required": ["dry_run", "target", "changed", "revision", "changes", "snapshot", "app"],
+              "additionalProperties": false,
+              "properties": {
+                "dry_run": { "type": "boolean" },
+                "target": { "const": "saved" },
+                "changed": { "type": "boolean" },
+                "revision": { "$ref": "#/$defs/revision_change" },
+                "changes": { "$ref": "#/$defs/rule_diff" },
+                "snapshot": { "type": ["string", "null"] },
+                "app": { "$ref": "#/$defs/app_after_write" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ok_rules_draft_discard": {
+      "allOf": [
+        { "$ref": "#/$defs/envelope_ok" },
+        {
+          "properties": {
+            "command": { "const": "rules.draft.discard" },
+            "data": {
+              "type": "object",
+              "required": ["dry_run", "discarded", "base_revision"],
+              "additionalProperties": false,
+              "properties": { "dry_run": { "type": "boolean" }, "discarded": { "type": "boolean" }, "base_revision": { "type": ["integer", "null"], "minimum": 0 } }
+            }
+          }
+        }
+      ]
+    },
     "error_code": {
-      "enum": ["io", "internal", "permission_denied", "hook_failed", "usage", "not_installed", "engine_not_running", "protocol_error", "app_identity_mismatch", "rules_invalid", "unsupported_platform", "rules_from_newer_version", "engine_elevated", "app_unresponsive", "engine_off"]
+      "enum": ["io", "internal", "permission_denied", "hook_failed", "usage", "rule_invalid", "hotkey_invalid", "hotkey_reserved", "not_installed", "engine_not_running", "rule_not_found", "profile_not_found", "mode_not_found", "snapshot_not_found", "protocol_error", "app_identity_mismatch", "rules_invalid", "unsupported_platform", "rules_from_newer_version", "engine_elevated", "app_unresponsive", "engine_off", "rule_conflict", "consent_required", "confirmation_required", "busy", "cancelled"]
     },
     "failure": {
       "type": "object",
@@ -501,12 +993,13 @@
           },
           "oneOf": [
             { "properties": { "exit_code": { "const": 1 }, "code": { "enum": ["io", "internal", "permission_denied", "hook_failed"] } } },
-            { "properties": { "exit_code": { "const": 2 }, "code": { "const": "usage" } } },
-            { "properties": { "exit_code": { "const": 3 }, "code": { "enum": ["not_installed", "engine_not_running"] } } },
+            { "properties": { "exit_code": { "const": 2 }, "code": { "enum": ["usage", "rule_invalid", "hotkey_invalid", "hotkey_reserved"] } } },
+            { "properties": { "exit_code": { "const": 3 }, "code": { "enum": ["not_installed", "engine_not_running", "rule_not_found", "profile_not_found", "mode_not_found", "snapshot_not_found"] } } },
             { "properties": { "exit_code": { "const": 4 }, "code": { "enum": ["protocol_error", "app_identity_mismatch", "rules_invalid"] } } },
             { "properties": { "exit_code": { "const": 5 }, "code": { "enum": ["unsupported_platform", "rules_from_newer_version", "engine_elevated"] } } },
             { "properties": { "exit_code": { "const": 6 }, "code": { "const": "app_unresponsive" } } },
-            { "properties": { "exit_code": { "const": 7 }, "code": { "const": "engine_off" } } }
+            { "properties": { "exit_code": { "const": 7 }, "code": { "enum": ["engine_off", "rule_conflict", "consent_required", "confirmation_required", "busy"] } } },
+            { "properties": { "exit_code": { "const": 8 }, "code": { "const": "cancelled" } } }
           ]
         }
       }

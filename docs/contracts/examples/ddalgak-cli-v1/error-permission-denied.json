@@ -1,0 +1,12 @@
+{
+  "command": "rule.add",
+  "error": {
+    "code": "permission_denied",
+    "details": [],
+    "exit_code": 1,
+    "hint": "Ddalgak never elevates; make the folder and rules.json writable for your account",
+    "message": "C:\\Users\\you\\AppData\\Local\\Temp\\ddalgak-cli-readonly\\Roaming\\mouv\\ddalgak\\rules.json is read-only; nothing was written"
+  },
+  "ok": false,
+  "schema_version": 1
+}

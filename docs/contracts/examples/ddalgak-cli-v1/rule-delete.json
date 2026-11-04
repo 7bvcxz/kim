@@ -1,0 +1,26 @@
+{
+  "command": "rule.delete",
+  "data": {
+    "app": {
+      "running": false
+    },
+    "backup": "rules.json.bak",
+    "changed": true,
+    "created": null,
+    "dry_run": false,
+    "notes": [],
+    "problems": [],
+    "revision": {
+      "from": 11,
+      "to": 12
+    },
+    "rules": [
+      "off-copy"
+    ],
+    "snapshot": "20261104T032117Z-r12.json",
+    "target": "saved"
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

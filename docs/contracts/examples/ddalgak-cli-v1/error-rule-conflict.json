@@ -1,0 +1,14 @@
+{
+  "command": "rule.add",
+  "error": {
+    "code": "rule_conflict",
+    "details": [
+      "rule `r-94dfc0da-e96c-4fa0-ae74-7e70ba699061`: duplicate_trigger (error): profiles[0].rules[2].trigger: an earlier enabled rule has the same trigger, modes, conditions and priority; this one is inactive — you may: ddalgak rule edit r-94dfc0da-e96c-4fa0-ae74-7e70ba699061 --trigger Ctrl+Alt+Shift+F13; or ddalgak rule disable r-94dfc0da-e96c-4fa0-ae74-7e70ba699061"
+    ],
+    "exit_code": 7,
+    "hint": "nothing was written; pick an offer above (they are never applied automatically)",
+    "message": "rule `r-94dfc0da-e96c-4fa0-ae74-7e70ba699061` would have the same trigger as rule `r-f3d1eca0-ff1b-4e86-8ad3-2a4f8ccf8e40` (same modes, conditions and priority), so one of them could never fire; nothing was written"
+  },
+  "ok": false,
+  "schema_version": 1
+}

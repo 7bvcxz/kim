@@ -23,10 +23,23 @@ pub enum Code {
     AppUnresponsive,
     EngineOff,
     AppAlreadyRunning,
+    // Step 67: the rule store and rule CRUD (docs/DDALGAK_RULE_MODEL.md §13).
+    RuleNotFound,
+    ProfileNotFound,
+    ModeNotFound,
+    SnapshotNotFound,
+    RuleInvalid,
+    HotkeyInvalid,
+    HotkeyReserved,
+    RuleConflict,
+    ConsentRequired,
+    ConfirmationRequired,
+    Busy,
+    Cancelled,
 }
 
 impl Code {
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 28] = [
         Self::Io,
         Self::Internal,
         Self::PermissionDenied,
@@ -43,6 +56,18 @@ impl Code {
         Self::AppUnresponsive,
         Self::EngineOff,
         Self::AppAlreadyRunning,
+        Self::RuleNotFound,
+        Self::ProfileNotFound,
+        Self::ModeNotFound,
+        Self::SnapshotNotFound,
+        Self::RuleInvalid,
+        Self::HotkeyInvalid,
+        Self::HotkeyReserved,
+        Self::RuleConflict,
+        Self::ConsentRequired,
+        Self::ConfirmationRequired,
+        Self::Busy,
+        Self::Cancelled,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -63,6 +88,18 @@ impl Code {
             Self::AppUnresponsive => "app_unresponsive",
             Self::EngineOff => "engine_off",
             Self::AppAlreadyRunning => "app_already_running",
+            Self::RuleNotFound => "rule_not_found",
+            Self::ProfileNotFound => "profile_not_found",
+            Self::ModeNotFound => "mode_not_found",
+            Self::SnapshotNotFound => "snapshot_not_found",
+            Self::RuleInvalid => "rule_invalid",
+            Self::HotkeyInvalid => "hotkey_invalid",
+            Self::HotkeyReserved => "hotkey_reserved",
+            Self::RuleConflict => "rule_conflict",
+            Self::ConsentRequired => "consent_required",
+            Self::ConfirmationRequired => "confirmation_required",
+            Self::Busy => "busy",
+            Self::Cancelled => "cancelled",
         }
     }
 
@@ -74,12 +111,23 @@ impl Code {
     pub fn exit_code(self) -> u8 {
         match self {
             Self::Io | Self::Internal | Self::PermissionDenied | Self::HookFailed => 1,
-            Self::Usage => 2,
-            Self::NotInstalled | Self::EngineNotRunning => 3,
+            Self::Usage | Self::RuleInvalid | Self::HotkeyInvalid | Self::HotkeyReserved => 2,
+            Self::NotInstalled
+            | Self::EngineNotRunning
+            | Self::RuleNotFound
+            | Self::ProfileNotFound
+            | Self::ModeNotFound
+            | Self::SnapshotNotFound => 3,
             Self::ProtocolError | Self::AppIdentityMismatch | Self::RulesInvalid => 4,
             Self::UnsupportedPlatform | Self::RulesFromNewerVersion | Self::EngineElevated => 5,
             Self::AppUnresponsive => 6,
-            Self::EngineOff | Self::AppAlreadyRunning => 7,
+            Self::EngineOff
+            | Self::AppAlreadyRunning
+            | Self::RuleConflict
+            | Self::ConsentRequired
+            | Self::ConfirmationRequired
+            | Self::Busy => 7,
+            Self::Cancelled => 8,
         }
     }
 }
@@ -111,6 +159,12 @@ impl CliError {
 
     pub fn usage(message: impl Into<String>) -> Self {
         Self::new(Code::Usage, message).hint("see `ddalgak --help`")
+    }
+
+    #[must_use]
+    pub fn details(mut self, details: Vec<String>) -> Self {
+        self.details = details;
+        self
     }
 }
 
@@ -180,6 +234,15 @@ mod tests {
         assert_eq!(Code::EngineNotRunning.exit_code(), 3);
         assert_eq!(Code::RulesInvalid.exit_code(), 4);
         assert_eq!(Code::RulesFromNewerVersion.exit_code(), 5);
+        assert_eq!(Code::RuleNotFound.exit_code(), 3);
+        assert_eq!(Code::RuleInvalid.exit_code(), 2);
+        assert_eq!(Code::RuleConflict.exit_code(), 7);
+        assert_eq!(Code::ConsentRequired.exit_code(), 7);
+        // Shared codes keep the registry's exit class.
+        assert_eq!(Code::HotkeyInvalid.exit_code(), 2);
+        assert_eq!(Code::HotkeyReserved.exit_code(), 2);
+        assert_eq!(Code::ConfirmationRequired.exit_code(), 7);
+        assert_eq!(Code::Busy.exit_code(), 7);
     }
 
     #[test]

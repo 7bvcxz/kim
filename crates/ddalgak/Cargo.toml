@@ -27,8 +27,16 @@ workspace = true
 # Key syntax, reserved chords, the hotkey manifest and user layer, `RegisterHotKey` chord mapping
 # (docs/HOTKEY_CONTRACT.md, ADR 0017).
 kim-hotkeys = { version = "0.0.1", path = "../kim-hotkeys" }
-# The --json envelope (docs/CLI_CONTRACT.md §7), the local IPC messages and rules.json reading.
+# The typed rules document (docs/DDALGAK_RULE_MODEL.md; unknown fields kept with `flatten`).
+serde = { version = "1.0.229", features = ["derive"] }
+# The --json envelope (docs/CLI_CONTRACT.md §7), the local IPC messages and rules.json.
 serde_json = "1.0.154"
+# The `ddalgak-rules-v1` schema is applied at run time with xtask/src/jsonschema.rs, the
+# validator of `cargo xtask schema-check` (ADR 0028), which needs `regex`. Only the features the
+# schema's patterns use (`\s`, `\S`, `(?i)`).
+regex = { version = "1.13.1", default-features = false, features = ["std", "perf", "unicode-case", "unicode-perl"] }
+# Launch-consent fingerprints (DDALGAK_RULE_MODEL §6.2, `consent_stale`), as `kim` and xtask.
+sha2 = "0.11.1"
 
 [target."cfg(windows)".dependencies]
 # The engine host (ADR 0024): low-level keyboard hook and SendInput, RegisterHotKey on the host
@@ -57,5 +65,6 @@ windows-sys = { version = "0.61.2", features = [
 ] }
 
 [dev-dependencies]
-# tests/cli.rs validates `ddalgak --json` output with xtask/src/jsonschema.rs (test-only).
+# tests/cli.rs validates `ddalgak --json` output with xtask/src/jsonschema.rs and rewrites
+# machine-specific names in the blessed examples (all regex features).
 regex = "1.13.1"

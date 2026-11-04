@@ -1,0 +1,91 @@
+{
+  "command": "status",
+  "data": {
+    "activity": [],
+    "app": {
+      "elevated": false,
+      "launched_by": "user",
+      "pid": 55736,
+      "running": true,
+      "started_at": "2026-11-04T03:21:16Z",
+      "test_mode": true,
+      "tray": false,
+      "uptime_s": 0,
+      "version": "0.0.1"
+    },
+    "engine": {
+      "hook": {
+        "installed": true,
+        "observe_only": true
+      },
+      "last_change": {
+        "origin": "cli",
+        "request": "start"
+      },
+      "off_reason": null,
+      "state": "running"
+    },
+    "profile": {
+      "id": "default",
+      "mode": "base"
+    },
+    "rules": {
+      "active": 3,
+      "active_rules": [
+        "base-pause",
+        "base-off",
+        "new-key"
+      ],
+      "active_set": {
+        "loaded_at": "2026-11-04T03:21:16Z",
+        "revision": 2
+      },
+      "disabled": 0,
+      "draft": null,
+      "engine_on_start": "off",
+      "file": "loaded",
+      "in_sync": null,
+      "inactive": [],
+      "last_reload": {
+        "at": "2026-11-04T03:21:16Z",
+        "code": null,
+        "origin": "watcher",
+        "outcome": "applied",
+        "reason": null,
+        "revision": 2
+      },
+      "other_modes": 0,
+      "problem": null,
+      "revision": 2,
+      "saved": {
+        "file": "loaded",
+        "interrupted_save": false,
+        "problem": null,
+        "revision": 2
+      },
+      "total": 3
+    },
+    "session": {
+      "locked": false
+    },
+    "shortcuts": {
+      "config": "default",
+      "global": [],
+      "off": false,
+      "problem": null
+    },
+    "start": {
+      "off_reason": "default"
+    },
+    "startup": {
+      "command": null,
+      "enabled": false,
+      "foreign": false,
+      "location": "HKCU\\Software\\mouv-test\\ddalgak-cli-reload\\Run\\mouv.ddalgak",
+      "program": "C:\\Users\\you\\AppData\\Local\\Programs\\mouv\\ddalgak\\versions\\0.0.1\\ddalgak-gui.exe"
+    }
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

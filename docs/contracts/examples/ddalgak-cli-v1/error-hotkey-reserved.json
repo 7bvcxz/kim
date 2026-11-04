@@ -1,0 +1,12 @@
+{
+  "command": "rule.add",
+  "error": {
+    "code": "hotkey_reserved",
+    "details": [],
+    "exit_code": 2,
+    "hint": "reserved chords (Windows key chords, Alt+Tab, Ctrl+Alt+Delete, F12, the emergency chord) are never rule triggers",
+    "message": "the trigger is reserved: the chord is reserved (Task switching)"
+  },
+  "ok": false,
+  "schema_version": 1
+}

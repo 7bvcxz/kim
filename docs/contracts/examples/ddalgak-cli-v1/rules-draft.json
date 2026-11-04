@@ -1,0 +1,24 @@
+{
+  "command": "rules.draft",
+  "data": {
+    "base_revision": 13,
+    "changes": {
+      "added": [],
+      "changed": [
+        "off-key"
+      ],
+      "removed": []
+    },
+    "exists": true,
+    "saved_revision": 13,
+    "stale": false,
+    "summary": {
+      "errors": 0,
+      "infos": 0,
+      "warnings": 0
+    }
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

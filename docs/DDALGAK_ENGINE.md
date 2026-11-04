@@ -1,9 +1,11 @@
 # Ddalgak engine (Step 66)
 
-Status: **current** (implemented in Step 66 for Windows; remaps and the other actions follow in
-Steps 68–72, the rule store in Step 67) · Decisions: [ADR 0022](adr/0022-ddalgak-rule-model-and-safety.md),
-[ADR 0024](adr/0024-ddalgak-windows-input-apis-and-permissions.md) · Code: `crates/ddalgak` ·
-Requirements: `DDALGAK-FR-001…004`, `DDALGAK-FR-008`, `DDALGAK-FR-017`, `DDALGAK-FR-060`,
+Status: **current** (engine implemented in Step 66 for Windows, the rule store and live reload in
+Step 67, §10; remaps and the other actions follow in Steps 68–72) · Decisions:
+[ADR 0022](adr/0022-ddalgak-rule-model-and-safety.md),
+[ADR 0024](adr/0024-ddalgak-windows-input-apis-and-permissions.md),
+[ADR 0028](adr/0028-ddalgak-rule-store-validation-and-reload.md) · Code: `crates/ddalgak` ·
+Requirements: `DDALGAK-FR-001…009`, `DDALGAK-FR-017`, `DDALGAK-FR-060`,
 `DDALGAK-NFR-001`, `DDALGAK-NFR-002`, `DDALGAK-NFR-004`, `DDALGAK-SEC-001…005`, `DDALGAK-SEC-007`,
 `DDALGAK-SEC-010`, `DDALGAK-SEC-011`
 
@@ -19,17 +21,18 @@ the rule format is [DDALGAK_RULE_MODEL](DDALGAK_RULE_MODEL.md); the safety scope
 | `ddalgak-gui.exe`: the tray app that owns the engine (tray icon with state by shape and text, single instance per user session, hidden window, no editor) | the rule editor and playground windows (74, 76) |
 | The low-level keyboard hook engine: event model, trigger tables, decision core, worker, lifecycle, emergency chord, held-key ledger, rate limit, stepping aside | remaps, send keys, text, launches, mouse, modes (68–72); mouse-button triggers and the mouse hook (68) |
 | Ddalgak's own global shortcuts `engine.toggle` and `engine.pause` from `hotkeys.json`, registered with `RegisterHotKey` | the `ddalgak hotkeys …` commands (81; bind by editing `hotkeys.json` until then) |
-| Rules: a read-only runtime view of `rules.json` that runs **engine-control rules** (`engine` steps) and keeps every other rule inactive with a stated code | the rule store, CRUD, full validation, history, live reload (67) |
-| `ddalgak status`, `health`, `engine start|pause|resume|stop`, `pause`, `resume`, `quit`, `startup status|enable|disable`, `capabilities` with `--json` and `--dry-run` | `rule`, `profile`, `mode`, `test`, `explain` (67, 72, 76, 77, 81) |
+| Rules: the engine runs **engine-control rules** (`engine` steps) and keeps every other rule inactive with a stated code; since Step 67 the rule store with full validation, CRUD, drafts, history and live reload (§10) | the other action types (68–72) |
+| `ddalgak status`, `health`, `engine start|pause|resume|stop`, `pause`, `resume`, `quit`, `startup status|enable|disable`, `capabilities` with `--json` and `--dry-run`; since Step 67 `rule …` and `rules …` | `profile`, `mode`, `test`, `explain` (72, 75, 76, 77, 81) |
 | Opt-in start at sign-in through the user's Run key | — |
 
 **Never broader.** A rule this version does not run is listed in `status` as inactive with its
 code: `step_unsupported` (an action type of a later Step, or an unknown one),
 `condition_unsupported` (`when`, Step 77), `rule_unsupported` (an unknown field inside the rule),
-`trigger_invalid`/`trigger_reserved`, `duplicate_rule_id`, `duplicate_trigger`. A file that is
-not a usable `ddalgak.rules` v1 document is not loaded at all and the engine cannot be turned on
-with it (`rules_invalid`, `rules_from_newer_version`). `rules.json` is read again at every
-`engine start`; it is never written by Step 66.
+`trigger_invalid`/`trigger_reserved`, `duplicate_rule_id`, `duplicate_trigger` and every other
+error of DDALGAK_RULE_MODEL §8. A file that is not a usable `ddalgak.rules` v1 document is not
+loaded at all and the engine cannot be turned on with it (`rules_invalid`,
+`rules_from_newer_version`). `rules.json` is read again at every `engine start` and reloaded
+while the app runs (§10); the app itself never writes it.
 
 ## 2. The event model
 
@@ -91,7 +94,9 @@ windows) is implemented and tested in the core for Step 68.
 
 ```mermaid
 flowchart LR
-  cli["ddalgak.exe<br/>(headless CLI)"] -- "identity-checked pipe<br/>status · health · engine · quit" --> app
+  cli["ddalgak.exe<br/>(headless CLI)"] -- "identity-checked pipe<br/>status · health · engine · quit · rules.reload" --> app
+  cli -- "rule … (locked atomic writes)" --> file[("rules.json")]
+  file -- "folder change notification" --> app
   subgraph app["ddalgak-gui.exe (user-started, tray icon)"]
     main["main thread<br/>hidden window · tray · RegisterHotKey<br/>session + WinEvent watchers · lifecycle"]
     hook["hook thread<br/>WH_KEYBOARD_LL · Core::decide"]
@@ -163,6 +168,7 @@ is safe mode: nothing is registered.
 | `quit` | write, `--dry-run` | Ends the tray app (engine off first). |
 | `startup status|enable|disable` | read / write, `--dry-run` | The user's Run value only. |
 | `capabilities` | read | [tool-capabilities-v1](contracts/schemas/tool-capabilities-v1.schema.json) |
+| `rule list|show|check`, `rule add|edit|delete|duplicate|enable|disable|move|revoke`, `rules history|backup|restore|reload|draft` | read / write / destructive | Step 67, §10. They work without the app (only `rules reload` needs it); after a saved change they ask a running app to reload. |
 
 Every command that talks to the app first checks that the pipe is served by `ddalgak-gui.exe` of
 the same user (`app_identity_mismatch`, 4) and sends nothing otherwise. Without the app it fails
@@ -237,9 +243,55 @@ tray icon on your desktop):
 | Path | What |
 | --- | --- |
 | `crates/ddalgak/src/{event,trigger,table,core,worker,lifecycle,inject,shortcuts,rules,ipc,startup,stats}.rs` | portable engine, unit-tested on every platform |
-| `crates/ddalgak/src/win/{hook,inject,context,host,tray,pipe,instance,startup}.rs` | Windows layer |
-| `crates/ddalgak/src/main.rs`, `cli.rs`, `output.rs` | the `ddalgak` CLI |
+| `crates/ddalgak/src/{model,schema,validate,store,edit}.rs` | the rule store (Step 67, §10): typed model, run-time schema, validation, files, operations |
+| `crates/ddalgak/src/win/{hook,inject,context,host,tray,pipe,instance,startup,watch}.rs` | Windows layer (`watch`: the folder change notifications of §10) |
+| `crates/ddalgak/src/main.rs`, `cli.rs`, `output.rs`, `rule_cmd.rs` | the `ddalgak` CLI (`rule_cmd`: the `rule` and `rules` commands) |
 | `crates/ddalgak/src/bin/ddalgak-gui.rs` | the tray app |
 | `crates/ddalgak/hotkeys.manifest.json` | the built-in hotkey manifest (equal to the contract example) |
 | `crates/ddalgak/tests/{cli,hook_windows}.rs` | real-binary and real-hook tests |
-| `e2e/tests/step66_ddalgak_engine.rs` | the e2e scenario (runs only through `cargo xtask e2e`) |
+| `e2e/tests/step66_ddalgak_engine.rs`, `e2e/tests/step67_ddalgak_rules.rs` | the e2e scenarios (run only through `cargo xtask e2e`) |
+
+## 10. The rule store and live reload (Step 67)
+
+Decision: [ADR 0028](adr/0028-ddalgak-rule-store-validation-and-reload.md). Format and codes:
+[DDALGAK_RULE_MODEL §2, §8, §13](DDALGAK_RULE_MODEL.md).
+
+**Files** (`%APPDATA%\mouv\ddalgak\`): `rules.json` (saved), `rules.json.bak` (the version before
+the last change), `history\<UTC time>-r<revision>.json` (every change, the last 50; `rules backup`
+adds one on demand), `rules.draft.json` (an unsaved draft), `rules.json.lock` (the writers'
+lock), `rules.json.tmp` (only while a save runs, or after a crash), `rules.corrupt-<time>.json`
+(an unusable file a restore replaced).
+
+**Three states, shown apart.** *Saved* is `rules.json`; *active* is what the running app holds
+and the engine runs (the last usable file it read); *draft* is `rules.draft.json`. `ddalgak status`
+reports `rules.saved` (file state, revision, `interrupted_save`), `rules.active_set` (revision and
+load time; `null` without the app), `rules.in_sync`, `rules.last_reload` (`applied` or
+`kept_previous` with the reason) and `rules.draft` (base revision, `stale`).
+
+**Writing** (CLI; the editor in Step 74 uses the same store): lock → re-read → revision check →
+change → validate before and after (an introduced error refuses the change) → `.bak` → temporary
+file, flush, rename → history snapshot → unlock → ask a running app to reload. Two CLIs at once
+take turns; a writer killed half-way leaves the previous `rules.json` and its lock is released by
+the OS.
+
+**Reloading** (the app): a folder change notification (one waiting thread, no polling) or the
+CLI's `rules.reload` request makes the app read `rules.json` and compare its bytes with the
+active ones. A usable, changed file becomes active at once: with the engine on, a new table is
+swapped into the running hook between two callbacks (the hook stays installed, keys it consumed
+stay paired, pending taps, holds and sequences are dropped) and the worker gets the new rules
+with a new generation, so signals of the old table are ignored. An unusable file keeps the active
+rules, marks `in_sync: false`, sets `last_reload.outcome: kept_previous` with `rules_invalid` or
+`rules_from_newer_version`, adds `rules_invalid` to `health.problems` and shows one tray notice per
+bad version. The engine state (off, running, paused) never changes by a reload.
+
+| Check | Status | Evidence |
+| --- | --- | --- |
+| CRUD, offers, refusals, consent, drafts, history, backup, restore through the real CLI without the app | **tested** | `tests/cli.rs::rules_are_managed_through_the_cli_without_the_app` |
+| Eight CLIs adding rules at once, six renaming one rule at once: no lost change; a held lock gives `busy` | **tested** | `tests/cli.rs::two_clis_editing_at_once_never_lose_a_change` |
+| A writer killed half-way through writing `rules.json` (debug test hook): previous file intact, torn temporary file reported, next save works | **tested** | `tests/cli.rs::a_crash_in_the_middle_of_a_save_leaves_a_valid_file` |
+| A corrupt file: safe mode, never rewritten, restore keeps it as `rules.corrupt-*.json` | **tested** | `tests/cli.rs::a_corrupt_file_is_safe_mode_kept_and_restorable` |
+| Read-only `rules.json` and a folder the user may not add files to (`icacls` deny, no elevation): `permission_denied`, nothing changed | **tested** | `tests/cli.rs::read_only_files_and_folders_are_refused_and_left_alone` |
+| Reload in the running app with the engine on: a CLI change is applied at once, a broken file keeps the previous rules, the hook stays installed and healthy, a repair is applied again | **tested** (Windows 10 19045; with the engine off when the tests run elevated) | `tests/cli.rs::a_running_app_reloads_valid_rules_and_keeps_its_hook` |
+| A rule added while the engine runs fires through the swapped table in the same hook (real `SendInput` of `F17` as "another program") | **tested** on an unlocked desktop of this machine; reports **skipped** when the desktop is locked | same test |
+| Load, validate and compile 1000 rules | **measured**: 33–34 ms (release, including compiling the schema's patterns once), 120–133 ms (debug); `DDALGAK-NFR-004` (< 100 ms with the hook, which installs in 0.2–0.3 ms) met | `rules::tests::loading_and_validating_1000_rules_is_fast_enough` |
+| A reload while a remap holds a key | **not tested**: remaps run from Step 68, which owns that check | — |

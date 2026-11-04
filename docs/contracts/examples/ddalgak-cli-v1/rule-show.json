@@ -1,0 +1,48 @@
+{
+  "command": "rule.show",
+  "data": {
+    "code": "step_unsupported",
+    "position": 2,
+    "problems": [
+      {
+        "at": "profiles[0].rules[2].steps[0]",
+        "code": "step_unsupported",
+        "message": "`remap` steps are not implemented in this version yet (Step 68)",
+        "offers": [],
+        "profile": "default",
+        "rule": "caps",
+        "severity": "info",
+        "with": null
+      }
+    ],
+    "profile": "default",
+    "revision": 4,
+    "rule": {
+      "consent": {
+        "input-injection": {
+          "granted_at": "2026-11-04T03:21:17Z",
+          "via": "cli"
+        }
+      },
+      "created_at": "2026-11-04T03:21:16Z",
+      "enabled": true,
+      "id": "caps",
+      "steps": [
+        {
+          "to": "LCtrl",
+          "type": "remap"
+        }
+      ],
+      "title": "CapsLock: acts as LCtrl",
+      "trigger": {
+        "keys": "CapsLock"
+      },
+      "updated_at": "2026-11-04T03:21:17Z"
+    },
+    "source": "saved",
+    "state": "inactive"
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

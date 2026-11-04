@@ -69,15 +69,17 @@ impl<'a> Validator<'a> {
             .ok_or_else(|| format!("unresolved $ref `{reference}`"))
     }
 
-    fn regex(&self, pattern: &str) -> Result<Regex, String> {
+    /// Matches with the cached compiled pattern. The cached `Regex` itself is used (a clone
+    /// would start with an empty search cache on every call, which made Ddalgak's run-time
+    /// validation of large rule files several times slower).
+    fn is_match(&self, pattern: &str, s: &str) -> Result<bool, String> {
         if let Some(re) = self.regexes.borrow().get(pattern) {
-            return Ok(re.clone());
+            return Ok(re.is_match(s));
         }
         let re = Regex::new(pattern).map_err(|e| format!("invalid pattern `{pattern}`: {e}"))?;
-        self.regexes
-            .borrow_mut()
-            .insert(pattern.to_string(), re.clone());
-        Ok(re)
+        let matched = re.is_match(s);
+        self.regexes.borrow_mut().insert(pattern.to_string(), re);
+        Ok(matched)
     }
 
     fn check(
@@ -180,7 +182,7 @@ impl<'a> Validator<'a> {
                 "pattern" => {
                     let pattern = value.as_str().ok_or("pattern must be a string")?;
                     if let Some(s) = inst.as_str()
-                        && !self.regex(pattern)?.is_match(s)
+                        && !self.is_match(pattern, s)?
                     {
                         errs.push(format!("{path}: {s:?} does not match /{pattern}/"));
                     }

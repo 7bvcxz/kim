@@ -1,0 +1,81 @@
+{
+  "command": "rule.list",
+  "data": {
+    "active_profile": "default",
+    "file": "loaded",
+    "profiles": [
+      {
+        "default_mode": "base",
+        "id": "default",
+        "modes": [
+          "base"
+        ],
+        "rules": 3,
+        "title": "Default"
+      }
+    ],
+    "revision": 4,
+    "rules": [
+      {
+        "code": null,
+        "enabled": true,
+        "id": "r-f3d1eca0-ff1b-4e86-8ad3-2a4f8ccf8e40",
+        "modes": null,
+        "on": "press",
+        "position": 0,
+        "priority": 0,
+        "problems": 0,
+        "profile": "default",
+        "state": "active",
+        "steps": [
+          "engine"
+        ],
+        "title": "Pause or resume",
+        "trigger": "Ctrl+Shift+F13"
+      },
+      {
+        "code": null,
+        "enabled": true,
+        "id": "off-key",
+        "modes": null,
+        "on": "press",
+        "position": 1,
+        "priority": 0,
+        "problems": 0,
+        "profile": "default",
+        "state": "active",
+        "steps": [
+          "engine"
+        ],
+        "title": "F14: engine disable",
+        "trigger": "F14"
+      },
+      {
+        "code": null,
+        "enabled": true,
+        "id": "caps",
+        "modes": null,
+        "on": "press",
+        "position": 2,
+        "priority": 0,
+        "problems": 0,
+        "profile": "default",
+        "state": "inactive",
+        "steps": [
+          "remap"
+        ],
+        "title": "CapsLock: acts as LCtrl",
+        "trigger": "CapsLock"
+      }
+    ],
+    "source": "saved",
+    "summary": {
+      "errors": 0,
+      "infos": 1,
+      "warnings": 0
+    }
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

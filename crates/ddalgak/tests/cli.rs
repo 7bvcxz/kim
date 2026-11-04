@@ -13,6 +13,12 @@
 //! Requirements: `DDALGAK-FR-002`, `DDALGAK-FR-003`, `DDALGAK-FR-004`, `DDALGAK-FR-017`,
 //! `DDALGAK-FR-060`, `DDALGAK-SEC-001`, `DDALGAK-SEC-004`, `DDALGAK-SEC-007`, `DDALGAK-SEC-010`,
 //! `DDALGAK-SEC-011`, `KIM-FR-012`.
+//!
+//! Step 67 (rule store and CRUD, the `rule …`/`rules …` commands; `DDALGAK-FR-005`…`009`,
+//! `DDALGAK-SEC-006`): CRUD with offers and refusals, two CLIs at once, a crash in the middle of a
+//! save, a corrupt file (safe mode, file kept), read-only file and folder, and the reload of a
+//! running app that keeps its hook installed. Every sandbox is its own `%APPDATA%`, so the user's
+//! real rules are never read or written.
 #![cfg(windows)]
 
 #[path = "../../../xtask/src/jsonschema.rs"]
@@ -78,6 +84,15 @@ fn bless(name: &str, doc: &Value) {
         &escaped(&bin_dir),
         &escaped(r"C:\Users\you\AppData\Local\Programs\mouv\ddalgak\versions\0.0.1"),
     );
+    let temp = std::env::temp_dir()
+        .display()
+        .to_string()
+        .trim_end_matches(['\\', '/'])
+        .to_string();
+    text = text.replace(
+        &escaped(&temp),
+        &escaped(r"C:\Users\you\AppData\Local\Temp"),
+    );
     let unique = regex::Regex::new(r"ddalgak-(cli|test)-([a-z]+)-[0-9]+-[0-9]+").unwrap();
     text = unique.replace_all(&text, "ddalgak-$1-$2").to_string();
     validate(&serde_json::from_str(&text).unwrap());
@@ -140,9 +155,12 @@ impl Sandbox {
     fn run(&self, args: &[&str]) -> std::process::Output {
         let mut c = Command::new(env!("CARGO_BIN_EXE_ddalgak"));
         c.args(args);
-        let talks_to_app = ["status", "health", "engine", "pause", "resume", "quit"]
-            .iter()
-            .any(|c| args.first() == Some(c));
+        // Rule changes ask a running app to reload: always this sandbox's app, never the user's.
+        let talks_to_app = [
+            "status", "health", "engine", "pause", "resume", "quit", "rule", "rules",
+        ]
+        .iter()
+        .any(|c| args.first() == Some(c));
         if talks_to_app && !args.contains(&"--endpoint") {
             c.args(["--endpoint", &self.endpoint]);
         }
@@ -699,6 +717,862 @@ fn injected_input_reaches_only_accepting_rules_in_the_real_app() {
         verified.push("a rule turned the engine off and the hook was removed");
     }
     eprintln!("verified with real SendInput: {verified:?}");
+    sb.json(&["quit"]);
+    assert_eq!(host.wait_exit(Duration::from_secs(10)), Some(0));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Step 67: the rule store and the rule commands.
+// ---------------------------------------------------------------------------------------------
+
+const VK_F17: u16 = 0x80;
+
+impl Sandbox {
+    fn rules_path(&self) -> PathBuf {
+        self.config().join("rules.json")
+    }
+
+    fn rules_bytes(&self) -> Vec<u8> {
+        std::fs::read(self.rules_path()).unwrap_or_default()
+    }
+
+    /// `ddalgak <args> --json --endpoint <mine>` without waiting (for concurrent runs).
+    fn spawn_cli(&self, args: &[&str], extra_env: &[(&str, &std::ffi::OsStr)]) -> Child {
+        let mut c = Command::new(env!("CARGO_BIN_EXE_ddalgak"));
+        c.args(args)
+            .args(["--json", "--endpoint", &self.endpoint])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        for (k, v) in extra_env {
+            c.env(k, v);
+        }
+        self.env(&mut c);
+        c.spawn().unwrap()
+    }
+
+    fn rule_ids(&self) -> Vec<String> {
+        let (_, d) = self.json(&["rule", "list"]);
+        d["data"]["rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["id"].as_str().unwrap().to_string())
+            .collect()
+    }
+}
+
+fn add_engine(sb: &Sandbox, id: &str, keys: &str, op: &str) -> Value {
+    let (code, d) = sb.json(&[
+        "rule",
+        "add",
+        "--trigger",
+        keys,
+        "--action",
+        "engine",
+        "--op",
+        op,
+        "--id",
+        id,
+        "--accept-injected",
+    ]);
+    assert_eq!(code, 0, "{d:#}");
+    d
+}
+
+fn details(d: &Value) -> String {
+    d["error"]["details"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .map(|x| x.as_str().unwrap_or(""))
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default()
+}
+
+#[test]
+fn rules_are_managed_through_the_cli_without_the_app() {
+    let sb = Sandbox::new("crud");
+    let (_, d) = sb.json(&["rule", "list"]);
+    assert_eq!(
+        (d["data"]["file"].as_str(), d["data"]["revision"].as_u64()),
+        (Some("missing"), Some(0))
+    );
+    // Create with a generated, stable ID.
+    let (code, d) = sb.json(&[
+        "rule",
+        "add",
+        "--trigger",
+        "ctrl+shift+f13",
+        "--action",
+        "engine",
+        "--op",
+        "toggle_pause",
+        "--title",
+        "Pause or resume",
+    ]);
+    assert_eq!(code, 0, "{d:#}");
+    let pause = d["data"]["created"].as_str().unwrap().to_string();
+    assert!(pause.starts_with("r-") && pause.len() == 38, "{pause}");
+    assert_eq!(d["data"]["revision"], json!({ "from": 0, "to": 1 }));
+    assert_eq!(
+        d["data"]["app"],
+        json!({ "running": false }),
+        "no app: simply saved"
+    );
+    bless("rule-add", &d);
+    // A dry run checks everything and writes nothing.
+    let before = sb.rules_bytes();
+    let (_, d) = sb.json(&[
+        "rule",
+        "add",
+        "--trigger",
+        "F14",
+        "--action",
+        "engine",
+        "--op",
+        "disable",
+        "--id",
+        "off-key",
+        "--dry-run",
+    ]);
+    assert_eq!(
+        (
+            d["data"]["dry_run"].as_bool(),
+            d["data"]["revision"]["to"].is_null()
+        ),
+        (Some(true), true)
+    );
+    assert_eq!(sb.rules_bytes(), before, "a dry run writes nothing");
+    bless("rule-add-dry-run", &d);
+    add_engine(&sb, "off-key", "F14", "disable");
+    // A trigger another enabled rule has is refused, with offers, and nothing is written.
+    let before = sb.rules_bytes();
+    let (code, d) = sb.json(&[
+        "rule",
+        "add",
+        "--trigger",
+        "Ctrl+Shift+F13",
+        "--action",
+        "engine",
+        "--op",
+        "pause",
+    ]);
+    assert_eq!(
+        (code, d["error"]["code"].as_str()),
+        (7, Some("rule_conflict")),
+        "{d:#}"
+    );
+    assert!(
+        d["error"]["message"].as_str().unwrap().contains(&pause),
+        "{d:#}"
+    );
+    assert!(
+        details(&d).contains("--trigger Ctrl+Alt+Shift+F13"),
+        "{d:#}"
+    );
+    assert_eq!(sb.rules_bytes(), before);
+    bless("error-rule-conflict", &d);
+    // Reserved and invalid triggers.
+    let (code, d) = sb.json(&["rule", "add", "--trigger", "Alt+Tab", "--action", "block"]);
+    assert_eq!(
+        (code, d["error"]["code"].as_str()),
+        (2, Some("hotkey_reserved"))
+    );
+    bless("error-hotkey-reserved", &d);
+    let (code, d) = sb.json(&["rule", "add", "--trigger", "Hyper+Q", "--action", "block"]);
+    assert_eq!(
+        (code, d["error"]["code"].as_str()),
+        (2, Some("hotkey_invalid"))
+    );
+    assert_eq!(sb.rules_bytes(), before);
+    // A rule that needs consent is saved disabled and the command says which --allow it needs.
+    let (code, d) = sb.json(&[
+        "rule",
+        "add",
+        "--trigger",
+        "CapsLock",
+        "--action",
+        "remap",
+        "--to",
+        "lctrl",
+        "--id",
+        "caps",
+    ]);
+    assert_eq!(
+        (code, d["error"]["code"].as_str()),
+        (7, Some("consent_required")),
+        "{d:#}"
+    );
+    assert!(
+        d["error"]["hint"]
+            .as_str()
+            .unwrap()
+            .contains("--allow input-injection")
+    );
+    bless("error-consent-required", &d);
+    let (_, d) = sb.json(&["rule", "show", "caps"]);
+    assert_eq!(
+        (
+            d["data"]["rule"]["enabled"].as_bool(),
+            d["data"]["state"].as_str()
+        ),
+        (Some(false), Some("disabled"))
+    );
+    let (code, d) = sb.json(&["rule", "enable", "caps"]);
+    assert_eq!(
+        (code, d["error"]["code"].as_str()),
+        (7, Some("consent_required"))
+    );
+    let (code, d) = sb.json(&["rule", "enable", "caps", "--allow", "input-injection"]);
+    assert_eq!(code, 0, "{d:#}");
+    let (_, d) = sb.json(&["rule", "show", "caps"]);
+    assert_eq!(
+        d["data"]["rule"]["consent"]["input-injection"]["via"],
+        "cli"
+    );
+    // Remaps run from Step 68: valid, enabled, and honestly inactive until then.
+    assert_eq!(
+        (d["data"]["state"].as_str(), d["data"]["code"].as_str()),
+        (Some("inactive"), Some("step_unsupported"))
+    );
+    bless("rule-show", &d);
+    let (_, d) = sb.json(&["rule", "list"]);
+    let states: Vec<(&str, &str)> = d["data"]["rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| (r["id"].as_str().unwrap(), r["state"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        states,
+        [
+            (pause.as_str(), "active"),
+            ("off-key", "active"),
+            ("caps", "inactive")
+        ]
+    );
+    bless("rule-list", &d);
+    let (_, d) = sb.json(&["rule", "check"]);
+    assert_eq!(
+        (
+            d["data"]["ok"].as_bool(),
+            d["data"]["summary"]["errors"].as_u64()
+        ),
+        (Some(true), Some(0))
+    );
+    bless("rule-check", &d);
+    // Rename: the title changes, the ID never does.
+    let (code, d) = sb.json(&[
+        "rule",
+        "edit",
+        "off-key",
+        "--title",
+        "F14 turns the engine off",
+    ]);
+    assert_eq!(code, 0, "{d:#}");
+    bless("rule-edit", &d);
+    let (_, d) = sb.json(&["rule", "show", "off-key"]);
+    assert_eq!(d["data"]["rule"]["title"], "F14 turns the engine off");
+    assert_eq!(d["data"]["rule"]["id"], "off-key");
+    let (code, d) = sb.json(&["rule", "edit", "off-key", "--patch", r#"{"id":"other"}"#]);
+    assert_eq!(
+        (code, d["error"]["code"].as_str()),
+        (2, Some("usage")),
+        "IDs never change"
+    );
+    // Unknown fields written by a newer Ddalgak survive edits (and keep the rule inactive).
+    let mut file: Value = serde_json::from_slice(&sb.rules_bytes()).unwrap();
+    file["profiles"][0]["rules"][1]["x_future"] = json!({ "kept": true });
+    file["x_top_level"] = json!(1);
+    std::fs::write(sb.rules_path(), serde_json::to_vec_pretty(&file).unwrap()).unwrap();
+    let (_, d) = sb.json(&["rule", "show", "off-key"]);
+    assert_eq!(d["data"]["code"], "rule_unsupported");
+    sb.json(&["rule", "edit", "off-key", "--description", "kept fields"]);
+    let file: Value = serde_json::from_slice(&sb.rules_bytes()).unwrap();
+    assert_eq!(
+        file["profiles"][0]["rules"][1]["x_future"],
+        json!({ "kept": true })
+    );
+    assert_eq!(file["x_top_level"], 1);
+    sb.json(&["rule", "edit", "off-key", "--patch", r#"{"x_future":null}"#]);
+    assert_eq!(
+        sb.json(&["rule", "show", "off-key"]).1["data"]["state"],
+        "active"
+    );
+    // Duplicate (a disabled copy), enabling it collides, move, delete.
+    let (_, d) = sb.json(&["rule", "duplicate", "off-key", "--id", "off-copy"]);
+    assert_eq!(d["data"]["created"], "off-copy");
+    let (code, _) = sb.json(&["rule", "enable", "off-copy"]);
+    assert_eq!(code, 7, "the copy has the same trigger");
+    let (code, d) = sb.json(&["rule", "edit", "off-copy", "--trigger", "Shift+F14"]);
+    assert_eq!(code, 0, "{d:#}");
+    let (code, _) = sb.json(&["rule", "enable", "off-copy"]);
+    assert_eq!(code, 0);
+    let (_, d) = sb.json(&["rule", "move", "off-copy", "--to", "start"]);
+    assert_eq!(d["data"]["changed"], true);
+    assert_eq!(sb.rule_ids()[0], "off-copy");
+    let (code, d) = sb.json(&["rule", "delete", "off-copy"]);
+    assert_eq!(
+        (code, d["error"]["code"].as_str()),
+        (7, Some("confirmation_required"))
+    );
+    bless("error-confirmation-required", &d);
+    let (_, d) = sb.json(&["rule", "delete", "off-copy", "--dry-run"]);
+    assert_eq!(d["data"]["dry_run"], true);
+    assert!(sb.rule_ids().contains(&"off-copy".to_string()));
+    let (code, d) = sb.json(&["rule", "delete", "off-copy", "--yes"]);
+    assert_eq!(code, 0);
+    bless("rule-delete", &d);
+    assert!(!sb.rule_ids().contains(&"off-copy".to_string()));
+    let (code, d) = sb.json(&["rule", "show", "off-copy"]);
+    assert_eq!(
+        (code, d["error"]["code"].as_str()),
+        (3, Some("rule_not_found"))
+    );
+    bless("error-rule-not-found", &d);
+    // Revoking consent disables the rule; it stays.
+    let (_, d) = sb.json(&["rule", "revoke", "caps", "input-injection"]);
+    assert_eq!(d["data"]["changed"], true);
+    assert_eq!(
+        sb.json(&["rule", "show", "caps"]).1["data"]["state"],
+        "disabled"
+    );
+    // A writer that read an older revision is refused.
+    let rev = sb.json(&["rule", "list"]).1["data"]["revision"]
+        .as_u64()
+        .unwrap();
+    let (code, d) = sb.json(&[
+        "rule",
+        "disable",
+        "off-key",
+        "--if-revision",
+        &(rev - 1).to_string(),
+    ]);
+    assert_eq!(
+        (code, d["error"]["code"].as_str()),
+        (7, Some("rule_conflict"))
+    );
+    // Draft: changes that are neither saved nor active.
+    let saved_before = sb.rules_bytes();
+    let (_, d) = sb.json(&["rule", "disable", "off-key", "--draft"]);
+    assert_eq!(
+        (d["data"]["target"].as_str(), d["data"]["app"].is_null()),
+        (Some("draft"), true)
+    );
+    assert_eq!(
+        sb.rules_bytes(),
+        saved_before,
+        "a draft leaves rules.json alone"
+    );
+    let (_, st) = sb.json(&["status"]);
+    assert_eq!(
+        st["data"]["rules"]["draft"],
+        json!({ "base_revision": rev, "stale": false })
+    );
+    bless("status-not-running-with-draft", &st);
+    let (_, d) = sb.json(&["rules", "draft"]);
+    assert_eq!(d["data"]["changes"]["changed"], json!(["off-key"]));
+    bless("rules-draft", &d);
+    assert_eq!(
+        sb.json(&["rule", "show", "off-key", "--draft"]).1["data"]["state"],
+        "disabled"
+    );
+    assert_eq!(
+        sb.json(&["rule", "show", "off-key"]).1["data"]["state"],
+        "active"
+    );
+    let (code, d) = sb.json(&["rules", "draft", "apply"]);
+    assert_eq!(code, 0, "{d:#}");
+    assert_eq!(d["data"]["revision"]["to"], rev + 1);
+    bless("rules-draft-apply", &d);
+    assert_eq!(
+        sb.json(&["rule", "show", "off-key"]).1["data"]["state"],
+        "disabled"
+    );
+    sb.json(&["rule", "enable", "off-key", "--draft"]);
+    let (code, d) = sb.json(&["rules", "draft", "discard", "--yes"]);
+    assert_eq!((code, d["data"]["discarded"].as_bool()), (0, Some(true)));
+    bless("rules-draft-discard", &d);
+    // History, backup and restore.
+    let (_, d) = sb.json(&["rules", "history"]);
+    let snaps = d["data"]["snapshots"].as_array().unwrap();
+    assert!(snaps.len() >= 10, "{d:#}");
+    assert_eq!(d["data"]["backup"]["exists"], true);
+    bless("rules-history", &d);
+    let (_, d) = sb.json(&["rules", "backup"]);
+    assert!(
+        d["data"]["snapshot"]
+            .as_str()
+            .unwrap()
+            .ends_with("-backup.json")
+    );
+    bless("rules-backup", &d);
+    let (code, d) = sb.json(&["rules", "restore", "--backup"]);
+    assert_eq!(
+        (code, d["error"]["code"].as_str()),
+        (7, Some("confirmation_required"))
+    );
+    let (code, d) = sb.json(&["rules", "restore", "--backup", "--yes"]);
+    assert_eq!(code, 0, "{d:#}");
+    assert_eq!(d["data"]["kept"], "rules.json.bak");
+    bless("rules-restore", &d);
+    assert_eq!(
+        sb.json(&["rule", "show", "off-key"]).1["data"]["state"],
+        "active",
+        "the version before"
+    );
+    // Headless means headless: no app was started by any of this.
+    assert_eq!(sb.json(&["status"]).1["data"]["app"]["running"], false);
+}
+
+#[test]
+fn two_clis_editing_at_once_never_lose_a_change() {
+    let sb = Sandbox::new("concurrent");
+    let keys = ["F13", "F14", "F15", "F16", "F17", "F18", "F19", "F20"];
+    let children: Vec<(String, Child)> = keys
+        .iter()
+        .map(|k| {
+            let id = format!("c-{}", k.to_lowercase());
+            let trigger = format!("Ctrl+Shift+{k}");
+            let c = sb.spawn_cli(
+                &[
+                    "rule",
+                    "add",
+                    "--trigger",
+                    &trigger,
+                    "--action",
+                    "engine",
+                    "--op",
+                    "pause",
+                    "--id",
+                    &id,
+                ],
+                &[],
+            );
+            (id, c)
+        })
+        .collect();
+    for (id, c) in children {
+        let out = c.wait_with_output().unwrap();
+        let d: Value = serde_json::from_slice(&out.stdout).unwrap();
+        validate(&d);
+        assert_eq!(out.status.code(), Some(0), "{id}: {d:#}");
+    }
+    let (_, d) = sb.json(&["rule", "list"]);
+    assert_eq!(d["data"]["revision"], 8, "eight writes, eight revisions");
+    let ids: std::collections::BTreeSet<String> = d["data"]["rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(ids.len(), 8, "no lost update: {ids:?}");
+    assert_eq!(
+        sb.json(&["rules", "history"]).1["data"]["snapshots"]
+            .as_array()
+            .unwrap()
+            .len(),
+        8
+    );
+    // Several CLIs renaming the same rule at once: every edit is applied, one after the other.
+    let titles: Vec<String> = (0..6).map(|i| format!("title {i}")).collect();
+    let edits: Vec<Child> = titles
+        .iter()
+        .map(|t| sb.spawn_cli(&["rule", "edit", "c-f13", "--title", t], &[]))
+        .collect();
+    for c in edits {
+        let out = c.wait_with_output().unwrap();
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{}",
+            String::from_utf8_lossy(&out.stdout)
+        );
+    }
+    let (_, d) = sb.json(&["rule", "show", "c-f13"]);
+    assert_eq!(d["data"]["revision"], 14);
+    assert!(titles.contains(&d["data"]["rule"]["title"].as_str().unwrap().to_string()));
+    // A long-held lock makes a writer give up with `busy`, without writing anything.
+    let files = ddalgak::store::Files {
+        rules: sb.rules_path(),
+    };
+    let held = ddalgak::store::lock(&files, Duration::from_secs(1)).unwrap();
+    let before = sb.rules_bytes();
+    let out = sb
+        .spawn_cli(
+            &["rule", "disable", "c-f14"],
+            &[("DDALGAK_TEST_LOCK_TIMEOUT_MS", std::ffi::OsStr::new("300"))],
+        )
+        .wait_with_output()
+        .unwrap();
+    let d: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(
+        (out.status.code(), d["error"]["code"].as_str()),
+        (Some(7), Some("busy")),
+        "{d:#}"
+    );
+    bless("error-busy", &d);
+    drop(held);
+    assert_eq!(sb.rules_bytes(), before);
+}
+
+#[test]
+fn a_crash_in_the_middle_of_a_save_leaves_a_valid_file() {
+    let sb = Sandbox::new("crash");
+    add_engine(&sb, "before-crash", "F13", "pause");
+    let before = sb.rules_bytes();
+    let marker = sb.root.join("in-the-middle.marker");
+    let mut writer = sb.spawn_cli(
+        &[
+            "rule",
+            "add",
+            "--trigger",
+            "F14",
+            "--action",
+            "engine",
+            "--op",
+            "pause",
+            "--id",
+            "lost",
+        ],
+        &[("DDALGAK_TEST_CRASH_IN_SAVE", marker.as_os_str())],
+    );
+    let until = Instant::now() + Duration::from_secs(30);
+    while !marker.exists() {
+        if let Ok(Some(s)) = writer.try_wait() {
+            panic!("the writer ended before the crash point: {s}");
+        }
+        assert!(
+            Instant::now() < until,
+            "the writer never reached the crash point"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // Kill the writer half-way through writing the new file.
+    writer.kill().unwrap();
+    let _ = writer.wait();
+    let tmp = sb.config().join("rules.json.tmp");
+    assert!(
+        tmp.exists(),
+        "the interrupted write left its temporary file"
+    );
+    assert!(
+        serde_json::from_slice::<Value>(&std::fs::read(&tmp).unwrap()).is_err(),
+        "the temporary file is torn"
+    );
+    assert_eq!(
+        sb.rules_bytes(),
+        before,
+        "rules.json is exactly the previous version"
+    );
+    let (_, st) = sb.json(&["status"]);
+    assert_eq!(st["data"]["rules"]["saved"]["interrupted_save"], true);
+    assert_eq!(st["data"]["rules"]["file"], "loaded");
+    assert_eq!(sb.rule_ids(), ["before-crash"]);
+    // The OS released the dead writer's lock; the next save works and replaces the leftover.
+    add_engine(&sb, "after-crash", "F15", "pause");
+    assert!(!tmp.exists());
+    assert_eq!(sb.rule_ids(), ["before-crash", "after-crash"]);
+    let (_, d) = sb.json(&["rule", "check"]);
+    assert_eq!(d["data"]["ok"], true);
+}
+
+#[test]
+fn a_corrupt_file_is_safe_mode_kept_and_restorable() {
+    let sb = Sandbox::new("corrupt");
+    add_engine(&sb, "first", "F13", "pause");
+    add_engine(&sb, "second", "F14", "pause");
+    let garbage = br#"{ "schema": "ddalgak.rules", "schema_version": 1, "profiles": [ broken"#;
+    std::fs::write(sb.rules_path(), garbage).unwrap();
+    let (code, d) = sb.json(&["rule", "list"]);
+    assert_eq!(
+        (code, d["error"]["code"].as_str()),
+        (4, Some("rules_invalid"))
+    );
+    assert!(
+        d["error"]["hint"]
+            .as_str()
+            .unwrap()
+            .contains("rules restore --backup")
+    );
+    bless("error-rule-list-rules-invalid", &d);
+    let (code, _) = sb.json(&["rule", "add", "--trigger", "F15", "--action", "block"]);
+    assert_eq!(code, 4);
+    assert_eq!(sb.rules_bytes(), garbage, "never rewritten automatically");
+    let (code, d) = sb.json(&["rule", "check"]);
+    assert_eq!(code, 0);
+    assert_eq!(
+        (d["data"]["file"].as_str(), d["data"]["ok"].as_bool()),
+        (Some("invalid"), Some(false))
+    );
+    bless("rule-check-invalid-file", &d);
+    let (_, st) = sb.json(&["status"]);
+    assert_eq!(st["data"]["rules"]["saved"]["file"], "invalid");
+    let (code, d) = sb.json(&["rules", "restore", "--backup", "--yes"]);
+    assert_eq!(code, 0, "{d:#}");
+    let kept = d["data"]["kept"].as_str().unwrap();
+    assert!(kept.starts_with("rules.corrupt-"), "{kept}");
+    assert_eq!(
+        std::fs::read(sb.config().join(kept)).unwrap(),
+        garbage,
+        "the bad file is kept"
+    );
+    assert_eq!(
+        sb.rule_ids(),
+        ["first"],
+        "the backup was the version before the last change"
+    );
+}
+
+/// Denies the current user the right to add files to `dir` (icacls, no elevation) until dropped.
+struct DenyWrite {
+    dir: PathBuf,
+    sid: String,
+}
+
+impl DenyWrite {
+    fn new(dir: &Path) -> DenyWrite {
+        let sid = ddalgak::win::user_sid().unwrap();
+        let ok = Command::new("icacls")
+            .arg(dir)
+            .args(["/deny", &format!("*{sid}:(WD,AD)")])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok, "icacls could not add the deny entry");
+        DenyWrite {
+            dir: dir.to_path_buf(),
+            sid,
+        }
+    }
+}
+
+impl Drop for DenyWrite {
+    fn drop(&mut self) {
+        let _ = Command::new("icacls")
+            .arg(&self.dir)
+            .args(["/remove:d", &format!("*{}", self.sid)])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(CREATE_NO_WINDOW)
+            .status();
+    }
+}
+
+#[test]
+fn read_only_files_and_folders_are_refused_and_left_alone() {
+    let sb = Sandbox::new("readonly");
+    add_engine(&sb, "first", "F13", "pause");
+    let before = sb.rules_bytes();
+    let path = sb.rules_path();
+    let mut p = std::fs::metadata(&path).unwrap().permissions();
+    p.set_readonly(true);
+    std::fs::set_permissions(&path, p.clone()).unwrap();
+    let (code, d) = sb.json(&["rule", "add", "--trigger", "F14", "--action", "block"]);
+    assert_eq!(
+        (code, d["error"]["code"].as_str()),
+        (1, Some("permission_denied")),
+        "{d:#}"
+    );
+    bless("error-permission-denied", &d);
+    assert_eq!(sb.rules_bytes(), before);
+    #[allow(clippy::permissions_set_readonly_false)]
+    p.set_readonly(false);
+    std::fs::set_permissions(&path, p).unwrap();
+    // A folder the user may not add files to.
+    {
+        let _deny = DenyWrite::new(&sb.config());
+        let (code, d) = sb.json(&["rule", "add", "--trigger", "F14", "--action", "block"]);
+        assert_eq!(
+            (code, d["error"]["code"].as_str()),
+            (1, Some("permission_denied")),
+            "{d:#}"
+        );
+        assert_eq!(sb.rules_bytes(), before);
+        assert!(!sb.config().join("rules.json.tmp").exists());
+    }
+    let (code, _) = sb.json(&["rule", "add", "--trigger", "F14", "--action", "block"]);
+    assert_eq!(code, 0, "writable again");
+}
+
+#[test]
+fn a_running_app_reloads_valid_rules_and_keeps_its_hook() {
+    let sb = Sandbox::new("reload");
+    // Physical-input rules only on F18/F19: the parallel injection test of Step 66 injects F13
+    // and F14 into the whole session and must not reach this app's rules.
+    sb.write_rules(&json!({
+        "schema": "ddalgak.rules", "schema_version": 1, "hotkey_contract": 1,
+        "revision": 1, "active_profile": "default",
+        "profiles": [ { "id": "default", "title": "Test", "default_mode": "base",
+            "modes": [ { "id": "base", "title": "Base" } ],
+            "rules": [
+                { "id": "base-pause", "title": "F18 pauses", "enabled": true,
+                  "trigger": { "keys": "F18" }, "steps": [ { "type": "engine", "op": "pause" } ] },
+                { "id": "base-off", "title": "F19 turns off", "enabled": true,
+                  "trigger": { "keys": "F19" }, "steps": [ { "type": "engine", "op": "disable" } ] }
+            ] } ]
+    }));
+    let mut host = sb.host();
+    let hook_on = !elevated();
+    if hook_on {
+        let (_, d) = sb.json(&["engine", "start"]);
+        assert_eq!(d["data"]["engine"]["hook"]["installed"], true);
+    } else {
+        eprintln!("elevated: the engine stays off; the reload is tested with the engine off");
+    }
+    let hook_ok = |st: &Value| {
+        if hook_on {
+            assert_eq!(st["data"]["engine"]["state"], "running", "{st:#}");
+            assert_eq!(st["data"]["engine"]["hook"]["installed"], true, "{st:#}");
+        }
+    };
+    // A saved change is applied by the running app at once.
+    let (_, d) = sb.json(&[
+        "rule",
+        "add",
+        "--trigger",
+        "F16",
+        "--action",
+        "engine",
+        "--op",
+        "pause",
+        "--id",
+        "new-key",
+        "--accept-injected",
+    ]);
+    assert_eq!(d["data"]["app"]["running"], true, "{d:#}");
+    assert_eq!(d["data"]["app"]["in_sync"], true, "{d:#}");
+    assert_eq!(d["data"]["app"]["active_revision"], 2);
+    bless("rule-add-app-running", &d);
+    let (_, st) = sb.json(&["status"]);
+    let r = &st["data"]["rules"];
+    assert!(
+        r["active_rules"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("new-key")),
+        "{st:#}"
+    );
+    assert_eq!(
+        (r["active_set"]["revision"].as_u64(), r["in_sync"].as_bool()),
+        (Some(2), Some(true))
+    );
+    assert_eq!(r["last_reload"]["outcome"], "applied");
+    hook_ok(&st);
+    bless("status-after-reload", &st);
+    let (_, h) = sb.json(&["health"]);
+    if hook_on {
+        assert_eq!(h["data"]["engine"]["hook"]["thread_alive"], true);
+    }
+    assert!(
+        h["data"]["problems"].as_array().unwrap().is_empty(),
+        "{h:#}"
+    );
+    // A broken file (written behind Ddalgak's back) keeps the previous active rules.
+    std::fs::write(sb.rules_path(), b"{ not json").unwrap();
+    let until = Instant::now() + Duration::from_secs(10);
+    let st = loop {
+        let (_, st) = sb.json(&["status"]);
+        if st["data"]["rules"]["saved"]["file"] == "invalid" {
+            break st;
+        }
+        assert!(
+            Instant::now() < until,
+            "the app never noticed the change: {st:#}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    let r = &st["data"]["rules"];
+    assert!(
+        r["active_rules"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("new-key")),
+        "unrelated rules stay: {st:#}"
+    );
+    assert_eq!(
+        (r["active_set"]["revision"].as_u64(), r["in_sync"].as_bool()),
+        (Some(2), Some(false))
+    );
+    assert_eq!(r["last_reload"]["outcome"], "kept_previous");
+    assert_eq!(r["last_reload"]["code"], "rules_invalid");
+    hook_ok(&st);
+    bless("status-kept-previous", &st);
+    let (_, d) = sb.json(&["rules", "reload"]);
+    assert_eq!(d["data"]["outcome"], "kept_previous");
+    bless("rules-reload-kept-previous", &d);
+    let (_, h) = sb.json(&["health"]);
+    assert!(
+        h["data"]["problems"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["code"] == "rules_invalid")
+    );
+    // Repair it from the backup: applied again, without restarting the app.
+    let (code, d) = sb.json(&["rules", "restore", "--backup", "--yes"]);
+    assert_eq!(code, 0, "{d:#}");
+    assert_eq!(d["data"]["app"]["in_sync"], true, "{d:#}");
+    let (_, d) = sb.json(&["rules", "reload"]);
+    assert_eq!(
+        (
+            d["data"]["outcome"].as_str(),
+            d["data"]["in_sync"].as_bool()
+        ),
+        (Some("unchanged"), Some(true))
+    );
+    bless("rules-reload", &d);
+    let (_, d) = sb.json(&["rules", "reload", "--dry-run"]);
+    assert_eq!(d["data"]["dry_run"], true);
+    // With real input, when the desktop allows it: a rule added while the engine runs fires
+    // through the swapped table in the same, still installed hook.
+    if hook_on && ddalgak::win::input_desktop_available() {
+        add_engine(&sb, "live-key", "F17", "toggle_pause");
+        let tap = |vk: u16| {
+            ddalgak::win::inject::send_as_other_program(&[
+                OutKey { vk, up: false },
+                OutKey { vk, up: true },
+            ])
+        };
+        if tap(VK_F17) == 2 {
+            let until = Instant::now() + Duration::from_secs(5);
+            loop {
+                let (_, st) = sb.json(&["status"]);
+                if st["data"]["engine"]["state"] == "paused" {
+                    assert_eq!(
+                        st["data"]["engine"]["last_change"]["origin"],
+                        "rule:live-key"
+                    );
+                    eprintln!(
+                        "verified with real SendInput: a reloaded rule fired in the running hook"
+                    );
+                    break;
+                }
+                assert!(
+                    Instant::now() < until,
+                    "the reloaded rule did not fire: {st:#}"
+                );
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            let _ = tap(VK_F17);
+        } else {
+            eprintln!(
+                "skipped (SendInput refused): locked desktop or an elevated window has focus"
+            );
+        }
+    } else if hook_on {
+        eprintln!("skipped (locked): no interactive input desktop for the live part");
+    }
+    if hook_on {
+        let (_, d) = sb.json(&["engine", "stop"]);
+        assert_eq!(d["data"]["engine"]["hook"]["installed"], false);
+    }
     sb.json(&["quit"]);
     assert_eq!(host.wait_exit(Duration::from_secs(10)), Some(0));
 }

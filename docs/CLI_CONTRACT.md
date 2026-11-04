@@ -232,26 +232,36 @@ familiarity and to match the IPC methods (ADR 0020, ADR 0027). `new` runs `-- <p
 resolved `executable` also without a Host ([PTY_PROCESSES](PTY_PROCESSES.md)); only `new` starts
 a Host on demand, and `--no-start` forbids even that.
 
-**Ddalgak codes** (Step 66 engine commands, [DDALGAK_ENGINE §6](DDALGAK_ENGINE.md)). `ddalgak`
-also uses `io`, `internal`, `permission_denied`, `usage`, `not_installed` (`ddalgak-gui.exe` is
-missing next to `ddalgak.exe`), `protocol_error` and `unsupported_platform` with the meaning
-and exit code above. `crates/ddalgak/src/output.rs` tests that this table matches its code;
-the `data` of every command is published as
+**Ddalgak codes** (Step 66 engine commands, [DDALGAK_ENGINE §6](DDALGAK_ENGINE.md); Step 67 rule
+commands, [DDALGAK_RULE_MODEL §13](DDALGAK_RULE_MODEL.md)). `ddalgak` also uses `io`,
+`internal`, `permission_denied` (a read-only `rules.json` or folder), `usage`, `not_installed`
+(`ddalgak-gui.exe` is missing next to `ddalgak.exe`), `protocol_error`, `unsupported_platform`,
+`busy` (another writer holds the rules lock), `confirmation_required` (`rule delete`,
+`rules restore`, `rules draft discard` without `--yes` when it cannot ask), `cancelled` and the
+`hotkeys` codes `hotkey_invalid` and `hotkey_reserved` (a rule trigger that does not parse or is
+reserved) with the meaning and exit code above. `crates/ddalgak/src/output.rs` tests that this
+table matches its code; the `data` of every command is published as
 [ddalgak-cli-v1](contracts/schemas/ddalgak-cli-v1.schema.json), with examples generated from
-real runs. Further codes proposed in [DDALGAK_RULE_MODEL §13](DDALGAK_RULE_MODEL.md) are
-registered by the Steps that implement them (67, 81).
+real runs. The profile and mode commands (Steps 72, 75, 81) use the codes below.
 
 | Code | Exit | Meaning |
 | --- | --- | --- |
 | `hook_failed` | 1 | Windows refused the low-level keyboard hook; the engine stays off. |
+| `rule_invalid` | 2 | The requested rule breaks the schema or a semantic rule (DDALGAK_RULE_MODEL §8); nothing was written. |
 | `engine_not_running` | 3 | The command needs the running tray app (`ddalgak-gui.exe`); the CLI never starts it. |
+| `rule_not_found` | 3 | No rule with this ID. |
+| `profile_not_found` | 3 | No profile with this ID. |
+| `mode_not_found` | 3 | No mode with this ID in the rule's profile. |
+| `snapshot_not_found` | 3 | The backup, history snapshot or draft to restore or apply does not exist. |
 | `app_identity_mismatch` | 4 | The endpoint is served by a process that is not `ddalgak-gui.exe` of this user. Nothing was sent to it. |
-| `rules_invalid` | 4 | `rules.json` is malformed or not a `ddalgak.rules` document; the engine cannot be turned on with it. |
+| `rules_invalid` | 4 | `rules.json` is malformed or not a usable `ddalgak.rules` document; the engine cannot be turned on with it, a running engine keeps its previous rules, and it is never rewritten automatically. |
 | `rules_from_newer_version` | 5 | `rules.json` was written by a newer Ddalgak; it is not run and never rewritten. |
 | `engine_elevated` | 5 | The app runs as administrator; it refuses to turn its engine on elevated (DDALGAK_SAFETY §3). |
 | `app_unresponsive` | 6 | The verified app accepted the connection but did not answer in time. It is neither stopped nor restarted. |
 | `engine_off` | 7 | Pause or resume needs the engine on; resume never turns it on. |
 | `app_already_running` | 7 | `ddalgak-gui.exe`: another instance already owns this user session; the new one exits without touching it. |
+| `rule_conflict` | 7 | The change would give a rule a trigger another enabled rule (or Ddalgak's own shortcut) already has, an ID is taken, or the rules changed since the revision the caller read; nothing was written. `details` list the problems with their offers. |
+| `consent_required` | 7 | The change needs `--allow <permission>`; a new rule was saved disabled, anything else was not written. |
 
 ## 7. Output streams and the `--json` envelope
 

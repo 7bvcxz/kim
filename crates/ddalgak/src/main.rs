@@ -1,15 +1,19 @@
 //! `ddalgak` — Ddalgak's headless CLI (docs/DDALGAK_ENGINE.md §6, docs/CLI_CONTRACT.md).
 //!
-//! Pre-alpha (Step 66): engine status and health, turning the engine on, pausing, resuming and
-//! turning it off in the running tray app (`ddalgak-gui.exe`) over an identity-checked local pipe,
-//! ending the app, and opt-in start at sign-in. The CLI **never** starts the app, installs a
-//! hook, opens a window or shows a tray icon (`DDALGAK-FR-060`, `DDALGAK-SEC-010`); with no app
-//! running, commands that need it fail with `engine_not_running`.
+//! Pre-alpha: engine status and health, turning the engine on, pausing, resuming and turning it
+//! off in the running tray app (`ddalgak-gui.exe`) over an identity-checked local pipe, ending the
+//! app, opt-in start at sign-in (Step 66), and managing rules — list, show, check, add, edit,
+//! delete, duplicate, enable, disable, move, revoke consent, drafts, history, backup and restore
+//! (Step 67, `rule_cmd`). The CLI **never** starts the app, installs a hook, opens a window or
+//! shows a tray icon (`DDALGAK-FR-060`, `DDALGAK-SEC-010`); with no app running, commands that
+//! need it fail with `engine_not_running`, and rule changes are simply saved.
 
 mod cli;
 // Portable, but until the Linux engine (D7, ADR 0011) only the Windows client uses every code.
 #[cfg_attr(not(windows), allow(dead_code))]
 mod output;
+#[cfg_attr(not(windows), allow(dead_code))]
+mod rule_cmd;
 
 use cli::{Args, Cmd};
 use output::{CliError, Code};
@@ -18,7 +22,7 @@ use std::io::Write;
 use std::process::ExitCode;
 
 const HELP: &str = "\
-ddalgak — Ddalgak automation engine (pre-alpha: engine core, Step 66)
+ddalgak — Ddalgak automation engine (pre-alpha: engine core and rule store, Steps 66–67)
 
 USAGE:
     ddalgak [--help | --version]
@@ -29,6 +33,23 @@ USAGE:
     ddalgak pause | resume  [--endpoint <name>] [--dry-run] [--json]
     ddalgak quit [--endpoint <name>] [--dry-run] [--json]
     ddalgak startup status|enable|disable [--dry-run] [--json]
+    ddalgak rule list [--profile <p>] [--mode <m>] [--draft] [--json]
+    ddalgak rule show <id> [--draft] [--json]
+    ddalgak rule check [--draft] [--json]
+    ddalgak rule add --trigger <keys> (--action <type> [inputs] | --step <json>...)
+                     [rule options] [--id <id>] [--profile <p>] [--before|--after <id>]
+                     [--disabled] [--allow <permission>]... [write options]
+    ddalgak rule edit <id> [rule options] [--all-modes] [--patch <json>] [write options]
+    ddalgak rule delete <id>... [--yes] [write options]
+    ddalgak rule duplicate <id> [--id <new>] [--title <t>] [--trigger <keys>] [write options]
+    ddalgak rule enable <id>... [--allow <permission>]... [write options]
+    ddalgak rule disable <id>... [write options]
+    ddalgak rule move <id> (--before <id> | --after <id> | --to start|end|<n>) [write options]
+    ddalgak rule revoke <id> <permission> [write options]
+    ddalgak rules history | backup [--dry-run] [--json]
+    ddalgak rules restore (--backup | <snapshot>) [--yes] [--dry-run] [--json]
+    ddalgak rules reload [--endpoint <name>] [--dry-run] [--json]
+    ddalgak rules draft [show] | draft apply [--dry-run] | draft discard [--yes] [--json]
 
 COMMANDS:
     status        Engine state (off, running, paused) and why it is off, the rules summary
@@ -50,6 +71,48 @@ COMMANDS:
     startup ...   Opt-in start of the tray app when you sign in, as one value under
                   HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run. No service, no task.
 
+RULES (rules.json; these commands work without the app):
+    rule list     Every rule with its trigger and state: active, disabled, inactive (with a
+                  code), other_mode or other_profile. rule show prints one rule in full.
+    rule check    Validate everything: the schema, IDs, mode and profile references, recursive
+                  outputs, duplicate triggers, rules that can never fire (shadowed triggers,
+                  hidden sequences), stale launch consent, collisions with Ddalgak's own
+                  shortcuts, missing program files. Each problem comes with offers (another
+                  free chord, disable, --allow, keep); offers are never applied by themselves.
+    rule add      A new rule with a new ID (r-<uuid>, or --id). Actions: --action engine --op
+                  pause|resume|toggle_pause|disable; remap --to <key> [--tap <key>]; block;
+                  send_keys --keys <seq>; type_text --text <t> [--method paste]; open_program
+                  --path <exe> [--arg <a>]...; open_url --url <url>; mode --op <op>
+                  [--target-mode <m>]...; delay --ms <n>; any step as --step '<json>'.
+                  Rule options: --title, --description, --on press|release|hold, --hold-ms,
+                  --repeat, --pass-through, --accept-injected, --mode <m>..., --priority,
+                  --on-error stop|continue. Only engine rules run yet; others stay inactive
+                  (step_unsupported) until their Step.
+    rule edit     Change fields with the same options, or --patch '<json merge patch>'. IDs
+                  never change. Changed launch targets need a fresh --allow launch-programs.
+    rule delete   Remove rules (asks, or needs --yes). duplicate makes a disabled copy.
+    enable, disable, move, revoke   Switch rules on or off, change their order (the last
+                  precedence step), or withdraw a consent (the rule is then disabled).
+    --allow <permission>   Your explicit consent: input-injection, launch-programs (bound to
+                  the exact targets) or clipboard. Without it a new rule that needs one is
+                  saved disabled (consent_required, exit 7). Agents never grant consent.
+
+    Every change is validated first: one that would add an error (a trigger another rule
+    already has, a reserved chord, a broken step) is refused and nothing is written
+    (rule_conflict, hotkey_reserved, rule_invalid). An unusable file is never rewritten
+    automatically. Writes are atomic (temporary file, flush, rename) under a lock, so two
+    commands at once never lose a change; the previous file stays as rules.json.bak and every
+    change as a snapshot in history\\ (the last 50).
+    Write options: --dry-run (validate and show, write nothing), --draft (change
+    rules.draft.json; `rules draft apply` saves it), --if-revision <n> (refuse with
+    rule_conflict when the rules changed since you read revision n), --endpoint <name>.
+    After a saved change a running app is asked to reload (it also notices file changes by
+    itself): a valid file replaces the active rules at once, without a restart and without
+    removing the hook; an invalid one leaves the active rules as they were. status shows the
+    saved, active and draft revisions apart.
+    rules history | backup | restore   The snapshots; a snapshot now; bring back rules.json.bak
+                  or a snapshot as a new revision (asks, or needs --yes).
+
     The CLI never starts the app: start ddalgak-gui.exe yourself (it shows a tray icon). Every
     command checks, before sending anything, that the pipe is served by ddalgak-gui.exe of this
     user (`app_identity_mismatch` otherwise). The emergency chord Ctrl+Alt+Shift+Escape always
@@ -59,10 +122,13 @@ OPTIONS:
     --endpoint <name>  Pipe name under \\\\.\\pipe\\ (default: mouv-ddalgak-<user SID>-s<session>).
     --dry-run          Show what would happen; change nothing.
     --json             One JSON document on stdout (docs/CLI_CONTRACT.md §7).
+    --yes, -y          Confirm a destructive change when ddalgak cannot ask.
+    --no-input         Never ask (also KIM_NO_INPUT=1).
     -q, --quiet / -v, --verbose   Less / more diagnostics on stderr.
 
 FILES:
-    %APPDATA%\\mouv\\ddalgak\\rules.json     rules (ddalgak.rules v1; editing commands: Step 67)
+    %APPDATA%\\mouv\\ddalgak\\rules.json     rules (ddalgak.rules v1), with rules.json.bak, history\\,
+                                         rules.draft.json and the writers' lock rules.json.lock
     %APPDATA%\\mouv\\ddalgak\\hotkeys.json   Ddalgak's own shortcuts (engine.toggle, engine.pause)
     %LOCALAPPDATA%\\mouv\\ddalgak\\          crash and emergency markers
 
@@ -147,6 +213,12 @@ fn run(cmd: Cmd, a: &Args) -> Outcome {
     if a.verbose {
         eprintln!("ddalgak: endpoint \\\\.\\pipe\\{endpoint}");
     }
+    if is_rule_cmd(cmd) {
+        let paths = ddalgak::paths::Paths::from_env().map_err(|e| CliError::new(Code::Io, e))?;
+        let notify =
+            |dry_run: bool| client::call(&endpoint, Method::RulesReload, dry_run).map(|(v, _)| v);
+        return rule_cmd::run(cmd, a, &paths, &notify);
+    }
     match cmd {
         Cmd::Status => client::status(&endpoint),
         Cmd::Health => client::health(&endpoint),
@@ -157,8 +229,34 @@ fn run(cmd: Cmd, a: &Args) -> Outcome {
         Cmd::StartupStatus => client::startup_status().map(|v| (v, Vec::new())),
         Cmd::StartupEnable => client::startup_change(true, a.dry_run),
         Cmd::StartupDisable => client::startup_change(false, a.dry_run),
-        Cmd::Help | Cmd::Version | Cmd::Capabilities => unreachable!("handled above"),
+        _ => unreachable!("handled above"),
     }
+}
+
+/// The Step 67 rule commands (`rule_cmd`).
+#[cfg(windows)]
+fn is_rule_cmd(cmd: Cmd) -> bool {
+    matches!(
+        cmd,
+        Cmd::RuleList
+            | Cmd::RuleShow
+            | Cmd::RuleCheck
+            | Cmd::RuleAdd
+            | Cmd::RuleEdit
+            | Cmd::RuleDelete
+            | Cmd::RuleDuplicate
+            | Cmd::RuleEnable
+            | Cmd::RuleDisable
+            | Cmd::RuleMove
+            | Cmd::RuleRevoke
+            | Cmd::RulesHistory
+            | Cmd::RulesBackup
+            | Cmd::RulesRestore
+            | Cmd::RulesReload
+            | Cmd::RulesDraft
+            | Cmd::RulesDraftApply
+            | Cmd::RulesDraftDiscard
+    )
 }
 
 #[cfg(not(windows))]
@@ -328,12 +426,38 @@ mod client {
         match call(endpoint, Method::Status, false) {
             Ok((mut v, _)) => {
                 v["startup"] = startup;
+                if let Ok(paths) = Paths::from_env()
+                    && v["rules"].is_object()
+                {
+                    v["rules"]["draft"] = crate::rule_cmd::draft_json(&paths);
+                }
                 Ok((v, Vec::new()))
             }
             Err(e) if e.code == Code::EngineNotRunning => {
                 let paths = Paths::from_env().map_err(|e| CliError::new(Code::Io, e))?;
-                let loaded = rules::load(&paths.rules());
                 let shortcuts = Shortcuts::load(&paths, false);
+                let ctx = ddalgak::validate::Context {
+                    shortcuts: shortcuts
+                        .list
+                        .iter()
+                        .map(|s| (s.action.clone(), s.keys.clone()))
+                        .collect(),
+                    check_targets: false,
+                };
+                let loaded = rules::load_with(&paths.rules(), &ctx);
+                let mut rules_json = rules::to_json(&loaded);
+                rules_json["saved"] = json!({
+                    "file": loaded.state.as_str(),
+                    "revision": loaded.revision,
+                    "problem": loaded.state.problem(),
+                    "interrupted_save": ddalgak::store::interrupted_save(
+                        &ddalgak::store::Files::new(&paths)
+                    ),
+                });
+                rules_json["active_set"] = Value::Null;
+                rules_json["in_sync"] = Value::Null;
+                rules_json["last_reload"] = Value::Null;
+                rules_json["draft"] = crate::rule_cmd::draft_json(&paths);
                 let mut warnings = Vec::new();
                 if !loaded.state.usable() {
                     warnings.push(
@@ -350,7 +474,7 @@ mod client {
                             "hook": { "installed": false, "observe_only": false },
                         },
                         "profile": { "id": loaded.profile, "mode": loaded.mode },
-                        "rules": rules::to_json(&loaded),
+                        "rules": rules_json,
                         "shortcuts": shortcuts.to_json(&|_| Some("not_running")),
                         "activity": [],
                         "startup": startup,
@@ -580,6 +704,7 @@ fn human(cmd: Cmd, d: &Value) -> String {
             });
         }
         Cmd::Help | Cmd::Version => {}
+        _ => return rule_cmd::human(cmd, d),
     }
     o
 }
@@ -624,7 +749,7 @@ mod tests {
         // DDALGAK-SEC-010 by inspection: the CLI's sources do not name the hook, the tray, the
         // host loop or the injector. Only `host::rules_json` (a pure formatter) is used.
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        for f in ["main.rs", "cli.rs", "output.rs"] {
+        for f in ["main.rs", "cli.rs", "output.rs", "rule_cmd.rs"] {
             let text = std::fs::read_to_string(dir.join(f)).unwrap();
             let shipped = text.split("#[cfg(test)]").next().unwrap_or_default();
             let code: String = shipped

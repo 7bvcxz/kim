@@ -1,0 +1,11 @@
+{
+  "command": "rules.draft.discard",
+  "data": {
+    "base_revision": 14,
+    "discarded": true,
+    "dry_run": false
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

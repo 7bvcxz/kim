@@ -1407,6 +1407,84 @@ fn read_only_files_and_folders_are_refused_and_left_alone() {
 }
 
 #[test]
+fn the_mouse_hook_exists_only_while_a_mouse_button_rule_does() {
+    // Step 68 (ADR 0031): the low-level mouse hook is the `mouse-hook` permission and is
+    // installed only while the engine is on and an active rule has a mouse-button trigger. The
+    // test host never consumes an event and never injects, so the user's mouse keeps working.
+    let sb = Sandbox::new("mouse");
+    sb.write_rules(&json!({
+        "schema": "ddalgak.rules", "schema_version": 1, "hotkey_contract": 1,
+        "revision": 1, "active_profile": "default",
+        "profiles": [ { "id": "default", "title": "Test", "default_mode": "base",
+            "modes": [ { "id": "base", "title": "Base" } ],
+            "rules": [
+                { "id": "f20-pause", "title": "F20 pauses", "enabled": true,
+                  "trigger": { "keys": "F20" }, "steps": [ { "type": "engine", "op": "pause" } ] }
+            ] } ]
+    }));
+    let _host = sb.host();
+    if elevated() {
+        eprintln!("elevated: the engine stays off, so neither hook is installed; nothing to test");
+        return;
+    }
+    let hooks = |sb: &Sandbox| {
+        let (_, st) = sb.json(&["status"]);
+        (
+            st["data"]["engine"]["hook"]["installed"] == true,
+            st["data"]["engine"]["hook"]["mouse_installed"] == true,
+        )
+    };
+    let wait_for = |sb: &Sandbox, want: (bool, bool)| {
+        let until = Instant::now() + Duration::from_secs(10);
+        while hooks(sb) != want {
+            assert!(Instant::now() < until, "hooks never became {want:?}");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    };
+    let (_, d) = sb.json(&["engine", "start"]);
+    assert_eq!(d["data"]["engine"]["hook"]["installed"], true);
+    assert_eq!(
+        d["data"]["engine"]["hook"]["mouse_installed"], false,
+        "no mouse rule: no mouse hook"
+    );
+    // A mouse-button rule saved while the engine runs: the reload installs the mouse hook.
+    let (code, d) = sb.json(&[
+        "rule",
+        "add",
+        "--trigger",
+        "MouseX2",
+        "--action",
+        "block",
+        "--id",
+        "no-x2",
+    ]);
+    assert_eq!(code, 0, "{d:#}");
+    wait_for(&sb, (true, true));
+    let (_, h) = sb.json(&["health"]);
+    assert_eq!(h["data"]["engine"]["hook"]["mouse_installed"], true);
+    assert!(
+        h["data"]["problems"].as_array().unwrap().is_empty(),
+        "{h:#}"
+    );
+    // Disabled: the mouse hook goes away, the keyboard hook stays.
+    let (code, _) = sb.json(&["rule", "disable", "no-x2"]);
+    assert_eq!(code, 0);
+    wait_for(&sb, (true, false));
+    // Enabled again, then the engine is stopped: both hooks are removed.
+    sb.json(&["rule", "enable", "no-x2"]);
+    wait_for(&sb, (true, true));
+    let (_, d) = sb.json(&["engine", "stop"]);
+    assert_eq!(d["data"]["engine"]["hook"]["installed"], false);
+    assert_eq!(d["data"]["engine"]["hook"]["mouse_installed"], false);
+    // Started with the mouse rule already there: installed at once.
+    let (_, d) = sb.json(&["engine", "start"]);
+    assert_eq!(
+        d["data"]["engine"]["hook"]["mouse_installed"], true,
+        "{d:#}"
+    );
+}
+
+#[test]
 fn a_running_app_reloads_valid_rules_and_keeps_its_hook() {
     let sb = Sandbox::new("reload");
     // Physical-input rules only on F18/F19: the parallel injection test of Step 66 injects F13

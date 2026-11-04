@@ -123,8 +123,18 @@ fn tap_other(vk: u16) -> usize {
     send_as_other_program(&[OutKey { vk, up: false }, OutKey { vk, up: true }])
 }
 
+/// The two tests inject into the whole session and watch the same obscure keys: they take turns.
+static SERIAL: Mutex<()> = Mutex::new(());
+
+fn serial() -> std::sync::MutexGuard<'static, ()> {
+    SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 #[test]
 fn real_hook_idle_cost_injected_cycles_held_keys_and_cleanup() {
+    let _turn = serial();
     let mut e = engine(
         vec![
             binding("accept-f13", "F13", Injected::Accept, EngineOp::Pause),
@@ -371,6 +381,7 @@ fn eventually(ms: u64, cond: impl Fn() -> bool) -> bool {
 
 #[test]
 fn real_remap_block_and_dual_role_with_obscure_keys() {
+    let _turn = serial();
     if !ddalgak::win::input_desktop_available() {
         eprintln!(
             "skipped (locked): no interactive input desktop; remaps are covered by the core and \

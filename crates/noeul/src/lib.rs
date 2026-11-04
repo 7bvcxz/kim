@@ -1,7 +1,8 @@
 //! Noeul (노을): a small native screenshot and floating-pin tool for Windows (pre-alpha:
 //! Step 49 foundation, Step 50 region selection overlay, Step 51 double-click to pin, Step 52
 //! smart selection and pixel precision, Step 53 floating pin engine, Step 56 annotation, Step 55
-//! clipboard paste and rich sources, Step 58 displays, monitor and window capture). See
+//! clipboard paste and rich sources, Step 58 displays, monitor and window capture, Step 59 the
+//! colour picker). See
 //! docs/NOEUL_PHILOSOPHY.md, docs/NOEUL_REQUIREMENTS.md, docs/adr/0023-noeul-app-foundation.md,
 //! docs/adr/0026-noeul-capture-overlay.md, docs/adr/0029-noeul-pin-engine.md and
 //! docs/adr/0038-noeul-annotation.md.
@@ -25,6 +26,7 @@
 //! | [`paste`] | What `F3` takes from the clipboard (Step 55): formats, priority, colours, copied paths, private content, the stand-in |
 //! | [`html`] | Noeul's own sanitizer for clipboard HTML (Step 55): text and basic formatting only, no script, no remote resource |
 //! | [`card`] | Text, HTML, colour and file-name cards (Step 55): document, layout, legible colours, pixels |
+//! | [`color`] | The colour picker's values as text (Step 59): HEX, RGB and HSL, case, alpha, HSL conversions |
 //! | [`decode`] | Local image decoding (Step 55): PNG, JPEG, GIF, BMP, ICO, TIFF, TGA with limits, alpha, ICC to sRGB, multi-image counts |
 //! | [`annotation`] | Annotation (Step 56): editable vector objects, undo/redo, the editor (tools, text, IME), the rasterizer and the export |
 //! | [`settings`], [`paths`] | `config.toml` and the stable per-user folders |
@@ -38,6 +40,7 @@ pub mod annotation;
 pub mod app;
 pub mod capture;
 pub mod card;
+pub mod color;
 pub mod decode;
 pub mod detect;
 pub mod dib;

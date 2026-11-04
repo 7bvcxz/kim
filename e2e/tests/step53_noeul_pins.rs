@@ -235,10 +235,10 @@ fn a_the_pin_engine_is_discoverable_headlessly() {
     ] {
         assert!(ids.contains(&id), "{id} is listed: {ids:?}");
     }
-    // The transforms shipped in Step 54; a text card's copy-text is still planned (Step 55).
+    // The transforms shipped in Step 54; a text card's copy-text shipped in Step 55.
     assert!(
-        !ids.contains(&"pin.copy-text"),
-        "pin.copy-text is not in this build"
+        ids.contains(&"pin.copy-text"),
+        "pin.copy-text is listed: {ids:?}"
     );
     for args in [
         &["pin", "hide", "--all"][..],

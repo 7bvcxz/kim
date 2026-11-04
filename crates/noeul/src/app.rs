@@ -56,9 +56,19 @@
 //! over a pin's picture ([`overlay::Mode::PinEdit`]) in a layered window; Done or `Enter` commits the
 //! annotations (and a crop) to the pin, Cancel or `Escape` leaves the pin as it was. One overlay
 //! exists at a time: a capture or a pin edit.
+//!
+//! **The colour picker** (Step 59, ADR 0053): the overlay is opened with the picker's style
+//! (`[color]` settings, and the format last chosen with `Shift+C` while this instance runs). On
+//! `color.copy` the core reads the one pixel of the frozen picture under the magnifier's crosshair
+//! and puts its text on the clipboard with [`Shell::clipboard_write_text`] — the only clipboard
+//! access; nothing is read and nothing listens (NOEUL-SEC-002). Without a selection the capture
+//! then ends (`captures.colors`); with one it stays with a banner. Status names the format, never
+//! the colour (NOEUL-SEC-008). After every redraw the window's accessible name follows what the
+//! overlay shows ([`Overlay::accessible_name`]).
 
 use crate::annotation::{self, Ime, Object, TextKey, Typesetter};
 use crate::capture::{CaptureBackend, DesktopState, check_region};
+use crate::color as pick;
 use crate::detect::{DetectMode, ElementAnswer, ElementRequest, Snapshot, WindowFacts};
 use crate::displays::{Debounce, LayoutChange, MonitorSpec};
 use crate::error::{Code, NoeulError, Result};
@@ -177,6 +187,9 @@ pub trait OverlayWindow: Measure + Typesetter {
     /// Moves the real pointer to `at` after a pointer key (`SetCursorPos`), only while the
     /// overlay is the foreground window and never under the test placement (NOEUL-SEC-012).
     fn warp_pointer(&mut self, at: (i32, i32));
+    /// The window's accessible name, which UI Automation reads as its Name (Step 59,
+    /// NOEUL-NFR-013): what the overlay shows, never anything else.
+    fn set_name(&mut self, name: &str);
     /// Destroys the window and frees its back buffer now.
     fn destroy(&mut self);
 }
@@ -290,6 +303,8 @@ struct OverlaySession {
     base: Option<Frame>,
     /// Where the input method's candidate window was put last (`None`: it is off).
     ime: Option<Rect>,
+    /// The accessible name the window was given last (Step 59).
+    name: String,
 }
 
 /// The annotation part of the overlay's status: the tool, counts and IDs, never text.
@@ -348,6 +363,11 @@ impl OverlaySession {
             "magnifier": {
                 "enabled": self.model.magnifier_enabled(),
                 "shown": self.scene.magnifier.is_some(),
+            },
+            "color": {
+                "format": self.model.color_style().format.as_str(),
+                "hex_case": self.model.color_style().case.as_str(),
+                "alpha": self.model.color_style().alpha,
             },
             "history": {
                 "count": self.model.history().0,
@@ -456,6 +476,17 @@ pub fn overlay_help(m: &Manager, gestures: Gestures) -> Vec<String> {
     }
     if !fourth.is_empty() {
         lines.push(fourth.join(" \u{b7} "));
+    }
+    // The colour picker (Step 59).
+    let mut fifth = Vec::new();
+    if let Some(x) = k("color.copy") {
+        fifth.push(format!("{x} copies the colour"));
+    }
+    if let Some(x) = k("color.format-next") {
+        fifth.push(format!("{x} switches HEX, RGB, HSL"));
+    }
+    if !fifth.is_empty() {
+        lines.push(fifth.join(" \u{b7} "));
     }
     lines
 }
@@ -662,6 +693,9 @@ pub struct App<S: Shell> {
     displays: Debounce,
     /// The one-shot timer the runtime should (re)arm for them.
     display_timer: Option<Duration>,
+    /// The colour format last chosen with `color.format-next` while this instance runs (memory
+    /// only; a settings reload forgets it, Step 59).
+    color_format: Option<pick::Format>,
 }
 
 impl<S: Shell> std::fmt::Debug for App<S> {
@@ -722,6 +756,7 @@ impl<S: Shell> App<S> {
             lost: 0,
             displays: Debounce::default(),
             display_timer: None,
+            color_format: None,
         }
     }
 
@@ -798,7 +833,19 @@ impl<S: Shell> App<S> {
     pub fn reload_settings(&mut self) -> Value {
         self.settings = settings::load(&self.paths.config_file());
         self.pins.set_look(self.settings.settings.pin_look);
+        // `[color] format` applies again from the next capture (Step 59).
+        self.color_format = None;
         self.settings.to_json()
+    }
+
+    /// The colour picker's style for the next overlay: `[color]`, with the format last chosen
+    /// with `Shift+C` while Noeul runs (Step 59).
+    fn color_style(&self) -> pick::Style {
+        let s = self.settings.settings.color;
+        match self.color_format {
+            Some(f) => s.with_format(f),
+            None => s,
+        }
     }
 
     pub fn settings(&self) -> &settings::Loaded {
@@ -808,6 +855,7 @@ impl<S: Shell> App<S> {
     pub fn status(&self) -> Value {
         let (started, pinned, cancelled) = self.captures.counts();
         let (copied, saved) = self.captures.output_counts();
+        let colors = self.captures.colors();
         json!({
             "running": true,
             "instance": {
@@ -826,6 +874,7 @@ impl<S: Shell> App<S> {
                      "group": self.pins.current_group(), "groups": self.pins.groups().len(),
                      "editor": self.overlay.as_ref().filter(|o| !o.is_capture()).map(OverlaySession::to_json)},
             "captures": {"started": started, "pinned": pinned, "copied": copied, "saved": saved,
+                         "colors": colors,
                          "cancelled": cancelled, "open": self.captures.is_open(),
                          "ignored": self.captures.ignored(),
                          "history": self.captures.history().len(),
@@ -1844,12 +1893,15 @@ impl<S: Shell> App<S> {
         .with_gestures(self.settings.settings.gestures)
         .with_detection(mode, snapshot)
         .with_magnifier(self.settings.settings.magnifier)
-        .with_history(&self.captures.history());
+        .with_history(&self.captures.history())
+        .with_color(self.color_style());
         let mut scene = model.scene(&*window);
         if let Some(frozen) = self.captures.frozen() {
             scene.sample(frozen);
             window.present(frozen, None, &scene, &[picture]);
         }
+        let name = model.accessible_name(&scene);
+        window.set_name(&name);
         window.set_cursor(model.cursor());
         if !window.show(self.shell.interactive()) {
             window.destroy();
@@ -1877,6 +1929,7 @@ impl<S: Shell> App<S> {
             layer: None,
             base: None,
             ime: None,
+            name,
         });
         self.last_action = Some(("capture.region".into(), "opened"));
         Ok(
@@ -1991,6 +2044,13 @@ impl<S: Shell> App<S> {
         if let Some(at) = ov.model.take_warp() {
             ov.window.warp_pointer(at);
         }
+        // `Shift+C` chose a format: the next captures start with it (Step 59).
+        if ov.is_capture() {
+            let f = ov.model.color_style().format;
+            if f != self.settings.settings.color.format || self.color_format.is_some() {
+                self.color_format = Some(f);
+            }
+        }
         let request = ov.model.take_element_request();
         let picture = ov.model.picture();
         if ov.model.needs_snapshot() {
@@ -2026,6 +2086,65 @@ impl<S: Shell> App<S> {
                 Output::QuickSave => self.quick_save(rect),
             },
             OverlayOutcome::Menu(at) => self.open_overlay_menu(at),
+            OverlayOutcome::Color { at, keep } => self.copy_color(at, keep),
+        }
+    }
+
+    /// `color.copy` (Step 59, NOEUL-FR-044): the text of the frozen picture's pixel at `at` in
+    /// the picker's chosen format goes to the clipboard — one write, nothing read. Without a
+    /// selection the capture then ends (its picture is freed, nothing is pinned, copied as an
+    /// image or kept in the history); with one (`keep`) it stays, with a banner naming what was
+    /// copied, so the selection and its annotations are not lost. A busy clipboard keeps the
+    /// overlay with a banner.
+    fn copy_color(&mut self, at: (i32, i32), keep: bool) {
+        let Some(ov) = self.overlay.as_ref().filter(|o| o.is_capture()) else {
+            return;
+        };
+        let (id, style) = (ov.id, ov.model.color_style());
+        let Some(c) = self
+            .captures
+            .frozen()
+            .and_then(|f| overlay::pixel_color(f, at))
+        else {
+            return self.redraw_overlay();
+        };
+        let text = style.text(c);
+        match self.shell.clipboard_write_text(&text) {
+            Ok(()) if keep => {
+                // The way to the swatch, with the user's key for `paste.float` (Step 55).
+                let then = self.hotkeys.keys_for("paste.float").map_or_else(
+                    || "Pin clipboard pins it as a swatch".to_string(),
+                    |k| format!("{} pins it as a swatch", crate::hotkeys::key_label(k)),
+                );
+                if let Some(ov) = self.overlay.as_mut() {
+                    ov.model.set_banner(Some(format!(
+                        "Copied {text} ({}). After the capture, {then}.",
+                        style.format.title()
+                    )));
+                }
+                self.redraw_overlay();
+                self.last_action = Some(("color.copy".into(), "copied"));
+            }
+            Ok(()) => {
+                self.captures.color_copied(id);
+                if let Some(mut ov) = self.overlay.take() {
+                    ov.window.destroy();
+                    self.shell.end_detection();
+                }
+                self.overlay_menu = None;
+                self.save_request = None;
+                self.last_action = Some(("color.copy".into(), "copied"));
+            }
+            Err(e) if e.code == Code::ClipboardUnavailable => self.fail_overlay(
+                "color.copy",
+                "clipboard_unavailable",
+                "The clipboard is in use by another program; the colour was not copied. Try again, or press Esc.",
+            ),
+            Err(_) => self.fail_overlay(
+                "color.copy",
+                "failed",
+                "The colour could not be copied. Try again, or press Esc.",
+            ),
         }
     }
 
@@ -2143,6 +2262,12 @@ impl<S: Shell> App<S> {
         if caret != ov.ime {
             ov.window.set_ime(caret);
             ov.ime = caret;
+        }
+        // The accessible name follows what is shown (Step 59): set only when it changed.
+        let name = ov.model.accessible_name(&scene);
+        if name != ov.name {
+            ov.window.set_name(&name);
+            ov.name = name;
         }
         ov.scene = scene;
     }
@@ -2709,6 +2834,7 @@ impl<S: Shell> App<S> {
             layer: None,
             base: Some(base),
             ime: None,
+            name: String::new(),
         });
         // The pin's annotations are drawn into the layer right away.
         self.redraw_overlay();
@@ -3586,6 +3712,9 @@ mod paste_tests;
 mod display_tests;
 
 #[cfg(test)]
+mod color_tests;
+
+#[cfg(test)]
 pub(crate) mod tests {
     use super::*;
     use crate::capture::{CaptureError, Desktop, Monitor, Synthetic};
@@ -3613,6 +3742,8 @@ pub(crate) mod tests {
         pub ime: Vec<Option<Rect>>,
         /// Whether each window was layered (the pin editor, Step 56).
         pub layered: Vec<bool>,
+        /// Every accessible name the windows were given, in order (Step 59).
+        pub names: Vec<String>,
     }
 
     #[derive(Debug, Default, Clone)]
@@ -3675,6 +3806,9 @@ pub(crate) mod tests {
         }
         fn warp_pointer(&mut self, at: (i32, i32)) {
             self.log.borrow_mut().warps.push(at);
+        }
+        fn set_name(&mut self, name: &str) {
+            self.log.borrow_mut().names.push(name.to_string());
         }
         fn set_ime(&mut self, caret: Option<Rect>) {
             self.log.borrow_mut().ime.push(caret);
@@ -3970,7 +4104,7 @@ pub(crate) mod tests {
         a.overlay_event(OverlayEvent::Input(i));
     }
 
-    fn key(a: &mut App<FakeShell>, name: &str, ctrl: bool, shift: bool) {
+    pub(crate) fn key(a: &mut App<FakeShell>, name: &str, ctrl: bool, shift: bool) {
         let c = crate::hotkeys::chord_of(name, ctrl, false, shift).unwrap();
         a.overlay_event(OverlayEvent::Key(c, None, false));
     }
@@ -4298,6 +4432,7 @@ pub(crate) mod tests {
                 "Arrows move \u{b7} Ctrl+arrows grow \u{b7} Shift+arrows shrink",
                 "Ctrl+A whole monitor \u{b7} R last area \u{b7} Enter pins the selection",
                 "W A S D move the pointer \u{b7} Space marks a corner \u{b7} E windows, elements, off \u{b7} M magnifier \u{b7} Comma/Period earlier areas",
+                "C copies the colour \u{b7} Shift+C switches HEX, RGB, HSL",
             ]
         );
         assert_eq!(help.dpi, 144, "drawn at the primary monitor's 150 %");
@@ -5692,7 +5827,7 @@ pub(crate) mod tests {
 
     // ---- Step 51: the outputs of the overlay (UX spec §4.3, window-free) ----
 
-    fn press_at(a: &mut App<FakeShell>, b: Button, x: i32, y: i32, mods: Mods, t: u32) {
+    pub(crate) fn press_at(a: &mut App<FakeShell>, b: Button, x: i32, y: i32, mods: Mods, t: u32) {
         ev(
             a,
             OverlayInput::Press {
@@ -5705,7 +5840,7 @@ pub(crate) mod tests {
         );
     }
 
-    fn up(a: &mut App<FakeShell>, x: i32, y: i32) {
+    pub(crate) fn up(a: &mut App<FakeShell>, x: i32, y: i32) {
         ev(
             a,
             OverlayInput::Release {
@@ -5750,7 +5885,7 @@ pub(crate) mod tests {
         (info.width, info.height, out)
     }
 
-    fn set_config(a: &mut App<FakeShell>, values: &[(&str, &str)]) {
+    pub(crate) fn set_config(a: &mut App<FakeShell>, values: &[(&str, &str)]) {
         let path = a.paths.config_file();
         let edited = settings::set(&path, values).unwrap();
         settings::write(&path, &edited.text).unwrap();
@@ -6220,7 +6355,7 @@ pub(crate) mod tests {
         st["captures"]["overlay"].clone()
     }
 
-    fn mouse(a: &mut App<FakeShell>, x: i32, y: i32) {
+    pub(crate) fn mouse(a: &mut App<FakeShell>, x: i32, y: i32) {
         ev(
             a,
             OverlayInput::Move {
@@ -6396,7 +6531,7 @@ pub(crate) mod tests {
         up(a, x, y);
     }
 
-    fn choose(a: &mut App<FakeShell>, t: annotation::Tool) {
+    pub(crate) fn choose(a: &mut App<FakeShell>, t: annotation::Tool) {
         click_button(a, overlay::ToolbarItem::Tool(t));
         assert_eq!(
             a.overlay.as_ref().unwrap().model.editor().tool(),
@@ -6406,7 +6541,7 @@ pub(crate) mod tests {
     }
 
     /// The overlay's (or editor's) status, validated against the schema.
-    fn checked_status(a: &App<FakeShell>) -> Value {
+    pub(crate) fn checked_status(a: &App<FakeShell>) -> Value {
         let st = a.status();
         let errors = crate::schema_errors("noeul-ipc-v1#status_result", &st);
         assert!(errors.is_empty(), "{errors:?}\n{st:#}");

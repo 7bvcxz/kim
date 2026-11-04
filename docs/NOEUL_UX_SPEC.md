@@ -1,6 +1,6 @@
 # Noeul UX specification
 
-Status: **current** (specification; Step 49 implemented the app foundation, [ADR 0023](adr/0023-noeul-app-foundation.md); Step 50 the `F1` selection overlay with `Enter` to pin, [ADR 0026](adr/0026-noeul-capture-overlay.md), see §4.5; Step 53 the floating pin engine, [ADR 0029](adr/0029-noeul-pin-engine.md), see §4.6; Step 51 the double-click-to-pin gesture, the toolbar, the selection menu, copy, save and the gesture settings, [ADR 0032](adr/0032-noeul-double-click-pin-and-outputs.md), see §4.7; Step 52 window and element detection, the magnifier, the precision keys, snapping and the rectangle history, [ADR 0035](adr/0035-noeul-smart-selection-and-precision.md), see §4.8; Step 56 annotation in the overlay and on pins, [ADR 0038](adr/0038-noeul-annotation.md), see §4.9; Step 57 mosaic, blur, the eraser and the solid redaction, [ADR 0041](adr/0041-noeul-privacy-tools.md), see §4.10; Step 54 the pin transforms, border resizing, outline and shadow, click-through with its ways back, thumbnails and groups, [ADR 0044](adr/0044-noeul-pin-transforms-and-control.md), see §4.11; Step 55 `F3` paste of images, image files, colours, HTML and text cards, drops and `noeul pin <file>`, [ADR 0047](adr/0047-noeul-clipboard-paste-and-rich-sources.md), see §4.12; Step 58 whole-monitor and active-window capture, the pointer in a capture and the rules for changing displays, [ADR 0050](adr/0050-noeul-displays-and-capture-backends.md), see §4.13 with the physical test matrix) · Step 48 ·
+Status: **current** (specification; Step 49 implemented the app foundation, [ADR 0023](adr/0023-noeul-app-foundation.md); Step 50 the `F1` selection overlay with `Enter` to pin, [ADR 0026](adr/0026-noeul-capture-overlay.md), see §4.5; Step 53 the floating pin engine, [ADR 0029](adr/0029-noeul-pin-engine.md), see §4.6; Step 51 the double-click-to-pin gesture, the toolbar, the selection menu, copy, save and the gesture settings, [ADR 0032](adr/0032-noeul-double-click-pin-and-outputs.md), see §4.7; Step 52 window and element detection, the magnifier, the precision keys, snapping and the rectangle history, [ADR 0035](adr/0035-noeul-smart-selection-and-precision.md), see §4.8; Step 56 annotation in the overlay and on pins, [ADR 0038](adr/0038-noeul-annotation.md), see §4.9; Step 57 mosaic, blur, the eraser and the solid redaction, [ADR 0041](adr/0041-noeul-privacy-tools.md), see §4.10; Step 54 the pin transforms, border resizing, outline and shadow, click-through with its ways back, thumbnails and groups, [ADR 0044](adr/0044-noeul-pin-transforms-and-control.md), see §4.11; Step 55 `F3` paste of images, image files, colours, HTML and text cards, drops and `noeul pin <file>`, [ADR 0047](adr/0047-noeul-clipboard-paste-and-rich-sources.md), see §4.12; Step 58 whole-monitor and active-window capture, the pointer in a capture and the rules for changing displays, [ADR 0050](adr/0050-noeul-displays-and-capture-backends.md), see §4.13 with the physical test matrix; Step 59 the colour picker in the overlay and the colour clipboard workflow, [ADR 0053](adr/0053-noeul-color-picker.md), see §4.14) · Step 48 ·
 Philosophy: [NOEUL_PHILOSOPHY](NOEUL_PHILOSOPHY.md) · Requirements: [NOEUL_REQUIREMENTS](NOEUL_REQUIREMENTS.md) ·
 Parity: [NOEUL_SNIPASTE_MATRIX](NOEUL_SNIPASTE_MATRIX.md) · Shortcuts: [HOTKEY_CONTRACT §13.3](HOTKEY_CONTRACT.md) ·
 Decision: [ADR 0021](adr/0021-noeul-product-definition.md)
@@ -566,8 +566,9 @@ Step 52 ships detection, the magnifier, the precision keys, snapping and the rec
    selecting and outside or on the handles of a confirmed selection: 15 × 15 pixels of the frozen
    picture enlarged (8 logical pixels each), a crosshair through the centre pixel, the position in
    device pixels (and, on a scaled monitor, the logical position on that monitor, "200, 300 at
-   150 %"), and the pixel's colour as HEX and RGB. It hides while moving the selection, over its
-   inside, the toolbar and the size chip.
+   150 %"), and the pixel's colour as HEX and RGB (since Step 59 written as the colour picker
+   copies them, `rgb(…)`, with the format `C` copies marked, §4.14). It hides while moving the
+   selection, over its inside, the toolbar and the size chip.
 8. **History.** `Comma` (`history.previous`) shows the rectangle of the last successful capture,
    again the one before, down to the oldest of 20; `Period` (`history.next`) goes forward. Only
    rectangles are kept, in memory; cancelled captures are never kept (NOEUL-FR-050).
@@ -605,7 +606,7 @@ Evidence column):
    window the chip says "Protected window: Windows captures it as black".
 7. `F1`, look at the magnifier: it follows the pointer, shows the enlarged pixels with a crosshair,
    the position and the colour. Move over a known colour (for example a pure white area) and check
-   `#FFFFFF  255, 255, 255`. Press `M`: it disappears; `M` again: it is back.
+   `#FFFFFF  rgb(255, 255, 255)`. Press `M`: it disappears; `M` again: it is back.
 8. `F1`, press `W A S D` (also on an AZERTY layout, the keys at those positions): the pointer and
    the magnifier move one pixel per press; hold a key: it speeds up. Press `Space`, move with the
    keys, `Space`: a rectangle; `Enter` pins it with the size the chip said.
@@ -1102,6 +1103,117 @@ For each configuration (✓ in the result table, with notes):
 | F | | | | | | | | | | | | | |
 | G | | | | | | | | | | | | | |
 
+### 4.14 Step 59: the colour picker and the colour clipboard workflow
+
+Step 59 ([ADR 0053](adr/0053-noeul-color-picker.md)) makes the magnifier a colour picker: `C`
+copies the hovered pixel's colour as text, and `F3` turns copied colour text into a floating
+swatch (§4.12).
+
+**Rules.**
+
+1. **What `C` copies** (`color.copy`): the pixel of the **frozen picture** under the magnifier's
+   crosshair — the centre cell, the pixel the overlay's pointer is on — and only **while the
+   magnifier is shown** (while selecting, next to a selection or on its handles). Inside the
+   selection, over the toolbar, after `M`, while a tool draws or in the pin editor nothing is
+   copied. `W A S D` move the crosshair one device pixel per press (accelerating when held), on
+   every monitor and scale.
+2. **Formats** (CSS, so they paste into style sheets and design tools as they are):
+
+   | Format | Opaque | With `[color] alpha = "on"` |
+   | --- | --- | --- |
+   | HEX | `#3A6EA5` (`[color] hex_case = "lower"`: `#3a6ea5`) | `#3A6EA5FF` |
+   | RGB | `rgb(58, 110, 165)` | `rgba(58, 110, 165, 1)` |
+   | HSL | `hsl(211, 48%, 44%)` | `hsla(211, 48%, 44%, 1)` |
+
+   HEX and RGB are exact; HSL is whole degrees and percent, so its colour can differ from the
+   pixel by up to 3 units per channel. A screen picture is opaque: the alpha is always `FF` / `1`.
+3. **The readout** writes exactly what `C` copies: the position (and the logical one on a scaled
+   monitor), then HEX and RGB, and HSL when it is the chosen format; the chosen line is bright
+   with an accent bar beside it. `color.format-next` (`Shift+C`) cycles HEX → RGB → HSL.
+   `[color] format` (`hex`, `rgb`, `hsl`) is the format a capture starts with; the one chosen with
+   `Shift+C` stays for the next captures until Noeul quits or the settings change.
+4. **After the copy.** With nothing selected, the capture ends at once: nothing is pinned, copied
+   as a picture or kept in the history (`noeul status` → `captures.colors`). With a selection (or
+   annotations) the capture **stays** with them and a banner says "Copied #3A6EA5 (HEX). After
+   the capture, F3 pins it as a swatch." A clipboard held by another program keeps the overlay
+   with a banner.
+5. **Back as a swatch.** `F3` (or `noeul pin --clipboard`) pins every text the picker copies as a
+   colour card: HEX, `rgb()`/`rgba()` and, since Step 59, `hsl()`/`hsla()`.
+6. **Keys and conflicts.** Both keys can be changed or turned off (`noeul hotkeys set color.copy
+   X`); the keyboard help names the effective keys. While a label is typed every overlay key is
+   suspended, so `C` and `Shift+C` type `c` and `C`; the overlay has no input context, so `C`
+   works in Korean Hangul mode, and no key fires during a composition. The `annotate` keys are
+   matched first while a selection is confirmed and none is `C` by default; an `annotate` action
+   bound to `C` wins there (`hotkeys check` does not report it: different contexts). The
+   contract has no bare `Shift`, so the format switch is `Shift+C` (Snipaste: `Shift`).
+7. **Privacy.** One pixel, of the picture the overlay shows, read only on `C`; one clipboard write,
+   no read, nothing listens. Status, IPC, logs and `--json` report the format, case, alpha and a
+   count, never a colour. The overlay window's accessible name carries the readout while it is on
+   screen (§9).
+8. **Colour management and HDR.** The values are the captured picture's: 8-bit values Windows'
+   GDI capture gives, treated as sRGB, before the monitor's calibration and profile (a
+   colour-managed program's content is already in the monitor's space). On a monitor with HDR on,
+   Windows converts the picture to SDR; the readout then adds "HDR shown as SDR", and the values
+   are that SDR picture's. Noeul corrects nothing and promises no match with what the display
+   emits (NOEUL-FR-092).
+9. **From the command line** the picker's settings (`noeul config set color.format|hex_case|alpha`),
+   its keys (`noeul hotkeys …`), its state (`noeul status`: `captures.overlay.color`) and the
+   swatch (`noeul pin --clipboard`) are reachable, but no command picks a pixel: that would be a
+   capture without the overlay with a pixel in the JSON (NOEUL-SEC-008).
+
+**Automated evidence** (no visible window, no real clipboard, no synthesized input, no screen of
+the user's: known synthetic pictures, the test hook's off-screen overlay and its stand-in
+clipboard):
+
+| Layer | Where | What |
+| --- | --- | --- |
+| Text formats | `crates/noeul/src/color.rs` (6 tests) | the exact strings of every format, case and alpha; HSL against known values and over the cube (≤ 3 units back); every alpha back from its text; every copied text pastes back through `F3`'s parser |
+| Paste | `crates/noeul/src/paste/tests.rs` colors_parse_in_every_documented_notation_and_nothing_else | `hsl()`/`hsla()` with commas, spaces, `deg`, `/ alpha`; invalid HSL refused |
+| Model | `crates/noeul/src/overlay.rs` c_copies_the_pixel_under_the_crosshair_only_while_the_magnifier_shows_it, the_picker_reads_exact_pixels_across_monitors_scales_hdr_and_pointer_keys, the_accessible_name_reads_the_selection_and_the_magnifier | when `C` copies (magnifier, selection, tool, drag, pin editor); the readout, its marked line and the accent bar; exact values on a 150 % monitor at negative coordinates, a 100 % primary, a 125 % HDR monitor and a gap; `W A S D` nudging; case and alpha; the HDR note; the accessible name |
+| Instance core | `crates/noeul/src/app/color_tests.rs` (6 tests) | exact HEX on both monitors of a mixed-DPI layout, the capture ended and freed, one write and no read, `F3` pins each copied HEX, RGB and HSL as a swatch of that colour; settings, `Shift+C` and the remembered format; `C` typed into a label, nothing copied while drawing, a selection and its annotation kept and pinned; rebound and disabled keys and the help; a busy clipboard; status never names the colour; the accessible name and the HDR note |
+| Real Win32 | `crates/noeul/src/win/overlay.rs` ui_automation_names_the_overlay_with_the_magnifiers_colour | UI Automation reads the real (hidden, off-screen) overlay window's Name with the magnifier's colour and copy format, and its change after `Shift+C` |
+| Real binary, test hook | `crates/noeul/tests/color_picker.rs` | known pixels on the 100 % and 150 % monitors and in a gap copied to the stand-in clipboard, `K` bound next to `Shift+C`, the `[color]` settings through a running instance, three swatches pinned back with `noeul pin --clipboard`, a selection kept, the Name read cross-process through UI Automation, no focus taken, no temporary file |
+| e2e (ignored; `cargo xtask e2e` only) | `e2e/tests/step59_noeul_color_picker.rs` | the keys and settings headlessly; picking, switching formats and pinning swatches on the synthetic desktop |
+
+These steps need the maintainer, on the real desktop with a physical mouse and keyboard, the real
+clipboard and real applications (record the Windows build, the monitors with their scales and HDR
+state, the applications and the date in the Step report and the matrix Evidence column). **None of
+them was run by the Step 59 worker.**
+
+- [ ] 1. `cargo build --release -p noeul`, then `target\release\noeul.exe start` (default profile,
+  `F1` and `F3` free).
+- [ ] 2. `F1`, hover a pure white area: the magnifier reads `#FFFFFF` (marked) and
+  `rgb(255, 255, 255)`. Press `C`: the overlay closes. Paste into Notepad: `#FFFFFF`.
+- [ ] 3. Press `F3`: a swatch card at the pointer with `#FFFFFF` and `rgb(255, 255, 255)`.
+- [ ] 4. In Paint, fill an area with pure red (255, 0, 0) and next to it pure blue. `F1`, hover the
+  red: `#FF0000`; press `D` (or `A`) one pixel at a time across the border: the value changes
+  exactly at the border. `C`, paste into Notepad: `#FF0000`.
+- [ ] 5. `F1`, `Shift+C`: the RGB line is marked; `Shift+C` again: an HSL line appears, marked.
+  `C`, paste into Notepad: `hsl(0, 100%, 50%)` over the red; `F3` pins a red swatch. `F1` again: it
+  starts in HSL; `Shift+C` back to HEX.
+- [ ] 6. `noeul config set color.hex_case lower` and `noeul config set color.alpha on`: `F1`, `C`
+  over the red gives `#ff0000ff`; `noeul config reset color --yes` restores `#FF0000`.
+- [ ] 7. `F1`, drag a selection, draw a rectangle with the toolbar's rectangle tool, `Esc` (leave
+  the tool), move the pointer outside the selection and press `C`: the banner "Copied …" appears,
+  the selection and the rectangle stay; `Enter` pins them.
+- [ ] 8. `F1`, select, choose the text tool, click inside and type `Color`: the label says
+  `Color` and the clipboard is unchanged (paste into Notepad).
+- [ ] 9. Switch the keyboard to Korean Hangul mode (한/영), `F1`, `C`: the colour is copied, no
+  Hangul character appears anywhere.
+- [ ] 10. Start Narrator (`Win+Ctrl+Enter`), `F1`, move the pointer: note what Narrator reads
+  ("Capture overlay. Magnifier at …"); `Esc`, stop Narrator.
+- [ ] 11. With monitors at different scales (UX spec §4.13 configurations C or F): hover the same
+  known colour on each monitor: the same values; the magnifier shows the logical position on the
+  scaled one.
+- [ ] 12. On an HDR monitor with "Use HDR" on: the readout adds "HDR shown as SDR"; compare the
+  value with another picker (for example PowerToys Color Picker) over the same pixel and note the
+  difference. On a monitor with a wide-gamut or calibrated profile, note that Noeul gives the
+  drawn values.
+- [ ] 13. With clipboard history on (`Win+V`), pick three colours: three entries appear, one per
+  `C`, and nothing else; leave Noeul idle for a minute: 0 % CPU in Task Manager.
+- [ ] 14. `noeul hotkeys set color.copy X`, `F1`: `X` copies, `C` does nothing; the keyboard help
+  says "X copies the colour"; `noeul hotkeys reset color.copy`.
+
 ## 5. Toolbar, menus and the tray
 
 - **Toolbar order** (tab order): Pin · Copy · Save · tools (N3) · Undo · Redo · Cancel. Pin is the
@@ -1166,8 +1278,10 @@ arrows move the focus, `Enter`/`Space` run the focused button, `Escape` on a but
 ([ADR 0035](adr/0035-noeul-smart-selection-and-precision.md), §4.8) added `selection.mark`,
 `pointer.move-*` (physical keys, matched from the scan code), `detect.cycle`, `magnifier.toggle`,
 `history.previous` and `history.next`, and acceleration of every held key with `repeat` (1 device
-pixel for the press and nine repeats, then 2, 5 and 10). `color.copy` and `color.format-next`
-arrive with the colour picker (N3); the magnifier shows HEX and RGB together until then.
+pixel for the press and nine repeats, then 2, 5 and 10). Step 59
+([ADR 0053](adr/0053-noeul-color-picker.md), §4.14) added `color.copy` (`C`: copy the colour under
+the magnifier's crosshair) and `color.format-next` (`Shift+C`: HEX, RGB, HSL); while a label is
+typed both are suspended with the other overlay keys, so `C` types a "c".
 
 **Context `annotate`** (while a drawing tool is active, in the overlay or on a pin; it is inside
 the other contexts, so its keys win there):
@@ -1291,6 +1405,7 @@ when a capture starts.
 | Pins, closed pins (for reopen) | memory | while open; reopen memory default 1 | freed at quit |
 | Capture history | memory (20 captures) | after a successful capture | disk: **off**; since Step 52 the rectangles only (images are N4) |
 | Detection | memory: rectangles and flags of the windows on the desktop, UI element rectangles | while the overlay is open | never stored or logged; no title, name, value or text is read |
+| Colour picker | the one pixel of the frozen picture under the crosshair, read on `C` and put on the clipboard as text; the format chosen with `Shift+C` in memory | on `C`; the format until Noeul quits | never stored, logged or reported (status names the format only); the overlay's accessible name shows the readout while it is on screen (Step 59) |
 | History on disk, auto-save | `%LOCALAPPDATA%\mouv\noeul\history\` or the chosen folder | only after the user turned it on | **off** |
 | Pin backup | `%LOCALAPPDATA%\mouv\noeul\pins\` (atomic, user-only) | only after the user turned it on | **off** |
 | Copy as file | `%LOCALAPPDATA%\mouv\noeul\outbox\`, deleted at quit | only after the user turned it on | **off** |
@@ -1323,7 +1438,12 @@ when a capture starts.
   way to do anything.
 - UI Automation names: the overlay ("Capture overlay, selection 640 by 360 at 412, 188"), each
   toolbar button, the magnifier readout, each pin ("Pin 3, 640 by 360, 100 percent"); results are
-  announced (NOEUL-NFR-013).
+  announced (NOEUL-NFR-013). Shipped since Step 59: the overlay window's Name — its window text,
+  read by UI Automation's window proxy and announced on change — is the overlay and its selection
+  and, while the magnifier is shown, its position, colour values and the format `C` copies
+  ("Capture overlay, selection 640 by 360 at 412, 188. Magnifier at 1100, 700 (733, 467 at
+  150 %): #3A6EA5, rgb(58, 110, 165); copy format HEX"). The toolbar buttons and the pins have
+  no names of their own yet (N5).
 - Focus is always visible (2 px focus ring); the overlay never traps focus: `Esc` always leaves.
 - Contrast themes switch to system colors; reduced motion removes the overlay fade and toast
   animations.

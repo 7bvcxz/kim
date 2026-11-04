@@ -44,6 +44,15 @@
 //! - `[paste] file_cards`: copied files that are not images become a card of their names,
 //!   `"off"` (default) or `"on"`.
 //!
+//! Since Step 59 (NOEUL-FR-044, ADR 0053), the colour picker:
+//!
+//! - `[color] format`: the format `C` copies when a capture starts, `"hex"` (default), `"rgb"`
+//!   or `"hsl"`; `Shift+C` switches it during a capture (and the next captures keep that choice
+//!   until Noeul quits or the settings change);
+//! - `[color] hex_case`: `"upper"` (default, `#3A6EA5`) or `"lower"` (`#3a6ea5`);
+//! - `[color] alpha`: include the alpha (`#3A6EA5FF`, `rgba(…, 1)`, `hsla(…, 1)`), `"off"`
+//!   (default) or `"on"`.
+//!
 //! The rules every setting follows:
 //!
 //! - a missing file means defaults;
@@ -180,6 +189,8 @@ pub struct Settings {
     pub pin_look: Look,
     /// What a paste takes (`[paste] paths`, `[paste] file_cards`; Step 55).
     pub paste: crate::paste::Options,
+    /// How the colour picker writes colours (`[color]`; Step 59).
+    pub color: crate::color::Style,
 }
 
 impl Default for Settings {
@@ -195,6 +206,7 @@ impl Default for Settings {
             pointer: false,
             pin_look: Look::default(),
             paste: crate::paste::Options::default(),
+            color: crate::color::Style::default(),
         }
     }
 }
@@ -247,6 +259,11 @@ impl Loaded {
             "paste": {
                 "paths": if s.paste.paths { "on" } else { "off" },
                 "file_cards": if s.paste.file_cards { "on" } else { "off" },
+            },
+            "color": {
+                "format": s.color.format.as_str(),
+                "hex_case": s.color.case.as_str(),
+                "alpha": if s.color.alpha { "on" } else { "off" },
             },
             "gestures": {
                 "double_click": s.gestures.double_click.as_str(),
@@ -373,6 +390,24 @@ const KEYS: &[Key] = &[
         takes: "\"on\" or \"off\"",
         default: "\"off\"",
     },
+    Key {
+        section: "color",
+        name: "format",
+        takes: "\"hex\", \"rgb\" or \"hsl\"",
+        default: "\"hex\"",
+    },
+    Key {
+        section: "color",
+        name: "hex_case",
+        takes: "\"upper\" or \"lower\"",
+        default: "\"upper\"",
+    },
+    Key {
+        section: "color",
+        name: "alpha",
+        takes: "\"on\" or \"off\"",
+        default: "\"off\"",
+    },
 ];
 
 /// The dotted names of every key `noeul config set` accepts.
@@ -383,7 +418,7 @@ pub fn key_names() -> Vec<String> {
 }
 
 /// The sections that hold keys (`noeul config reset <section>`).
-pub const SECTIONS: &[&str] = &["general", "capture", "gestures", "pins", "paste"];
+pub const SECTIONS: &[&str] = &["general", "capture", "gestures", "pins", "paste", "color"];
 
 /// Applies one value to `settings`; `Err` names what the key takes.
 fn apply(settings: &mut Settings, section: &str, name: &str, v: &toml::Value) -> Result<(), ()> {
@@ -449,6 +484,19 @@ fn apply(settings: &mut Settings, section: &str, name: &str, v: &toml::Value) ->
             } else {
                 settings.paste.file_cards = on;
             }
+        }
+        ("color", "format") => {
+            settings.color.format = s.and_then(crate::color::Format::parse).ok_or(())?;
+        }
+        ("color", "hex_case") => {
+            settings.color.case = s.and_then(crate::color::HexCase::parse).ok_or(())?;
+        }
+        ("color", "alpha") => {
+            settings.color.alpha = match s {
+                Some("on") => true,
+                Some("off") => false,
+                _ => return Err(()),
+            };
         }
         _ => {}
     }

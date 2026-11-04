@@ -35,6 +35,10 @@
 //!   for the user. Labels are typeset with GDI and font fallback (`win::typeset`). The pin editor
 //!   uses a **layered** window (`UpdateLayeredWindow` with per-pixel alpha), so the canvas around
 //!   the pin is transparent and passes clicks to what is behind.
+//! - **Accessible name** (Step 59): the window's text is the overlay's accessible name
+//!   ([`crate::overlay::Overlay::accessible_name`]): the selection and, while the magnifier is
+//!   shown, its position, colour values and the format `C` copies. UI Automation reads it as the
+//!   window's Name, and `DefWindowProcW` announces each change; only what the overlay shows.
 
 use crate::annotation::{Glyphs, Ime, Typesetter};
 use crate::app::{OverlayEvent, OverlayWindow};
@@ -83,7 +87,9 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SYSKEYDOWN, WM_SYSKEYUP, WNDCLASSEXW,
     WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
-use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, SetCursorPos};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    GetForegroundWindow, SetCursorPos, SetWindowTextW,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     ULW_ALPHA, UpdateLayeredWindow, WM_CHAR, WM_IME_CHAR, WM_IME_COMPOSITION,
     WM_IME_ENDCOMPOSITION, WM_IME_SETCONTEXT, WM_IME_STARTCOMPOSITION, WM_MOUSEWHEEL,
@@ -826,7 +832,7 @@ impl WinOverlay {
             unsafe {
                 let prev = SelectObject(self.mem, f);
                 for (i, line) in label.lines.iter().enumerate() {
-                    let c = if i == 0 {
+                    let c = if label.strong(i) {
                         color::TEXT_PRIMARY
                     } else {
                         color::TEXT_SECONDARY
@@ -1092,6 +1098,16 @@ impl OverlayWindow for WinOverlay {
                 }
             }
         }
+    }
+
+    fn set_name(&mut self, name: &str) {
+        if !self.alive() {
+            return;
+        }
+        let text = wide(name);
+        // SAFETY: our own live window and a NUL-terminated string; `DefWindowProcW` stores the
+        // text and announces the name change to UI Automation clients (EVENT_OBJECT_NAMECHANGE).
+        unsafe { SetWindowTextW(self.hwnd, text.as_ptr()) };
     }
 
     fn warp_pointer(&mut self, at: (i32, i32)) {
@@ -1690,6 +1706,148 @@ mod tests {
         assert_eq!(unsafe { IsWindow(hwnd) }, 0);
         drop(layer);
         drop(base);
+        assert_eq!(ledger.live(), (0, 0));
+    }
+
+    /// The Name UI Automation gives the window `hwnd` (`IUIAutomation::ElementFromHandle`, then
+    /// `IUIAutomationElement::get_CurrentName`, vtable slots 6 and 23 of UIAutomationClient.h),
+    /// read in a multithreaded apartment of the calling thread. Test-only: Noeul itself never
+    /// asks any window for its name (NOEUL-SEC-007).
+    fn uia_name(hwnd: usize) -> Option<String> {
+        use windows_sys::Win32::Foundation::{SysFreeString, SysStringLen};
+        use windows_sys::Win32::System::Com::{
+            CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
+            CoUninitialize,
+        };
+        use windows_sys::core::{BSTR, GUID, HRESULT};
+        type FnHwnd = unsafe extern "system" fn(*mut c_void, HWND, *mut *mut c_void) -> HRESULT;
+        type FnName = unsafe extern "system" fn(*mut c_void, *mut BSTR) -> HRESULT;
+        type FnRelease = unsafe extern "system" fn(*mut c_void) -> u32;
+        let clsid = GUID::from_u128(0xff48dba4_60ef_4201_aa87_54103eef594e);
+        let iid = GUID::from_u128(0x30cbe57d_d9d0_452a_ab13_7ac5ac4825ee);
+        // SAFETY: COM initialised for this thread and balanced below; documented class and
+        // interface ids; every vtable slot is called with its signature on a live object, and each
+        // object and string is released once.
+        unsafe {
+            let slot = |o: *mut c_void, i: usize| *(*(o as *const *const *const c_void)).add(i);
+            if CoInitializeEx(std::ptr::null(), COINIT_MULTITHREADED as u32) < 0 {
+                return None;
+            }
+            let mut auto: *mut c_void = std::ptr::null_mut();
+            let mut name = None;
+            if CoCreateInstance(
+                &raw const clsid,
+                std::ptr::null_mut(),
+                CLSCTX_INPROC_SERVER,
+                &raw const iid,
+                &raw mut auto,
+            ) >= 0
+                && !auto.is_null()
+            {
+                let from = std::mem::transmute::<*const c_void, FnHwnd>(slot(auto, 6));
+                let mut e: *mut c_void = std::ptr::null_mut();
+                if from(auto, hwnd as HWND, &raw mut e) >= 0 && !e.is_null() {
+                    let get = std::mem::transmute::<*const c_void, FnName>(slot(e, 23));
+                    let mut b: BSTR = std::ptr::null();
+                    if get(e, &raw mut b) >= 0 && !b.is_null() {
+                        let n = SysStringLen(b) as usize;
+                        name = Some(String::from_utf16_lossy(std::slice::from_raw_parts(b, n)));
+                        SysFreeString(b);
+                    }
+                    std::mem::transmute::<*const c_void, FnRelease>(slot(e, 2))(e);
+                }
+                std::mem::transmute::<*const c_void, FnRelease>(slot(auto, 2))(auto);
+            }
+            CoUninitialize();
+            name
+        }
+    }
+
+    /// Asks UI Automation for the Name of `hwnd` on another thread while this thread (the
+    /// window's) answers its messages, as a screen reader would.
+    fn name_seen_by_uia(hwnd: HWND) -> Option<String> {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, TranslateMessage,
+        };
+        let h = hwnd as usize;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let t = std::thread::spawn(move || {
+            let _ = tx.send(uia_name(h));
+        });
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let got = loop {
+            if let Ok(r) = rx.try_recv() {
+                break r;
+            }
+            assert!(std::time::Instant::now() < until, "UI Automation answered");
+            let mut m = MSG::default();
+            // SAFETY: this thread's own messages (the overlay window's).
+            unsafe {
+                while PeekMessageW(&raw mut m, std::ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
+                    TranslateMessage(&raw const m);
+                    DispatchMessageW(&raw const m);
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        t.join().unwrap();
+        got
+    }
+
+    /// Step 59 (NOEUL-NFR-013, issue #64 "accessibility"): the real overlay window's Name in the
+    /// UI Automation tree is the overlay's accessible name — the magnifier's position, the
+    /// colour values it shows and the format `C` copies — and it follows a change of format. The
+    /// window stays hidden and off-screen; only this test's own window is asked.
+    #[test]
+    fn ui_automation_names_the_overlay_with_the_magnifiers_colour() {
+        use crate::overlay::Action;
+        crate::win::per_monitor_dpi_awareness();
+        let syn = Synthetic::off_screen();
+        let desk = syn.desktop();
+        let picture = desk.virtual_rect.unwrap();
+        let ledger = Ledger::new();
+        let frozen = syn.capture(&ledger, picture).unwrap();
+        let mut win = WinOverlay::create(picture, Placement::OFF_SCREEN_TEST, false).unwrap();
+        let hwnd = win.hwnd();
+        let mut model = Overlay::new(
+            picture,
+            desk.monitors,
+            SystemValues::default(),
+            (picture.x + 100, picture.y + 100),
+            None,
+            None,
+        );
+        let at = (picture.x + 123, picture.y + 45);
+        model.handle(Input::Move {
+            x: at.0,
+            y: at.1,
+            mods: Mods::NONE,
+        });
+        let mut scene = model.scene(&win);
+        scene.sample(&frozen);
+        win.present(&frozen, None, &scene, &[picture]);
+        let name = model.accessible_name(&scene);
+        let [b, g, r, _] = Synthetic::pixel(at.0, at.1);
+        let hex = format!("#{r:02X}{g:02X}{b:02X}");
+        assert_eq!(
+            name,
+            format!(
+                "Capture overlay. Magnifier at {}, {}: {hex}, rgb({r}, {g}, {b}); copy format HEX",
+                at.0, at.1
+            )
+        );
+        win.set_name(&name);
+        assert_eq!(name_seen_by_uia(hwnd).as_deref(), Some(name.as_str()));
+        // Shift+C: the Name follows.
+        model.handle(Input::Action(Action::ColorFormatNext));
+        let mut scene = model.scene(&win);
+        scene.sample(&frozen);
+        let name = model.accessible_name(&scene);
+        assert!(name.ends_with("; copy format RGB"), "{name}");
+        win.set_name(&name);
+        assert_eq!(name_seen_by_uia(hwnd).as_deref(), Some(name.as_str()));
+        win.destroy();
+        drop(frozen);
         assert_eq!(ledger.live(), (0, 0));
     }
 }

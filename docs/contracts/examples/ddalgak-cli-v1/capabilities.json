@@ -298,7 +298,7 @@
     "json_schema_version": 1,
     "schema": "kim.capabilities",
     "schema_version": 1,
-    "summary": "Pre-alpha engine: status, health and engine start/pause/resume/stop of the running tray app over a local pipe, opt-in start at sign-in, and the rule store: rule CRUD, validation, drafts, history, backup, restore and live reload; runs engine-control rules only",
+    "summary": "Pre-alpha: engine status, health and control of the running tray app, opt-in sign-in start, and the rule store (CRUD, validation, drafts, history, live reload); runs engine-control rules only",
     "tool": "ddalgak",
     "version": "0.0.1"
   },

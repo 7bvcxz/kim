@@ -1124,9 +1124,14 @@ pub fn run(cmd: Cmd, a: &Args, paths: &Paths, notify: Notify<'_>) -> Outcome {
             let ids = a.positional.clone();
             let n = ids.len();
             {
-                // Name what would go before asking.
-                let (l, _) = source(a, &files, &ctx)?;
-                let doc = l.doc.as_ref().expect("usable");
+                // Name what would go before asking (a new draft starts from the saved rules).
+                let doc = match (
+                    a.has("--draft"),
+                    store::read_draft(&files).map_err(store_err)?,
+                ) {
+                    (true, Some(d)) => d.doc,
+                    _ => saved(&files, &ctx)?.doc.expect("usable"),
+                };
                 if let Some(missing) = ids.iter().find(|i| !doc.has_rule_id(i)) {
                     return Err(CliError::new(
                         Code::RuleNotFound,

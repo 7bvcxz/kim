@@ -1,0 +1,515 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/hellomouv/kim/blob/main/docs/contracts/schemas/ddalgak-cli-v1.schema.json",
+  "title": "ddalgak --json output, schema_version 1 (Step 66 engine commands)",
+  "description": "Every document `ddalgak ... --json` prints in Step 66: the cli-envelope-v1 envelope, the `data` of each command (selected by `command`), and Ddalgak's error codes with their exit codes (docs/CLI_CONTRACT.md §6, docs/DDALGAK_ENGINE.md §6). Objects are closed so regression tests notice any change; consumers must still ignore unknown fields and tolerate new enum values (CLI_CONTRACT §8). Privacy is part of the contract: activity entries carry rule IDs and outcome codes only, and no field ever carries keys, typed text, window titles, paths of other programs or rule content (DDALGAK-SEC-001, DDALGAK-SEC-011).",
+  "oneOf": [
+    { "$ref": "#/$defs/failure" },
+    { "$ref": "#/$defs/ok_capabilities" },
+    { "$ref": "#/$defs/ok_status" },
+    { "$ref": "#/$defs/ok_health" },
+    { "$ref": "#/$defs/ok_engine" },
+    { "$ref": "#/$defs/ok_quit" },
+    { "$ref": "#/$defs/ok_startup_status" },
+    { "$ref": "#/$defs/ok_startup_change" }
+  ],
+  "$defs": {
+    "rule_id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{1,47}$" },
+    "state": { "enum": ["off", "running", "paused"] },
+    "count": { "type": "integer", "minimum": 0 },
+    "warnings": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "envelope_ok": {
+      "type": "object",
+      "required": ["ok", "command", "schema_version", "data", "warnings"],
+      "properties": {
+        "ok": { "const": true },
+        "schema_version": { "const": 1 },
+        "warnings": { "$ref": "#/$defs/warnings" }
+      }
+    },
+    "engine": {
+      "type": "object",
+      "required": ["state", "off_reason", "last_change", "hook"],
+      "additionalProperties": false,
+      "properties": {
+        "state": { "$ref": "#/$defs/state" },
+        "off_reason": {
+          "description": "Why the engine is off (null while it is on).",
+          "enum": [null, "default", "unclean_exit", "emergency", "no_hotkeys", "elevated", "stopped", "app_not_running"]
+        },
+        "last_change": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "required": ["request", "origin"],
+              "additionalProperties": false,
+              "properties": {
+                "request": { "enum": ["start", "pause", "resume", "toggle_pause", "stop", "emergency"] },
+                "origin": {
+                  "description": "tray, cli, startup, shutdown, session, emergency, shortcut:<action>, rule:<rule id>",
+                  "type": "string",
+                  "pattern": "^(tray|cli|startup|shutdown|session|emergency|shortcut:engine\\.(toggle|pause)|rule:[a-z][a-z0-9-]{1,47})$"
+                }
+              },
+              "not": {
+                "description": "No rule turns the engine on (DDALGAK-FR-004).",
+                "required": ["request", "origin"],
+                "properties": { "request": { "const": "start" }, "origin": { "pattern": "^rule:" } }
+              }
+            }
+          ]
+        },
+        "hook": {
+          "type": "object",
+          "required": ["installed", "observe_only"],
+          "additionalProperties": false,
+          "properties": {
+            "installed": { "type": "boolean" },
+            "observe_only": { "type": "boolean" }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "description": "The keyboard hook exists only while the engine is running or paused (DDALGAK-FR-002).",
+          "anyOf": [
+            { "properties": { "state": { "enum": ["running", "paused"] } } },
+            { "properties": { "hook": { "properties": { "installed": { "const": false } } } } }
+          ]
+        },
+        {
+          "description": "off_reason is given exactly when the engine is off.",
+          "anyOf": [
+            { "properties": { "state": { "const": "off" }, "off_reason": { "type": "string" } } },
+            { "properties": { "state": { "enum": ["running", "paused"] }, "off_reason": { "type": "null" } } }
+          ]
+        }
+      ]
+    },
+    "rules": {
+      "type": "object",
+      "required": ["file", "problem", "revision", "engine_on_start", "total", "active", "active_rules", "disabled", "other_modes", "inactive"],
+      "additionalProperties": false,
+      "properties": {
+        "file": { "enum": ["missing", "loaded", "invalid", "newer_version"] },
+        "problem": { "type": ["string", "null"] },
+        "revision": { "type": ["integer", "null"], "minimum": 0 },
+        "engine_on_start": { "enum": ["on", "off"] },
+        "total": { "$ref": "#/$defs/count" },
+        "active": { "$ref": "#/$defs/count" },
+        "active_rules": { "type": "array", "items": { "$ref": "#/$defs/rule_id" } },
+        "disabled": { "$ref": "#/$defs/count" },
+        "other_modes": { "$ref": "#/$defs/count" },
+        "inactive": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["rule", "code", "reason"],
+            "additionalProperties": false,
+            "properties": {
+              "rule": { "$ref": "#/$defs/rule_id" },
+              "code": {
+                "description": "Validation codes of DDALGAK_RULE_MODEL §8 (rule_invalid: a value this version's loader refuses).",
+                "enum": ["trigger_invalid", "trigger_reserved", "step_invalid", "step_unsupported", "condition_unsupported", "rule_unsupported", "rule_invalid", "duplicate_rule_id", "duplicate_trigger"]
+              },
+              "reason": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      }
+    },
+    "shortcuts": {
+      "type": "object",
+      "required": ["config", "off", "problem", "global"],
+      "additionalProperties": false,
+      "properties": {
+        "config": { "enum": ["default", "user", "invalid", "newer_version"] },
+        "off": { "type": "boolean" },
+        "problem": { "type": ["string", "null"] },
+        "global": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["action", "keys", "registration"],
+            "additionalProperties": false,
+            "properties": {
+              "action": { "enum": ["engine.toggle", "engine.pause", "editor.open"] },
+              "keys": { "type": "string", "minLength": 1 },
+              "registration": {
+                "description": "registered / taken (RegisterHotKey in the running app); not_running (no app); unavailable (the action has no feature yet: editor.open before Step 74); unsupported (needs more than RegisterHotKey, e.g. left/right modifiers); wanted (to be registered).",
+                "enum": ["registered", "taken", "not_running", "unavailable", "unsupported", "wanted"]
+              }
+            }
+          }
+        }
+      }
+    },
+    "activity": {
+      "type": "array",
+      "maxItems": 200,
+      "items": {
+        "type": "object",
+        "required": ["at", "rule", "profile", "mode", "outcome"],
+        "additionalProperties": false,
+        "properties": {
+          "at": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$" },
+          "rule": { "$ref": "#/$defs/rule_id" },
+          "profile": { "type": "string" },
+          "mode": { "type": "string" },
+          "outcome": {
+            "enum": ["ok", "skipped_paused", "skipped_password_field", "skipped_secure_desktop", "skipped_elevated_target", "skipped_ime_composition", "skipped_injected_input", "busy", "rate_limited", "injection_failed", "cancelled", "timeout"]
+          }
+        }
+      }
+    },
+    "startup_state": {
+      "type": "object",
+      "required": ["enabled", "command", "foreign", "location", "program"],
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "command": { "type": ["string", "null"] },
+        "foreign": { "type": "boolean" },
+        "location": { "type": "string", "pattern": "^HKCU\\\\" },
+        "program": { "type": "string", "pattern": "ddalgak-gui\\.exe$" }
+      }
+    },
+    "app_running": {
+      "type": "object",
+      "required": ["running", "pid", "version", "started_at", "uptime_s", "elevated", "launched_by", "tray", "test_mode"],
+      "additionalProperties": false,
+      "properties": {
+        "running": { "const": true },
+        "pid": { "type": "integer", "minimum": 1 },
+        "version": { "type": "string" },
+        "started_at": { "type": "string" },
+        "uptime_s": { "$ref": "#/$defs/count" },
+        "elevated": { "type": "boolean" },
+        "launched_by": { "enum": ["user", "startup"] },
+        "tray": { "type": "boolean" },
+        "test_mode": { "type": "boolean" }
+      }
+    },
+    "ok_status": {
+      "allOf": [
+        { "$ref": "#/$defs/envelope_ok" },
+        {
+          "properties": {
+            "command": { "const": "status" },
+            "data": {
+              "type": "object",
+              "required": ["app", "engine", "profile", "rules", "shortcuts", "activity", "startup"],
+              "additionalProperties": false,
+              "properties": {
+                "app": {
+                  "oneOf": [
+                    { "type": "object", "required": ["running"], "additionalProperties": false, "properties": { "running": { "const": false } } },
+                    { "$ref": "#/$defs/app_running" }
+                  ]
+                },
+                "engine": { "$ref": "#/$defs/engine" },
+                "start": {
+                  "type": "object",
+                  "required": ["off_reason"],
+                  "additionalProperties": false,
+                  "properties": { "off_reason": { "enum": ["default", "unclean_exit", "emergency", "no_hotkeys", "elevated"] } }
+                },
+                "profile": {
+                  "type": "object",
+                  "required": ["id", "mode"],
+                  "additionalProperties": false,
+                  "properties": { "id": { "type": "string" }, "mode": { "type": "string" } }
+                },
+                "rules": { "$ref": "#/$defs/rules" },
+                "shortcuts": { "$ref": "#/$defs/shortcuts" },
+                "session": {
+                  "type": "object",
+                  "required": ["locked"],
+                  "additionalProperties": false,
+                  "properties": { "locked": { "type": "boolean" } }
+                },
+                "activity": { "$ref": "#/$defs/activity" },
+                "startup": {
+                  "oneOf": [
+                    { "$ref": "#/$defs/startup_state" },
+                    { "type": "object", "required": ["error"], "additionalProperties": false, "properties": { "error": { "type": "string" } } }
+                  ]
+                }
+              },
+              "allOf": [
+                {
+                  "description": "Without the app the engine is off for that reason, and there is no activity.",
+                  "anyOf": [
+                    { "properties": { "app": { "properties": { "running": { "const": true } } } }, "required": ["start", "session"] },
+                    {
+                      "properties": {
+                        "app": { "properties": { "running": { "const": false } } },
+                        "engine": { "properties": { "off_reason": { "const": "app_not_running" } } },
+                        "activity": { "maxItems": 0 }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "ok_health": {
+      "allOf": [
+        { "$ref": "#/$defs/envelope_ok" },
+        {
+          "properties": {
+            "command": { "const": "health" },
+            "data": {
+              "type": "object",
+              "required": ["healthy", "problems", "engine", "counters", "process", "app"],
+              "additionalProperties": false,
+              "properties": {
+                "healthy": { "type": "boolean" },
+                "problems": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": ["code", "message"],
+                    "additionalProperties": false,
+                    "properties": {
+                      "code": { "enum": ["hook_thread_ended", "hook_may_have_been_removed", "signals_dropped", "callback_panicked", "rules_invalid", "shortcut_taken"] },
+                      "message": { "type": "string", "minLength": 1 }
+                    }
+                  }
+                },
+                "engine": {
+                  "type": "object",
+                  "required": ["state", "hook", "context_watchers"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "state": { "$ref": "#/$defs/state" },
+                    "hook": {
+                      "type": "object",
+                      "required": ["installed", "thread_alive", "observe_only"],
+                      "additionalProperties": false,
+                      "properties": {
+                        "installed": { "type": "boolean" },
+                        "thread_alive": { "type": "boolean" },
+                        "observe_only": { "type": "boolean" }
+                      }
+                    },
+                    "context_watchers": { "$ref": "#/$defs/count" }
+                  }
+                },
+                "counters": {
+                  "type": "object",
+                  "required": ["callbacks", "consumed", "own_injected", "other_injected", "dropped_signals", "panics", "callback_us", "late_events", "max_delay_ms", "wakeups"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "callbacks": { "$ref": "#/$defs/count" },
+                    "consumed": { "$ref": "#/$defs/count" },
+                    "own_injected": { "$ref": "#/$defs/count" },
+                    "other_injected": { "$ref": "#/$defs/count" },
+                    "dropped_signals": { "$ref": "#/$defs/count" },
+                    "panics": { "$ref": "#/$defs/count" },
+                    "callback_us": {
+                      "type": "object",
+                      "required": ["max", "p99_at_most", "histogram"],
+                      "additionalProperties": false,
+                      "properties": {
+                        "max": { "$ref": "#/$defs/count" },
+                        "p99_at_most": { "type": ["integer", "null"], "minimum": 0 },
+                        "histogram": {
+                          "type": "array",
+                          "minItems": 8,
+                          "maxItems": 8,
+                          "items": {
+                            "type": "object",
+                            "required": ["bucket_us", "count"],
+                            "additionalProperties": false,
+                            "properties": { "bucket_us": { "type": "string" }, "count": { "$ref": "#/$defs/count" } }
+                          }
+                        }
+                      }
+                    },
+                    "late_events": { "$ref": "#/$defs/count" },
+                    "max_delay_ms": { "$ref": "#/$defs/count" },
+                    "wakeups": {
+                      "type": "object",
+                      "required": ["hook_thread", "worker", "host"],
+                      "additionalProperties": false,
+                      "properties": {
+                        "hook_thread": { "$ref": "#/$defs/count" },
+                        "worker": { "$ref": "#/$defs/count" },
+                        "host": { "$ref": "#/$defs/count" }
+                      }
+                    }
+                  }
+                },
+                "process": {
+                  "type": "object",
+                  "required": ["pid", "cpu_ms", "uptime_s"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "pid": { "type": "integer", "minimum": 1 },
+                    "cpu_ms": { "$ref": "#/$defs/count" },
+                    "uptime_s": { "$ref": "#/$defs/count" }
+                  }
+                },
+                "app": {
+                  "type": "object",
+                  "required": ["pid", "image", "verified", "latency_ms"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "pid": { "type": "integer", "minimum": 1 },
+                    "image": { "type": "string", "pattern": "ddalgak-gui\\.exe$" },
+                    "verified": { "const": true },
+                    "latency_ms": { "$ref": "#/$defs/count" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "transition": {
+      "type": "object",
+      "required": ["request", "from", "to", "changed"],
+      "additionalProperties": false,
+      "properties": {
+        "request": { "enum": ["start", "pause", "resume", "stop"] },
+        "from": { "$ref": "#/$defs/state" },
+        "to": { "$ref": "#/$defs/state" },
+        "changed": { "type": "boolean" }
+      }
+    },
+    "ok_engine": {
+      "allOf": [
+        { "$ref": "#/$defs/envelope_ok" },
+        {
+          "properties": {
+            "command": { "enum": ["engine.start", "engine.pause", "engine.resume", "engine.stop"] },
+            "data": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "required": ["dry_run", "would", "engine"],
+                  "additionalProperties": false,
+                  "properties": { "dry_run": { "const": true }, "would": { "$ref": "#/$defs/transition" }, "engine": { "$ref": "#/$defs/engine" } }
+                },
+                {
+                  "type": "object",
+                  "required": ["dry_run", "change", "engine"],
+                  "additionalProperties": false,
+                  "properties": { "dry_run": { "const": false }, "change": { "$ref": "#/$defs/transition" }, "engine": { "$ref": "#/$defs/engine" } }
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "ok_quit": {
+      "allOf": [
+        { "$ref": "#/$defs/envelope_ok" },
+        {
+          "properties": {
+            "command": { "const": "quit" },
+            "data": {
+              "type": "object",
+              "required": ["dry_run", "quitting", "pid", "engine"],
+              "additionalProperties": false,
+              "properties": {
+                "dry_run": { "type": "boolean" },
+                "quitting": { "type": "boolean" },
+                "pid": { "type": "integer", "minimum": 1 },
+                "engine": { "$ref": "#/$defs/engine" }
+              },
+              "anyOf": [
+                { "properties": { "dry_run": { "const": true }, "quitting": { "const": false } } },
+                { "properties": { "dry_run": { "const": false }, "quitting": { "const": true } } }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "ok_startup_status": {
+      "allOf": [
+        { "$ref": "#/$defs/envelope_ok" },
+        { "properties": { "command": { "const": "startup.status" }, "data": { "$ref": "#/$defs/startup_state" } } }
+      ]
+    },
+    "ok_startup_change": {
+      "allOf": [
+        { "$ref": "#/$defs/envelope_ok" },
+        {
+          "properties": {
+            "command": { "enum": ["startup.enable", "startup.disable"] },
+            "data": {
+              "type": "object",
+              "required": ["dry_run", "changed", "before", "after", "location"],
+              "additionalProperties": false,
+              "properties": {
+                "dry_run": { "type": "boolean" },
+                "changed": { "type": "boolean" },
+                "before": { "type": ["string", "null"] },
+                "after": { "type": ["string", "null"] },
+                "location": { "type": "string", "pattern": "^HKCU\\\\" }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "ok_capabilities": {
+      "allOf": [
+        { "$ref": "#/$defs/envelope_ok" },
+        {
+          "properties": {
+            "command": { "const": "capabilities" },
+            "data": {
+              "type": "object",
+              "required": ["schema", "tool", "commands"],
+              "properties": { "schema": { "const": "kim.capabilities" }, "tool": { "const": "ddalgak" } }
+            }
+          }
+        }
+      ]
+    },
+    "error_code": {
+      "enum": ["io", "internal", "permission_denied", "hook_failed", "usage", "not_installed", "engine_not_running", "protocol_error", "app_identity_mismatch", "rules_invalid", "unsupported_platform", "rules_from_newer_version", "engine_elevated", "app_unresponsive", "engine_off"]
+    },
+    "failure": {
+      "type": "object",
+      "required": ["ok", "command", "schema_version", "error"],
+      "additionalProperties": false,
+      "properties": {
+        "ok": { "const": false },
+        "command": { "type": "string", "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)*$" },
+        "schema_version": { "const": 1 },
+        "error": {
+          "type": "object",
+          "required": ["code", "exit_code", "message", "hint", "details"],
+          "additionalProperties": false,
+          "properties": {
+            "code": { "$ref": "#/$defs/error_code" },
+            "exit_code": { "type": "integer", "minimum": 1, "maximum": 8 },
+            "message": { "type": "string", "minLength": 1 },
+            "hint": { "type": ["string", "null"] },
+            "details": { "type": "array", "items": { "type": "string" } }
+          },
+          "oneOf": [
+            { "properties": { "exit_code": { "const": 1 }, "code": { "enum": ["io", "internal", "permission_denied", "hook_failed"] } } },
+            { "properties": { "exit_code": { "const": 2 }, "code": { "const": "usage" } } },
+            { "properties": { "exit_code": { "const": 3 }, "code": { "enum": ["not_installed", "engine_not_running"] } } },
+            { "properties": { "exit_code": { "const": 4 }, "code": { "enum": ["protocol_error", "app_identity_mismatch", "rules_invalid"] } } },
+            { "properties": { "exit_code": { "const": 5 }, "code": { "enum": ["unsupported_platform", "rules_from_newer_version", "engine_elevated"] } } },
+            { "properties": { "exit_code": { "const": 6 }, "code": { "const": "app_unresponsive" } } },
+            { "properties": { "exit_code": { "const": 7 }, "code": { "const": "engine_off" } } }
+          ]
+        }
+      }
+    }
+  }
+}

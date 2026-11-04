@@ -23,7 +23,7 @@
 
 use crate::table::{Action, Binding, EngineOp, Injected, On};
 use crate::trigger::{TKey, Trigger};
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 use std::path::Path;
 
 /// What the file looked like.
@@ -440,6 +440,26 @@ pub fn parse(bytes: &[u8]) -> Loaded {
     });
     out.bindings = kept.into_iter().map(|c| c.binding).collect();
     out
+}
+
+/// `rules` in status output: counts, codes and rule IDs (never rule content).
+pub fn to_json(l: &Loaded) -> Value {
+    json!({
+        "file": l.state.as_str(),
+        "problem": match &l.state {
+            FileState::Invalid(why) => Some(why.clone()),
+            FileState::NewerVersion(v) => Some(format!("schema_version {v} is newer than this Ddalgak")),
+            _ => None,
+        },
+        "revision": l.revision,
+        "engine_on_start": if l.engine_on_start { "on" } else { "off" },
+        "total": l.total,
+        "active": l.bindings.len(),
+        "active_rules": l.bindings.iter().map(|b| b.rule.clone()).collect::<Vec<_>>(),
+        "disabled": l.disabled,
+        "other_modes": l.other_modes,
+        "inactive": l.inactive.iter().map(|i| json!({ "rule": i.rule, "code": i.code, "reason": i.reason })).collect::<Vec<_>>(),
+    })
 }
 
 #[cfg(test)]

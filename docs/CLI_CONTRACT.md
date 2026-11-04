@@ -177,6 +177,27 @@ document: it streams the terminal, so `--json` is accepted only with `--dry-run`
 [CONPTY_PROOF.md](CONPTY_PROOF.md). It is not yet a published schema (Step 12 publishes Subak's
 CLI schema); the envelopes are validated against `cli-envelope-v1`.
 
+**Ddalgak codes** (Step 66 engine commands, [DDALGAK_ENGINE §6](DDALGAK_ENGINE.md)). `ddalgak`
+also uses `io`, `internal`, `permission_denied`, `usage`, `not_installed` (`ddalgak-gui.exe` is
+missing next to `ddalgak.exe`), `protocol_error` and `unsupported_platform` with the meaning
+and exit code above. `crates/ddalgak/src/output.rs` tests that this table matches its code;
+the `data` of every command is published as
+[ddalgak-cli-v1](contracts/schemas/ddalgak-cli-v1.schema.json), with examples generated from
+real runs. Further codes proposed in [DDALGAK_RULE_MODEL §13](DDALGAK_RULE_MODEL.md) are
+registered by the Steps that implement them (67, 81).
+
+| Code | Exit | Meaning |
+| --- | --- | --- |
+| `hook_failed` | 1 | Windows refused the low-level keyboard hook; the engine stays off. |
+| `engine_not_running` | 3 | The command needs the running tray app (`ddalgak-gui.exe`); the CLI never starts it. |
+| `app_identity_mismatch` | 4 | The endpoint is served by a process that is not `ddalgak-gui.exe` of this user. Nothing was sent to it. |
+| `rules_invalid` | 4 | `rules.json` is malformed or not a `ddalgak.rules` document; the engine cannot be turned on with it. |
+| `rules_from_newer_version` | 5 | `rules.json` was written by a newer Ddalgak; it is not run and never rewritten. |
+| `engine_elevated` | 5 | The app runs as administrator; it refuses to turn its engine on elevated (DDALGAK_SAFETY §3). |
+| `app_unresponsive` | 6 | The verified app accepted the connection but did not answer in time. It is neither stopped nor restarted. |
+| `engine_off` | 7 | Pause or resume needs the engine on; resume never turns it on. |
+| `app_already_running` | 7 | `ddalgak-gui.exe`: another instance already owns this user session; the new one exits without touching it. |
+
 ## 7. Output streams and the `--json` envelope
 
 **Streams.** Results go to **stdout**. Warnings, progress, prompts, diagnostics and human error

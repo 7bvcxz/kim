@@ -1,0 +1,12 @@
+{
+  "command": "engine.pause",
+  "error": {
+    "code": "engine_off",
+    "details": [],
+    "exit_code": 7,
+    "hint": null,
+    "message": "the engine is off; turn it on first (`ddalgak engine start`)"
+  },
+  "ok": false,
+  "schema_version": 1
+}

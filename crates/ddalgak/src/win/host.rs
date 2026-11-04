@@ -316,7 +316,7 @@ impl Host {
             "engine": self.engine_json(),
             "start": { "off_reason": self.start_reason.as_str() },
             "profile": { "id": self.loaded.profile, "mode": self.loaded.mode },
-            "rules": rules_json(&self.loaded),
+            "rules": rules::to_json(&self.loaded),
             "shortcuts": self.shortcuts.to_json(&|a| self.registration(a)),
             "session": { "locked": self.locked },
             "activity": activity,
@@ -480,26 +480,6 @@ impl Host {
         self.registered.clear();
         self.tray = None;
     }
-}
-
-/// `rules` in status output: counts, codes and rule IDs (never rule content).
-pub fn rules_json(l: &rules::Loaded) -> Value {
-    json!({
-        "file": l.state.as_str(),
-        "problem": match &l.state {
-            FileState::Invalid(why) => Some(why.clone()),
-            FileState::NewerVersion(v) => Some(format!("schema_version {v} is newer than this Ddalgak")),
-            _ => None,
-        },
-        "revision": l.revision,
-        "engine_on_start": if l.engine_on_start { "on" } else { "off" },
-        "total": l.total,
-        "active": l.bindings.len(),
-        "active_rules": l.bindings.iter().map(|b| b.rule.clone()).collect::<Vec<_>>(),
-        "disabled": l.disabled,
-        "other_modes": l.other_modes,
-        "inactive": l.inactive.iter().map(|i| json!({ "rule": i.rule, "code": i.code, "reason": i.reason })).collect::<Vec<_>>(),
-    })
 }
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {

@@ -1,0 +1,24 @@
+{
+  "command": "engine.start",
+  "data": {
+    "dry_run": true,
+    "engine": {
+      "hook": {
+        "installed": false,
+        "observe_only": true
+      },
+      "last_change": null,
+      "off_reason": "default",
+      "state": "off"
+    },
+    "would": {
+      "changed": true,
+      "from": "off",
+      "request": "start",
+      "to": "running"
+    }
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

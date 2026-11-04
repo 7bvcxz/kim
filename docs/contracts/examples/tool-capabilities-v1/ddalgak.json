@@ -1,0 +1,122 @@
+{
+  "schema": "kim.capabilities",
+  "schema_version": 1,
+  "tool": "ddalgak",
+  "version": "0.0.1",
+  "cli_contract": 1,
+  "json_schema_version": 1,
+  "implementation": "implemented",
+  "summary": "Pre-alpha engine: status, health and engine start/pause/resume/stop of the running tray app over a local pipe, and opt-in start at sign-in; runs engine-control rules only",
+  "commands": [
+    {
+      "name": "capabilities",
+      "usage": "ddalgak capabilities [--json]",
+      "summary": "This document",
+      "effect": "read",
+      "network": false,
+      "dry_run": false,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "status",
+      "usage": "ddalgak status [--endpoint <name>] [--json]",
+      "summary": "Engine state, rules summary, shortcuts, recent activity (rule IDs and outcome codes only) and sign-in start; works without the app",
+      "effect": "read",
+      "network": false,
+      "dry_run": false,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "health",
+      "usage": "ddalgak health [--endpoint <name>] [--json]",
+      "summary": "On-demand check of the running app: identity, hook thread, callback timing, dropped signals, wake-ups and CPU time",
+      "effect": "read",
+      "network": false,
+      "dry_run": false,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "engine.start",
+      "usage": "ddalgak engine start [--endpoint <name>] [--dry-run] [--json]",
+      "summary": "Turn the engine on in the running app (never starts the app)",
+      "effect": "write",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "engine.pause",
+      "usage": "ddalgak engine pause [--endpoint <name>] [--dry-run] [--json]",
+      "summary": "Pause all rules except engine-control rules; held keys are released",
+      "effect": "write",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "engine.resume",
+      "usage": "ddalgak engine resume [--endpoint <name>] [--dry-run] [--json]",
+      "summary": "Resume a paused engine (never turns it on)",
+      "effect": "write",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "engine.stop",
+      "usage": "ddalgak engine stop [--endpoint <name>] [--dry-run] [--json]",
+      "summary": "Turn the engine off: remove the hook, release held keys, cancel runs",
+      "effect": "write",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "quit",
+      "usage": "ddalgak quit [--endpoint <name>] [--dry-run] [--json]",
+      "summary": "End the running tray app (the engine is turned off first)",
+      "effect": "write",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "startup.status",
+      "usage": "ddalgak startup status [--json]",
+      "summary": "Whether the tray app starts at sign-in (HKCU Run value)",
+      "effect": "read",
+      "network": false,
+      "dry_run": false,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "startup.enable",
+      "usage": "ddalgak startup enable [--dry-run] [--json]",
+      "summary": "Opt in: start the tray app (engine off unless engine_on_start is on) when you sign in",
+      "effect": "write",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "startup.disable",
+      "usage": "ddalgak startup disable [--dry-run] [--json]",
+      "summary": "Stop starting the tray app at sign-in",
+      "effect": "write",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": false,
+      "opens_window": false
+    }
+  ]
+}

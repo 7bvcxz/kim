@@ -1,0 +1,74 @@
+{
+  "command": "status",
+  "data": {
+    "activity": [],
+    "app": {
+      "elevated": false,
+      "launched_by": "user",
+      "pid": 57488,
+      "running": true,
+      "started_at": "2026-11-04T01:43:42Z",
+      "test_mode": true,
+      "tray": false,
+      "uptime_s": 0,
+      "version": "0.0.1"
+    },
+    "engine": {
+      "hook": {
+        "installed": false,
+        "observe_only": true
+      },
+      "last_change": null,
+      "off_reason": "unclean_exit",
+      "state": "off"
+    },
+    "profile": {
+      "id": "default",
+      "mode": "base"
+    },
+    "rules": {
+      "active": 3,
+      "active_rules": [
+        "pause-key",
+        "off-key",
+        "physical-only"
+      ],
+      "disabled": 0,
+      "engine_on_start": "on",
+      "file": "loaded",
+      "inactive": [
+        {
+          "code": "step_unsupported",
+          "reason": "`remap` steps are not implemented in this version yet (Step 68)",
+          "rule": "caps-remap"
+        }
+      ],
+      "other_modes": 0,
+      "problem": null,
+      "revision": 1,
+      "total": 4
+    },
+    "session": {
+      "locked": false
+    },
+    "shortcuts": {
+      "config": "default",
+      "global": [],
+      "off": false,
+      "problem": null
+    },
+    "start": {
+      "off_reason": "unclean_exit"
+    },
+    "startup": {
+      "command": null,
+      "enabled": false,
+      "foreign": false,
+      "location": "HKCU\\Software\\mouv-test\\ddalgak-cli-policy\\Run\\mouv.ddalgak",
+      "program": "C:\\Users\\you\\AppData\\Local\\Programs\\mouv\\ddalgak\\versions\\0.0.1\\ddalgak-gui.exe"
+    }
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

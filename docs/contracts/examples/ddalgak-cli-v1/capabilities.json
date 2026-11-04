@@ -1,0 +1,128 @@
+{
+  "command": "capabilities",
+  "data": {
+    "cli_contract": 1,
+    "commands": [
+      {
+        "dry_run": false,
+        "effect": "read",
+        "name": "capabilities",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "This document",
+        "usage": "ddalgak capabilities [--json]"
+      },
+      {
+        "dry_run": false,
+        "effect": "read",
+        "name": "status",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "Engine state, rules summary, shortcuts, recent activity (rule IDs and outcome codes only) and sign-in start; works without the app",
+        "usage": "ddalgak status [--endpoint <name>] [--json]"
+      },
+      {
+        "dry_run": false,
+        "effect": "read",
+        "name": "health",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "On-demand check of the running app: identity, hook thread, callback timing, dropped signals, wake-ups and CPU time",
+        "usage": "ddalgak health [--endpoint <name>] [--json]"
+      },
+      {
+        "dry_run": true,
+        "effect": "write",
+        "name": "engine.start",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "Turn the engine on in the running app (never starts the app)",
+        "usage": "ddalgak engine start [--endpoint <name>] [--dry-run] [--json]"
+      },
+      {
+        "dry_run": true,
+        "effect": "write",
+        "name": "engine.pause",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "Pause all rules except engine-control rules; held keys are released",
+        "usage": "ddalgak engine pause [--endpoint <name>] [--dry-run] [--json]"
+      },
+      {
+        "dry_run": true,
+        "effect": "write",
+        "name": "engine.resume",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "Resume a paused engine (never turns it on)",
+        "usage": "ddalgak engine resume [--endpoint <name>] [--dry-run] [--json]"
+      },
+      {
+        "dry_run": true,
+        "effect": "write",
+        "name": "engine.stop",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "Turn the engine off: remove the hook, release held keys, cancel runs",
+        "usage": "ddalgak engine stop [--endpoint <name>] [--dry-run] [--json]"
+      },
+      {
+        "dry_run": true,
+        "effect": "write",
+        "name": "quit",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "End the running tray app (the engine is turned off first)",
+        "usage": "ddalgak quit [--endpoint <name>] [--dry-run] [--json]"
+      },
+      {
+        "dry_run": false,
+        "effect": "read",
+        "name": "startup.status",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "Whether the tray app starts at sign-in (HKCU Run value)",
+        "usage": "ddalgak startup status [--json]"
+      },
+      {
+        "dry_run": true,
+        "effect": "write",
+        "name": "startup.enable",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "Opt in: start the tray app (engine off unless engine_on_start is on) when you sign in",
+        "usage": "ddalgak startup enable [--dry-run] [--json]"
+      },
+      {
+        "dry_run": true,
+        "effect": "write",
+        "name": "startup.disable",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "Stop starting the tray app at sign-in",
+        "usage": "ddalgak startup disable [--dry-run] [--json]"
+      }
+    ],
+    "implementation": "implemented",
+    "json_schema_version": 1,
+    "schema": "kim.capabilities",
+    "schema_version": 1,
+    "summary": "Pre-alpha engine: status, health and engine start/pause/resume/stop of the running tray app over a local pipe, and opt-in start at sign-in; runs engine-control rules only",
+    "tool": "ddalgak",
+    "version": "0.0.1"
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

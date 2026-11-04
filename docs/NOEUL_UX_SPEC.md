@@ -1,6 +1,6 @@
 # Noeul UX specification
 
-Status: **current** (specification; Step 49 implemented the app foundation, [ADR 0023](adr/0023-noeul-app-foundation.md); Step 50 the `F1` selection overlay with `Enter` to pin, [ADR 0026](adr/0026-noeul-capture-overlay.md), see §4.5; Step 53 the floating pin engine, [ADR 0029](adr/0029-noeul-pin-engine.md), see §4.6; Step 51 the double-click-to-pin gesture, the toolbar, the selection menu, copy, save and the gesture settings, [ADR 0032](adr/0032-noeul-double-click-pin-and-outputs.md), see §4.7; Step 52 window and element detection, the magnifier, the precision keys, snapping and the rectangle history, [ADR 0035](adr/0035-noeul-smart-selection-and-precision.md), see §4.8; Step 56 annotation in the overlay and on pins, [ADR 0038](adr/0038-noeul-annotation.md), see §4.9; Step 57 mosaic, blur, the eraser and the solid redaction, [ADR 0041](adr/0041-noeul-privacy-tools.md), see §4.10) · Step 48 ·
+Status: **current** (specification; Step 49 implemented the app foundation, [ADR 0023](adr/0023-noeul-app-foundation.md); Step 50 the `F1` selection overlay with `Enter` to pin, [ADR 0026](adr/0026-noeul-capture-overlay.md), see §4.5; Step 53 the floating pin engine, [ADR 0029](adr/0029-noeul-pin-engine.md), see §4.6; Step 51 the double-click-to-pin gesture, the toolbar, the selection menu, copy, save and the gesture settings, [ADR 0032](adr/0032-noeul-double-click-pin-and-outputs.md), see §4.7; Step 52 window and element detection, the magnifier, the precision keys, snapping and the rectangle history, [ADR 0035](adr/0035-noeul-smart-selection-and-precision.md), see §4.8; Step 56 annotation in the overlay and on pins, [ADR 0038](adr/0038-noeul-annotation.md), see §4.9; Step 57 mosaic, blur, the eraser and the solid redaction, [ADR 0041](adr/0041-noeul-privacy-tools.md), see §4.10; Step 54 the pin transforms, border resizing, outline and shadow, click-through with its ways back, thumbnails and groups, [ADR 0044](adr/0044-noeul-pin-transforms-and-control.md), see §4.11) · Step 48 ·
 Philosophy: [NOEUL_PHILOSOPHY](NOEUL_PHILOSOPHY.md) · Requirements: [NOEUL_REQUIREMENTS](NOEUL_REQUIREMENTS.md) ·
 Parity: [NOEUL_SNIPASTE_MATRIX](NOEUL_SNIPASTE_MATRIX.md) · Shortcuts: [HOTKEY_CONTRACT §13.3](HOTKEY_CONTRACT.md) ·
 Decision: [ADR 0021](adr/0021-noeul-product-definition.md)
@@ -141,9 +141,16 @@ Shipped since Step 53 ([ADR 0029](adr/0029-noeul-pin-engine.md)): the menu opens
 `Shift+F10` or the menu key, and lists the implemented items only — Zoom in, Zoom out, Zoom 100 %,
 Hide, Close, Destroy — each with its effective key. Step 51 added Copy, Save… and Quick save
 (`pin.copy`, `pin.save`, `pin.quick-save`: the pin's picture at 100 %, whatever its zoom; since
-Step 56 with its annotations). Step 56 added Annotate (`pin.annotate`, `Space`, §4.9). The
-other items arrive with the Steps that implement them (transforms, opacity, thumbnails and
-click-through 54, groups 54). The border and shadow of §10 are not drawn yet.
+Step 56 with its annotations). Step 56 added Annotate (`pin.annotate`, `Space`, §4.9). Step 54
+([ADR 0044](adr/0044-noeul-pin-transforms-and-control.md), §4.11) added Rotate right / left
+(`1`/`2`), Flip horizontally / vertically (`3`/`4`), More opaque / More transparent
+(`Ctrl+Plus`/`Ctrl+Minus`; the opacity steps of the sketch are 10 % steps instead of a submenu),
+Thumbnail (`T`, checked while on), Click-through (`Ctrl+Shift+T`, checked while on; greyed while
+neither the tray icon nor a `pins.clickable` key offers a way back) and "Move to a new group"
+(the sketch's Group submenu; joining another group is a `Ctrl`-drop onto one of its pins);
+"Zoom 100 %" became "Zoom 100 %, opaque". A pin made from an animated GIF ends the menu with a
+greyed "Animated GIF: first of N frames only". The pin's outline and shadow of §10 are drawn; the
+click-through marker is a badge in the picture's top-right corner.
 
 ### 3.4 Tray menu (optional tray icon)
 
@@ -165,7 +172,10 @@ click-through 54, groups 54). The border and shadow of §10 are not drawn yet.
 ```
 
 Shipped since Step 53: Hide all pins (while every pin shows) or Show all pins (while one is
-hidden), and Bring pins on screen (only while a pin lies where no monitor shows it).
+hidden), and Bring pins on screen (only while a pin lies where no monitor shows it). Step 54:
+Make all pins clickable (only while a pin lets clicks through) and, while there are several
+groups, one checked entry per group ("Group: work"; choosing one switches to it) instead of the
+sketch's Groups submenu.
 
 ### 3.5 Settings: Gestures and Shortcuts
 
@@ -786,6 +796,73 @@ Evidence column):
 9. With a redaction drawn, leave the overlay idle for a minute: the CPU use of `noeul.exe` in Task
    Manager stays at 0 %.
 
+### 4.11 Step 54: manual check of pin transforms and controls
+
+Step 54 ([ADR 0044](adr/0044-noeul-pin-transforms-and-control.md)) ships the pin transforms
+(rotation, flips, opacity, thumbnails, border resizing, precise placement), the outline and
+shadow, click-through with its ways back, groups, the honest notice for animated GIFs, the keys
+and their customisation, and `noeul pin set` / `noeul pin group`. Automated tests run every pin
+off-screen, never activated, never on top of the user's programs; they check styles, the system's
+hit-testing at points no monitor shows, the pixels DWM renders and the events of the windows' own
+messages, and never synthesize input or read the clipboard:
+
+| Area | Automated evidence |
+| --- | --- |
+| Every transform and its inverse, per pin | `crates/noeul/src/transform.rs` (8 tests), `crates/noeul/src/pins/tests.rs` every_transform_is_reversible_and_touches_only_its_pin, `crates/noeul/src/app.rs` transform_keys_are_reversible_per_pin, `crates/noeul/tests/pin_transform.rs` transforms_through_the_cli_and_the_windows_messages_are_reversible |
+| With annotations and redactions | `crates/noeul/src/pins/tests.rs` transforms_compose_with_annotations_and_redactions, a_crop_of_a_turned_pin_stays_where_it_was_shown |
+| High DPI (synthetic 100 % and 150 % layouts), low opacity, extreme zoom, scroll direction | `crates/noeul/src/pins/tests.rs` high_dpi_layouts_scale_the_look_never_the_picture, thumbnails_extreme_zoom_and_border_resizing; `crates/noeul/src/app.rs` the_wheel_direction_ctrl_opacity_shift_double_click_and_border_drag; `crates/noeul/src/win/pinwnd/tests.rs` the_outline_surrounds_the_exact_picture_on_screen |
+| Click-through and its recovery by keyboard, tray model, global action, second start and CLI | `crates/noeul/src/app.rs` click_through_always_has_a_way_back; `crates/noeul/src/win/pinwnd/tests.rs` a_click_through_window_lets_the_mouse_pass_and_comes_back; `crates/noeul/tests/pin_transform.rs` click_through_lets_the_mouse_pass_and_always_comes_back |
+| Multiple pins and groups | `crates/noeul/src/app.rs` groups_are_switched_and_organised_by_menu_drop_tray_and_cli; `crates/noeul/tests/pin_transform.rs` groups_switch_and_act_together |
+| Hidden pins use no CPU | `crates/noeul/tests/pin_transform.rs` hidden_pins_use_no_cpu; `crates/noeul/examples/pin_measure.rs` (numbers in ADR 0044) |
+| GIF: honest first-frame notice | `crates/noeul/src/gif.rs`, `crates/noeul/src/app.rs` an_animated_gif_is_never_flattened_silently |
+
+These steps need the maintainer, on the real desktop with a physical mouse and keyboard (record
+the Windows build, the monitors and their scales, and the date in the Step report and the matrix
+Evidence column). None of them was run by the Step 54 worker:
+
+- [ ] 1. `cargo build --release -p noeul`, then `target\release\noeul.exe start` (default profile,
+  tray icon on).
+- [ ] 2. `F1`, select part of a window with text, `Enter`: the pin has a thin dark outline and a soft
+  shadow below it; the picture sits exactly where the selection was.
+- [ ] 3. Press `1`: the pin turns right around its centre; `2` turns it back to the very same place.
+  `3` and `4` flip it; pressing each again undoes it.
+- [ ] 4. `Ctrl`+wheel towards you: the pin fades in 10 % steps and stops at 10 % (still visible);
+  away from you it comes back. `Ctrl+Minus`/`Ctrl+Plus` do the same. The wheel without `Ctrl`
+  still zooms (away: larger).
+- [ ] 5. Point at the pin's shadow on its right: the pointer becomes the left-right sizing arrow;
+  drag right: the pin grows with its proportions kept and its left edge in place; the corners
+  resize diagonally; the middle of the picture still moves the pin.
+- [ ] 6. `T` (or `Shift`+double-click): the pin becomes a small thumbnail at its corner; `T` again
+  restores its size. A middle-click restores 100 %, full opacity and the full size.
+- [ ] 7. Open Notepad behind the pin. With the pin focused, `Ctrl+Shift+T`: a small badge appears in
+  its corner and a notice names the ways back; click through the pin into Notepad and type: the
+  text goes to Notepad. Tray → Make all pins clickable: the badge disappears and clicks hit the
+  pin again.
+- [ ] 8. Make the pin click-through again, then `noeul start` in a console (or the Start menu): the
+  pin is clickable again and a notice says so. Again, then `noeul pin set --all --click-through
+  off`: clickable.
+- [ ] 9. `noeul hotkeys set pins.clickable Ctrl+Alt+F11` (if that key is free), make a pin
+  click-through, click elsewhere, press `Ctrl+Alt+F11`: clickable again. `noeul hotkeys reset
+  pins.clickable` afterwards.
+- [ ] 10. `noeul config set general.tray_icon false`, restart Noeul with `--no-tray`: the pin menu's
+  Click-through item is greyed and `Ctrl+Shift+T` does nothing (no way back without a terminal);
+  `noeul pin set pin-1 --click-through on` still works and `noeul start` brings it back. Reset
+  the setting afterwards.
+- [ ] 11. Make three pins. Right-click one → Move to a new group (a notice names `group-2`); drag a
+  second pin onto it with `Ctrl` held: "joined group-2". Tray → Group: group-2: only those two
+  show; Tray → Group: default: the third shows again. `noeul pin close --group group-2` asks for
+  `--yes`.
+- [ ] 12. With monitors at 100 % and 150 %: drag a pin across; its picture keeps its pixel size,
+  its outline and shadow become thicker on the 150 % monitor after it is dropped.
+- [ ] 13. Copy an animated GIF in a browser that offers the GIF format (e.g. right-click → Copy
+  image), press `F3`: the pin shows the first frame and a notice says "This GIF has N frames;
+  Noeul shows only the first"; the pin's menu ends with the same note. (Whether a browser offers
+  the `GIF` format varies; note the browser and version.)
+- [ ] 14. `noeul pin hide --all` with a few transformed pins, leave Noeul idle for a minute: the
+  CPU use of `noeul.exe` in Task Manager stays at 0 %.
+- [ ] 15. `noeul config set pins.shadow off`: every pin loses its shadow at once (and can then only
+  be resized by the 4 pixels inside its edge); `noeul config reset pins --yes` restores it.
+
 ## 5. Toolbar, menus and the tray
 
 - **Toolbar order** (tab order): Pin · Copy · Save · tools (N3) · Undo · Redo · Cancel. Pin is the
@@ -817,7 +894,11 @@ disabled and reset (HOTKEY_CONTRACT §8–§12).
 Planned global actions without defaults (show or hide all pins, make all pins clickable, reopen
 the last closed pin, capture the active window) are added to the manifest in the Steps that
 implement them, together with the catalog's shortcut summary (NOEUL-FR-005). No other global
-default will be added (HOTKEY_CONTRACT §7.5).
+default will be added (HOTKEY_CONTRACT §7.5). Shipped since Step 54: `pins.clickable` (make every
+pin clickable again) and `pins.toggle-hidden` (hide all pins, or show them when one is hidden),
+scopes `global` and `app`, **no default keys**: the user binds them (`noeul hotkeys set
+pins.clickable Ctrl+Alt+F11`), so nothing new is registered and no other program loses a key;
+the catalog lists them (catalog v5).
 
 **Context `capture-overlay`** (while the overlay has focus):
 
@@ -893,6 +974,15 @@ double-click that does nothing are shipped; `Ctrl`+wheel (opacity), border resiz
 Shift+double-click (thumbnail) are not in this build (border resizing of NOEUL-FR-061 is proposed
 for Step 54 with the transforms; zooming covers resizing until then). Step 51 added `pin.copy`,
 `pin.save` and `pin.quick-save`.
+Step 54 ([ADR 0044](adr/0044-noeul-pin-transforms-and-control.md)) added `pin.rotate-cw`/`-ccw`,
+`pin.flip-horizontal`/`-vertical`, `pin.opacity-up`/`-down`, `pin.thumbnail` and
+`pin.click-through` with the defaults above, and `pin.group-new` (Move the pin to a new group,
+no default); `Ctrl+Plus`/`Ctrl+Minus` differ from the zoom keys by the modifier, so nothing in the
+context conflicts. `pin.zoom-reset` and the middle-click now also restore full opacity and end
+thumbnail mode. Of the mouse gestures, `Ctrl`+wheel (away from the user: more opaque),
+border resizing (the outline, the shadow and 4 logical pixels inside the edge; the aspect ratio
+kept) and `Shift`+double-click (thumbnail) shipped, and dropping a pin with `Ctrl` held onto
+another pin joins that pin's group. The pin's double-click setting is still not in this build.
 
 **Choices and where they differ from Snipaste** (the matrix lists each):
 
@@ -1007,7 +1097,11 @@ when a capture starts.
   on light content; handles are 7×7 logical pixels.
 - The size chip and magnifier readout use the mono family at caption size, in device pixels
   ("640 × 360  at 412, 188").
-- Pins: a one-pixel `border.subtle` outline and the soft shadow, both switchable off; nothing
-  else around the image. The click-through marker is a small badge in the corner.
+- Pins: a one-pixel `border.subtle` outline and the soft pin shadow (`pin.shadow`,
+  `0 2 10 rgba(0,0,0,0.40)`: smaller than the menus' because a pin's shadow is also its resize
+  band and catches clicks), both switchable off (`noeul config set pins.border off`,
+  `pins.shadow off`); nothing else around the image. The click-through marker is a small badge
+  in the picture's top-right corner: a dark halo, an `accent` ring and a white centre (since
+  Step 54).
 - Motion: the overlay appears without animation (speed matters more); toasts fade in
   `duration.base`; none with reduced motion.

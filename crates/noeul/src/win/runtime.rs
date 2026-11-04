@@ -342,8 +342,13 @@ fn overlay_requests() {
             with_app(|a| a.take_save_request().map(|r| (r, a.shell().interactive)))
         {
             let path = if interactive {
+                // Owned by the pin being saved, or by the overlay, so it stays above it.
+                let owner = match req.pin {
+                    Some(id) => pinwnd::hwnd_of(id),
+                    None => overlay::current(),
+                };
                 MENU_OPEN.set(true);
-                let p = crate::win::files::save_dialog(overlay::current(), &req);
+                let p = crate::win::files::save_dialog(owner, &req);
                 MENU_OPEN.set(false);
                 p
             } else if req.explicit {

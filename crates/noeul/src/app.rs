@@ -341,9 +341,12 @@ pub struct OverlayMenu {
 /// quick-save folder, or "cancelled" when there is none.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SaveRequest {
-    /// The capture session it belongs to (a later answer for another session is ignored).
+    /// The capture session it belongs to (a later answer for another session is ignored); 0 for
+    /// a pin's picture.
     pub session: u64,
     pub rect: Rect,
+    /// `pin.save`: the pin whose picture is saved (the dialog is owned by its window).
+    pub pin: Option<PinId>,
     /// The suggested file name, `noeul-YYYYMMDD-HHMMSS.png` (NOEUL-FR-031).
     pub name: String,
     /// The folder the dialog starts in (the quick-save folder), if known.
@@ -377,6 +380,10 @@ pub struct PinOptions {
 
 /// The menu's entries: implemented pin actions only (NOEUL-FR-114).
 const MENU: &[Option<(&str, &str)>] = &[
+    Some(("pin.copy", "Copy")),
+    Some(("pin.save", "Save\u{2026}")),
+    Some(("pin.quick-save", "Quick save")),
+    None,
     Some(("pin.zoom-in", "Zoom in")),
     Some(("pin.zoom-out", "Zoom out")),
     Some(("pin.zoom-reset", "Zoom 100 %")),
@@ -879,6 +886,9 @@ impl<S: Shell> App<S> {
             ("paste.float", _) => self.paste_float(),
             ("pin.close", Some(id)) => found(self.pins.close(id).is_ok(), "closed"),
             ("pin.destroy", Some(id)) => found(self.pins.destroy(id).is_ok(), "destroyed"),
+            ("pin.copy", Some(id)) => self.copy_pin(id),
+            ("pin.save", Some(id)) => self.request_pin_save(id),
+            ("pin.quick-save", Some(id)) => self.quick_save_pin(id),
             ("pin.hide", Some(id)) => match self.pins.hide(id) {
                 Ok(_) => {
                     if self.pins.hidden() == 1 {
@@ -1362,6 +1372,7 @@ impl<S: Shell> App<S> {
         self.save_request = Some(SaveRequest {
             session: id,
             rect,
+            pin: None,
             name: output::file_name(self.shell.local_time()),
             folder,
             explicit,
@@ -1380,6 +1391,9 @@ impl<S: Shell> App<S> {
     /// (cancelled) leaves the overlay as it was. An answer for a session that has ended since is
     /// ignored.
     pub fn save_chosen(&mut self, req: &SaveRequest, path: Option<PathBuf>) {
+        if let Some(pin) = req.pin {
+            return self.pin_saved(pin, path);
+        }
         if self.overlay.as_ref().map(|o| o.id) != Some(req.session) {
             return;
         }
@@ -1449,6 +1463,107 @@ impl<S: Shell> App<S> {
                 "failed",
                 "The picture could not be saved in the quick-save folder. Copy, pin, save elsewhere, or press Esc.",
             ),
+        }
+    }
+
+    /// `pin.copy` (`Ctrl+C`, the pin's menu): the pin's picture at 100 % on the clipboard as PNG
+    /// and `CF_DIBV5`; a busy clipboard is reported in a notice (NOEUL-FR-030).
+    fn copy_pin(&mut self, id: PinId) -> &'static str {
+        let Some(frame) = self.pins.picture(id) else {
+            return "not_found";
+        };
+        let encoded = output::png(frame).map(|png| (png, output::dib_v5(frame)));
+        let written = match encoded {
+            Ok((png, dib)) => self.shell.clipboard_write(&png, &dib),
+            Err(why) => Err(NoeulError::new(Code::Internal, why)),
+        };
+        match written {
+            Ok(()) => "copied",
+            Err(e) => {
+                self.shell.notice(if e.code == Code::ClipboardUnavailable {
+                    "The clipboard is in use by another program; nothing was copied."
+                } else {
+                    "The picture could not be copied."
+                });
+                if e.code == Code::ClipboardUnavailable {
+                    "clipboard_unavailable"
+                } else {
+                    "failed"
+                }
+            }
+        }
+    }
+
+    /// `pin.save` (`Ctrl+S`, the pin's menu): asks the runtime for the save dialog, owned by the
+    /// pin; [`App::save_chosen`] writes the pin's picture at 100 % to the chosen file.
+    fn request_pin_save(&mut self, id: PinId) -> &'static str {
+        let Some(frame) = self.pins.picture(id) else {
+            return "not_found";
+        };
+        let rect = frame.rect();
+        let (folder, explicit) = self.quick_save_folder();
+        self.save_request = Some(SaveRequest {
+            session: 0,
+            rect,
+            pin: Some(id),
+            name: output::file_name(self.shell.local_time()),
+            folder,
+            explicit,
+        });
+        "asked"
+    }
+
+    /// The answer to a pin's save dialog (the pin may be gone by then).
+    fn pin_saved(&mut self, id: PinId, path: Option<PathBuf>) {
+        let result = match (path, self.pins.picture(id)) {
+            (None, _) => "cancelled",
+            (Some(_), None) => "not_found",
+            (Some(path), Some(frame)) => {
+                let written = output::png(frame)
+                    .map_err(std::io::Error::other)
+                    .and_then(|bytes| output::write_file(&path, &bytes, true));
+                match written {
+                    Ok(()) => {
+                        self.shell.notice(&format!("Saved to {}", path.display()));
+                        "saved"
+                    }
+                    Err(_) => {
+                        self.shell
+                            .notice("The picture could not be saved there. Try another folder.");
+                        "failed"
+                    }
+                }
+            }
+        };
+        self.last_action = Some(("pin.save".into(), result));
+    }
+
+    /// `pin.quick-save` (`Ctrl+Shift+S`): a new PNG of the pin's picture in the quick-save
+    /// folder, never overwriting (NOEUL-FR-032).
+    fn quick_save_pin(&mut self, id: PinId) -> &'static str {
+        let (Some(folder), _) = self.quick_save_folder() else {
+            self.shell.notice(
+                "No quick-save folder: set one with `noeul config set capture.quick_save_folder <folder>`.",
+            );
+            return "no_folder";
+        };
+        let Some(frame) = self.pins.picture(id) else {
+            return "not_found";
+        };
+        let name = output::file_name(self.shell.local_time());
+        let written = output::png(frame)
+            .map_err(std::io::Error::other)
+            .and_then(|bytes| output::quick_save(&folder, &name, &bytes));
+        match written {
+            Ok(path) => {
+                self.shell.notice(&format!("Saved to {}", path.display()));
+                "saved"
+            }
+            Err(_) => {
+                self.shell
+                    .notice("The picture could not be saved in the quick-save folder.");
+                "failed"
+            }
         }
     }
 
@@ -2989,6 +3104,10 @@ pub(crate) mod tests {
         assert_eq!(
             labels,
             [
+                ("Copy\tCtrl+C", true),
+                ("Save\u{2026}\tCtrl+S", true),
+                ("Quick save\tCtrl+Shift+S", true),
+                ("", false),
                 ("Zoom in\tPlus", true),
                 ("Zoom out\tMinus", true),
                 ("Zoom 100 %\t0", false),
@@ -3010,7 +3129,7 @@ pub(crate) mod tests {
         assert_eq!(a.pins.info(id).unwrap().zoom, 110);
         a.pin_event(PinEvent::Menu(id, None));
         let items = a.take_pin_menu().unwrap().items;
-        assert!(items[2].enabled, "100 % is offered once zoomed");
+        assert!(items[6].enabled, "100 % is offered once zoomed");
         a.pin_menu_choice(id, "capture.region");
         assert!(
             !a.overlay_open(),
@@ -3808,6 +3927,64 @@ pub(crate) mod tests {
             a.status()["last_action"],
             json!({"action": "capture.menu", "result": "not_shown"})
         );
+    }
+
+    #[test]
+    fn a_pin_copies_and_saves_its_own_picture() {
+        let (mut a, _syn, dir) = overlay_app("pin-out");
+        a.action("capture.region", None);
+        drag(&mut a, (100, 100), (299, 199));
+        double_click(&mut a, 200, 150, 0);
+        let id = PinId(1);
+        let sel = Rect::new(100, 100, 200, 100);
+        let ctrl =
+            |name: &str, shift: bool| crate::hotkeys::chord_of(name, true, false, shift).unwrap();
+        // Ctrl+C on the focused pin: its picture at 100 %, even when zoomed.
+        a.action("pin.zoom-in", Some(id));
+        a.pin_event(PinEvent::Key(id, ctrl("C", false), false));
+        assert_eq!(
+            a.status()["last_action"],
+            json!({"action": "pin.copy", "result": "copied"})
+        );
+        let (png, _) = a.shell.copies[0].clone();
+        let (w, h, px) = png_bgra(&png);
+        assert_eq!((w, h), (200, 100));
+        assert!(px == pattern(sel));
+        // A held clipboard: a notice, the pin stays.
+        a.shell.clipboard_busy = true;
+        a.pin_event(PinEvent::Key(id, ctrl("C", false), false));
+        assert_eq!(a.status()["last_action"]["result"], "clipboard_unavailable");
+        assert!(a.pins.contains(id));
+        // Ctrl+S asks for the dialog owned by the pin; the answer writes the picture.
+        a.pin_event(PinEvent::Key(id, ctrl("S", false), false));
+        let req = a.take_save_request().unwrap();
+        assert_eq!((req.pin, req.rect), (Some(id), sel));
+        let out = dir.join("pinned.png");
+        a.save_chosen(&req, Some(out.clone()));
+        assert!(png_bgra(&std::fs::read(&out).unwrap()).2 == pattern(sel));
+        assert_eq!(
+            a.status()["last_action"],
+            json!({"action": "pin.save", "result": "saved"})
+        );
+        a.save_chosen(&req, None);
+        assert_eq!(a.status()["last_action"]["result"], "cancelled");
+        // Ctrl+Shift+S: quick save, never overwriting; from the menu as well.
+        set_config(
+            &mut a,
+            &[(
+                "capture.quick_save_folder",
+                &dir.join("q").display().to_string(),
+            )],
+        );
+        a.pin_event(PinEvent::Key(id, ctrl("S", true), false));
+        a.pin_menu_choice(id, "pin.quick-save");
+        assert!(dir.join("q").join("noeul-20261104-090507.png").exists());
+        assert!(dir.join("q").join("noeul-20261104-090507-2.png").exists());
+        assert!(a.pins.contains(id), "outputs never close the pin");
+        a.pins.close(id).unwrap();
+        a.action("pin.copy", Some(id));
+        assert_eq!(a.status()["last_action"]["result"], "not_found");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

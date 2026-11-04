@@ -7,6 +7,8 @@
 //! running, commands that need it fail with `engine_not_running`.
 
 mod cli;
+// Portable, but until the Linux engine (D7, ADR 0011) only the Windows client uses every code.
+#[cfg_attr(not(windows), allow(dead_code))]
 mod output;
 
 use cli::{Args, Cmd};
@@ -582,12 +584,16 @@ fn human(cmd: Cmd, d: &Value) -> String {
     o
 }
 
+/// The schema validator of `cargo xtask schema-check` (test-only; a top-level module so the
+/// relative path resolves on every OS).
+#[cfg(test)]
+#[path = "../../../xtask/src/jsonschema.rs"]
+#[allow(dead_code)]
+mod jsonschema;
+
 #[cfg(test)]
 mod tests {
-    /// The schema validator of `cargo xtask schema-check`.
-    #[path = "../../../../xtask/src/jsonschema.rs"]
-    #[allow(dead_code)]
-    mod jsonschema;
+    use crate::jsonschema;
 
     #[test]
     fn capabilities_match_the_published_example_and_the_schema() {

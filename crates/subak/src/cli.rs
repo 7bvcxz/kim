@@ -12,6 +12,11 @@
 //! Step 13 (ADR 0030, docs/SCROLLBACK.md) adds `capture`, `history` and `clear-history`
 //! (tmux `capture-pane`, the `history-limit` counters, `clear-history`) and `new --history-limit`.
 //!
+//! Step 21 (ADR 0054) adds the internal windows and panes of a Terminal: `subak window
+//! new|ls|select|rename|kill` and `subak pane new|ls|select|kill`, with tmux's long command names
+//! (`new-window`, `list-windows`, `select-window`, `rename-window`, `kill-window`, `list-panes`,
+//! `select-pane`, `kill-pane`) as aliases.
+//!
 //! Step 17 adds the `hotkeys` command group of the hotkey contract (docs/HOTKEY_CONTRACT.md §10,
 //! `SUBAK-FR-034`): `subak hotkeys list|show|set|disable|enable|reset|check|export|import`.
 
@@ -61,6 +66,16 @@ pub enum Cmd {
     ConfigImport,
     ProfileList,
     ProfileShow,
+    // Step 21: internal windows and panes.
+    WindowNew,
+    WindowLs,
+    WindowSelect,
+    WindowRename,
+    WindowKill,
+    PaneNew,
+    PaneLs,
+    PaneSelect,
+    PaneKill,
 }
 
 impl Cmd {
@@ -105,6 +120,15 @@ impl Cmd {
             Self::ConfigImport => "config.import",
             Self::ProfileList => "profile.list",
             Self::ProfileShow => "profile.show",
+            Self::WindowNew => "window.new",
+            Self::WindowLs => "window.ls",
+            Self::WindowSelect => "window.select",
+            Self::WindowRename => "window.rename",
+            Self::WindowKill => "window.kill",
+            Self::PaneNew => "pane.new",
+            Self::PaneLs => "pane.ls",
+            Self::PaneSelect => "pane.select",
+            Self::PaneKill => "pane.kill",
         }
     }
 
@@ -170,6 +194,11 @@ impl Cmd {
             Self::ConfigSet => (&["key", "value"], 1),
             Self::ConfigReset => (&["key or section"], 0),
             Self::ProfileShow => (&["name"], 1),
+            Self::WindowNew | Self::WindowLs => (&["terminal"], 1),
+            Self::WindowSelect | Self::WindowKill => (&["window"], 1),
+            Self::WindowRename => (&["window", "new name"], 2),
+            Self::PaneNew | Self::PaneLs => (&["terminal or window"], 1),
+            Self::PaneSelect | Self::PaneKill => (&["pane"], 1),
             _ => (&[], 0),
         }
     }
@@ -262,7 +291,27 @@ impl Cmd {
             | Self::ProfileShow => &[],
             Self::ConfigSet | Self::ConfigImport => &["--dry-run"],
             Self::ConfigReset => &["--all", "--yes", "--dry-run"],
+            Self::WindowNew | Self::PaneNew => &[
+                "--endpoint",
+                "--name",
+                "--cwd",
+                "--env",
+                "--unset-env",
+                "--size",
+                "--command-line",
+                "--history-limit",
+                "--no-select",
+                "--dry-run",
+            ],
+            Self::WindowLs | Self::PaneLs => &["--endpoint"],
+            Self::WindowSelect | Self::PaneSelect | Self::WindowRename => {
+                &["--endpoint", "--dry-run"]
+            }
+            Self::WindowKill | Self::PaneKill => &["--endpoint", "--dry-run", "--yes"],
         };
+        if *self == Self::PaneNew && opt == "--name" {
+            return false;
+        }
         allowed.contains(&opt)
     }
 }
@@ -346,6 +395,10 @@ pub struct Args {
     pub positional: Vec<String>,
     /// `new -- <program> [args…]`.
     pub command: Vec<String>,
+    /// `window new --name <name>` (Step 21).
+    pub name: Option<String>,
+    /// `window new|pane new --no-select`: do not make it the active one (tmux `-d`).
+    pub no_select: bool,
 }
 
 /// A line of `capture --start/--end`: a number (history lines are negative) or `-`, the oldest
@@ -454,6 +507,38 @@ fn terminal_verb(word: &str) -> Option<Cmd> {
         "capture" | "capture-pane" => Cmd::Capture,
         "history" => Cmd::History,
         "clear-history" => Cmd::ClearHistory,
+        // Step 21: tmux's long names for the window and pane commands.
+        "new-window" => Cmd::WindowNew,
+        "list-windows" => Cmd::WindowLs,
+        "select-window" => Cmd::WindowSelect,
+        "rename-window" => Cmd::WindowRename,
+        "kill-window" => Cmd::WindowKill,
+        "list-panes" => Cmd::PaneLs,
+        "select-pane" => Cmd::PaneSelect,
+        "kill-pane" => Cmd::PaneKill,
+        _ => return None,
+    })
+}
+
+/// The `subak window <verb>` commands (Step 21).
+fn window_verb(word: &str) -> Option<Cmd> {
+    Some(match word {
+        "new" => Cmd::WindowNew,
+        "ls" | "list" => Cmd::WindowLs,
+        "select" => Cmd::WindowSelect,
+        "rename" => Cmd::WindowRename,
+        "kill" => Cmd::WindowKill,
+        _ => return None,
+    })
+}
+
+/// The `subak pane <verb>` commands (Step 21; splitting is Step 22).
+fn pane_verb(word: &str) -> Option<Cmd> {
+    Some(match word {
+        "new" => Cmd::PaneNew,
+        "ls" | "list" => Cmd::PaneLs,
+        "select" => Cmd::PaneSelect,
+        "kill" => Cmd::PaneKill,
         _ => return None,
     })
 }
@@ -750,6 +835,19 @@ pub fn parse(raw: &[String]) -> Result<(Cmd, Args), (String, CliError)> {
                 a.repeat = true;
                 opts.push("--repeat");
             }
+            "--name" => {
+                opts.push("--name");
+                if let Some(v) = value("--name") {
+                    if v.trim().is_empty() {
+                        bad.get_or_insert(CliError::usage("--name needs a window name"));
+                    }
+                    a.name = Some(v);
+                }
+            }
+            "--no-select" => {
+                a.no_select = true;
+                opts.push("--no-select");
+            }
             "--replace" => {
                 a.replace = true;
                 opts.push("--replace");
@@ -964,6 +1062,34 @@ pub fn parse(raw: &[String]) -> Result<(Cmd, Args), (String, CliError)> {
                 .hint("profile commands: list, show (profiles are defined in config.toml; see `subak --help`)"),
             ));
         }
+        ["window", sub, ..] if window_verb(sub).is_some() => {
+            (window_verb(sub).expect("checked above"), 2)
+        }
+        ["window", ..] => {
+            return Err((
+                "window".into(),
+                CliError::usage(if words.len() == 1 {
+                    "`subak window` needs a command".to_string()
+                } else {
+                    format!("unknown command `{}`", words.join(" "))
+                })
+                .hint("window commands: new, ls, select, rename, kill (see `subak --help`)"),
+            ));
+        }
+        ["pane", sub, ..] if pane_verb(sub).is_some() => {
+            (pane_verb(sub).expect("checked above"), 2)
+        }
+        ["pane", ..] => {
+            return Err((
+                "pane".into(),
+                CliError::usage(if words.len() == 1 {
+                    "`subak pane` needs a command".to_string()
+                } else {
+                    format!("unknown command `{}`", words.join(" "))
+                })
+                .hint("pane commands: new, ls, select, kill (splitting is Step 22; see `subak --help`)"),
+            ));
+        }
         ["terminal", verb, ..] if STEP10_VERBS.contains(verb) => {
             let cmd = terminal_verb(verb).expect("every Step 10 verb is a Terminal verb");
             a.alias = Some(format!("terminal {verb}"));
@@ -992,7 +1118,7 @@ pub fn parse(raw: &[String]) -> Result<(Cmd, Args), (String, CliError)> {
             return Err((
                 "subak".into(),
                 CliError::usage(format!("unknown command `{}`", words.join(" "))).hint(
-                    "commands: new, ls, info, status, attach, detach, rename, stop, kill, rm, capture, history, clear-history, host, hotkeys, config, profile, capabilities (see `subak --help`)",
+                    "commands: new, ls, info, status, attach, detach, rename, stop, kill, rm, capture, history, clear-history, window, pane, host, hotkeys, config, profile, capabilities (see `subak --help`)",
                 ),
             ));
         }
@@ -1026,8 +1152,10 @@ pub fn parse(raw: &[String]) -> Result<(Cmd, Args), (String, CliError)> {
     }
     a.positional = rest.iter().map(|s| (*s).to_string()).collect();
     let fail = |e: CliError| Err((cmd.name().to_string(), e));
-    if dashdash && cmd != Cmd::New {
-        return fail(CliError::usage("only `new` takes a program after `--`"));
+    if dashdash && !matches!(cmd, Cmd::New | Cmd::WindowNew | Cmd::PaneNew) {
+        return fail(CliError::usage(
+            "only `new`, `window new` and `pane new` take a program after `--`",
+        ));
     }
     if dashdash && a.command.first().is_none_or(|p| p.trim().is_empty()) {
         return fail(CliError::usage("`--` must be followed by a program"));

@@ -445,6 +445,15 @@ fn run_host(cmd: Cmd, a: &Args) -> Result<Value, CliError> {
         Cmd::Capture => terminal::capture(a, &endpoint),
         Cmd::History => terminal::history(a, &endpoint),
         Cmd::ClearHistory => terminal::clear_history(a, &endpoint),
+        Cmd::WindowNew => terminal::create_in(a, &endpoint, true),
+        Cmd::PaneNew => terminal::create_in(a, &endpoint, false),
+        Cmd::WindowLs => terminal::topology(a, &endpoint, false),
+        Cmd::PaneLs => terminal::topology(a, &endpoint, true),
+        Cmd::WindowSelect => terminal::select(a, &endpoint, false),
+        Cmd::PaneSelect => terminal::select(a, &endpoint, true),
+        Cmd::WindowRename => terminal::window_rename(a, &endpoint),
+        Cmd::WindowKill => terminal::close(a, &endpoint, true),
+        Cmd::PaneKill => terminal::close(a, &endpoint, false),
         // Help, version, capabilities and the portable `hotkeys` commands run elsewhere.
         _ => Err(CliError::new(Code::Internal, "not a host command")),
     }
@@ -537,6 +546,62 @@ fn table(list: &[Value]) -> Option<String> {
         s.push('\n');
     }
     Some(s)
+}
+
+/// The windows (and with `panes` every pane) of `window ls` / `pane ls`; `*` marks the active
+/// window and each window's active pane.
+fn topology_table(d: &Value, panes: bool) -> String {
+    let active = &d["active_window"];
+    let mut s = if panes {
+        format!(
+            "{:<8}  {:<14}  {:>7}  {:<8}  PROGRAM\n",
+            "PANE", "ID", "PID", "STATE"
+        )
+    } else {
+        format!(
+            "{:<4}  {:<20}  {:<14}  {:>5}  ACTIVE PANE\n",
+            "#", "NAME", "ID", "PANES"
+        )
+    };
+    for w in d["windows"].as_array().map_or(&[][..], Vec::as_slice) {
+        let mark = if w["id"] == *active { "*" } else { " " };
+        let ps = w["panes"].as_array().map_or(&[][..], Vec::as_slice);
+        if !panes {
+            s.push_str(&format!(
+                "{:<4}  {:<20}  {:<14}  {:>5}  {}\n",
+                format!("{}{mark}", w["index"]),
+                text(&w["name"]),
+                text(&w["id"]),
+                ps.len(),
+                text(&w["active_pane"]),
+            ));
+            continue;
+        }
+        for p in ps {
+            let pm = if p["id"] == w["active_pane"] {
+                "*"
+            } else {
+                " "
+            };
+            s.push_str(&format!(
+                "{:<8}  {:<14}  {:>7}  {:<8}  {}\n",
+                format!("{}.{}{pm}", w["index"], p["index"]),
+                text(&p["id"]),
+                if p["pid"].is_null() {
+                    "-".into()
+                } else {
+                    text(&p["pid"])
+                },
+                if p["running"] == true {
+                    "running"
+                } else {
+                    "ended"
+                },
+                text(&p["command"]["program"]),
+            ));
+        }
+    }
+    s.trim_end().to_string()
 }
 
 /// An exit status as shown to people: NTSTATUS-like values (≥ 0x80000000, e.g. `0xC000013A`
@@ -1041,6 +1106,83 @@ fn human(cmd: Cmd, d: &Value, a: &Args) {
             bytes_text(&d["cleared_bytes"]),
             text(&d["name"]),
         ),
+        Cmd::WindowNew | Cmd::PaneNew => {
+            let w = &d["window"];
+            let pane = w["panes"]
+                .as_array()
+                .and_then(|ps| ps.iter().find(|p| p["id"] == d["pane_id"]))
+                .cloned()
+                .unwrap_or(Value::Null);
+            writeln!(
+                out,
+                "{} {}:{}.{} ({} {}, pid {}){}",
+                if cmd == Cmd::WindowNew {
+                    "created window"
+                } else {
+                    "created pane"
+                },
+                w["index"],
+                text(&w["name"]),
+                pane["index"],
+                text(&d["window_id"]),
+                text(&d["pane_id"]),
+                text(&pane["pid"]),
+                if d["selected"] == true {
+                    "; it is now the active one"
+                } else {
+                    ""
+                },
+            )
+        }
+        Cmd::WindowLs | Cmd::PaneLs => {
+            let _ = writeln!(
+                out,
+                "Terminal `{}` ({}), {}",
+                text(&d["name"]),
+                text(&d["terminal_id"]),
+                text(&d["state"])
+            );
+            writeln!(out, "{}", topology_table(d, cmd == Cmd::PaneLs))
+        }
+        Cmd::WindowSelect | Cmd::PaneSelect => writeln!(
+            out,
+            "{} window {} pane {} of Terminal {}",
+            if d["changed"] == true {
+                "selected"
+            } else {
+                "already selected:"
+            },
+            text(&d["window_id"]),
+            text(&d["pane_id"]),
+            text(&d["terminal_id"]),
+        ),
+        Cmd::WindowRename => writeln!(
+            out,
+            "window {} renamed: `{}` -> `{}`",
+            text(&d["window_id"]),
+            text(&d["previous_name"]),
+            text(&d["name"]),
+        ),
+        Cmd::WindowKill | Cmd::PaneKill => {
+            let ended: Vec<String> = d["affected"]
+                .as_array()
+                .map(|v| v.iter().map(ended).collect())
+                .unwrap_or_default();
+            writeln!(
+                out,
+                "{}{}; every other pane keeps running",
+                if ended.is_empty() {
+                    "nothing was running".to_string()
+                } else {
+                    ended.join("; ")
+                },
+                if d["window_removed"] == true {
+                    format!("; window {} removed", text(&d["window_id"]))
+                } else {
+                    String::new()
+                },
+            )
+        }
         _ => Ok(()),
     };
 }

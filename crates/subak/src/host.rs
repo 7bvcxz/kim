@@ -9,17 +9,21 @@
 //! `gui` client (or `--shell` at Host start), and only typed into by an interactively attached
 //! `cli` or `gui` connection.
 //!
-//! **Session manager.** The Host owns any number of Terminals ([`crate::session`]): each has one
-//! internal Window with one Pane, and each Pane its own pseudo console (ConPTY) and its own
-//! kill-on-close job, so every Terminal's process tree is isolated. The model and the state
+//! **Session manager.** The Host owns any number of Terminals ([`crate::session`]): each has
+//! internal Windows with Panes (any number since Step 21, ADR 0054), and each Pane its own pseudo
+//! console (ConPTY) and its own kill-on-close job, so every pane's process tree is isolated. The model and the state
 //! machine live in `session.rs`; this file owns the OS side (pseudo consoles, jobs, threads,
 //! output rings) and applies every state change under one lock, emitting its event in the same
 //! step, so a client that subscribes and then lists never misses or double-counts a change.
 //!
-//! Ending a pane is claimed once, under the lock: whoever claims it (a stop, a kill, a Host stop,
-//! or the pane's own exit waiter when its shell exits by itself) performs the teardown; anyone
-//! who arrives later waits for that result, and a kill arriving during a graceful stop escalates
-//! it. Client connections own nothing: a client that detaches, disconnects or crashes only loses
+//! Ending is claimed once, under the lock, at two levels. A Terminal's end (a stop, a kill, a
+//! Host stop, or the exit of its last running pane) is claimed by whoever sets its `ending`; it
+//! claims every pane and applies the state machine once they are down. A single pane's end (a
+//! `pane.kill`, a `window.kill`, or the exit of a pane while others still run) claims that pane
+//! only and takes it out of the model. Anyone who arrives later waits for the same result, and a
+//! kill arriving during a graceful stop escalates it. A pane-level end never takes a Terminal's
+//! last running pane: that is the Terminal's own end, so no window or pane command can end a
+//! whole Terminal. Client connections own nothing: a client that detaches, disconnects or crashes only loses
 //! its subscriptions and attachments.
 //!
 //! Lifetime (ADR 0003 §4): the Host runs while it owns a live Terminal or has a client. When both
@@ -59,6 +63,11 @@ pub const DEFAULT_IDLE_EXIT_S: u64 = 10;
 pub const MAX_CONNECTIONS: usize = 64;
 /// Most Terminals (live and stored) one Host owns; more get `busy`.
 pub const MAX_TERMINALS: usize = 256;
+/// Most panes one Terminal holds across its windows (Step 21); more get `busy`.
+pub const MAX_PANES_PER_TERMINAL: usize = 64;
+/// Most running panes one Host owns (Step 21: each is a pseudo console and a conhost process);
+/// more get `busy`.
+pub const MAX_PANES: usize = 512;
 /// Bytes queued per connection; each queued frame also counts [`FRAME_COST`], so many tiny
 /// frames (ConPTY's output arrives in chunks of ~80 bytes on Windows 10) are bounded by memory,
 /// not by a frame count (ADR 0025). Output that does not fit makes its stream lag: its queued
@@ -334,11 +343,31 @@ struct PaneRt {
     reader: Mutex<Option<JoinHandle<()>>>,
     /// The job was terminated (not every process ended by itself).
     forced: AtomicBool,
+    /// Someone performs this pane's teardown (set under the Host lock, once).
+    claimed: AtomicBool,
     done: Mutex<Option<Value>>,
     done_cv: Condvar,
 }
 
 impl PaneRt {
+    fn new(pane_id: &str, terminal_id: &str, stream: u32, pty: Arc<dyn Pty>) -> Arc<Self> {
+        Arc::new(Self {
+            pane_id: pane_id.to_string(),
+            terminal_id: terminal_id.to_string(),
+            stream,
+            pty,
+            reader: Mutex::new(None),
+            forced: AtomicBool::new(false),
+            claimed: AtomicBool::new(false),
+            done: Mutex::new(None),
+            done_cv: Condvar::new(),
+        })
+    }
+
+    fn is_claimed(&self) -> bool {
+        self.claimed.load(Ordering::SeqCst)
+    }
+
     fn terminate(&self) {
         self.forced.store(true, Ordering::SeqCst);
         self.pty.kill_tree(1);
@@ -456,6 +485,11 @@ impl State {
         session::summary_json(t, &|p| self.live(p))
     }
 
+    fn window_json(&self, t: &session::Terminal, w: &session::Window) -> Value {
+        let (mut clients, mut busy) = (0, false);
+        session::window_json(t, w, &|p| self.live(p), &mut clients, &mut busy)
+    }
+
     fn rt_of_stream(&self, stream: u32) -> Option<&Arc<PaneRt>> {
         self.rt.values().find(|r| r.stream == stream)
     }
@@ -517,6 +551,62 @@ impl State {
         }
         let data = json!({"terminal_id": terminal_id, "name": name, "reason": reason});
         self.notify("terminals", "terminal.removed", &data);
+    }
+
+    /// Drops one pane's screen and history (the pane left its Terminal, Step 21), keeping its
+    /// counters in the Host's totals.
+    fn drop_screen(&mut self, pane_id: &str) {
+        if let Some(o) = self.out.remove(pane_id) {
+            let h = o.screen.history();
+            self.stats.ended_output_bytes += o.seq;
+            self.stats.ended_input_bytes += o.input_bytes;
+            self.stats.ended_evicted_lines += h.evicted_lines;
+            self.stats.ended_cleared_lines += h.cleared_lines;
+        }
+    }
+
+    /// The running panes of `t` nobody is ending yet, other than `except`.
+    fn others_running(&self, t: &session::Terminal, except: &[&str]) -> usize {
+        t.panes()
+            .filter(|p| !except.contains(&p.id.as_str()))
+            .filter_map(|p| self.rt.get(&p.id))
+            .filter(|r| !r.is_claimed())
+            .count()
+    }
+
+    /// The selection events after the active window or pane of Terminal `tid` changed (Step 21):
+    /// `window.selected` when its active window changed, else `pane.selected` when the active
+    /// pane of a window changed. Every client sees the same selection.
+    fn selected(&mut self, tid: &str, window_changed: bool, pane_changed: bool) {
+        let Some(t) = self.reg.get(tid) else {
+            return;
+        };
+        let w = &t.windows[t.active_window];
+        let data = json!({
+            "terminal_id": t.id, "window_id": w.id, "pane_id": w.panes[w.active_pane].id,
+        });
+        if window_changed {
+            self.notify("terminals", "window.selected", &data);
+        } else if pane_changed {
+            self.notify("terminals", "pane.selected", &data);
+        }
+    }
+
+    /// The events of a pane taken out of its Terminal ([`session::Terminal::remove_pane`]).
+    fn pane_removed(&mut self, tid: &str, pane_id: &str, r: &session::Removal, reason: &str) {
+        let data = json!({
+            "terminal_id": tid, "window_id": r.window_id, "pane_id": pane_id, "reason": reason,
+        });
+        self.notify("terminals", "pane.removed", &data);
+        if r.window_removed {
+            let data = json!({"terminal_id": tid, "window_id": r.window_id, "reason": reason});
+            self.notify("terminals", "window.removed", &data);
+        }
+        self.selected(tid, r.window_changed, r.pane_changed);
+        if let Some(p) = &r.window_pane {
+            let data = json!({"terminal_id": tid, "window_id": r.window_id, "pane_id": p});
+            self.notify("terminals", "pane.selected", &data);
+        }
     }
 }
 
@@ -783,6 +873,44 @@ struct Launch {
     env: EnvOverrides,
 }
 
+/// A new pane's program and settings, checked (`terminal.create`, `window.create`,
+/// `pane.create`); the environment values are used once and never stored.
+struct PaneLaunch {
+    command: Command,
+    raw_line: Option<String>,
+    cwd: Option<String>,
+    env: EnvOverrides,
+    size: (u16, u16),
+    history_limit: usize,
+}
+
+/// `invalid_state` unless the Terminal runs and nothing is ending it (Step 21: windows and panes
+/// are created and ended only in a running Terminal).
+fn require_running(t: &session::Terminal) -> Result<(), IpcError> {
+    if t.state == session::State::Running && t.ending.is_none() {
+        return Ok(());
+    }
+    let state = if t.ending.is_some() {
+        "stopping"
+    } else {
+        t.state.as_str()
+    };
+    Err(IpcError::new(
+        ErrorCode::InvalidState,
+        format!(
+            "Terminal `{}` is {state}; windows and panes change only while it runs",
+            t.name.display
+        ),
+    )
+    .details(json!({"terminal_id": t.id, "state": state})))
+}
+
+/// `invalid_params` for a target of the wrong level (Step 21: each operation takes one level, so
+/// no window or pane command acts on a whole Terminal, and the reverse).
+fn wrong_level(method: &str, wants: &str) -> IpcError {
+    IpcError::param("target", format!("{method} takes {wants}"))
+}
+
 /// The `spawn_failed` error of a failed start (IPC_PROTOCOL §6): `details.reason` and, when
 /// there is one, `details.hint` and `details.os_error`.
 fn spawn_failed(e: &pty::SpawnError, program: &str, keep: bool, tid: Option<&str>) -> IpcError {
@@ -950,16 +1078,7 @@ impl Host {
         let output = pty
             .take_output()
             .expect("a fresh pseudo console has its output end");
-        let rt = Arc::new(PaneRt {
-            pane_id: pane_id.clone(),
-            terminal_id: tid.clone(),
-            stream,
-            pty: Arc::clone(&pty),
-            reader: Mutex::new(None),
-            forced: AtomicBool::new(false),
-            done: Mutex::new(None),
-            done_cv: Condvar::new(),
-        });
+        let rt = PaneRt::new(&pane_id, &tid, stream, Arc::clone(&pty));
         let result = {
             let mut st = self.lock();
             if st.stopping || st.reg.get(&tid).is_none() {
@@ -1008,10 +1127,17 @@ impl Host {
                 "terminal": st.terminal_json(t),
             })
         };
-        // The reader is registered before the exit waiter can tear the pane down.
+        self.run_pane(&rt, output);
+        let _ = self.events.send(Ev::Changed);
+        Ok(result)
+    }
+
+    /// Starts the threads of a pane that just started: its output reader and its exit waiter.
+    /// The reader is registered before the exit waiter can tear the pane down.
+    fn run_pane(self: &Arc<Self>, rt: &Arc<PaneRt>, output: Box<dyn Read + Send>) {
         let reader = thread::spawn({
             let host = Arc::clone(self);
-            let rt = Arc::clone(&rt);
+            let rt = Arc::clone(rt);
             let mut output = output;
             move || host.read_output(&rt, &mut *output)
         });
@@ -1020,46 +1146,134 @@ impl Host {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(reader);
         thread::spawn({
             let host = Arc::clone(self);
+            let rt = Arc::clone(rt);
             move || {
                 rt.pty.wait_exit(None);
-                host.end_pane(&rt.pane_id, EndCause::Exited, false);
+                host.pane_exited(&rt);
             }
         });
-        let _ = self.events.send(Ev::Changed);
-        Ok(result)
     }
 
-    /// Ends one pane once and returns its report. The first caller claims the teardown and
-    /// performs it; later callers wait for its result (a later, stronger cause still decides the
-    /// Terminal's fate, and `immediate` ends the job at once).
-    fn end_pane(&self, pane_id: &str, cause: EndCause, immediate: bool) -> Value {
-        let rt = {
+    /// A pane's root process exited by itself. While other panes of its Terminal still run, the
+    /// pane alone ends and leaves the model (tmux closes a pane whose program exits); the last
+    /// running pane's exit is the Terminal's own end (removed, or `stopped` with
+    /// `remain_on_exit`). A pane someone already ends, or a Terminal already ending, is left to
+    /// whoever ends it.
+    fn pane_exited(&self, rt: &Arc<PaneRt>) {
+        let alone = {
+            let st = self.lock();
+            if rt.is_claimed() {
+                return;
+            }
+            let Some(t) = st.reg.get(&rt.terminal_id) else {
+                return;
+            };
+            if t.ending.is_some() {
+                return;
+            }
+            let others = st.others_running(t, &[&rt.pane_id]) > 0;
+            if others {
+                rt.claimed.store(true, Ordering::SeqCst);
+            }
+            others
+        };
+        if alone {
+            self.end_alone(rt, false, "exited");
+        } else {
+            self.end_terminal(&rt.terminal_id, EndCause::Exited, false);
+        }
+    }
+
+    /// Ends every running pane of a Terminal once (stop, kill, Host stop, or the exit of its last
+    /// running pane) and applies the end to the Terminal; returns one report per pane. The first
+    /// caller claims the end and performs it; later callers wait for the same result (a later,
+    /// stronger cause still decides the Terminal's fate, and `immediate` ends the jobs at once).
+    /// A pane someone else already ends (its own exit, a `pane.kill`) is waited for.
+    fn end_terminal(&self, tid: &str, cause: EndCause, immediate: bool) -> Vec<Value> {
+        let (rts, mine) = {
             let mut st = self.lock();
-            let Some(rt) = st.rt.get(pane_id).cloned() else {
-                return Value::Null;
+            let Some(t) = st.reg.get(tid) else {
+                return Vec::new();
             };
-            let Some(t) = st.reg.get_mut(&rt.terminal_id) else {
-                return Value::Null;
-            };
-            if let Some(prev) = t.ending {
-                if cause > prev {
+            let rts: Vec<Arc<PaneRt>> = t
+                .panes()
+                .filter_map(|p| st.rt.get(&p.id).cloned())
+                .collect();
+            let (state, ending) = (t.state, t.ending);
+            if let Some(prev) = ending {
+                if cause > prev
+                    && let Some(t) = st.reg.get_mut(tid)
+                {
                     t.ending = Some(cause);
                 }
-                drop(st);
-                if immediate {
-                    rt.terminate();
+                (rts, false)
+            } else if rts.is_empty() || state != session::State::Running {
+                return Vec::new();
+            } else {
+                if let Some(t) = st.reg.get_mut(tid) {
+                    t.ending = Some(cause);
                 }
-                return rt.wait_done();
+                if st.reg.apply(tid, Transition::EndBegins).is_ok() {
+                    st.state_changed(tid, "running", Some(cause));
+                }
+                (rts, true)
             }
-            t.ending = Some(cause);
-            let tid = rt.terminal_id.clone();
-            if st.reg.apply(&tid, Transition::EndBegins).is_ok() {
-                st.state_changed(&tid, "running", Some(cause));
-            }
-            rt
         };
-        let report = self.teardown(&rt, immediate);
-        self.finish(&rt, &report);
+        if !mine {
+            if immediate {
+                for r in &rts {
+                    r.terminate();
+                }
+            }
+            return rts
+                .iter()
+                .map(|r| r.wait_done())
+                .filter(|r| !r.is_null())
+                .collect();
+        }
+        let ended: Vec<(Value, bool)> = thread::scope(|s| {
+            let handles: Vec<_> = rts
+                .iter()
+                .map(|rt| s.spawn(move || self.claim_and_teardown(rt, immediate)))
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| h.join().unwrap_or((Value::Null, false)))
+                .collect()
+        });
+        self.finish_terminal(tid, &rts, &ended);
+        for (rt, (report, own)) in rts.iter().zip(&ended) {
+            if *own {
+                rt.set_done(report.clone());
+            }
+        }
+        ended
+            .into_iter()
+            .map(|(r, _)| r)
+            .filter(|r| !r.is_null())
+            .collect()
+    }
+
+    /// Claims a pane's teardown and performs it (`true`), or waits for whoever claimed it first.
+    fn claim_and_teardown(&self, rt: &PaneRt, immediate: bool) -> (Value, bool) {
+        let mine = {
+            let _st = self.lock();
+            !rt.claimed.swap(true, Ordering::SeqCst)
+        };
+        if !mine {
+            if immediate {
+                rt.terminate();
+            }
+            return (rt.wait_done(), false);
+        }
+        (self.teardown(rt, immediate), true)
+    }
+
+    /// Ends one pane that the caller claimed (under the lock) while other panes of its Terminal
+    /// keep running (`pane.kill`, `window.kill`, or its own exit), and takes it out of the model.
+    fn end_alone(&self, rt: &PaneRt, immediate: bool, reason: &str) -> Value {
+        let report = self.teardown(rt, immediate);
+        self.finish_pane(rt, &report, reason);
         rt.set_done(report.clone());
         report
     }
@@ -1107,63 +1321,122 @@ impl Host {
         })
     }
 
-    /// Applies the end of a pane to the model: detaches its clients, records how it ended, and
-    /// moves its Terminal to `stopped` (its screen and history stay for `pane.capture`) or
-    /// removes it, with the events, in one critical section.
-    fn finish(&self, rt: &PaneRt, report: &Value) {
+    /// What every ended pane does to the Host: its runtime goes, its clients are detached, and
+    /// `pane.exited` follows its last output.
+    fn release_pane(st: &mut State, rt: &PaneRt, report: &Value) {
+        st.rt.remove(&rt.pane_id);
+        for c in st.conns.values_mut() {
+            c.attached.remove(&rt.stream);
+        }
+        let exit_code = report["exit_code"]
+            .as_u64()
+            .and_then(|c| u32::try_from(c).ok());
+        let data = json!({
+            "pane_id": rt.pane_id, "terminal_id": rt.terminal_id, "pid": rt.pty.pid(),
+            "exit_code": exit_code,
+        });
+        st.notify("panes", "pane.exited", &data);
+    }
+
+    /// Applies the end of a Terminal to the model: releases the panes it ended, records how it
+    /// ended, and moves it to `stopped` (its windows, panes, screens and histories stay for
+    /// `pane.capture`) or removes it, with the events, in one critical section.
+    fn finish_terminal(&self, tid: &str, rts: &[Arc<PaneRt>], ended: &[(Value, bool)]) {
         {
             let mut st = self.lock();
-            st.rt.remove(&rt.pane_id);
-            for c in st.conns.values_mut() {
-                c.attached.remove(&rt.stream);
+            for (rt, (report, own)) in rts.iter().zip(ended) {
+                if *own {
+                    Self::release_pane(&mut st, rt, report);
+                }
             }
-            let tid = rt.terminal_id.clone();
-            let exit_code = report["exit_code"]
-                .as_u64()
-                .and_then(|c| u32::try_from(c).ok());
-            let Some(t) = st.reg.get_mut(&tid) else {
+            let Some(t) = st.reg.get_mut(tid) else {
+                drop(st);
+                let _ = self.events.send(Ev::Changed);
                 return;
             };
             let cause = t.ending.take().unwrap_or(EndCause::Exited);
+            // How it ended: the active pane's report when it is among them, else the first.
+            let active = t.active_pane().id.clone();
+            let reports: Vec<&Value> = ended
+                .iter()
+                .map(|(r, _)| r)
+                .filter(|r| !r.is_null())
+                .collect();
+            let main = reports
+                .iter()
+                .find(|r| r["pane_id"] == active.as_str())
+                .or_else(|| reports.first());
             t.last_exit = Some(LastExit {
-                pid: Some(rt.pty.pid()),
-                exit_code,
-                forced: report["forced"] == true,
+                pid: main
+                    .and_then(|r| r["pid"].as_u64())
+                    .and_then(|p| u32::try_from(p).ok()),
+                exit_code: main
+                    .and_then(|r| r["exit_code"].as_u64())
+                    .and_then(|c| u32::try_from(c).ok()),
+                forced: reports.iter().any(|r| r["forced"] == true),
                 cause,
             });
-            t.active_pane_mut().pid = None;
+            for w in &mut t.windows {
+                for p in &mut w.panes {
+                    p.pid = None;
+                }
+            }
             let (name, remain) = (t.name.display.clone(), t.remain_on_exit);
-            let data = json!({
-                "pane_id": rt.pane_id, "terminal_id": tid, "pid": rt.pty.pid(), "exit_code": exit_code,
-            });
-            st.notify("panes", "pane.exited", &data);
             match st.reg.apply(
-                &tid,
+                tid,
                 Transition::Ended {
                     cause,
                     remain_on_exit: remain,
                 },
             ) {
-                Ok(Some(_)) => st.state_changed(&tid, "stopping", Some(cause)),
-                Ok(None) => st.removed(&tid, &name, cause.as_str()),
+                Ok(Some(_)) => st.state_changed(tid, "stopping", Some(cause)),
+                Ok(None) => st.removed(tid, &name, cause.as_str()),
                 Err(_) => {}
             }
         }
         let _ = self.events.send(Ev::Changed);
     }
 
-    /// Ends every running pane in parallel (Host stop or idle exit); returns their reports.
+    /// Applies the end of one pane whose Terminal goes on (Step 21): releases it, takes it out of
+    /// the model (its window too when it was the last pane there) with its screen, and announces
+    /// the new selection when the active pane or window went.
+    fn finish_pane(&self, rt: &PaneRt, report: &Value, reason: &str) {
+        {
+            let mut st = self.lock();
+            Self::release_pane(&mut st, rt, report);
+            let removal = st.reg.get_mut(&rt.terminal_id).and_then(|t| {
+                if let Some(p) = t.pane_mut(&rt.pane_id) {
+                    p.pid = None;
+                }
+                t.remove_pane(&rt.pane_id)
+            });
+            if let Some(r) = removal {
+                st.drop_screen(&rt.pane_id);
+                st.pane_removed(&rt.terminal_id, &rt.pane_id, &r, reason);
+            }
+        }
+        let _ = self.events.send(Ev::Changed);
+    }
+
+    /// Ends every live Terminal in parallel (Host stop or idle exit); returns the pane reports.
     fn end_all(&self) -> Vec<Value> {
-        let panes: Vec<String> = self.lock().rt.keys().cloned().collect();
+        let tids: Vec<String> = self
+            .lock()
+            .reg
+            .terminals
+            .iter()
+            .filter(|t| t.state.is_live())
+            .map(|t| t.id.clone())
+            .collect();
         thread::scope(|s| {
-            let handles: Vec<_> = panes
+            let handles: Vec<_> = tids
                 .iter()
-                .map(|p| s.spawn(move || self.end_pane(p, EndCause::HostStop, false)))
+                .map(|t| s.spawn(move || self.end_terminal(t, EndCause::HostStop, false)))
                 .collect();
             handles
                 .into_iter()
                 .filter_map(|h| h.join().ok())
-                .filter(|r| !r.is_null())
+                .flatten()
                 .collect()
         })
     }
@@ -1552,6 +1825,16 @@ impl Host {
             "terminal.stop" => Reply::Now(self.end_request(p, Op::Stop)),
             "terminal.kill" => Reply::Now(self.end_request(p, Op::Kill)),
             "terminal.remove" => Reply::Now(self.end_request(p, Op::Remove)),
+            // Step 21 (ADR 0054): internal windows and panes.
+            "window.create" => Reply::Now(self.create_in(p, true)),
+            "pane.create" => Reply::Now(self.create_in(p, false)),
+            "window.list" => Reply::Now(self.topology(p, false)),
+            "pane.list" => Reply::Now(self.topology(p, true)),
+            "window.select" => Reply::Now(self.select(p, false)),
+            "pane.select" => Reply::Now(self.select(p, true)),
+            "window.rename" => Reply::Now(self.window_rename(p)),
+            "window.kill" => Reply::Now(self.close(p, true)),
+            "pane.kill" => Reply::Now(self.close(p, false)),
             other => Reply::Now(Err(IpcError::new(
                 ErrorCode::UnknownRequest,
                 format!("unknown method `{other}`"),
@@ -1726,16 +2009,24 @@ impl Host {
                 .iter()
                 .filter(|t| t.state.is_live())
                 .collect();
-            let panes: Vec<String> = live.iter().map(|t| t.active_pane().id.clone()).collect();
+            let panes: Vec<String> = live
+                .iter()
+                .flat_map(|t| t.panes())
+                .filter(|p| st.rt.contains_key(&p.id))
+                .map(|p| p.id.clone())
+                .collect();
             let would_end: Vec<Value> = live
                 .iter()
                 .map(|t| {
                     let p = t.active_pane();
-                    let l = st.live(p);
+                    // Step 21: the processes of every pane, busy when any pane is.
+                    let lives: Vec<(&session::Pane, session::Live)> =
+                        t.panes().map(|p| (p, st.live(p))).collect();
                     json!({
                         "terminal_id": t.id, "name": t.name.display, "pane_id": p.id,
-                        "pid": p.pid, "processes": l.processes,
-                        "busy": session::busy(&p.command.program, l.processes),
+                        "pid": p.pid,
+                        "processes": lives.iter().map(|(_, l)| l.processes).sum::<u32>(),
+                        "busy": lives.iter().any(|(p, l)| session::busy(&p.command.program, l.processes)),
                     })
                 })
                 .collect();
@@ -1861,10 +2152,13 @@ impl Host {
         let Some(t) = st.reg.get_mut(&rt.terminal_id) else {
             return Reply::Queued;
         };
+        let Some(pane) = t.pane_mut(&rt.pane_id) else {
+            return Reply::Queued;
+        };
         if let Some(s) = size {
-            t.active_pane_mut().size = s;
+            pane.size = s;
         }
-        let pane = t.active_pane().clone();
+        let pane = pane.clone();
         let Some(out) = st.out.get(&rt.pane_id) else {
             return Reply::Queued;
         };
@@ -2338,8 +2632,13 @@ impl Host {
                 IpcError::new(ErrorCode::InternalError, format!("resize failed: {e}"))
             })?;
         }
-        if let Some(t) = self.lock().reg.get_mut(&rt.terminal_id) {
-            t.active_pane_mut().size = (c, r);
+        if let Some(p) = self
+            .lock()
+            .reg
+            .get_mut(&rt.terminal_id)
+            .and_then(|t| t.pane_mut(&rt.pane_id))
+        {
+            p.size = (c, r);
         }
         Ok(json!({"cols": c, "rows": r, "stream_id": rt.stream}))
     }
@@ -2375,17 +2674,10 @@ impl Host {
         Ok(json!({ "terminal": st.terminal_json(&st.reg.terminals[i]) }))
     }
 
-    fn create_request(self: &Arc<Self>, p: &Value) -> Result<Value, IpcError> {
-        if !p["profile"].is_null() {
-            return Err(IpcError::param(
-                "profile",
-                "`profile` is part of IPC v1 but not implemented by this Host yet (Step 33)",
-            ));
-        }
+    /// The program, working directory, environment, size and history of a new pane: the
+    /// parameters `terminal.create`, `window.create` and `pane.create` share, checked.
+    fn launch_params(&self, p: &Value) -> Result<PaneLaunch, IpcError> {
         let env = EnvOverrides::from_json(&p["env"]).map_err(|m| IpcError::param("env", m))?;
-        let name = optional_string(p, "name")?
-            .map(session::parse_name)
-            .transpose()?;
         // Step 12 (ADR 0027 §4): a verbatim command line, for programs such as `cmd.exe /c` that
         // parse their command line themselves. Only its first word is resolved; `command` is its
         // split, for display and the busy rule.
@@ -2484,6 +2776,64 @@ impl Host {
                     )
                 })?,
         };
+        Ok(PaneLaunch {
+            command,
+            raw_line,
+            cwd,
+            env,
+            size,
+            history_limit,
+        })
+    }
+
+    /// What a new pane would run (`dry_run`): the same checks as a real start (working
+    /// directory, program on the pane's PATH, scripts), with nothing started.
+    fn plan_pane(l: &PaneLaunch) -> Result<Value, IpcError> {
+        let dir = l
+            .cwd
+            .as_deref()
+            .map(PathBuf::from)
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_default();
+        let executable = pty::plan(&pty::Spec {
+            program: &l.command.program,
+            args: &l.command.args,
+            raw_line: l.raw_line.as_deref(),
+            cwd: &dir,
+            env: &l.env,
+            host_vars: &[],
+            size: l.size,
+        })
+        .map_err(|e| spawn_failed(&e, &l.command.program, false, None))?;
+        Ok(json!({
+            "command": {"program": redact::program(&l.command.program), "args": redact::args(&l.command.args)},
+            "command_line": l.raw_line.as_deref().map(redact::command_line),
+            "executable": executable.display().to_string(),
+            "cwd": l.cwd,
+            "env": session::env_json(&l.env.names()),
+            "size": {"cols": l.size.0, "rows": l.size.1},
+            "history_limit": l.history_limit,
+        }))
+    }
+
+    fn create_request(self: &Arc<Self>, p: &Value) -> Result<Value, IpcError> {
+        if !p["profile"].is_null() {
+            return Err(IpcError::param(
+                "profile",
+                "`profile` is part of IPC v1 but not implemented by this Host yet (Step 33)",
+            ));
+        }
+        let name = optional_string(p, "name")?
+            .map(session::parse_name)
+            .transpose()?;
+        let PaneLaunch {
+            command,
+            raw_line,
+            cwd,
+            env,
+            size,
+            history_limit,
+        } = self.launch_params(p)?;
         let remain_on_exit = flag(p, "remain_on_exit")?;
         let keep = flag(p, "keep_on_failure")?;
         if flag(p, "dry_run")? {
@@ -2566,32 +2916,468 @@ impl Host {
         }))
     }
 
+    /// `window.create` (a new internal window with one pane) and `pane.create` (a new pane in a
+    /// window) of a running Terminal (Step 21, ADR 0054). The ids are reserved under the lock, the
+    /// pane's process is started outside it, and the window or pane enters the model only once
+    /// it runs, so no client ever sees a half-made one; a failed start leaves nothing. `select`
+    /// (default true, tmux `new-window` without `-d`) makes it the Terminal's active pane.
+    fn create_in(self: &Arc<Self>, p: &Value, new_window: bool) -> Result<Value, IpcError> {
+        let method = if new_window {
+            "window.create"
+        } else {
+            "pane.create"
+        };
+        let target = target(p)?;
+        let name = if new_window {
+            optional_string(p, "name")?
+                .map(session::parse_window_name)
+                .transpose()?
+        } else {
+            None
+        };
+        let select = match &p["select"] {
+            Value::Null => true,
+            Value::Bool(b) => *b,
+            _ => return Err(IpcError::param("select", "select must be true or false")),
+        };
+        let dry_run = flag(p, "dry_run")?;
+        let l = self.launch_params(p)?;
+        let (tid, wid, pane_id, stream) = {
+            let mut st = self.lock();
+            if st.stopping {
+                return Err(IpcError::new(
+                    ErrorCode::HostStopping,
+                    "the Host is shutting down",
+                ));
+            }
+            let r = st.reg.resolve(target)?;
+            if new_window && r.level != Level::Terminal {
+                return Err(wrong_level(method, "a Terminal (its name or t- id)"));
+            }
+            if !new_window && r.level == Level::Pane {
+                return Err(wrong_level(
+                    method,
+                    "a Terminal (its active window) or a window (terminal:window or a w- id)",
+                ));
+            }
+            let t = &st.reg.terminals[r.terminal];
+            require_running(t)?;
+            if t.panes().count() >= MAX_PANES_PER_TERMINAL || st.rt.len() >= MAX_PANES {
+                return Err(IpcError::new(
+                    ErrorCode::Busy,
+                    format!(
+                        "a Terminal holds at most {MAX_PANES_PER_TERMINAL} panes and a Host runs at most {MAX_PANES}"
+                    ),
+                ));
+            }
+            let tid = t.id.clone();
+            let existing = (!new_window).then(|| t.windows[r.window].id.clone());
+            if dry_run {
+                let (tname, index) = (t.name.display.clone(), t.free_window_index());
+                drop(st);
+                let mut plan = Self::plan_pane(&l)?;
+                plan["terminal_id"] = json!(tid);
+                plan["terminal"] = json!(tname);
+                plan["window_id"] = json!(existing);
+                plan["window_index"] = json!(if new_window { Some(index) } else { None });
+                plan["window_name"] = json!(if new_window {
+                    Some(name.unwrap_or_else(|| session::window_name(&l.command.program)))
+                } else {
+                    None
+                });
+                plan["select"] = json!(select);
+                return Ok(json!({"dry_run": true, "would_create": plan}));
+            }
+            let wid = existing.unwrap_or_else(|| st.reg.issue_id('w', proto::new_object_id));
+            let pane_id = st.reg.issue_id('p', proto::new_object_id);
+            let stream = st.reg.alloc_stream();
+            (tid, wid, pane_id, stream)
+        };
+        let cwd = l
+            .cwd
+            .as_deref()
+            .map(PathBuf::from)
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_default();
+        let started = pty::spawn(&pty::Spec {
+            program: &l.command.program,
+            args: &l.command.args,
+            raw_line: l.raw_line.as_deref(),
+            cwd: &cwd,
+            env: &l.env,
+            host_vars: &[("SUBAK_PANE_ID", &pane_id), ("SUBAK_TERMINAL_ID", &tid)],
+            size: l.size,
+        })
+        .map_err(|e| {
+            self.lock().stats.spawn_failures += 1;
+            spawn_failed(&e, &l.command.program, false, None)
+        })?;
+        let pty = started.pty;
+        let output = pty
+            .take_output()
+            .expect("a fresh pseudo console has its output end");
+        let rt = PaneRt::new(&pane_id, &tid, stream, Arc::clone(&pty));
+        let result = {
+            let mut st = self.lock();
+            let fits = st.reg.get(&tid).is_some_and(|t| {
+                require_running(t).is_ok() && (new_window || t.window_pos(&wid).is_some())
+            });
+            if st.stopping || !fits {
+                let stopping = st.stopping;
+                drop(st);
+                discard(&pty, output);
+                return Err(if stopping {
+                    IpcError::new(
+                        ErrorCode::HostStopping,
+                        "the Host began shutting down while the pane started; nothing was kept",
+                    )
+                } else {
+                    IpcError::new(
+                        ErrorCode::InvalidState,
+                        "the Terminal or window ended while the pane started; nothing was kept",
+                    )
+                    .details(json!({"terminal_id": tid}))
+                });
+            }
+            let pane = session::Pane {
+                id: pane_id.clone(),
+                index: 0,
+                command: l.command,
+                command_line: l.raw_line,
+                cwd: l.cwd,
+                executable: Some(started.executable.display().to_string()),
+                env: l.env.names(),
+                size: l.size,
+                stream,
+                pid: Some(pty.pid()),
+                history_limit: l.history_limit,
+            };
+            let t = st.reg.get_mut(&tid).expect("checked above");
+            let wi = if new_window {
+                let index = t.free_window_index();
+                let automatic_name = name.is_none();
+                let wname = name.unwrap_or_else(|| session::window_name(&pane.command.program));
+                t.insert_window(session::Window {
+                    id: wid.clone(),
+                    index,
+                    name: wname,
+                    automatic_name,
+                    panes: Vec::new(),
+                    active_pane: 0,
+                })
+            } else {
+                t.window_pos(&wid).expect("checked above")
+            };
+            let pi = t.push_pane(wi, pane);
+            let (window_changed, pane_changed) = if select {
+                t.select_pane(wi, pi)
+            } else {
+                (false, false)
+            };
+            st.out.insert(
+                pane_id.clone(),
+                PaneOut {
+                    screen: Screen::new(
+                        l.size.0,
+                        l.size.1,
+                        Limits {
+                            lines: l.history_limit,
+                            bytes: screen::HISTORY_BYTES,
+                        },
+                    ),
+                    terminal_id: tid.clone(),
+                    seq: 0,
+                    input_bytes: 0,
+                },
+            );
+            st.rt.insert(pane_id.clone(), Arc::clone(&rt));
+            let t = st.reg.get(&tid).expect("checked above");
+            let w = &t.windows[wi];
+            let window = st.window_json(t, w);
+            let pane = session::pane_json(t, &w.panes[pi], &st.live(&w.panes[pi]));
+            if new_window {
+                let data = json!({"terminal_id": tid, "window": window});
+                st.notify("terminals", "window.created", &data);
+            } else {
+                let data = json!({"terminal_id": tid, "window_id": wid, "pane": pane});
+                st.notify("terminals", "pane.created", &data);
+            }
+            st.selected(&tid, window_changed, pane_changed);
+            json!({
+                "terminal_id": tid,
+                "window_id": wid,
+                "pane_id": pane_id,
+                "selected": select,
+                "window": window,
+            })
+        };
+        self.run_pane(&rt, output);
+        let _ = self.events.send(Ev::Changed);
+        Ok(result)
+    }
+
+    /// `window.list` (a Terminal's windows) and `pane.list` (a Terminal's or one window's panes,
+    /// in their windows): `{terminal_id, name, active_window, windows}`.
+    fn topology(&self, p: &Value, panes: bool) -> Result<Value, IpcError> {
+        let target = target(p)?;
+        let st = self.lock();
+        let r = st.reg.resolve(target)?;
+        let only = match (panes, r.level) {
+            (_, Level::Terminal) => None,
+            (true, Level::Window) => Some(r.window),
+            (false, _) => {
+                return Err(wrong_level("window.list", "a Terminal (its name or t- id)"));
+            }
+            (true, Level::Pane) => {
+                return Err(wrong_level(
+                    "pane.list",
+                    "a Terminal or a window (terminal:window or a w- id)",
+                ));
+            }
+        };
+        let t = &st.reg.terminals[r.terminal];
+        let windows: Vec<Value> = t
+            .windows
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| only.is_none_or(|o| o == *i))
+            .map(|(_, w)| st.window_json(t, w))
+            .collect();
+        Ok(json!({
+            "terminal_id": t.id,
+            "name": t.name.display,
+            "state": t.state.as_str(),
+            "active_window": t.windows[t.active_window].id,
+            "windows": windows,
+        }))
+    }
+
+    /// `window.select` and `pane.select` (tmux `select-window`, `select-pane`): the Terminal's
+    /// active window, or a window's active pane and that window, for every client. Selecting
+    /// changes no process. Allowed in any state (a stopped Terminal keeps its selection).
+    fn select(&self, p: &Value, pane: bool) -> Result<Value, IpcError> {
+        let target = target(p)?;
+        let dry_run = flag(p, "dry_run")?;
+        let mut st = self.lock();
+        let r = st.reg.resolve(target)?;
+        match (pane, r.level) {
+            (false, Level::Window) | (true, Level::Pane) => {}
+            (false, _) => {
+                return Err(wrong_level(
+                    "window.select",
+                    "a window (terminal:window or a w- id)",
+                ));
+            }
+            (true, _) => {
+                return Err(wrong_level(
+                    "pane.select",
+                    "a pane (terminal:window.pane or a p- id)",
+                ));
+            }
+        }
+        let t = &mut st.reg.terminals[r.terminal];
+        if dry_run {
+            let w = &t.windows[r.window];
+            let pi = if pane { r.pane } else { w.active_pane };
+            return Ok(json!({"dry_run": true, "would_select": {
+                "terminal_id": t.id, "window_id": w.id, "pane_id": w.panes[pi].id,
+                "changed": t.active_window != r.window || w.active_pane != pi,
+            }}));
+        }
+        let (wc, pc) = if pane {
+            t.select_pane(r.window, r.pane)
+        } else {
+            (t.select_window(r.window), false)
+        };
+        let w = &t.windows[r.window];
+        let out = json!({
+            "terminal_id": t.id,
+            "window_id": w.id,
+            "pane_id": w.panes[w.active_pane].id,
+            "changed": wc || pc,
+        });
+        let tid = t.id.clone();
+        st.selected(&tid, wc, pc);
+        Ok(out)
+    }
+
+    /// `window.rename` (tmux `rename-window`): a window's name; it stops following its program.
+    fn window_rename(&self, p: &Value) -> Result<Value, IpcError> {
+        let target = target(p)?;
+        let raw = optional_string(p, "name")?
+            .ok_or_else(|| IpcError::param("name", "name is required"))?;
+        let name = session::parse_window_name(raw)?;
+        let dry_run = flag(p, "dry_run")?;
+        let mut st = self.lock();
+        let r = st.reg.resolve(target)?;
+        if r.level != Level::Window {
+            return Err(wrong_level(
+                "window.rename",
+                "a window (terminal:window or a w- id)",
+            ));
+        }
+        let t = &mut st.reg.terminals[r.terminal];
+        let tid = t.id.clone();
+        let w = &mut t.windows[r.window];
+        let (wid, previous) = (w.id.clone(), w.name.clone());
+        if dry_run {
+            return Ok(json!({"dry_run": true, "would_rename": {
+                "terminal_id": tid, "window_id": wid, "from": previous, "to": name,
+            }}));
+        }
+        let changed = previous != name || w.automatic_name;
+        w.name.clone_from(&name);
+        w.automatic_name = false;
+        if changed {
+            let data = json!({
+                "terminal_id": tid, "window_id": wid, "name": name, "previous_name": previous,
+            });
+            st.notify("terminals", "window.renamed", &data);
+        }
+        Ok(json!({
+            "terminal_id": tid, "window_id": wid, "name": name, "previous_name": previous,
+            "changed": changed,
+        }))
+    }
+
+    /// `window.kill` and `pane.kill` (tmux `kill-window`, `kill-pane`): end the processes of one
+    /// window's panes, or of one pane, at once, and take them out of the Terminal. Only that
+    /// target's jobs are terminated; every other pane keeps running. A busy pane (more than an
+    /// idle shell) needs `force`, as for `terminal.kill`. The last running window or pane of a
+    /// Terminal is refused (`invalid_state`): ending it would end the Terminal, which only
+    /// `terminal.kill` does.
+    fn close(&self, p: &Value, window: bool) -> Result<Value, IpcError> {
+        let method = if window { "window.kill" } else { "pane.kill" };
+        let target = target(p)?;
+        let force = flag(p, "force")?;
+        let dry_run = flag(p, "dry_run")?;
+        let (rts, tid, wid) = {
+            let st = self.lock();
+            let r = st.reg.resolve(target)?;
+            match (window, r.level) {
+                (true, Level::Window) | (false, Level::Pane) => {}
+                (true, _) => {
+                    return Err(wrong_level(
+                        method,
+                        "a window (terminal:window or a w- id); `terminal.kill` ends a Terminal",
+                    ));
+                }
+                (false, _) => {
+                    return Err(wrong_level(
+                        method,
+                        "a pane (terminal:window.pane or a p- id); `terminal.kill` ends a Terminal",
+                    ));
+                }
+            }
+            let t = &st.reg.terminals[r.terminal];
+            require_running(t)?;
+            let w = &t.windows[r.window];
+            let scope: Vec<&session::Pane> = if window {
+                w.panes.iter().collect()
+            } else {
+                vec![&w.panes[r.pane]]
+            };
+            let ids: Vec<&str> = scope.iter().map(|p| p.id.as_str()).collect();
+            if st.others_running(t, &ids) == 0 {
+                let what = if window { "window" } else { "pane" };
+                return Err(IpcError::new(
+                    ErrorCode::InvalidState,
+                    format!(
+                        "this is the last running {what} of Terminal `{}`; ending it would end the Terminal",
+                        t.name.display
+                    ),
+                )
+                .details(json!({
+                    "terminal_id": t.id, "state": t.state.as_str(),
+                    "reason": if window { "last_window" } else { "last_pane" },
+                    "hint": format!("to end the whole Terminal use `subak kill {}`", t.name.display),
+                })));
+            }
+            let panes: Vec<Value> = scope
+                .iter()
+                .map(|p| {
+                    let l = st.live(p);
+                    json!({
+                        "pane_id": p.id, "index": p.index, "pid": p.pid.filter(|_| l.running),
+                        "program": redact::program(&p.command.program),
+                        "processes": l.processes,
+                        "busy": l.running && session::busy(&p.command.program, l.processes),
+                    })
+                })
+                .collect();
+            let busy = panes.iter().any(|p| p["busy"] == true);
+            let processes: u64 = panes.iter().filter_map(|p| p["processes"].as_u64()).sum();
+            let plan = json!({
+                "terminal_id": t.id, "name": t.name.display, "window_id": w.id,
+                "window_index": w.index, "panes": panes, "processes": processes, "busy": busy,
+                "removes_window": window || w.panes.len() == 1,
+            });
+            if busy && !force {
+                return Err(IpcError::new(
+                    ErrorCode::Busy,
+                    format!(
+                        "the {} runs more than an idle shell ({processes} process(es)); set force to end it",
+                        if window { "window" } else { "pane" }
+                    ),
+                )
+                .details(plan));
+            }
+            if dry_run {
+                return Ok(json!({"dry_run": true, "would_kill": plan}));
+            }
+            // Claimed here, under the lock that decided "not the last one": a pane that is
+            // already ending (its own exit) is left to whoever ends it.
+            let rts: Vec<Arc<PaneRt>> = ids
+                .iter()
+                .filter_map(|id| st.rt.get(*id).cloned())
+                .filter(|r| !r.claimed.swap(true, Ordering::SeqCst))
+                .collect();
+            (rts, t.id.clone(), w.id.clone())
+        };
+        let affected: Vec<Value> = thread::scope(|s| {
+            let handles: Vec<_> = rts
+                .iter()
+                .map(|rt| s.spawn(move || self.end_alone(rt, true, "killed")))
+                .collect();
+            handles.into_iter().filter_map(|h| h.join().ok()).collect()
+        });
+        let st = self.lock();
+        let t = st.reg.get(&tid);
+        Ok(json!({
+            "terminal_id": tid,
+            "window_id": wid,
+            "affected": affected,
+            "window_removed": t.is_none_or(|t| t.window_pos(&wid).is_none()),
+            "terminal": t.map(|t| st.terminal_json(t)),
+        }))
+    }
+
     /// `terminal.stop`, `terminal.kill` and `terminal.remove` (docs/SESSION_MODEL.md §4).
     fn end_request(&self, p: &Value, op: Op) -> Result<Value, IpcError> {
         let target = target(p)?;
         let force = flag(p, "force")?;
         let dry_run = flag(p, "dry_run")?;
-        let (tid, pane_id, name) = {
+        let (tid, name) = {
             let mut st = self.lock();
             let i = st.reg.resolve_terminal(target)?;
             let t = &st.reg.terminals[i];
             let pane = t.active_pane();
-            let live = st.live(pane);
+            // Step 21: every pane of every window counts; busy when any pane is.
+            let lives: Vec<(&session::Pane, session::Live)> =
+                t.panes().map(|p| (p, st.live(p))).collect();
+            let processes: u32 = lives.iter().map(|(_, l)| l.processes).sum();
             let busy = t.state == session::State::Running
-                && session::busy(&pane.command.program, live.processes);
+                && lives
+                    .iter()
+                    .any(|(p, l)| l.running && session::busy(&p.command.program, l.processes));
             let plan = json!({
                 "terminal_id": t.id, "name": t.name.display, "state": t.state.as_str(),
                 "pane_id": pane.id, "pid": pane.pid, "program": redact::program(&pane.command.program),
-                "processes": live.processes, "busy": busy,
+                "processes": processes, "busy": busy,
                 "ends_processes": t.state.is_live() && !(op == Op::Remove && !force),
                 "removes_terminal": op != Op::Stop,
             });
-            let (tid, pane_id, name, state) = (
-                t.id.clone(),
-                pane.id.clone(),
-                t.name.display.clone(),
-                t.state,
-            );
+            let (tid, name, state) = (t.id.clone(), t.name.display.clone(), t.state);
             match state {
                 session::State::Starting => {
                     return Err(IpcError::new(
@@ -2616,8 +3402,7 @@ impl Host {
                     return Err(IpcError::new(
                         ErrorCode::Busy,
                         format!(
-                            "Terminal `{name}` runs more than an idle shell ({} process(es) in its job); set force to end them",
-                            live.processes
+                            "Terminal `{name}` runs more than an idle shell ({processes} process(es) in its panes' jobs); set force to end them"
                         ),
                     )
                     .details(plan));
@@ -2649,16 +3434,16 @@ impl Host {
                     "terminal_id": tid, "name": name,
                 }));
             }
-            (tid, pane_id, name)
+            (tid, name)
         };
-        let report = match op {
-            Op::Stop => self.end_pane(&pane_id, EndCause::Stop, false),
-            Op::Kill | Op::Remove => self.end_pane(&pane_id, EndCause::Kill, true),
+        let reports = match op {
+            Op::Stop => self.end_terminal(&tid, EndCause::Stop, false),
+            Op::Kill | Op::Remove => self.end_terminal(&tid, EndCause::Kill, true),
         };
         let st = self.lock();
         let after = st.reg.get(&tid);
         Ok(json!({
-            "affected": if report.is_null() { vec![] } else { vec![report] },
+            "affected": reports,
             "terminal": after.map(|t| st.terminal_json(t)),
             "removed": after.is_none(),
             "terminal_id": tid,

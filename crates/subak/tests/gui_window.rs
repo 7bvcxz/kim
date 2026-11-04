@@ -413,7 +413,7 @@ fn closing_or_killing_the_window_never_ends_the_host_or_the_pane() {
     let prefs: Value =
         serde_json::from_slice(&std::fs::read(appdata.join("mouv/subak/gui.json")).unwrap())
             .unwrap();
-    validate("subak-gui-v1", &prefs);
+    validate("subak-gui-v2", &prefs);
     assert_eq!(prefs["last_terminal"]["id"], tid.as_str());
     // 2. A crash: TerminateProcess on the window's own process.
     let mut gui = Gui::start(&ep, None, &appdata);
@@ -762,8 +762,17 @@ fn dpi_resize_minimize_zoom_and_preferences() {
     assert_eq!(gui.close(), 0);
     let path = appdata.join("mouv").join("subak").join("gui.json");
     let prefs: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    validate("subak-gui-v1", &prefs);
-    assert_eq!(prefs["font_size"], 14.0);
+    validate("subak-gui-v2", &prefs);
+    // Step 20: the text size is a setting of config.toml (an in-place line edit), not gui.json.
+    assert!(prefs.get("font_size").is_none(), "{prefs}");
+    let settings = std::fs::read_to_string(appdata.join("mouv/subak/config.toml")).unwrap();
+    assert!(
+        settings.contains(
+            "font_size = 14
+"
+        ),
+        "{settings}"
+    );
     assert_eq!(prefs["window"]["dpi"], 96);
     assert_eq!(prefs["window"]["maximized"], false);
     assert_eq!(prefs["last_terminal"]["name"], "dpi");
@@ -789,12 +798,13 @@ fn dpi_resize_minimize_zoom_and_preferences() {
     assert_eq!(gui.close(), 0);
     let after: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(after["added_by_a_later_version"], json!({"keep": true}));
-    // An invalid file: defaults, a notice, and the file is left as it is.
+    // An invalid file: defaults, a notice, and the file is left as it is. (The text size lives
+    // in config.toml since Step 20, so it stays.)
     std::fs::write(&path, b"{ not json").unwrap();
     let mut gui = Gui::start(&ep, None, &appdata);
     gui.state("attached");
     let d = gui.dump();
-    assert_eq!(d["font_size"], 13.0);
+    assert_eq!(d["font_size"], 14.0);
     assert!(
         d["notice"].as_str().unwrap().contains("not a JSON object"),
         "{d}"
@@ -824,6 +834,11 @@ fn rendered_frames_of_the_window_content() {
     let gui = Gui::start(&ep, None, &sandbox("shots-prefs"));
     gui.state("empty");
     let shot = |name: &str| {
+        // Step 20: a transition (the tab marker, a banner) is drawn as it runs; the checks below
+        // are of the settled frame.
+        gui.until("no transition runs", |d| {
+            d["motion"]["active"].as_array().is_some_and(Vec::is_empty)
+        });
         let path = dir.join(format!("{name}.bmp"));
         let r = gui.cmd(&json!({"cmd": "shot", "path": path}));
         assert_eq!(r["ok"], true, "{r}");

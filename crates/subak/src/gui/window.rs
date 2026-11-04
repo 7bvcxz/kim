@@ -3542,7 +3542,9 @@ impl App {
         } else {
             None
         };
-        if !self.leave_tracked {
+        // The off-screen test window is never under the real pointer, so Windows would report a
+        // leave at once; its tests post WM_MOUSELEAVE themselves.
+        if !self.leave_tracked && !self.opts.test {
             let mut t = TRACKMOUSEEVENT {
                 cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
                 dwFlags: TME_LEAVE,

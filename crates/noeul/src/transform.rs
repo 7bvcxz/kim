@@ -43,7 +43,7 @@ impl Orientation {
 
     /// `rotation` clockwise in degrees (0, 90, 180 or 270) after mirroring; `None` otherwise.
     pub fn new(rotation: u32, mirrored: bool) -> Option<Orientation> {
-        (rotation % 90 == 0 && rotation < 360).then(|| Orientation {
+        (rotation.is_multiple_of(90) && rotation < 360).then(|| Orientation {
             quarter: u8::try_from(rotation / 90).unwrap_or(0),
             mirrored,
         })
@@ -708,7 +708,7 @@ mod tests {
         assert_eq!(at(&v, 4, 0), at(&f, 4, 2));
         for o in ALL {
             let shown = o.apply(&f).unwrap_or_else(|| f.crop(f.rect()).unwrap());
-            let mut seen = vec![false; 15];
+            let mut seen = [false; 15];
             for y in 0..3 {
                 for x in 0..5 {
                     let (dx, dy) = o.map(x, y, 5, 3);

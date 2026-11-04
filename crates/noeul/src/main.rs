@@ -229,7 +229,7 @@ enum PinCommand {
     Reopen(DryRun),
     /// Change pins precisely: place, zoom, opacity, rotation and flips, thumbnail,
     /// click-through, group (every change can be undone the same way)
-    Set(PinSetArgs),
+    Set(Box<PinSetArgs>),
     /// Pin groups: list them, or switch to one (its pins show, the others hide)
     #[command(subcommand)]
     Group(PinGroupCommand),

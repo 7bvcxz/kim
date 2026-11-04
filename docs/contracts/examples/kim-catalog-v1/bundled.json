@@ -1,7 +1,7 @@
 {
   "schema": "kim.catalog",
   "schema_version": 1,
-  "catalog_version": 4,
+  "catalog_version": 5,
   "generated_at": "2026-11-04T00:00:00Z",
   "expires_at": "2027-05-04T00:00:00Z",
   "publisher": "mouv",
@@ -125,6 +125,18 @@
             "keys": [
               "Ctrl+Comma"
             ]
+          },
+          {
+            "action": "pins.clickable",
+            "title": "Make every pin clickable again (after click-through)",
+            "scope": "global",
+            "keys": []
+          },
+          {
+            "action": "pins.toggle-hidden",
+            "title": "Hide all pins, or show them again",
+            "scope": "global",
+            "keys": []
           }
         ]
       },

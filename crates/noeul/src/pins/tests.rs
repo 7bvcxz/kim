@@ -579,7 +579,7 @@ fn every_transform_is_reversible_and_touches_only_its_pin() {
     assert_eq!(pins.thumbnails(), 1);
     assert!(pins.set_thumbnail(a, false).unwrap());
     let mut after = pins.list(&d);
-    let mut was = before.clone();
+    let mut was = before;
     for l in [&mut after, &mut was] {
         l["pins"][0]["created_at"] = Value::Null;
     }

@@ -3079,7 +3079,7 @@ impl SetChange {
             }
         };
         let rotation = num("rotation", 0, 270, "`rotation` must be 0, 90, 180 or 270")?;
-        if rotation.is_some_and(|r| r % 90 != 0) {
+        if rotation.is_some_and(|r| !r.is_multiple_of(90)) {
             return Err(bad("`rotation` must be 0, 90, 180 or 270"));
         }
         let at = match p.get("at") {

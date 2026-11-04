@@ -1,18 +1,20 @@
-//! `subak-gui`: the Subak window (Step 16, ADR 0039, docs/SUBAK_GUI.md).
+//! `subak-gui`: the Subak window (Steps 16–17, ADR 0039, ADR 0042, docs/SUBAK_GUI.md).
 //!
 //! A pure client of the per-user Host (ADR 0009): it connects like the CLI (identity checks,
-//! IPC v1, starting a Host on demand — one that starts no shell), attaches interactively to one
-//! existing Terminal's pane and renders it with the `subak-term` view and CPU renderer in a plain
-//! Win32 window (ADR 0036: no GPU, no GUI framework). Closing the window, or this process ending
-//! in any way, is a detach: the Host and its Terminals keep running (`SUBAK-FR-003`,
-//! `SUBAK-FR-015`).
+//! IPC v1, starting a Host on demand — one that starts no shell), shows the Host's Terminals as
+//! tabs (Step 17), attaches interactively to the active tab's pane and renders it with the
+//! `subak-term` view and CPU renderer in a plain Win32 window (ADR 0036: no GPU, no GUI
+//! framework). Closing the window, a tab's `×`, or this process ending in any way, is a detach:
+//! the Host and its Terminals keep running (`SUBAK-FR-003`, `SUBAK-FR-015`). Only the explicit
+//! `Ctrl+T` creates and `Ctrl+W` ends a Terminal (confirmed when it is busy, `SUBAK-FR-014`).
 //!
 //! | Module | Role | Platform |
 //! | --- | --- | --- |
 //! | [`model`] | the Host conversation as a state machine: what to attach, phases, reconnects | portable, unit-tested |
-//! | [`screens`] | loading, empty, chooser and error screens; banners | portable, unit-tested |
+//! | [`screens`] | loading, empty, stored and error screens; banners; the busy confirmation | portable, unit-tested |
+//! | [`tabs`] | the tab bar: layout, scrolling, clickable spans, the rename field | portable, unit-tested |
 //! | [`layout`] | DPI scale, grid ↔ client area, saved placements on monitors | portable, unit-tested |
-//! | [`keys`] | the window's shortcuts (hotkey-contract syntax) and key mapping | portable, unit-tested |
+//! | [`keys`] | the window's shortcuts (Subak's hotkey manifest + `hotkeys.json`) and key mapping | portable, unit-tested |
 //! | [`prefs`] | `%APPDATA%\mouv\subak\gui.json` | portable, unit-tested |
 //! | `net` | the connection: connect or start, read frames, write frames | Windows |
 //! | `window` | the Win32 window: paint, keyboard, IME, mouse, clipboard, DPI, test hooks | Windows |
@@ -31,6 +33,8 @@ mod model;
 mod prefs;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod screens;
+#[cfg_attr(not(windows), allow(dead_code))]
+mod tabs;
 
 #[cfg(windows)]
 mod net;
@@ -41,25 +45,40 @@ mod window;
 use std::process::ExitCode;
 
 const HELP: &str = "\
-subak-gui — the Subak window (pre-alpha, Step 16)
+subak-gui — the Subak window (pre-alpha, Steps 16-17)
 
 USAGE:
-    subak-gui [<terminal>] [--endpoint <name>]
+    subak-gui [<terminal>] [--endpoint <name>] [--no-hotkeys]
     subak-gui --help | --version
 
-Shows one Subak Terminal in a native window. <terminal> is a Terminal name (case is ignored) or
-id; without it the window reopens the Terminal it showed last, or the only running one, or lets
-you choose. A Host is started if none runs (it starts no shell); the window never creates,
-stops or kills a Terminal. Closing the window, or this program ending in any way, only detaches:
-every Terminal keeps running in the Host (`subak ls`).
+Shows the Host's Terminals as tabs in a native window. <terminal> is a Terminal name (case is
+ignored) or id to open first; without it the window reopens the Terminal it showed last, or the
+first running one. A Host is started if none runs (it starts no shell); opening the window never
+creates or ends a Terminal. Closing the window, a tab's x, or this program ending in any way,
+only detaches: every Terminal keeps running in the Host (`subak ls`).
 
-Keys go to the program, except: Ctrl+Shift+C / Ctrl+Insert copy, Ctrl+Shift+V / Shift+Insert
-paste, Ctrl+Plus / Ctrl+Minus / Ctrl+0 text size, Ctrl+Shift+PageUp/PageDown/Up/Down/Home/End
-scroll. The mouse selects (double-click: word, triple-click: line, Alt: block); right-click
-copies a selection or pastes. Preferences: %APPDATA%\\mouv\\subak\\gui.json (docs/SUBAK_GUI.md).
+TABS (docs/SUBAK_GUI.md §2):
+    Ctrl+T          New Terminal (the Host's default shell, in your profile folder).
+    Ctrl+W          Close Terminal: ends it. When it runs more than an idle shell the window
+                    asks first (the safe answer, Cancel, is the default). On a stopped Terminal
+                    it removes the record; on one that already ended it closes the tab.
+    Ctrl+Tab / Ctrl+Shift+Tab   Next / previous tab.
+    Ctrl+Shift+R    Rename the Terminal (Enter saves, Esc cancels).
+    x on a tab, middle click   Hide the tab: a detach; the Terminal keeps running.
+    Right click, the Menu key   The tab menu: rename, hide, move, close, new, hidden tabs.
+    Tabs follow other clients: `subak new`, `rename`, `stop` and `kill` show up at once.
+
+Other keys go to the program, except: Ctrl+Shift+C / Ctrl+Insert copy, Ctrl+Shift+V /
+Shift+Insert paste, Ctrl+Plus / Ctrl+Minus / Ctrl+0 text size, Ctrl+Shift+PageUp/PageDown/Up/
+Down/Home/End scroll. Every shortcut can be changed or turned off with `subak hotkeys`
+(%APPDATA%\\mouv\\subak\\hotkeys.json, re-read when the window gets focus); Ctrl+W and Ctrl+T
+reach the program only once you disable or rebind them (the Ctrl+B pass-through is Step 23).
+The mouse selects (double-click: word, triple-click: line, Alt: block); right-click copies a
+selection or pastes. Preferences: %APPDATA%\\mouv\\subak\\gui.json (docs/SUBAK_GUI.md).
 
 OPTIONS:
     --endpoint <name>   Use this Host endpoint instead of your default one (as `subak --endpoint`).
+    --no-hotkeys        Start with every shortcut off (also KIM_NO_HOTKEYS); keys go to programs.
     -h, --help          This text.
     -V, --version       The version.
 ";
@@ -71,6 +90,8 @@ pub struct Options {
     pub endpoint: Option<String>,
     /// The Terminal to show.
     pub target: Option<String>,
+    /// `--no-hotkeys`: every shortcut off for this run (HOTKEY_CONTRACT §8.3 4).
+    pub no_hotkeys: bool,
     /// Test hooks (debug builds, or the `test-hooks` feature): the window is placed off every
     /// monitor, never activated, without a taskbar button, reports its state as JSON lines on
     /// stdout, takes WM_COPYDATA test commands, never touches the system clipboard, and closes
@@ -108,6 +129,7 @@ fn parse(args: &[String]) -> Result<Parsed, String> {
                     .ok_or("--endpoint needs a name")?;
                 o.endpoint = Some(ep.clone());
             }
+            "--no-hotkeys" => o.no_hotkeys = true,
             "--test-offscreen" if TEST_HOOKS => o.test = true,
             "--test-max-seconds" if TEST_HOOKS => {
                 i += 1;
@@ -196,7 +218,11 @@ mod tests {
         };
         assert_eq!(o.target.as_deref(), Some("build"));
         assert_eq!(o.endpoint.as_deref(), Some("subak-x"));
-        assert!(!o.test);
+        assert!(!o.test && !o.no_hotkeys);
+        let Ok(Parsed::Run(o)) = p(&["--no-hotkeys"]) else {
+            panic!()
+        };
+        assert!(o.no_hotkeys);
         assert_eq!(p(&["--help"]), Ok(Parsed::Help));
         assert_eq!(p(&["-V"]), Ok(Parsed::Version));
         assert!(p(&["a", "b"]).unwrap_err().contains("one Terminal"));
@@ -205,5 +231,6 @@ mod tests {
         // The test hooks exist in debug builds (this test's build) only.
         assert_eq!(p(&["--test-offscreen"]).is_ok(), TEST_HOOKS);
         assert!(HELP.contains("only detaches"));
+        assert!(HELP.contains("Ctrl+Tab") && HELP.contains("asks first"));
     }
 }

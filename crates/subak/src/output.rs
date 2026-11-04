@@ -32,11 +32,19 @@ pub enum Code {
     TerminalsRunning,
     ConfirmationRequired,
     Cancelled,
+    // The `hotkeys` command group (docs/HOTKEY_CONTRACT.md §10.4, Step 17).
+    HotkeyInvalid,
+    HotkeyReserved,
+    ActionNotFound,
+    HotkeysInvalid,
+    HotkeyUnsupported,
+    HotkeysFromNewerVersion,
+    HotkeyConflict,
 }
 
 impl Code {
     #[cfg(test)]
-    pub const ALL: [Self; 23] = [
+    pub const ALL: [Self; 30] = [
         Self::Io,
         Self::Internal,
         Self::PermissionDenied,
@@ -60,6 +68,13 @@ impl Code {
         Self::TerminalsRunning,
         Self::ConfirmationRequired,
         Self::Cancelled,
+        Self::HotkeyInvalid,
+        Self::HotkeyReserved,
+        Self::ActionNotFound,
+        Self::HotkeysInvalid,
+        Self::HotkeyUnsupported,
+        Self::HotkeysFromNewerVersion,
+        Self::HotkeyConflict,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -87,6 +102,13 @@ impl Code {
             Self::TerminalsRunning => "terminals_running",
             Self::ConfirmationRequired => "confirmation_required",
             Self::Cancelled => "cancelled",
+            Self::HotkeyInvalid => "hotkey_invalid",
+            Self::HotkeyReserved => "hotkey_reserved",
+            Self::ActionNotFound => "action_not_found",
+            Self::HotkeysInvalid => "hotkeys_invalid",
+            Self::HotkeyUnsupported => "hotkey_unsupported",
+            Self::HotkeysFromNewerVersion => "hotkeys_from_newer_version",
+            Self::HotkeyConflict => "hotkey_conflict",
         }
     }
 
@@ -94,16 +116,25 @@ impl Code {
     pub fn exit_code(self) -> u8 {
         match self {
             Self::Io | Self::Internal | Self::PermissionDenied | Self::SpawnFailed => 1,
-            Self::Usage | Self::InvalidName | Self::AmbiguousTarget => 2,
-            Self::HostNotRunning | Self::TargetNotFound => 3,
-            Self::ProtocolError | Self::HostIdentityMismatch => 4,
-            Self::UnsupportedPlatform | Self::HostTooOld | Self::HostTooNew => 5,
+            Self::Usage
+            | Self::InvalidName
+            | Self::AmbiguousTarget
+            | Self::HotkeyInvalid
+            | Self::HotkeyReserved => 2,
+            Self::HostNotRunning | Self::TargetNotFound | Self::ActionNotFound => 3,
+            Self::ProtocolError | Self::HostIdentityMismatch | Self::HotkeysInvalid => 4,
+            Self::UnsupportedPlatform
+            | Self::HostTooOld
+            | Self::HostTooNew
+            | Self::HotkeyUnsupported
+            | Self::HotkeysFromNewerVersion => 5,
             Self::HostDisconnected | Self::HostUnresponsive | Self::Timeout => 6,
             Self::HostAlreadyRunning
             | Self::NameConflict
             | Self::InvalidState
             | Self::TerminalsRunning
-            | Self::ConfirmationRequired => 7,
+            | Self::ConfirmationRequired
+            | Self::HotkeyConflict => 7,
             Self::Cancelled => 8,
         }
     }

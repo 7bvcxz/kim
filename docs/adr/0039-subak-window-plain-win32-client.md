@@ -138,6 +138,15 @@ to build on plain Win32 or justify the GPU stack.
 - **Driving `subak attach` as a child process** (the Step 15 harness): an extra process per
   window, the CLI's detach keys intercepting `Ctrl+B d`, no Terminal list or events. Rejected.
 
+## Notes
+
+- 2026-11-04 (Step 17): [ADR 0042](0042-subak-window-tabs-and-safe-close.md) extends this window
+  with tabs. Decision 3's "never creates, stops, kills or removes" now holds for opening and
+  closing the window; `Ctrl+T` creates and `Ctrl+W` ends or removes the shown Terminal (by id,
+  asking when busy). The chooser of decision 3 is replaced by the tabs; decision 7's fixed
+  shortcuts are Subak's hotkey-contract actions (shipped manifest + `hotkeys.json`). The tab bar
+  is drawn in the client area; the title-bar integration stays Step 20 work.
+
 ## Requirements
 
 `SUBAK-FR-003`, `SUBAK-FR-015`, `SUBAK-FR-031`, `SUBAK-FR-037`, `SUBAK-FR-046`,

@@ -27,7 +27,13 @@
 //!   it back (default memory: the last pin, NOEUL-FR-065); destroying frees it for good. Closing the
 //!   capture overlay never closes pins. Quitting releases every picture. Nothing is written to
 //!   disk, so pins do not survive a restart (NOEUL-SEC-005; opt-in backup is NOEUL-FR-066, N4).
+//! - **Annotations** (Step 56). A pin keeps its picture unchanged and its annotations as vector
+//!   objects in image pixels ([`crate::annotation`]); its window shows them flattened, and copy and
+//!   save output them flattened ([`Pins::rendered`]). Editing a pin ([`Pins::set_editing`],
+//!   [`Pins::commit_edit`]) replaces the objects and may crop the picture; a cancelled edit changes
+//!   nothing. Closing and reopening keeps them.
 
+use crate::annotation::{self, Object};
 use crate::capture::Desktop;
 use crate::frame::{Frame, Rect};
 use crate::util::rfc3339;
@@ -134,6 +140,8 @@ pub struct NewPin {
     pub placement: Placement,
     pub focus: bool,
     pub guard: Option<Duration>,
+    /// Annotations in image pixels (`(0, 0)` is the picture's top-left), kept editable (Step 56).
+    pub annotations: Vec<Object>,
 }
 
 /// What [`Pins::info`] reports about one open pin.
@@ -147,6 +155,10 @@ pub struct PinInfo {
     pub zoom: u32,
     pub visible: bool,
     pub source: Source,
+    /// How many annotations it carries (Step 56).
+    pub annotations: usize,
+    /// Whether its annotations are being edited (its window is hidden meanwhile).
+    pub editing: bool,
 }
 
 struct Pin {
@@ -157,6 +169,9 @@ struct Pin {
     window: Box<dyn PinWindow>,
     source: Source,
     created: SystemTime,
+    /// In image pixels (Step 56).
+    annotations: Vec<Object>,
+    editing: bool,
 }
 
 impl Pin {
@@ -176,6 +191,16 @@ impl std::fmt::Debug for Pin {
     }
 }
 
+/// The picture with its annotations drawn on it, when it has any (what the window shows and copy
+/// and save output; the picture itself never changes).
+pub fn render(frame: &Frame, annotations: &[Object]) -> Option<Frame> {
+    if annotations.is_empty() {
+        return None;
+    }
+    let r = frame.rect();
+    annotation::flatten(frame, &annotation::translate_all(annotations, r.x, r.y), r)
+}
+
 fn display_rect(frame: &Frame, zoom: u32) -> Rect {
     let r = frame.rect();
     let (w, h) = zoom::size(r.width, r.height, zoom);
@@ -189,6 +214,7 @@ struct Closed {
     zoom: u32,
     source: Source,
     created: SystemTime,
+    annotations: Vec<Object>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -264,6 +290,7 @@ impl Pins {
             placement,
             focus,
             guard,
+            annotations,
         } = new;
         let (frame, zoom) = match placement {
             Placement::Exact => (frame, zoom::FULL),
@@ -278,7 +305,8 @@ impl Pins {
             focus,
             guard,
         };
-        match windows.create(id, &frame, &spec) {
+        let shown = render(&frame, &annotations);
+        match windows.create(id, shown.as_ref().unwrap_or(&frame), &spec) {
             Ok(window) => {
                 self.next += 1;
                 self.open.insert(
@@ -290,6 +318,8 @@ impl Pins {
                         window,
                         source,
                         created: SystemTime::now(),
+                        annotations,
+                        editing: false,
                     },
                 );
                 Ok(id)
@@ -338,6 +368,8 @@ impl Pins {
             zoom: p.zoom,
             visible: p.visible,
             source: p.source,
+            annotations: p.annotations.len(),
+            editing: p.editing,
         })
     }
 
@@ -349,6 +381,74 @@ impl Pins {
     /// The picture of an open pin at 100 % (what `pin.copy` and `pin.save` output, Step 51).
     pub fn picture(&self, id: PinId) -> Option<&Frame> {
         self.open.get(&id).map(|p| &p.frame)
+    }
+
+    /// The annotations of an open pin, in image pixels (Step 56).
+    pub fn annotations(&self, id: PinId) -> Option<&[Object]> {
+        self.open.get(&id).map(|p| p.annotations.as_slice())
+    }
+
+    /// The picture of an open pin with its annotations drawn on it, when it has any (copy and
+    /// save output this; [`Pins::picture`] otherwise).
+    pub fn rendered(&self, id: PinId) -> Option<Frame> {
+        self.open
+            .get(&id)
+            .and_then(|p| render(&p.frame, &p.annotations))
+    }
+
+    /// Hides a pin's window while its annotations are edited, and shows it again (if it was
+    /// shown) when the edit ends; nothing else changes.
+    pub fn set_editing(&mut self, id: PinId, editing: bool) -> Result<(), PinError> {
+        let p = self.open.get_mut(&id).ok_or(PinError::NotFound(id))?;
+        if p.editing != editing {
+            p.editing = editing;
+            if p.visible {
+                p.window.set_visible(!editing);
+            }
+        }
+        Ok(())
+    }
+
+    /// Commits an edit of a pin (Step 56): `objects` are the annotations in the editor's pixels
+    /// (the picture at 100 % at the pin's top-left corner), `keep` the part of the picture the
+    /// pin keeps (a crop; the whole picture when unchanged). A cropped pin shows the kept part
+    /// where it was shown, at its zoom. On a window error nothing changes.
+    pub fn commit_edit(
+        &mut self,
+        id: PinId,
+        objects: &[Object],
+        keep: Rect,
+    ) -> Result<(), PinError> {
+        let p = self.open.get_mut(&id).ok_or(PinError::NotFound(id))?;
+        let r = p.frame.rect();
+        let keep = crate::overlay::intersection(keep, r).unwrap_or(r);
+        let annotations = annotation::inside(
+            &annotation::translate_all(objects, -keep.x, -keep.y),
+            Rect::new(0, 0, keep.width, keep.height),
+        );
+        let cropped = if keep == r {
+            None
+        } else {
+            let at = |o: i32, d: i32| {
+                let v = i64::from(o) + i64::from(d) * i64::from(p.zoom) / 100;
+                i32::try_from(v).unwrap_or(o)
+            };
+            let (x, y) = (at(r.x, keep.x - r.x), at(r.y, keep.y - r.y));
+            match p.frame.crop(keep) {
+                Some(f) => Some(f.moved_to(x, y)),
+                None => return Err(PinError::Window("the crop is outside the picture".into())),
+            }
+        };
+        let frame = cropped.as_ref().unwrap_or(&p.frame);
+        let shown = render(frame, &annotations);
+        p.window
+            .present(shown.as_ref().unwrap_or(frame), display_rect(frame, p.zoom))
+            .map_err(PinError::Window)?;
+        if let Some(f) = cropped {
+            p.frame = f;
+        }
+        p.annotations = annotations;
+        Ok(())
     }
 
     /// The pin closed last (reopen memory), if any.
@@ -367,6 +467,7 @@ impl Pins {
             zoom: pin.zoom,
             source: pin.source,
             created: pin.created,
+            annotations: pin.annotations,
         });
         Ok(())
     }
@@ -386,7 +487,8 @@ impl Pins {
             focus,
             guard: None,
         };
-        match windows.create(c.id, &c.frame, &spec) {
+        let shown = render(&c.frame, &c.annotations);
+        match windows.create(c.id, shown.as_ref().unwrap_or(&c.frame), &spec) {
             Ok(window) => {
                 self.open.insert(
                     c.id,
@@ -397,6 +499,8 @@ impl Pins {
                         window,
                         source: c.source,
                         created: c.created,
+                        annotations: c.annotations,
+                        editing: false,
                     },
                 );
                 Ok(c.id)
@@ -442,8 +546,9 @@ impl Pins {
         }
         let r = p.frame.rect();
         let (x, y) = zoom::around((r.x, r.y), anchor, p.zoom, zoom);
+        let shown = render(&p.frame, &p.annotations);
         p.window
-            .present(&p.frame, Rect::new(x, y, w, h))
+            .present(shown.as_ref().unwrap_or(&p.frame), Rect::new(x, y, w, h))
             .map_err(PinError::Window)?;
         p.frame.set_origin(x, y);
         p.zoom = zoom;
@@ -526,8 +631,9 @@ impl Pins {
         if z == p.zoom {
             p.window.set_position(x, y);
         } else {
+            let shown = render(&p.frame, &p.annotations);
             p.window
-                .present(&p.frame, Rect::new(x, y, w, h))
+                .present(shown.as_ref().unwrap_or(&p.frame), Rect::new(x, y, w, h))
                 .map_err(PinError::Window)?;
             p.zoom = z;
         }
@@ -565,6 +671,8 @@ impl Pins {
                     "on_screen": known.then(|| on_screen(desktop, r)),
                     "source": p.source.as_str(),
                     "created_at": rfc3339(p.created),
+                    "annotations": p.annotations.len(),
+                    "editing": p.editing,
                 })
             }).collect::<Vec<_>>(),
             "reopenable": self.reopenable().map(|id| id.to_string()),
@@ -695,6 +803,7 @@ mod tests {
             placement: Placement::Exact,
             focus,
             guard: None,
+            annotations: Vec::new(),
         }
     }
 
@@ -908,6 +1017,7 @@ mod tests {
                     placement: Placement::At(1900, 1000),
                     focus: true,
                     guard: None,
+                    annotations: Vec::new(),
                 },
             )
             .unwrap();
@@ -933,6 +1043,7 @@ mod tests {
                     placement: Placement::At(-600, 5),
                     focus: false,
                     guard: None,
+                    annotations: Vec::new(),
                 },
             )
             .unwrap();
@@ -1033,5 +1144,98 @@ mod tests {
             "a tiny pin is whole"
         );
         assert!(!on_screen(&d, Rect::new(-5000, 0, 100, 100)));
+    }
+
+    /// Step 56: a pin keeps its picture and its annotations apart; its window shows them drawn
+    /// over a transparent picture without making it opaque; a commit crops where it was shown.
+    #[test]
+    fn annotations_over_a_transparent_picture_and_crop_commits() {
+        use crate::annotation::{Bounds, Object, PALETTE, Shape};
+        let ledger = Ledger::new();
+        let mut w = FakeWindows::default();
+        let d = desk();
+        let mut pins = Pins::new();
+        let red = PALETTE[0].1;
+        let outline = Object {
+            id: 1,
+            shape: Shape::Rectangle(Bounds::new(0.0, 0.0, 10.0, 10.0)),
+            color: red,
+            level: 0,
+            dpi: 96,
+        };
+        let frame = Frame::solid(&ledger, Rect::new(100, 100, 40, 30), [0, 0, 0, 0]).unwrap();
+        let mut new = exact(frame, Source::Clipboard, false);
+        new.annotations = vec![outline.clone()];
+        let id = pins.create(&mut w, &d, new).unwrap();
+        let px = |f: &Frame, x: i32, y: i32| {
+            let r = f.rect();
+            let i = (((y - r.y) as u32 * r.width + (x - r.x) as u32) * 4) as usize;
+            [
+                f.pixels()[i],
+                f.pixels()[i + 1],
+                f.pixels()[i + 2],
+                f.pixels()[i + 3],
+            ]
+        };
+        let shown = pins.rendered(id).unwrap();
+        assert_eq!(px(&shown, 100, 100), [red.b, red.g, red.r, 255]);
+        assert_eq!(
+            px(&shown, 105, 105),
+            [0, 0, 0, 0],
+            "transparent inside the outline"
+        );
+        assert_eq!(px(&shown, 130, 120), [0, 0, 0, 0]);
+        drop(shown);
+        assert!(
+            pins.picture(id).unwrap().pixels().iter().all(|b| *b == 0),
+            "unchanged"
+        );
+        assert_eq!(pins.info(id).unwrap().annotations, 1);
+        // Editing hides the window and shows it again; nothing else changes.
+        pins.set_editing(id, true).unwrap();
+        assert!(pins.info(id).unwrap().editing);
+        pins.set_editing(id, false).unwrap();
+        assert_eq!(w.log.borrow().visible.as_slice(), [(id, false), (id, true)]);
+        // Commit a crop that keeps x 105..140: the pin moves to where that part was shown.
+        let screen = annotation::translate_all(&[outline], 100, 100);
+        pins.commit_edit(id, &screen, Rect::new(105, 100, 35, 30))
+            .unwrap();
+        let info = pins.info(id).unwrap();
+        assert_eq!(
+            (info.rect, info.image),
+            (Rect::new(105, 100, 35, 30), (35, 30))
+        );
+        assert_eq!(
+            pins.annotations(id).unwrap().len(),
+            1,
+            "still shows in the kept part"
+        );
+        assert_eq!(
+            w.log.borrow().presented.last(),
+            Some(&(id, Rect::new(105, 100, 35, 30)))
+        );
+        // At 200 % the kept part goes where it was shown at that zoom.
+        pins.set_zoom(id, 200, (105, 100)).unwrap();
+        pins.commit_edit(id, &[], Rect::new(115, 110, 25, 20))
+            .unwrap();
+        let info = pins.info(id).unwrap();
+        assert_eq!(info.rect, Rect::new(125, 120, 50, 40));
+        assert_eq!(info.annotations, 0);
+        assert!(
+            pins.commit_edit(PinId(99), &[], Rect::new(0, 0, 1, 1))
+                .is_err()
+        );
+        // Closing and reopening keeps annotations.
+        let mut new = exact(
+            Frame::solid(&ledger, Rect::new(0, 0, 20, 20), [9, 9, 9, 255]).unwrap(),
+            Source::Capture,
+            false,
+        );
+        new.annotations = annotation::translate_all(&screen, -100, -100);
+        let two = pins.create(&mut w, &d, new).unwrap();
+        pins.close(two).unwrap();
+        pins.reopen(&mut w, false).unwrap();
+        assert_eq!(pins.annotations(two).unwrap().len(), 1);
+        assert_eq!(pins.list(&d)["pins"][1]["annotations"], 1);
     }
 }

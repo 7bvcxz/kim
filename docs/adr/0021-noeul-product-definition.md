@@ -117,3 +117,12 @@ because later Steps (49–64) build on them:
 `NOEUL-FR-002`, `NOEUL-FR-003`, `NOEUL-FR-020`…`NOEUL-FR-026`, `NOEUL-FR-065`, `NOEUL-FR-100`,
 `NOEUL-FR-114`, `NOEUL-NFR-001`…`NOEUL-NFR-004`, `NOEUL-NFR-008`, `NOEUL-NFR-012`,
 `NOEUL-SEC-001`…`NOEUL-SEC-013`, `KIM-FR-012`, `KIM-NFR-020`, `KIM-SEC-020`…`KIM-SEC-022`.
+
+## Notes
+
+- 2026-11-04 (Step 56, [ADR 0038](0038-noeul-annotation.md)): the final manifest gained seven
+  `annotate` context actions for keyboard-only object editing (`annotate.delete`,
+  `annotate.select-next`, `annotate.select-previous`, `annotate.bring-forward`,
+  `annotate.send-backward`, `annotate.bring-to-front`, `annotate.send-to-back`), so it now carries
+  80 actions; the conflict scenarios still find no conflict of Noeul's own. No global or app action
+  changed, so the Kim catalog's shortcut summary is unchanged.

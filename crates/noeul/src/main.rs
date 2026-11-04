@@ -29,13 +29,18 @@ right-click outside cancels; `noeul capture --interactive` opens the same overla
 clipboard image. The double-click can copy, save or do nothing instead
 (`noeul config set gestures.double_click copy`), and `noeul config set gestures.preset snipaste`
 switches to Snipaste-style gestures (double-click and Enter copy, Ctrl+T pins).
+Annotate before you pin, copy or save: the toolbar's rectangle, ellipse, line, arrow, pen,
+marker and text tools draw inside the selection (Ctrl+Z undoes, Ctrl+Y redoes, [ and ] or the
+wheel change the width, Esc leaves the tool and keeps the drawing); a label takes Korean and
+other input methods. Enter still pins, with the annotations.
 Pins float on top: drag to move, wheel or Plus/Minus to zoom, 0 or middle-click for 100 %,
-H hides, Esc closes, Shift+Esc destroys, right-click (or Shift+F10) opens the pin's menu;
+H hides, Esc closes, Shift+Esc destroys, Space edits the pin's annotations (Enter keeps them,
+Esc leaves the pin as it was), right-click (or Shift+F10) opens the pin's menu;
 `noeul pin list/hide/show/close` reach them from scripts. Pins live in memory only and do not
 survive a restart.
-Not in this build (labeled planned): window detection and the magnifier (52), pin transforms,
-opacity and click-through (54), annotation (56), settings window (61), capture to a file or the
-clipboard from the command line and `noeul pin <file>` (62).
+Not in this build (labeled planned): mosaic, blur, eraser and redaction (57), pin transforms,
+opacity and click-through (54), settings window (61), capture to a file or the clipboard from
+the command line and `noeul pin <file>` (62).
 
 Exit codes: 0 ok · 1 failure (I/O, permission) · 2 usage · 3 not found (not running, no pin)
             4 integrity (protocol, identity) · 5 incompatible or unsupported platform

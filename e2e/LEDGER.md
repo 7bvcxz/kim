@@ -31,4 +31,6 @@ Run with `cargo xtask e2e`, which refuses unless the counter below has reached 1
 
 | Date | After Step | Command | Result |
 | --- | --- | --- | --- |
-| — | — | — | not run yet (next run due after the 15th processed Step) |
+| 2026-11-04 09:53 | 15 (#10 Step 10) | `cargo xtask e2e` at e65c2a7 | **FAIL** — `step07_cli_contract::agent_discovers_negotiates_and_probes_an_installed_subak`: the scenario still assumed Subak lacked `terminal.list`, which Step 10 added (stale test, not a product bug). `cargo test` then stopped, so the Step 08/09/10/46/47 files did not run. |
+| 2026-11-04 09:55 | 15 (same run, verification) | `cargo xtask e2e` with the Step 07 fix and `--no-fail-fast` (aa4bad2) | **FAIL** — 22 of 23 passed; `step09_host_ipc::a_program_holding_the_pipe_name_is_refused_and_sent_nothing` failed about 1 in 3: the PowerShell squatter started listening only after printing READY, so .NET threw when Subak connected and left first, and the squatter exited. Subak sent 0 bytes every time (security property held). |
+| 2026-11-04 10:02 | 15 (same run, verification) | `cargo xtask e2e` with both fixes (ab1d6c7, merged as the next main commit) | **PASS** — 23 of 23 scenarios across 9 files; no `subak.exe`/`kim.exe` left running. Fixes: Step 07 uses a never-declared command for `capability_missing`; the Step 09 squatter listens before READY (15/15 focused runs); `cargo xtask e2e` passes `--no-fail-fast`. |

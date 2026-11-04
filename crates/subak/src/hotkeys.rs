@@ -11,8 +11,10 @@
 //!   what it says.
 //! - **Scopes.** The tab actions are `app` actions (the window has focus); the Step 16 copy,
 //!   paste, zoom and scroll keys are actions of the `terminal` context (passthrough: keys no
-//!   binding uses go to the program). Subak registers no global hotkey yet (`gui.show` comes with
-//!   the floating icon, Step 18).
+//!   binding uses go to the program); the Terminal manager's keys (Step 18) are actions of the
+//!   `manager` context. Subak registers no global hotkey yet: `gui.show` (no default) is not
+//!   shipped until a Step registers it; the floating UI is reached by a click, the tray, or
+//!   `subak-gui --manager` (a shortcut key on a Start-menu link works without registering).
 //! - **The user layer** is `%APPDATA%\mouv\subak\hotkeys.json` (next to the window's `gui.json`).
 //!   A broken or newer file means safe mode: the defaults apply and the file is never rewritten
 //!   implicitly (§8.3).
@@ -31,6 +33,9 @@ pub const TOOL: &str = "subak";
 
 /// The context of the terminal pane (passthrough).
 pub const TERMINAL_CONTEXT: &str = "terminal";
+
+/// The context of the Terminal manager (Step 18).
+pub const MANAGER_CONTEXT: &str = "manager";
 
 /// The actions this build implements, in manifest order.
 pub const IMPLEMENTED: &[&str] = &[
@@ -53,6 +58,13 @@ pub const IMPLEMENTED: &[&str] = &[
     "scroll.line-down",
     "scroll.top",
     "scroll.bottom",
+    "manager.open",
+    "manager.new",
+    "manager.rename",
+    "manager.delete",
+    "manager.search",
+    "manager.pin",
+    "manager.close",
 ];
 
 /// The compiled-in manifest.

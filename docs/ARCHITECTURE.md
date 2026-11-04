@@ -239,3 +239,4 @@ they return `unsupported_platform` until milestone M4.
 | Profiles, SSH, extended features | planned | 32–36 |
 | MCP, interoperability, hardening, release | planned | 37–40 |
 | Linux | planned | 41–42 |
+| Ddalgak specification: philosophy, requirements, rule model and schemas (`ddalgak-rules-v1`, `ddalgak-simulation-v1`), GUI journeys, safety scope, AutoHotkey matrix, final hotkey manifest ([DDALGAK_RULE_MODEL](DDALGAK_RULE_MODEL.md), ADR 0022) | current (design; Ddalgak itself planned, Steps 66–83) | 65 |

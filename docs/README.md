@@ -45,6 +45,21 @@ real output against them; for the scenarios, `schema-check` also recomputes ever
 conflict report with a reference checker, and the library recomputes them again
 ([HOTKEY_CONTRACT §15](HOTKEY_CONTRACT.md)).
 
+## Ddalgak (automation engine)
+
+| Document | Status | Purpose |
+| --- | --- | --- |
+| [DDALGAK_PHILOSOPHY.md](DDALGAK_PHILOSOPHY.md) | current (Step 65) | Why Ddalgak exists: one action, useful automation; novice-friendly GUI and headless CLI; safe by construction; honest about AutoHotkey |
+| [DDALGAK_REQUIREMENTS.md](DDALGAK_REQUIREMENTS.md) | current (Step 65) | Numbered requirements `DDALGAK-FR/NFR/SEC-ddd` and milestones D1–D7 |
+| [DDALGAK_RULE_MODEL.md](DDALGAK_RULE_MODEL.md) | current (rules document v1, Step 65; not implemented) | Triggers, the seven core action types with inputs/outputs/errors/safety, modes, conditions, profiles, consent, precedence, validation, playground, outcomes and activity, versioning, CLI preview |
+| [DDALGAK_GUI_JOURNEYS.md](DDALGAK_GUI_JOURNEYS.md) | current (design, Step 65) | End-to-end GUI journeys and wireframes: create, capture, effects, playground, profiles, modes, rollback, search/edit/delete/duplicate/export, emergency |
+| [DDALGAK_SAFETY.md](DDALGAK_SAFETY.md) | current (Step 65; nothing run on Windows yet) | Risks and scope: reserved shortcuts, elevated windows, engine lifecycle, layouts and IME, anti-cheat, hook security and emergency off, password fields and privacy, Linux, recursion and stuck keys, verification plan |
+| [DDALGAK_AHK_MATRIX.md](DDALGAK_AHK_MATRIX.md) | current (matrix v1, AutoHotkey v2.0.31) | Versioned AutoHotkey v2 comparison: supported, partial, planned, not intended, with sources |
+
+The Ddalgak schemas `ddalgak-rules-v1` and `ddalgak-simulation-v1` are specifications (nothing
+implements them yet); `schema-check` validates their examples and runs the cross-reference
+checks of [DDALGAK_RULE_MODEL §8](DDALGAK_RULE_MODEL.md) on them.
+
 ## Planned
 
 | Document | Status | Planned by | Purpose |

@@ -10,6 +10,7 @@
 //! and the global hotkeys; `capture`, `pin …` and `quit` ask it over the identity-checked local
 //! pipe. Noeul makes no network connection (NOEUL-NFR-008).
 
+mod config_cmd;
 mod hotkeys_cmd;
 mod instance;
 
@@ -105,7 +106,7 @@ enum Command {
     /// registers a hotkey or opens a window)
     #[command(subcommand)]
     Hotkeys(hotkeys_cmd::HotkeysCommand),
-    /// Settings and paths (read-only)
+    /// Settings and paths: show them, change one (`config set`), reset them (`config reset`)
     #[command(subcommand)]
     Config(ConfigCommand),
     /// Noeul's capabilities document: its commands and what each may change (read-only)
@@ -269,6 +270,11 @@ pub struct DryRun {
 enum ConfigCommand {
     /// Effective settings and the per-user paths
     Show,
+    /// Change one setting in config.toml (e.g. `gestures.double_click copy`, or
+    /// `gestures.preset snipaste` for the opt-in Snipaste-style gestures)
+    Set(config_cmd::SetArgs),
+    /// Reset settings to their defaults: one section (general, capture, gestures) or all
+    Reset(config_cmd::ResetArgs),
 }
 
 /// Output options shared by every command (docs/CLI_CONTRACT.md §3–§4).
@@ -382,6 +388,8 @@ fn main() -> ExitCode {
         },
         Command::Hotkeys(c) => hotkeys_cmd::run(c, &ctx),
         Command::Config(ConfigCommand::Show) => instance::config_show(),
+        Command::Config(ConfigCommand::Set(a)) => config_cmd::set(&ctx, a),
+        Command::Config(ConfigCommand::Reset(a)) => config_cmd::reset(&ctx, a),
         Command::Capabilities => Ok(capabilities()),
         Command::Version => Ok(version()),
     };
@@ -407,6 +415,8 @@ fn command_name(c: &Command) -> &'static str {
         },
         Command::Hotkeys(c) => hotkeys_cmd::command_name(c),
         Command::Config(ConfigCommand::Show) => "config.show",
+        Command::Config(ConfigCommand::Set(_)) => "config.set",
+        Command::Config(ConfigCommand::Reset(_)) => "config.reset",
         Command::Capabilities => "capabilities",
         Command::Version => "version",
     }

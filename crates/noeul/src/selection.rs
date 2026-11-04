@@ -61,6 +61,10 @@ impl Origin {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Outcome {
     Pinned,
+    /// Copied to the clipboard (Step 51).
+    Copied,
+    /// Saved to a file (Step 51).
+    Saved,
     Cancelled,
 }
 
@@ -172,6 +176,8 @@ pub struct Captures {
     started: u64,
     pinned: u64,
     cancelled: u64,
+    copied: u64,
+    saved: u64,
     ignored: u64,
 }
 
@@ -256,8 +262,12 @@ impl Captures {
         let rect = s.selection;
         self.open = None;
         match how {
-            Outcome::Pinned => {
-                self.pinned += 1;
+            Outcome::Pinned | Outcome::Copied | Outcome::Saved => {
+                match how {
+                    Outcome::Pinned => self.pinned += 1,
+                    Outcome::Copied => self.copied += 1,
+                    _ => self.saved += 1,
+                }
                 self.last = rect.or(self.last);
             }
             Outcome::Cancelled => self.cancelled += 1,
@@ -334,6 +344,11 @@ impl Captures {
     /// ignored requests are [`Captures::ignored`].
     pub fn counts(&self) -> (u64, u64, u64) {
         (self.started, self.pinned, self.cancelled)
+    }
+
+    /// `(copied, saved)` since the instance started (Step 51).
+    pub fn output_counts(&self) -> (u64, u64) {
+        (self.copied, self.saved)
     }
 }
 

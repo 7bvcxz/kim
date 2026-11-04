@@ -23,7 +23,12 @@
 //! captures from [`Synthetic::off_screen`] instead of the screen, and its overlay and pins never
 //! take focus or stay on top. Everything it shows lies far off-screen, nothing reads the real
 //! screen, and release builds do not contain the hook. Tests and the e2e suite use it to drive the
-//! real binary's overlay without anything appearing on the user's desktop.
+//! real binary's overlay without anything appearing on the user's desktop. Since Step 51 the
+//! hook also keeps the outputs off the user's things: Copy goes to an in-memory stand-in (never
+//! the clipboard; `NOEUL_DEV_CLIPBOARD=busy` makes it fail like a held clipboard), the
+//! selection's context menu is recorded instead of shown, the save dialog is answered with a new
+//! file in the configured quick-save folder (never shown), and quick save never falls back to
+//! the user's Pictures folder.
 //!
 //! **Pins** (Step 53, ADR 0029): a pin's context menu is modal, so the pump only records the
 //! request and [`wake`] shows it after releasing the core (one menu at a time), as for the tray
@@ -105,11 +110,22 @@ thread_local! {
     static MENU_OPEN: Cell<bool> = const { Cell::new(false) };
 }
 
+/// Where Copy writes.
+enum CopyTarget {
+    /// The Windows clipboard, owned by the control window.
+    System,
+    /// The debug-build test hook: an in-memory stand-in, so automated runs never touch the
+    /// user's clipboard; `busy` (`NOEUL_DEV_CLIPBOARD=busy`) makes every write fail as a
+    /// clipboard held by another program does.
+    Synthetic { busy: bool },
+}
+
 /// The Win32 [`Shell`]: pin windows, the overlay, clipboard, pointer, tray notices.
 struct WinShell {
     windows: WinPins,
     /// `false` only under the debug-build test hook.
     interactive: bool,
+    copy: CopyTarget,
 }
 
 impl Shell for WinShell {
@@ -119,6 +135,32 @@ impl Shell for WinShell {
 
     fn clipboard_image(&mut self, ledger: &Arc<Ledger>) -> Result<Frame> {
         crate::win::clipboard::read_image(ledger)
+    }
+
+    fn clipboard_write(&mut self, png: &[u8], dib: &[u8]) -> Result<()> {
+        match self.copy {
+            CopyTarget::System => {
+                crate::win::clipboard::write_image(CONTROL.get() as HWND, png, dib)
+            }
+            CopyTarget::Synthetic { busy: true } => Err(NoeulError::new(
+                Code::ClipboardUnavailable,
+                "another program keeps the clipboard open (test hook)",
+            )),
+            CopyTarget::Synthetic { busy: false } => Ok(()),
+        }
+    }
+
+    fn pictures_dir(&self) -> Option<std::path::PathBuf> {
+        // Under the test hook nothing is ever written to the user's Pictures folder.
+        if self.interactive {
+            crate::win::files::pictures_dir()
+        } else {
+            None
+        }
+    }
+
+    fn local_time(&self) -> [u16; 6] {
+        crate::win::files::local_time()
     }
 
     fn pointer(&self) -> (i32, i32) {
@@ -236,8 +278,10 @@ fn pump(app: &mut App<WinShell>) {
                 .as_ref()
                 .is_some_and(|i| i.reload.swap(false, Ordering::SeqCst))
         }) {
+            // Something changed in the settings folder: hotkeys.json and config.toml.
             did = true;
             app.hotkeys().reload();
+            app.reload_settings();
         }
         for e in pinwnd::take_events() {
             did = true;
@@ -272,6 +316,48 @@ fn with_app<R>(f: impl FnOnce(&mut App<WinShell>) -> R) -> Option<R> {
 fn wake() {
     with_app(|_| ());
     pin_menus();
+    overlay_requests();
+}
+
+/// Shows what the capture overlay asked for — the selection's context menu, the save dialog —
+/// one at a time, with the core released (both are modal), then reports the answer. Under the
+/// debug-build test hook the core never asks for a menu, and a save is answered without a
+/// dialog: a new file in the explicitly configured quick-save folder, or "cancelled".
+fn overlay_requests() {
+    if MENU_OPEN.get() {
+        return;
+    }
+    loop {
+        if let Some(Some(menu)) = with_app(App::take_overlay_menu) {
+            MENU_OPEN.set(true);
+            let choice = overlay::current()
+                .and_then(|h| pinwnd::track_menu_on(h, &menu.items, Some(menu.at)));
+            MENU_OPEN.set(false);
+            if let Some(action) = choice {
+                with_app(|a| a.overlay_menu_choice(action));
+            }
+            continue;
+        }
+        if let Some(Some((req, interactive))) =
+            with_app(|a| a.take_save_request().map(|r| (r, a.shell().interactive)))
+        {
+            let path = if interactive {
+                MENU_OPEN.set(true);
+                let p = crate::win::files::save_dialog(overlay::current(), &req);
+                MENU_OPEN.set(false);
+                p
+            } else if req.explicit {
+                req.folder
+                    .as_ref()
+                    .map(|f| crate::output::free_name(f, &req.name))
+            } else {
+                None
+            };
+            with_app(|a| a.save_chosen(&req, path));
+            continue;
+        }
+        break;
+    }
 }
 
 /// Shows the pin context menus the core asked for, one at a time, with the core released (the
@@ -605,6 +691,13 @@ pub fn run(opts: &RunOpts) -> Result<Value> {
                 },
             },
             interactive: !dev,
+            copy: if dev {
+                CopyTarget::Synthetic {
+                    busy: std::env::var_os("NOEUL_DEV_CLIPBOARD").is_some_and(|v| v == "busy"),
+                }
+            } else {
+                CopyTarget::System
+            },
         },
         backend,
         mgr,

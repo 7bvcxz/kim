@@ -19,6 +19,16 @@
 //! and on `capture.pin` hands the session's [`crate::selection::CaptureSelection`] to a new pin.
 //! While an overlay is open, further capture requests do nothing (NOEUL-FR-013).
 //!
+//! **Outputs of the overlay** (Step 51, UX spec §4.2): the overlay model reports
+//! `Output(Pin | Copy | Save | QuickSave, rect, via)` for a double-click or middle-click inside
+//! the selection, a key, the toolbar or the selection's context menu. A pin goes through
+//! [`App::pin_selection`] (no clipboard, no file; a pointer gesture guards the new pin for one
+//! double-click time); a copy encodes PNG and `CF_DIBV5` in memory and hands them to
+//! [`Shell::clipboard_write`]; a save asks the runtime for the save dialog ([`SaveRequest`],
+//! shown with the core released) and writes only the file the user chose; a quick save writes a
+//! new file in the quick-save folder. Every failure keeps the overlay and its selection with a
+//! banner (NOEUL-FR-025); a clipboard that is busy or disabled never affects Pin.
+//!
 //! **The pin engine** (Step 53, ADR 0029): every pin, whatever made it, goes through
 //! [`crate::pins::NewPin`]: the overlay's selection through [`App::pin_selection`] (the entry
 //! point of Step 51's double-click, with no clipboard in between), a CLI region through
@@ -33,9 +43,10 @@ use crate::error::{Code, NoeulError, Result};
 use crate::frame::{Frame, Ledger, Rect};
 use crate::hotkeys::Manager;
 use crate::ipc;
+use crate::output;
 use crate::overlay::{
-    self, Action as OverlayAction, Cursor, Input as OverlayInput, Measure,
-    Outcome as OverlayOutcome, Overlay, Scene, SystemValues,
+    self, Action as OverlayAction, Cursor, GestureAction, Gestures, Input as OverlayInput, Measure,
+    Nav, Outcome as OverlayOutcome, Output, Overlay, Scene, SystemValues, Via,
 };
 use crate::paths::Paths;
 use crate::pins::{NewPin, PinError, PinId, PinWindows, Pins, Placement, Source};
@@ -49,6 +60,7 @@ use crate::zoom;
 use kim_hotkeys::keys::Chord;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, VecDeque};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -58,6 +70,15 @@ pub trait Shell {
     /// Reads the clipboard once and returns its image (`nothing_to_pin`,
     /// `clipboard_unavailable` or `image_invalid` otherwise). Called only for `paste.float`.
     fn clipboard_image(&mut self, ledger: &Arc<Ledger>) -> Result<Frame>;
+    /// Puts a picture on the clipboard (Copy, NOEUL-FR-030): `png` as the registered `PNG`
+    /// format and `dib` as `CF_DIBV5`, the clipboard opened for the write only and retried
+    /// briefly when another program holds it (`clipboard_unavailable`). Never called for a pin.
+    fn clipboard_write(&mut self, png: &[u8], dib: &[u8]) -> Result<()>;
+    /// The user's Pictures folder (quick save defaults to its `Noeul` subfolder); `None` under
+    /// the debug-build test hook, so a test never writes there.
+    fn pictures_dir(&self) -> Option<PathBuf>;
+    /// The local time `[year, month, day, hour, minute, second]` (saved files' names).
+    fn local_time(&self) -> [u16; 6];
     /// The pointer position in device pixels.
     fn pointer(&self) -> (i32, i32);
     /// A short non-modal notice (a tray balloon when the icon is shown; nothing otherwise).
@@ -185,14 +206,35 @@ impl OverlaySession {
             "monitors": self.model.monitors().len(),
             "buffer_bytes": self.window.buffer_bytes(),
             "help": self.model.help_shown(),
+            "focus": self.model.toolbar_focus().map_or("canvas", overlay::ToolbarItem::as_str),
         })
     }
 }
 
-/// The overlay's keyboard help, from the effective bindings (so a changed key shows as such).
-pub fn overlay_help(m: &Manager) -> Vec<String> {
+/// The overlay's keyboard help, from the effective bindings and gestures (so a changed key or
+/// gesture shows as such).
+pub fn overlay_help(m: &Manager, gestures: Gestures) -> Vec<String> {
     let k = |a: &str| m.keys_for(a).map(str::to_string);
     let mut lines = vec!["Drag to select a region. Esc or right-click cancels.".to_string()];
+    let mut outputs = Vec::new();
+    match gestures.double_click {
+        GestureAction::Pin => outputs.push("Double-click inside pins it".to_string()),
+        GestureAction::Copy => outputs.push("Double-click inside copies it".to_string()),
+        GestureAction::Save => outputs.push("Double-click inside saves it".to_string()),
+        GestureAction::None => {}
+    }
+    for (action, verb) in [
+        ("capture.copy", "copies"),
+        ("capture.save", "saves"),
+        ("capture.quick-save", "quick-saves"),
+    ] {
+        if let Some(x) = k(action) {
+            outputs.push(format!("{x} {verb}"));
+        }
+    }
+    if !outputs.is_empty() {
+        lines.push(outputs.join(" \u{b7} "));
+    }
     let group = |kind: &str| -> Option<String> {
         let mut keys = Vec::new();
         for d in ["up", "down", "left", "right"] {
@@ -283,6 +325,46 @@ pub struct PinMenu {
     pub items: Vec<PinMenuItem>,
 }
 
+/// The selection's context menu to show (UX spec §3.2): the runtime shows it modally with the
+/// core released, owned by the overlay window, then reports the choice through
+/// [`App::overlay_menu_choice`]. Never shown under the debug-build test hook.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OverlayMenu {
+    /// Where it opens (the pointer of a right-click, or the selection's corner).
+    pub at: (i32, i32),
+    pub items: Vec<PinMenuItem>,
+}
+
+/// A save the user asked for (`capture.save`, the Save button): the runtime shows the save
+/// dialog with the core released and answers with [`App::save_chosen`]. Under the debug-build
+/// test hook no dialog is shown: the answer is a new file in the explicitly configured
+/// quick-save folder, or "cancelled" when there is none.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SaveRequest {
+    /// The capture session it belongs to (a later answer for another session is ignored).
+    pub session: u64,
+    pub rect: Rect,
+    /// The suggested file name, `noeul-YYYYMMDD-HHMMSS.png` (NOEUL-FR-031).
+    pub name: String,
+    /// The folder the dialog starts in (the quick-save folder), if known.
+    pub folder: Option<PathBuf>,
+    /// Whether that folder was set by the user (`[capture] quick_save_folder`).
+    pub explicit: bool,
+}
+
+/// The selection's context menu: this build's outputs and keys (NOEUL-FR-114).
+const OVERLAY_MENU: &[Option<(&str, &str)>] = &[
+    Some(("capture.pin", "Pin")),
+    Some(("capture.copy", "Copy")),
+    Some(("capture.save", "Save\u{2026}")),
+    Some(("capture.quick-save", "Quick save")),
+    None,
+    Some(("selection.full", "Select monitor")),
+    Some(("selection.last", "Last rectangle")),
+    None,
+    Some(("capture.cancel", "Cancel")),
+];
+
 /// How a pin is made from a capture selection (Step 51's gestures pass their own).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PinOptions {
@@ -333,6 +415,10 @@ pub struct App<S: Shell> {
     latency: Latency,
     ui_state: UiState,
     menu: Option<PinMenu>,
+    /// The selection's context menu the runtime should show.
+    overlay_menu: Option<OverlayMenu>,
+    /// The save dialog the runtime should show.
+    save_request: Option<SaveRequest>,
     /// Wheel deltas not yet worth a zoom step, per pin (high-resolution wheels send small ones).
     wheel: BTreeMap<PinId, i32>,
     /// Pins left off-screen by the last display change (a notice says so when it changes).
@@ -389,6 +475,8 @@ impl<S: Shell> App<S> {
             overlay: None,
             latency: Latency::default(),
             menu: None,
+            overlay_menu: None,
+            save_request: None,
             wheel: BTreeMap::new(),
             lost: 0,
         }
@@ -449,6 +537,7 @@ impl<S: Shell> App<S> {
                 Ok(json!({"reloaded": problem.is_none(), "problem": problem,
                           "hotkeys": self.hotkeys.status_json()}))
             }
+            "settings.reload" => Ok(json!({"reloaded": true, "settings": self.reload_settings()})),
             "quit" => self.quit_request(ipc::flag(params, "force")?, dry_run),
             other => Err(NoeulError::new(
                 Code::Usage,
@@ -457,8 +546,21 @@ impl<S: Shell> App<S> {
         }
     }
 
+    /// Re-reads `config.toml` (the settings watcher, IPC `settings.reload`). The gestures, the
+    /// keyboard help and the quick-save folder apply from the next capture; the tray icon
+    /// setting at the next start.
+    pub fn reload_settings(&mut self) -> Value {
+        self.settings = settings::load(&self.paths.config_file());
+        self.settings.to_json()
+    }
+
+    pub fn settings(&self) -> &settings::Loaded {
+        &self.settings
+    }
+
     pub fn status(&self) -> Value {
         let (started, pinned, cancelled) = self.captures.counts();
+        let (copied, saved) = self.captures.output_counts();
         json!({
             "running": true,
             "instance": {
@@ -473,7 +575,8 @@ impl<S: Shell> App<S> {
             "capture_backend": self.capture.name(),
             "pins": {"open": self.pins.len(), "reopenable": self.pins.reopenable().map(|p| p.to_string()),
                      "hidden": self.pins.hidden(), "off_screen": self.pins.off_screen(&self.capture.desktop())},
-            "captures": {"started": started, "pinned": pinned, "cancelled": cancelled, "open": self.captures.is_open(),
+            "captures": {"started": started, "pinned": pinned, "copied": copied, "saved": saved,
+                         "cancelled": cancelled, "open": self.captures.is_open(),
                          "ignored": self.captures.ignored(),
                          "overlay": self.overlay.as_ref().map(OverlaySession::to_json),
                          "first_frame": self.latency.to_json()},
@@ -761,6 +864,8 @@ impl<S: Shell> App<S> {
         if let Some(mut ov) = self.overlay.take() {
             ov.window.destroy();
         }
+        self.overlay_menu = None;
+        self.save_request = None;
         self.captures.cancel();
         self.pins.clear();
         self.hotkeys.release_all();
@@ -936,7 +1041,8 @@ impl<S: Shell> App<S> {
             self.shell.pointer(),
             self.captures.last(),
             help,
-        );
+        )
+        .with_gestures(self.settings.settings.gestures);
         let scene = model.scene(&*window);
         if let Some(frozen) = self.captures.frozen() {
             window.present(frozen, &scene, &[picture]);
@@ -1003,7 +1109,7 @@ impl<S: Shell> App<S> {
             KeyboardHelp::Always => true,
             KeyboardHelp::Never => false,
         };
-        show.then(|| overlay_help(&self.hotkeys))
+        show.then(|| overlay_help(&self.hotkeys, self.settings.settings.gestures))
     }
 
     /// The first capture finished from the overlay: the first-run help is not shown again.
@@ -1023,16 +1129,19 @@ impl<S: Shell> App<S> {
             return;
         }
         let input = match e {
-            OverlayEvent::Input(i) => i,
-            OverlayEvent::Key(chord, repeat) => match self
-                .hotkeys
-                .overlay_action(&chord, repeat)
-                .as_deref()
-                .and_then(OverlayAction::from_id)
-            {
-                Some(a) => OverlayInput::Action(a),
-                // The reserved navigation key always leaves (nav.cancel, NOEUL-SEC-013).
-                None if !repeat && is_escape(&chord) => OverlayInput::Leave,
+            OverlayEvent::Input(i) => {
+                if matches!(i, OverlayInput::Press { .. }) {
+                    // The user's double-click time, rectangle and drag threshold as they are now,
+                    // so a change in Windows applies from the next press (UX spec §4.2 rule 13).
+                    let sys = self.shell.system_values();
+                    if let Some(ov) = self.overlay.as_mut() {
+                        ov.model.set_system_values(sys);
+                    }
+                }
+                i
+            }
+            OverlayEvent::Key(chord, repeat) => match self.overlay_key(&chord, repeat) {
+                Some(i) => i,
                 None => return,
             },
         };
@@ -1040,12 +1149,55 @@ impl<S: Shell> App<S> {
             Some(ov) => ov.model.handle(input),
             None => return,
         };
+        self.overlay_outcome(outcome);
+    }
+
+    fn overlay_outcome(&mut self, outcome: OverlayOutcome) {
         match outcome {
             OverlayOutcome::Stay => self.redraw_overlay(),
             OverlayOutcome::Cancel => {
                 self.cancel_overlay();
             }
-            OverlayOutcome::Pin(rect) => self.pin_from_overlay(rect),
+            OverlayOutcome::Output(out, rect, via) => match out {
+                Output::Pin => self.pin_from_overlay(rect, via),
+                Output::Copy => self.copy_from_overlay(rect),
+                Output::Save => self.request_save(rect),
+                Output::QuickSave => self.quick_save(rect),
+            },
+            OverlayOutcome::Menu(at) => self.open_overlay_menu(at),
+        }
+    }
+
+    /// A key press in the overlay: the navigation keys go to a focused toolbar button first
+    /// (ADR 0021 §5), then the `capture-overlay` bindings, then the reserved `Escape`; `Tab`
+    /// and `Shift+Tab` move the focus into the toolbar when no binding uses them.
+    fn overlay_key(&self, chord: &Chord, repeat: bool) -> Option<OverlayInput> {
+        let focused = self
+            .overlay
+            .as_ref()
+            .is_some_and(|o| o.model.toolbar_focus().is_some());
+        let nav = nav_of(chord);
+        if focused
+            && let Some(n) = nav
+            && !(repeat && matches!(n, Nav::Activate | Nav::Escape))
+        {
+            return Some(OverlayInput::Nav(n));
+        }
+        if let Some(a) = self
+            .hotkeys
+            .overlay_action(chord, repeat)
+            .as_deref()
+            .and_then(OverlayAction::from_id)
+        {
+            return Some(OverlayInput::Action(a));
+        }
+        // The reserved navigation key always leaves (nav.cancel, NOEUL-SEC-013).
+        if !repeat && is_escape(chord) {
+            return Some(OverlayInput::Leave);
+        }
+        match nav {
+            Some(n @ (Nav::Next | Nav::Prev)) => Some(OverlayInput::Nav(n)),
+            _ => None,
         }
     }
 
@@ -1072,48 +1224,296 @@ impl<S: Shell> App<S> {
         };
         ov.window.destroy();
         self.captures.cancel();
+        self.overlay_menu = None;
+        self.save_request = None;
         self.last_action = Some(("capture.cancel".into(), "cancelled"));
         true
     }
 
-    /// `capture.pin`: the session's selection becomes a pin at the same place and size, with
-    /// keyboard focus; the overlay closes. Nothing touches the clipboard or the disk
-    /// (NOEUL-FR-020, NOEUL-SEC-005). If the pin cannot be created, the overlay stays with its
-    /// selection and says so (NOEUL-FR-025).
-    fn pin_from_overlay(&mut self, rect: Rect) {
+    /// The open session's selection set to `rect`, as a [`CaptureSelection`].
+    fn overlay_selection(&mut self, rect: Rect) -> Option<(u64, CaptureSelection)> {
+        let id = self.overlay.as_ref()?.id;
+        self.captures
+            .select(id, rect)
+            .and_then(|()| self.captures.selection(id))
+            .ok()
+            .map(|s| (id, s))
+    }
+
+    /// An output succeeded: the session ends (its frozen picture is freed), the overlay closes.
+    fn finish_overlay(
+        &mut self,
+        id: u64,
+        how: SessionOutcome,
+        action: &'static str,
+        result: &'static str,
+    ) {
+        let _ = self.captures.complete(id, how);
+        if let Some(mut ov) = self.overlay.take() {
+            ov.window.destroy();
+        }
+        self.overlay_menu = None;
+        self.save_request = None;
+        self.help_done();
+        self.last_action = Some((action.into(), result));
+    }
+
+    /// An output failed: the overlay stays with its selection and says why (NOEUL-FR-025).
+    fn fail_overlay(&mut self, action: &'static str, result: &'static str, banner: &str) {
+        if let Some(ov) = self.overlay.as_mut() {
+            ov.model.set_banner(Some(banner.to_string()));
+        }
+        self.redraw_overlay();
+        self.last_action = Some((action.into(), result));
+    }
+
+    /// `capture.pin`, the double-click, the middle-click, the Pin button or the menu: the
+    /// session's selection becomes a pin at the same place and size, with keyboard focus; the
+    /// overlay closes. Nothing touches the clipboard or the disk (NOEUL-FR-020, NOEUL-SEC-005).
+    /// After a mouse gesture the new pin ignores presses for one double-click time, so the rest
+    /// of a triple or quadruple click cannot move, zoom or close it (UX spec §4.2 rule 10). If
+    /// the pin cannot be created, the overlay stays with its selection and says so
+    /// (NOEUL-FR-025).
+    fn pin_from_overlay(&mut self, rect: Rect, via: Via) {
+        let Some(ov) = self.overlay.as_ref() else {
+            return;
+        };
+        let guard = via
+            .pointer()
+            .then(|| Duration::from_millis(u64::from(ov.model.system_values().double_click_ms)));
+        let Some((id, sel)) = self.overlay_selection(rect) else {
+            return self.fail_overlay(
+                "capture.pin",
+                "failed",
+                "The selection could not be taken. Try again, or press Esc.",
+            );
+        };
+        let opts = PinOptions { focus: true, guard };
+        match self.pin_selection(sel, opts) {
+            Ok(_) => self.finish_overlay(id, SessionOutcome::Pinned, "capture.pin", "pinned"),
+            Err(_) => self.fail_overlay(
+                "capture.pin",
+                "failed",
+                "The pin could not be created. Your selection is kept: try again, copy, save, or press Esc.",
+            ),
+        }
+    }
+
+    /// `capture.copy`, the Copy button, the menu (or the double-click set to `copy`): the
+    /// selection goes to the clipboard as PNG and `CF_DIBV5`, then the overlay closes
+    /// (NOEUL-FR-023, NOEUL-FR-030). Nothing is pinned or written to disk. A busy or failing
+    /// clipboard keeps the overlay with a banner, so the user can retry, pin or save.
+    fn copy_from_overlay(&mut self, rect: Rect) {
+        let Some((id, sel)) = self.overlay_selection(rect) else {
+            return self.fail_overlay(
+                "capture.copy",
+                "failed",
+                "The selection could not be taken. Try again, or press Esc.",
+            );
+        };
+        let encoded = output::png(sel.frame()).map(|png| (png, output::dib_v5(sel.frame())));
+        drop(sel);
+        let written = match encoded {
+            Ok((png, dib)) => self.shell.clipboard_write(&png, &dib),
+            Err(why) => Err(NoeulError::new(
+                Code::Internal,
+                format!("PNG encoding failed: {why}"),
+            )),
+        };
+        match written {
+            Ok(()) => self.finish_overlay(id, SessionOutcome::Copied, "capture.copy", "copied"),
+            Err(e) if e.code == Code::ClipboardUnavailable => self.fail_overlay(
+                "capture.copy",
+                "clipboard_unavailable",
+                "The clipboard is in use by another program; nothing was copied. Try again, pin, save, or press Esc.",
+            ),
+            Err(_) => self.fail_overlay(
+                "capture.copy",
+                "failed",
+                "The picture could not be copied. Try again, pin, save, or press Esc.",
+            ),
+        }
+    }
+
+    /// The quick-save folder: `[capture] quick_save_folder`, else the Pictures folder + `Noeul`
+    /// (never under the debug-build test hook), and whether the user set it.
+    fn quick_save_folder(&self) -> (Option<PathBuf>, bool) {
+        match &self.settings.settings.quick_save_folder {
+            Some(f) => (Some(f.clone()), true),
+            None => (self.shell.pictures_dir().map(|p| p.join("Noeul")), false),
+        }
+    }
+
+    /// `capture.save`, the Save button, the menu (or the double-click set to `save`): asks the
+    /// runtime for the save dialog. The overlay stays open behind it; nothing is written until
+    /// the user chose a file ([`App::save_chosen`]).
+    fn request_save(&mut self, rect: Rect) {
         let Some(id) = self.overlay.as_ref().map(|o| o.id) else {
             return;
         };
-        let selection = self
-            .captures
-            .select(id, rect)
-            .and_then(|()| self.captures.selection(id));
-        let opts = PinOptions {
-            focus: true,
-            guard: None,
-        };
-        let failed = match selection {
-            Ok(sel) => match self.pin_selection(sel, opts) {
-                Ok(_) => {
-                    let _ = self.captures.complete(id, SessionOutcome::Pinned);
-                    if let Some(mut ov) = self.overlay.take() {
-                        ov.window.destroy();
-                    }
-                    self.help_done();
-                    self.last_action = Some(("capture.pin".into(), "pinned"));
-                    return;
-                }
-                Err(_) => {
-                    "The pin could not be created. Your selection is kept: try again, or press Esc."
-                }
-            },
-            Err(_) => "The selection could not be taken. Try again, or press Esc.",
-        };
-        if let Some(ov) = self.overlay.as_mut() {
-            ov.model.set_banner(Some(failed.to_string()));
+        if self.captures.select(id, rect).is_err() {
+            return self.fail_overlay(
+                "capture.save",
+                "failed",
+                "The selection could not be taken. Try again, or press Esc.",
+            );
         }
+        let (folder, explicit) = self.quick_save_folder();
+        self.save_request = Some(SaveRequest {
+            session: id,
+            rect,
+            name: output::file_name(self.shell.local_time()),
+            folder,
+            explicit,
+        });
+        self.last_action = Some(("capture.save".into(), "asked"));
         self.redraw_overlay();
-        self.last_action = Some(("capture.pin".into(), "failed"));
+    }
+
+    /// The save dialog the runtime should show now, if one was asked for.
+    pub fn take_save_request(&mut self) -> Option<SaveRequest> {
+        self.save_request.take()
+    }
+
+    /// The user's answer to the save dialog: `Some(path)` writes the selection there as PNG
+    /// (the dialog already asked before replacing a file) and closes the overlay; `None`
+    /// (cancelled) leaves the overlay as it was. An answer for a session that has ended since is
+    /// ignored.
+    pub fn save_chosen(&mut self, req: &SaveRequest, path: Option<PathBuf>) {
+        if self.overlay.as_ref().map(|o| o.id) != Some(req.session) {
+            return;
+        }
+        let Some(path) = path else {
+            self.last_action = Some(("capture.save".into(), "cancelled"));
+            return self.redraw_overlay();
+        };
+        let Some((id, sel)) = self.overlay_selection(req.rect) else {
+            return self.fail_overlay(
+                "capture.save",
+                "failed",
+                "The selection could not be taken. Try again, or press Esc.",
+            );
+        };
+        let written = output::png(sel.frame())
+            .map_err(std::io::Error::other)
+            .and_then(|bytes| output::write_file(&path, &bytes, true));
+        drop(sel);
+        match written {
+            Ok(()) => {
+                self.shell.notice(&format!("Saved to {}", path.display()));
+                self.finish_overlay(id, SessionOutcome::Saved, "capture.save", "saved");
+            }
+            Err(_) => self.fail_overlay(
+                "capture.save",
+                "failed",
+                "The picture could not be saved there. Try another folder, copy, pin, or press Esc.",
+            ),
+        }
+    }
+
+    /// `capture.quick-save` (or `Shift`+Save): a new PNG in the quick-save folder, never
+    /// overwriting a file, then the overlay closes (NOEUL-FR-032). Without a folder (none set,
+    /// none known) the overlay stays and says how to set one.
+    fn quick_save(&mut self, rect: Rect) {
+        let (Some(folder), _) = self.quick_save_folder() else {
+            return self.fail_overlay(
+                "capture.quick-save",
+                "no_folder",
+                "No quick-save folder: set one with `noeul config set capture.quick_save_folder <folder>`, or press Esc.",
+            );
+        };
+        let Some((id, sel)) = self.overlay_selection(rect) else {
+            return self.fail_overlay(
+                "capture.quick-save",
+                "failed",
+                "The selection could not be taken. Try again, or press Esc.",
+            );
+        };
+        let name = output::file_name(self.shell.local_time());
+        let written = output::png(sel.frame())
+            .map_err(std::io::Error::other)
+            .and_then(|bytes| output::quick_save(&folder, &name, &bytes));
+        drop(sel);
+        match written {
+            Ok(path) => {
+                self.shell.notice(&format!("Saved to {}", path.display()));
+                self.finish_overlay(
+                    id,
+                    SessionOutcome::Saved,
+                    "capture.quick-save",
+                    "saved",
+                );
+            }
+            Err(_) => self.fail_overlay(
+                "capture.quick-save",
+                "failed",
+                "The picture could not be saved in the quick-save folder. Copy, pin, save elsewhere, or press Esc.",
+            ),
+        }
+    }
+
+    /// The selection's context menu (right-click inside, `Shift+F10`, the menu key): at the
+    /// pointer, or at the selection's corner from the keyboard. Under the debug-build test hook
+    /// it is recorded, never shown (a popup menu always lands on a real monitor).
+    fn open_overlay_menu(&mut self, at: Option<(i32, i32)>) {
+        let Some(sel) = self.overlay.as_ref().and_then(|o| o.model.selection()) else {
+            return;
+        };
+        if !self.shell.interactive() {
+            self.last_action = Some(("capture.menu".into(), "not_shown"));
+            return;
+        }
+        let last = self.captures.last().is_some();
+        let items = OVERLAY_MENU
+            .iter()
+            .map(|entry| match entry {
+                None => PinMenuItem {
+                    action: None,
+                    label: String::new(),
+                    enabled: false,
+                },
+                Some((action, text)) => PinMenuItem {
+                    action: Some(action),
+                    label: self
+                        .hotkeys
+                        .keys_for(action)
+                        .or(match *action {
+                            "capture.cancel" => Some("Escape"),
+                            _ => None,
+                        })
+                        .map_or_else(|| (*text).to_string(), |k| format!("{text}\t{k}")),
+                    enabled: *action != "selection.last" || last,
+                },
+            })
+            .collect();
+        self.overlay_menu = Some(OverlayMenu {
+            at: at.unwrap_or((sel.x.saturating_add(8), sel.y.saturating_add(8))),
+            items,
+        });
+        self.last_action = Some(("capture.menu".into(), "shown"));
+    }
+
+    /// The selection's context menu the runtime should show now, if one was asked for.
+    pub fn take_overlay_menu(&mut self) -> Option<OverlayMenu> {
+        self.overlay_menu.take()
+    }
+
+    /// The user chose `action` in the selection's context menu (the overlay may be gone).
+    pub fn overlay_menu_choice(&mut self, action: &str) {
+        if !OVERLAY_MENU.iter().flatten().any(|(a, _)| *a == action) {
+            return;
+        }
+        let Some(a) = OverlayAction::from_id(action) else {
+            return;
+        };
+        let outcome = match self.overlay.as_mut() {
+            Some(ov) => ov.model.handle(OverlayInput::Action(a)),
+            None => return,
+        };
+        self.overlay_outcome(match outcome {
+            OverlayOutcome::Output(o, r, _) => OverlayOutcome::Output(o, r, Via::Menu),
+            other => other,
+        });
     }
 
     /// The pin engine's entry point for a confirmed capture selection: a pin of exactly that
@@ -1402,6 +1802,28 @@ fn is_escape(c: &Chord) -> bool {
     crate::hotkeys::chord_of("Escape", false, false, false).is_some_and(|e| e == *c)
 }
 
+/// The toolbar navigation a key means (UX spec §5): `Tab`, `Shift+Tab`, the arrows, `Enter`,
+/// `Space` and `Escape`, without other modifiers.
+fn nav_of(c: &Chord) -> Option<Nav> {
+    let is = |name: &str, shift: bool| {
+        crate::hotkeys::chord_of(name, false, false, shift).is_some_and(|k| k == *c)
+    };
+    [
+        ("Tab", false, Nav::Next),
+        ("Tab", true, Nav::Prev),
+        ("Left", false, Nav::Left),
+        ("Up", false, Nav::Left),
+        ("Right", false, Nav::Right),
+        ("Down", false, Nav::Right),
+        ("Enter", false, Nav::Activate),
+        ("Space", false, Nav::Activate),
+        ("Escape", false, Nav::Escape),
+    ]
+    .into_iter()
+    .find(|(name, shift, _)| is(name, *shift))
+    .map(|(_, _, n)| n)
+}
+
 fn hotkeys_forced_off(m: &Manager) -> bool {
     let s = m.status_json();
     matches!(
@@ -1549,6 +1971,16 @@ pub(crate) mod tests {
         pub pointer_at: Option<(i32, i32)>,
         /// `Some(false)` stands for the debug-build test hook.
         pub interactive: Option<bool>,
+        /// What Copy put on the (fake) clipboard: `(png, dib)` per write.
+        pub copies: Vec<(Vec<u8>, Vec<u8>)>,
+        /// Every clipboard write attempt, also the refused ones.
+        pub clipboard_writes: usize,
+        /// The fake clipboard is held by another program (or disabled).
+        pub clipboard_busy: bool,
+        /// The Pictures folder (quick save's default parent).
+        pub pictures: Option<PathBuf>,
+        /// The user's pointer settings (Windows defaults when `None`).
+        pub sys: Option<SystemValues>,
     }
 
     impl Shell for FakeShell {
@@ -1563,6 +1995,20 @@ pub(crate) mod tests {
                 }
                 None => Err(NoeulError::new(Code::NothingToPin, "no image")),
             }
+        }
+        fn clipboard_write(&mut self, png: &[u8], dib: &[u8]) -> Result<()> {
+            self.clipboard_writes += 1;
+            if self.clipboard_busy {
+                return Err(NoeulError::new(Code::ClipboardUnavailable, "held (test)"));
+            }
+            self.copies.push((png.to_vec(), dib.to_vec()));
+            Ok(())
+        }
+        fn pictures_dir(&self) -> Option<PathBuf> {
+            self.pictures.clone()
+        }
+        fn local_time(&self) -> [u16; 6] {
+            [2026, 11, 4, 9, 5, 7]
         }
         fn pointer(&self) -> (i32, i32) {
             self.pointer_at.unwrap_or((90, 95))
@@ -1594,7 +2040,7 @@ pub(crate) mod tests {
             }))
         }
         fn system_values(&self) -> SystemValues {
-            SystemValues::default()
+            self.sys.unwrap_or_default()
         }
         fn interactive(&self) -> bool {
             self.interactive.unwrap_or(true)
@@ -1618,7 +2064,7 @@ pub(crate) mod tests {
         )
     }
 
-    fn tmp(tag: &str) -> std::path::PathBuf {
+    fn tmp(tag: &str) -> PathBuf {
         std::env::temp_dir().join(format!("noeul-app-{tag}-{}", std::process::id()))
     }
 
@@ -1631,7 +2077,7 @@ pub(crate) mod tests {
     }
 
     /// An instance on the synthetic two-monitor desktop with the default keys (no registrar).
-    fn overlay_app(tag: &str) -> (App<FakeShell>, Arc<Synthetic>, std::path::PathBuf) {
+    fn overlay_app(tag: &str) -> (App<FakeShell>, Arc<Synthetic>, PathBuf) {
         let dir = tmp(tag);
         let _ = std::fs::remove_dir_all(&dir);
         let paths = Paths::under(&dir);
@@ -1766,7 +2212,10 @@ pub(crate) mod tests {
             };
             assert_eq!(at(0, 150), Synthetic::pixel(0, 150), "plain inside");
             assert_eq!(at(-101, 150), color::ACCENT, "border outside the left edge");
-            assert_eq!(at(400, 400), overlay::dim_pixel(Synthetic::pixel(400, 400)));
+            assert_eq!(
+                at(-600, 300),
+                overlay::dim_pixel(Synthetic::pixel(-600, 300))
+            );
             assert!(l.dirty_rects > 0 && l.presents >= 4);
         }
         // Escape cancels: the window and the frozen picture are gone, nothing was pinned.
@@ -1981,6 +2430,7 @@ pub(crate) mod tests {
             help.lines,
             [
                 "Drag to select a region. Esc or right-click cancels.",
+                "Double-click inside pins it \u{b7} Ctrl+C copies \u{b7} Ctrl+S saves \u{b7} Ctrl+Shift+S quick-saves",
                 "Arrows move \u{b7} Ctrl+arrows grow \u{b7} Shift+arrows shrink",
                 "Ctrl+A whole monitor \u{b7} R last area \u{b7} Enter pins the selection",
             ]
@@ -2021,10 +2471,27 @@ pub(crate) mod tests {
         let paths = Paths::under(&dir);
         let off = Manager::start(&paths, Some("--no-hotkeys"), || unreachable!());
         assert_eq!(
-            overlay_help(&off),
-            ["Drag to select a region. Esc or right-click cancels."],
+            overlay_help(&off, Gestures::default()),
+            [
+                "Drag to select a region. Esc or right-click cancels.",
+                "Double-click inside pins it"
+            ],
             "without shortcuts only the mouse and Escape remain"
         );
+        let copy = Gestures {
+            double_click: GestureAction::Copy,
+            ..Gestures::default()
+        };
+        assert_eq!(
+            overlay_help(&off, copy)[1],
+            "Double-click inside copies it",
+            "the help names the gesture setting"
+        );
+        let none = Gestures {
+            double_click: GestureAction::None,
+            ..Gestures::default()
+        };
+        assert_eq!(overlay_help(&off, none).len(), 1);
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&paths.config_dir).unwrap();
         std::fs::write(
@@ -2043,13 +2510,13 @@ pub(crate) mod tests {
         let m = Manager::start(&paths, None, || {
             Err(kim_hotkeys::register::RegisterError::Stopped)
         });
-        let lines = overlay_help(&m);
+        let lines = overlay_help(&m, Gestures::default());
         assert_eq!(
-            lines[1],
+            lines[2],
             "code:KeyW/Down/Left/Right move \u{b7} Ctrl+arrows grow \u{b7} Shift+arrows shrink"
         );
         assert_eq!(
-            lines[2],
+            lines[3],
             "Ctrl+A whole monitor \u{b7} Ctrl+Enter pins the selection"
         );
         let _ = std::fs::remove_dir_all(&dir);

@@ -64,6 +64,8 @@
     "captures": {
       "started": 2,
       "pinned": 1,
+      "copied": 0,
+      "saved": 0,
       "cancelled": 0,
       "open": true,
       "ignored": 3,
@@ -84,7 +86,8 @@
         },
         "monitors": 2,
         "buffer_bytes": 25804800,
-        "help": false
+        "help": false,
+        "focus": "canvas"
       },
       "first_frame": {
         "count": 2,
@@ -161,6 +164,12 @@
       "state": "default",
       "tray_icon": true,
       "keyboard_help": "first-run",
+      "quick_save_folder": null,
+      "gestures": {
+        "double_click": "pin",
+        "middle_click": "pin",
+        "preset": "noeul"
+      },
       "problems": []
     },
     "last_action": {

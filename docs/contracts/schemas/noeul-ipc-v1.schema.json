@@ -124,7 +124,7 @@
       "properties": {
         "type": { "const": "request" },
         "id": { "type": "integer", "minimum": 1 },
-        "method": { "enum": ["status", "activate", "capture", "capture.region", "capture.cancel", "pin.list", "pin.create", "pin.hide", "pin.show", "pin.close", "pin.reopen", "hotkeys.reload", "quit"] },
+        "method": { "enum": ["status", "activate", "capture", "capture.region", "capture.cancel", "pin.list", "pin.create", "pin.hide", "pin.show", "pin.close", "pin.reopen", "hotkeys.reload", "settings.reload", "quit"] },
         "params": { "$ref": "#/$defs/params" }
       }
     },
@@ -166,6 +166,7 @@
             { "$ref": "#/$defs/pin_close_result" },
             { "$ref": "#/$defs/pin_reopen_result" },
             { "$ref": "#/$defs/reload_result" },
+            { "$ref": "#/$defs/settings_reload_result" },
             { "$ref": "#/$defs/quit_result" }
           ]
         }
@@ -254,13 +255,25 @@
     },
     "settings_state": {
       "type": "object",
-      "required": ["path", "state", "tray_icon", "keyboard_help", "problems"],
+      "required": ["path", "state", "tray_icon", "keyboard_help", "quick_save_folder", "gestures", "problems"],
       "additionalProperties": false,
       "properties": {
         "path": { "type": "string", "minLength": 1 },
         "state": { "enum": ["default", "user", "invalid", "newer_version"] },
         "tray_icon": { "type": "boolean" },
         "keyboard_help": { "description": "`[capture] keyboard_help`: when the capture overlay shows its keyboard help (Step 50).", "enum": ["first-run", "always", "never"] },
+        "quick_save_folder": { "description": "`[capture] quick_save_folder` (Step 51); null: the Pictures folder + Noeul.", "type": ["string", "null"] },
+        "gestures": {
+          "description": "`[gestures]` (Step 51, NOEUL-FR-024): what a double-click and a middle-click inside a confirmed selection do, and the preset's name.",
+          "type": "object",
+          "required": ["double_click", "middle_click", "preset"],
+          "additionalProperties": false,
+          "properties": {
+            "double_click": { "enum": ["pin", "copy", "save", "none"] },
+            "middle_click": { "enum": ["pin", "copy", "none"] },
+            "preset": { "enum": ["noeul", "snipaste"] }
+          }
+        },
         "problems": { "type": "array", "items": { "type": "string" } }
       }
     },
@@ -299,11 +312,13 @@
         },
         "captures": {
           "type": "object",
-          "required": ["started", "pinned", "cancelled", "open", "ignored", "overlay", "first_frame"],
+          "required": ["started", "pinned", "copied", "saved", "cancelled", "open", "ignored", "overlay", "first_frame"],
           "additionalProperties": false,
           "properties": {
             "started": { "$ref": "#/$defs/u64" },
             "pinned": { "$ref": "#/$defs/u64" },
+            "copied": { "description": "Captures that ended with Copy (Step 51).", "$ref": "#/$defs/u64" },
+            "saved": { "description": "Captures that ended with Save or quick save (Step 51).", "$ref": "#/$defs/u64" },
             "cancelled": { "$ref": "#/$defs/u64" },
             "open": { "type": "boolean" },
             "ignored": { "description": "Capture requests that found an overlay open and did nothing (NOEUL-FR-013).", "$ref": "#/$defs/u64" },
@@ -391,7 +406,7 @@
     "overlay_state": {
       "description": "The open capture overlay (Step 50, ADR 0026): geometry and state only, never pixels.",
       "type": "object",
-      "required": ["session", "phase", "selection", "picture", "monitors", "buffer_bytes", "help"],
+      "required": ["session", "phase", "selection", "picture", "monitors", "buffer_bytes", "help", "focus"],
       "additionalProperties": false,
       "properties": {
         "session": { "$ref": "#/$defs/u64" },
@@ -400,7 +415,8 @@
         "picture": { "$ref": "#/$defs/rect" },
         "monitors": { "$ref": "#/$defs/u64" },
         "buffer_bytes": { "$ref": "#/$defs/u64" },
-        "help": { "type": "boolean" }
+        "help": { "type": "boolean" },
+        "focus": { "description": "What has the keyboard focus (Step 51): the canvas or a toolbar button.", "enum": ["canvas", "pin", "copy", "save", "cancel"] }
       }
     },
     "first_frame": {
@@ -551,6 +567,16 @@
         "reloaded": { "type": "boolean" },
         "problem": { "type": ["string", "null"] },
         "hotkeys": { "$ref": "#/$defs/hotkeys_state" }
+      }
+    },
+    "settings_reload_result": {
+      "description": "`settings.reload` (Step 51): config.toml read again; the gestures, keyboard help and quick-save folder apply from the next capture.",
+      "type": "object",
+      "required": ["reloaded", "settings"],
+      "additionalProperties": false,
+      "properties": {
+        "reloaded": { "type": "boolean" },
+        "settings": { "$ref": "#/$defs/settings_state" }
       }
     },
     "quit_result": {

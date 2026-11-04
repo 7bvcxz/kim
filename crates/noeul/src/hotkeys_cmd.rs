@@ -903,3 +903,77 @@ fn import(paths: &Paths, a: &ImportArgs) -> Result<Outcome, NoeulError> {
     };
     finish_change(&w, &applied, a.dry_run, true, w.warnings.clone())
 }
+
+/// The overlay bindings of a gesture preset in `hotkeys.json` (`noeul config set
+/// gestures.preset`, `noeul config reset gestures`; NOEUL-FR-024). Turning the Snipaste-style
+/// preset on writes its bindings (`capture.pin` → `Ctrl+T`, `capture.copy` → `Ctrl+C`,
+/// `Enter`) like `noeul hotkeys set` would, refusing a conflict; turning it off resets those
+/// actions to their defaults, but only while they still have exactly the preset's bindings (a
+/// binding the user changed since stays). Returns `(changes, written)`; nothing is written on a
+/// dry run or when nothing changes.
+pub fn apply_preset(
+    paths: &Paths,
+    preset: noeul::settings::Preset,
+    dry_run: bool,
+) -> Result<(Vec<Value>, bool), NoeulError> {
+    use noeul::settings::{PRESET_ACTIONS, Preset};
+    let w = world(paths, true, None);
+    let mut tools = w.tools.clone();
+    let mut changes = Vec::new();
+    let mut changed = false;
+    let edits: Vec<Edit> = match preset {
+        Preset::Snipaste => preset
+            .bindings()
+            .iter()
+            .map(|(action, keys)| Edit::Set {
+                action: (*action).to_string(),
+                bindings: keys
+                    .iter()
+                    .map(|k| BindingSpec::Text((*k).to_string()))
+                    .collect(),
+            })
+            .collect(),
+        Preset::Noeul => PRESET_ACTIONS
+            .iter()
+            .filter(|action| {
+                let state = edit::effective_state(&tools[0], action);
+                let preset_keys = Preset::Snipaste
+                    .bindings()
+                    .iter()
+                    .find(|(a, _)| a == *action)
+                    .map(|(_, k)| k.to_vec())
+                    .unwrap_or_default();
+                state.source == "user" && state.bindings == preset_keys
+            })
+            .map(|action| Edit::Reset {
+                action: (*action).to_string(),
+            })
+            .collect(),
+    };
+    if edits.is_empty() {
+        return Ok((Vec::new(), false));
+    }
+    writable(&w.loaded)?;
+    for e in &edits {
+        let applied = edit::apply(&tools, &[], 0, e, &Options::default()).map_err(refusal)?;
+        changed |= applied.changed;
+        changes.extend(
+            applied
+                .changes
+                .iter()
+                .filter(|c| c.before != c.after)
+                .map(edit::Change::to_json),
+        );
+        tools[0].layer = applied.layer;
+    }
+    let written = changed && !dry_run;
+    if written {
+        let layer = tools[0]
+            .layer
+            .clone()
+            .unwrap_or_else(|| UserLayer::new(nh::TOOL));
+        store::save(&w.loaded.path, &layer, w.loaded.migrated_from.is_some())
+            .map_err(|e| NoeulError::io(w.loaded.path.display(), &e))?;
+    }
+    Ok((changes, written))
+}

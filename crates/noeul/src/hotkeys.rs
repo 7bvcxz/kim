@@ -22,7 +22,9 @@
 //!
 //! `capture.region` (`F1`) is registered since Step 50, which added its selection overlay and the
 //! overlay keys it implements (ADR 0026); Step 49 left it out because the contract forbids
-//! registering an action that does nothing (NOEUL-FR-114).
+//! registering an action that does nothing (NOEUL-FR-114). Step 51 added the overlay's outputs
+//! `capture.copy` (`Ctrl+C`), `capture.save` (`Ctrl+S`) and `capture.quick-save`
+//! (`Ctrl+Shift+S`).
 
 use crate::paths::Paths;
 use kim_hotkeys::check::{Conflict, Severity, ToolState, analyze};
@@ -45,6 +47,9 @@ pub const IMPLEMENTED: &[&str] = &[
     "capture.region",
     "paste.float",
     "capture.pin",
+    "capture.copy",
+    "capture.save",
+    "capture.quick-save",
     "capture.cancel",
     "selection.full",
     "selection.last",
@@ -713,7 +718,8 @@ mod tests {
                 Some("selection.shrink-down"),
             ),
             (c("Enter", false, false, false), true, None),
-            (c("C", true, false, false), false, None),
+            (c("C", true, false, false), false, Some("capture.copy")),
+            (c("S", true, false, true), false, Some("capture.quick-save")),
             (c("Space", false, false, false), false, None),
         ] {
             assert_eq!(

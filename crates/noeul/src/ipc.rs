@@ -44,6 +44,7 @@ pub const METHODS: &[(&str, bool)] = &[
     ("pin.close", true),
     ("pin.reopen", true),
     ("hotkeys.reload", true),
+    ("settings.reload", true),
     ("quit", true),
 ];
 

@@ -85,6 +85,18 @@ mod measure {
         fn clipboard_image(&mut self, _: &Arc<Ledger>) -> noeul::error::Result<Frame> {
             Err(NoeulError::new(Code::NothingToPin, "not used"))
         }
+        fn clipboard_write(&mut self, _: &[u8], _: &[u8]) -> noeul::error::Result<()> {
+            Err(NoeulError::new(
+                Code::ClipboardUnavailable,
+                "never touches the clipboard",
+            ))
+        }
+        fn pictures_dir(&self) -> Option<std::path::PathBuf> {
+            None
+        }
+        fn local_time(&self) -> [u16; 6] {
+            [2026, 1, 1, 0, 0, 0]
+        }
         fn pointer(&self) -> (i32, i32) {
             self.pointer
         }

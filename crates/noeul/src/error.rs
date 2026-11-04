@@ -35,6 +35,8 @@ pub enum Code {
     HotkeyConflict,
     Cancelled,
     NoeulStartFailed,
+    ConfigInvalid,
+    ConfigFromNewerVersion,
 }
 
 impl Code {
@@ -66,6 +68,8 @@ impl Code {
         Code::HotkeyConflict,
         Code::Cancelled,
         Code::NoeulStartFailed,
+        Code::ConfigInvalid,
+        Code::ConfigFromNewerVersion,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -97,6 +101,8 @@ impl Code {
             Code::HotkeyConflict => "hotkey_conflict",
             Code::Cancelled => "cancelled",
             Code::NoeulStartFailed => "noeul_start_failed",
+            Code::ConfigInvalid => "config_invalid",
+            Code::ConfigFromNewerVersion => "config_from_newer_version",
         }
     }
 
@@ -116,11 +122,13 @@ impl Code {
             Code::ProtocolError
             | Code::NoeulIdentityMismatch
             | Code::HotkeysInvalid
-            | Code::ImageInvalid => 4,
+            | Code::ImageInvalid
+            | Code::ConfigInvalid => 4,
             Code::UnsupportedPlatform
             | Code::NoeulIncompatible
             | Code::HotkeyUnsupported
-            | Code::HotkeysFromNewerVersion => 5,
+            | Code::HotkeysFromNewerVersion
+            | Code::ConfigFromNewerVersion => 5,
             Code::DesktopUnavailable
             | Code::ClipboardUnavailable
             | Code::NoeulUnresponsive

@@ -10,7 +10,8 @@
 //! | [`frame`] | Owned capture-image buffers and their accounting |
 //! | [`capture`] | The OS capture boundary: desktop state, monitors, `CaptureBackend` |
 //! | [`selection`] | Capture sessions: one at a time, the frozen picture, [`selection::CaptureSelection`] |
-//! | [`overlay`] | The region-selection overlay: state machine, geometry, DPI math, pixels |
+//! | [`overlay`] | The region-selection overlay: state machine, double-click gesture, toolbar, geometry, DPI math, pixels |
+//! | [`output`] | Copy and save of a selection: PNG and `CF_DIBV5` in memory, files only where the user asked |
 //! | [`pins`] | The pin engine's model: stable IDs, placement, zoom, hide/show, close/reopen/destroy, the window trait |
 //! | [`zoom`] | Pin zoom levels, sizes, fitting and the premultiplying scaler |
 //! | [`annotation`] | **Placeholder**: annotation is Step 56 |
@@ -29,6 +30,7 @@ pub mod error;
 pub mod frame;
 pub mod hotkeys;
 pub mod ipc;
+pub mod output;
 pub mod overlay;
 pub mod paths;
 pub mod pins;

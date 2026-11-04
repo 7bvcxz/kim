@@ -741,7 +741,21 @@ pub fn track_menu(
     items: &[PinMenuItem],
     at: Option<(i32, i32)>,
 ) -> Option<&'static str> {
-    let hwnd = hwnd_of(id)?;
+    track_menu_on(hwnd_of(id)?, items, at)
+}
+
+/// Shows a popup menu owned by `hwnd`, one of Noeul's windows (a pin, the capture overlay), at
+/// `at` or near the window's top-left corner, and returns the chosen action (modal; call it
+/// while the instance core is not borrowed).
+pub(crate) fn track_menu_on(
+    hwnd: HWND,
+    items: &[PinMenuItem],
+    at: Option<(i32, i32)>,
+) -> Option<&'static str> {
+    // SAFETY: a liveness check on a handle the caller got from one of our windows.
+    if hwnd.is_null() || unsafe { IsWindow(hwnd) } == 0 {
+        return None;
+    }
     // SAFETY: a new popup menu, destroyed below.
     let menu = unsafe { CreatePopupMenu() };
     if menu.is_null() {

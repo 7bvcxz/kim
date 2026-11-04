@@ -431,8 +431,9 @@ fn bundled_catalog_shows_noeul_and_ddalgak_as_planned_with_their_metadata() {
         2
     );
     assert!(
-        h.query_by_label_contains("issues/53").is_some(),
-        "docs link"
+        h.query_by_label_contains("docs/NOEUL_PHILOSOPHY.md")
+            .is_some(),
+        "docs link (catalog v4 points at the Step 48 docs)"
     );
     assert!(
         h.query_by_label_contains("Install 0").is_none() && h.query_by_label("Repair").is_none(),

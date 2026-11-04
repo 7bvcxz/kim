@@ -736,12 +736,25 @@ pub fn config_show() -> Result<Outcome> {
             "data_dir": paths.data_dir.display().to_string(),
         },
     });
+    let st = &s.settings;
+    let preset = if st.preset == settings::Preset::Snipaste {
+        format!("{} (on)", st.preset.title())
+    } else {
+        "off".to_string()
+    };
     let human = format!(
-        "Settings: {} ({})\n  tray_icon = {}\n  keyboard_help = {}\nShortcuts: {}\nData folder (ui-state.json only, never pictures): {}\n",
+        "Settings: {} ({})\n  general.tray_icon = {}\n  capture.keyboard_help = {}\n  capture.quick_save_folder = {}\n  gestures.double_click = {}\n  gestures.middle_click = {}\n  gestures.preset = {} (Snipaste-style gestures: {preset})\nShortcuts: {}\nData folder (ui-state.json only, never pictures): {}\nChange a setting: noeul config set <key> <value>; reset: noeul config reset [<section>] --yes\n",
         paths.config_file().display(),
         s.state.as_str(),
-        s.settings.tray_icon,
-        s.settings.keyboard_help.as_str(),
+        st.tray_icon,
+        st.keyboard_help.as_str(),
+        st.quick_save_folder.as_ref().map_or_else(
+            || "(default: the Pictures folder + Noeul)".to_string(),
+            |p| p.display().to_string()
+        ),
+        st.gestures.double_click.as_str(),
+        st.gestures.middle_click.as_str(),
+        st.preset.as_str(),
         paths.hotkeys_file().display(),
         paths.data_dir.display()
     );
@@ -782,6 +795,35 @@ pub fn registrations(ctx: &Ctx) -> Result<Option<Vec<(String, String, String)>>>
 }
 
 /// Tells a running instance to re-read `hotkeys.json`; a sentence when that did not work.
+/// Asks a running instance to read `config.toml` again (IPC `settings.reload`). `Ok(true)` when
+/// it did, `Ok(false)` when none runs; the file watcher would also notice the change.
+pub fn reload_settings(ctx: &Ctx) -> std::result::Result<bool, String> {
+    #[cfg(windows)]
+    {
+        match connect(ctx) {
+            Ok(None) => Ok(false),
+            Ok(Some(mut s)) => s
+                .request("settings.reload", json!({}))
+                .map(|_| true)
+                .map_err(|e| {
+                    format!(
+                        "the running Noeul could not reload its settings: {}",
+                        e.message
+                    )
+                }),
+            Err(e) => Err(format!(
+                "the running Noeul could not be told to reload: {}",
+                e.message
+            )),
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = ctx;
+        Ok(false)
+    }
+}
+
 pub fn reload_hotkeys(ctx: &Ctx) -> Option<String> {
     #[cfg(windows)]
     {

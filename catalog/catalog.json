@@ -1,7 +1,7 @@
 {
   "schema": "kim.catalog",
   "schema_version": 1,
-  "catalog_version": 3,
+  "catalog_version": 4,
   "generated_at": "2026-11-04T00:00:00Z",
   "expires_at": "2027-05-04T00:00:00Z",
   "publisher": "mouv",
@@ -84,8 +84,8 @@
       "links": [
         {
           "kind": "docs",
-          "title": "Noeul design and Snipaste parity plan (Step 48)",
-          "url": "https://github.com/hellomouv/kim/issues/53"
+          "title": "Noeul philosophy, requirements and Snipaste parity (Step 48)",
+          "url": "https://github.com/hellomouv/kim/blob/main/docs/NOEUL_PHILOSOPHY.md"
         },
         {
           "kind": "shortcuts",
@@ -168,7 +168,7 @@
       "entry_points": [
         {
           "kind": "gui",
-          "command": "ddalgak",
+          "command": "ddalgak-gui",
           "summary": "Starts Ddalgak with its tray icon and rule editor; the engine stays off until you turn it on",
           "status": "planned"
         },
@@ -206,8 +206,8 @@
       "links": [
         {
           "kind": "docs",
-          "title": "Ddalgak design and rule model (Step 65)",
-          "url": "https://github.com/hellomouv/kim/issues/70"
+          "title": "Ddalgak philosophy, rule model and safety (Step 65)",
+          "url": "https://github.com/hellomouv/kim/blob/main/docs/DDALGAK_PHILOSOPHY.md"
         },
         {
           "kind": "shortcuts",
@@ -257,6 +257,11 @@
         {
           "id": "keyboard-hook",
           "detail": "A low-level keyboard hook exists only while you have the engine on; it acts on your rule triggers only and records no keystrokes",
+          "opt_in": true
+        },
+        {
+          "id": "mouse-hook",
+          "detail": "A low-level mouse hook exists only while the engine is on and one of your rules uses a mouse button as its trigger; it acts on the middle and side buttons only and records nothing",
           "opt_in": true
         },
         {

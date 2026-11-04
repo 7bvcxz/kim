@@ -21,6 +21,9 @@ workspace = true
 clap = { version = "4.6.7", features = ["derive"] }
 # Shortcuts: manifest, user layer, conflicts and the `RegisterHotKey` backend (ADR 0017).
 kim-hotkeys = { version = "0.0.1", path = "../kim-hotkeys" }
+# PNG for Copy (the clipboard's `PNG` format) and Save (NOEUL-FR-030/031, Step 51): pure Rust,
+# MIT/Apache-2.0, already in the workspace lock with its dependencies (no new crate).
+png = { version = "0.18.1", default-features = false }
 serde = { version = "1.0.229", features = ["derive"] }
 # The --json envelope and IPC v1 messages.
 serde_json = "1.0.154"
@@ -30,8 +33,9 @@ toml = { version = "1.1.8", default-features = false, features = ["parse", "serd
 
 [target."cfg(windows)".dependencies]
 # Plain Win32 (ADR 0023): GDI screen capture into memory, layered pin windows, the optional
-# notification-area icon, the clipboard (read on paste only), the per-user named pipe with peer
-# identity checks, input-desktop and session checks. No GUI framework, no hook, no service.
+# notification-area icon, the clipboard (read on paste, written on Copy only), the save dialog and
+# the Pictures folder (Step 51), the per-user named pipe with peer identity checks, input-desktop
+# and session checks. No GUI framework, no hook, no service.
 windows-sys = { version = "0.61.2", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
@@ -41,6 +45,7 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_System_DataExchange",
     "Win32_System_IO",
     "Win32_System_JobObjects",
+    "Win32_System_Com",
     "Win32_System_LibraryLoader",
     "Win32_System_Memory",
     "Win32_System_Ole",
@@ -48,8 +53,11 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_System_ProcessStatus",
     "Win32_System_RemoteDesktop",
     "Win32_System_StationsAndDesktops",
+    "Win32_System_SystemInformation",
     "Win32_System_SystemServices",
     "Win32_System_Threading",
+    "Win32_UI_Controls",
+    "Win32_UI_Controls_Dialogs",
     "Win32_UI_HiDpi",
     "Win32_UI_Input_Ime",
     "Win32_UI_Input_KeyboardAndMouse",

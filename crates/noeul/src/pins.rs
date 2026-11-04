@@ -346,6 +346,11 @@ impl Pins {
         self.open.get(&id).map(Pin::rect)
     }
 
+    /// The picture of an open pin at 100 % (what `pin.copy` and `pin.save` output, Step 51).
+    pub fn picture(&self, id: PinId) -> Option<&Frame> {
+        self.open.get(&id).map(|p| &p.frame)
+    }
+
     /// The pin closed last (reopen memory), if any.
     pub fn reopenable(&self) -> Option<PinId> {
         self.closed.as_ref().map(|c| c.id)

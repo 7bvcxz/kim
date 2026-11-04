@@ -185,7 +185,9 @@ this document with its exit code.
 | `nothing_to_pin` | 3 | The clipboard holds nothing Noeul can pin. |
 | `noeul_identity_mismatch` | 4 | The endpoint is served by a process that is not `noeul.exe` of this user (a pipe squatter, or a process that cannot be verified). Nothing was sent to it. |
 | `image_invalid` | 4 | The image is malformed or exceeds the size limits. |
+| `config_invalid` | 4 | `config.toml` is not valid TOML, or `noeul config set` or `reset` cannot edit its layout in place without changing other keys; nothing was written (Step 51). |
 | `noeul_incompatible` | 5 | The running Noeul and this CLI share no IPC protocol major. Neither is restarted. |
+| `config_from_newer_version` | 5 | `config.toml` was written by a newer Noeul (`schema_version` above 1); it is read-only and never rewritten (Step 51). |
 | `desktop_unavailable` | 6 | No unlocked interactive desktop for this user: locked, secure desktop, disconnected remote session, no interactive window station, or no display. Retry after unlocking. |
 | `clipboard_unavailable` | 6 | Another program kept the clipboard open for longer than 500 ms. |
 | `noeul_unresponsive` | 6 | A verified Noeul accepted the connection but did not answer in time (or closed it). It is not stopped. |

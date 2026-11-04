@@ -42,20 +42,20 @@ use windows_sys::Win32::Graphics::Gdi::{
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Input::Ime::ImmAssociateContextEx;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    GetDoubleClickTime, GetKeyState, ReleaseCapture, SetCapture, SetFocus, VK_CONTROL, VK_MENU,
-    VK_SHIFT,
+    GetDoubleClickTime, GetKeyState, ReleaseCapture, SetCapture, SetFocus, VK_APPS, VK_CONTROL,
+    VK_F10, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA, GetMessageTime,
-    GetSystemMetrics, GetWindowLongPtrW, GetWindowThreadProcessId, HCURSOR, HTCLIENT, IDC_CROSS,
-    IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, IsWindow, IsWindowVisible,
-    LoadCursorW, MA_NOACTIVATE, RegisterClassExW, SM_CXDOUBLECLK, SM_CXDRAG, SM_CYDOUBLECLK,
-    SM_CYDRAG, SW_SHOW, SW_SHOWNOACTIVATE, SetCursor, SetForegroundWindow, SetWindowLongPtrW,
-    ShowWindow, WA_INACTIVE, WM_ACTIVATE, WM_CAPTURECHANGED, WM_CLOSE, WM_DESTROY,
-    WM_DISPLAYCHANGE, WM_DPICHANGED, WM_ERASEBKGND, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_PAINT, WM_RBUTTONDOWN,
-    WM_RBUTTONUP, WM_SETCURSOR, WM_SYSKEYDOWN, WM_SYSKEYUP, WNDCLASSEXW, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    GetSystemMetrics, GetWindowLongPtrW, GetWindowThreadProcessId, HCURSOR, HTCLIENT, IDC_ARROW,
+    IDC_CROSS, IDC_SIZEALL, IDC_SIZENESW, IDC_SIZENS, IDC_SIZENWSE, IDC_SIZEWE, IsWindow,
+    IsWindowVisible, LoadCursorW, MA_NOACTIVATE, RegisterClassExW, SM_CXDOUBLECLK, SM_CXDRAG,
+    SM_CYDOUBLECLK, SM_CYDRAG, SW_SHOW, SW_SHOWNOACTIVATE, SetCursor, SetForegroundWindow,
+    SetWindowLongPtrW, ShowWindow, WA_INACTIVE, WM_ACTIVATE, WM_CAPTURECHANGED, WM_CLOSE,
+    WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_ERASEBKGND, WM_KEYDOWN, WM_KEYUP,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_PAINT,
+    WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SYSKEYDOWN, WM_SYSKEYUP, WNDCLASSEXW,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 
 const CLASS: &str = "NoeulOverlay";
@@ -70,6 +70,15 @@ thread_local! {
     static CURSOR: Cell<usize> = const { Cell::new(0) };
     static LAST: Cell<(i32, i32)> = const { Cell::new((0, 0)) };
     static RELEASING: Cell<bool> = const { Cell::new(false) };
+    /// The open overlay window (the owner of its context menu and of the save dialog).
+    static CURRENT: Cell<usize> = const { Cell::new(0) };
+}
+
+/// The open overlay window, if any (same thread).
+pub fn current() -> Option<HWND> {
+    let h = CURRENT.get() as HWND;
+    // SAFETY: a liveness query on a handle we created.
+    (!h.is_null() && unsafe { IsWindow(h) } != 0).then_some(h)
 }
 
 /// Sets what runs after the overlay queued an event (the instance's pump). Same thread.
@@ -103,6 +112,7 @@ fn mods() -> Mods {
         ctrl: down(VK_CONTROL),
         shift: down(VK_SHIFT),
         alt: down(VK_MENU),
+        win: down(VK_LWIN) || down(VK_RWIN),
     }
 }
 
@@ -236,6 +246,18 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 return 0;
             }
             let repeat = (lp >> 30) & 1 == 1;
+            // The menu key and Shift+F10 open the selection's context menu (reserved keys).
+            if vk == u32::from(VK_APPS)
+                || (vk == u32::from(VK_F10)
+                    && down(VK_SHIFT)
+                    && !down(VK_CONTROL)
+                    && !down(VK_MENU))
+            {
+                if !repeat {
+                    input(Input::MenuKey);
+                }
+                return 0;
+            }
             if let Some(name) = vk_name(vk) {
                 if msg == WM_SYSKEYDOWN && name == "F4" {
                     // Alt+F4 (reserved `window.close`) leaves the overlay.
@@ -440,6 +462,7 @@ impl WinOverlay {
         ORIGIN.set((picture.x, picture.y));
         ACTIVATES.set(placement.activate);
         LAST.set((picture.x, picture.y));
+        CURRENT.set(hwnd as usize);
         Ok(o)
     }
 
@@ -538,30 +561,71 @@ impl WinOverlay {
             .eq_ignore_ascii_case(face)
     }
 
-    /// Draws the text of the labels that intersect `area`, clipped to it.
+    /// Clips the back buffer's DC to `area` (client coordinates), once per area.
+    fn clip(&self, area: Rect, clipped: &mut bool) {
+        if *clipped {
+            return;
+        }
+        let (ox, oy) = (self.picture.x, self.picture.y);
+        // SAFETY: a region in client coordinates, selected (copied) into our DC and deleted
+        // right after.
+        unsafe {
+            let rgn = CreateRectRgn(
+                area.x - ox,
+                area.y - oy,
+                area.x - ox + i32::try_from(area.width).unwrap_or(0),
+                area.y - oy + i32::try_from(area.height).unwrap_or(0),
+            );
+            SelectClipRgn(self.mem, rgn);
+            DeleteObject(rgn);
+        }
+        *clipped = true;
+    }
+
+    /// Draws the text of the labels and toolbar buttons that intersect `area`, clipped to it.
     fn draw_text(&self, scene: &Scene, area: Rect) {
         let (ox, oy) = (self.picture.x, self.picture.y);
         let labels = scene.chip.iter().chain(scene.help.iter());
         let mut clipped = false;
+        if let Some(bar) = &scene.toolbar
+            && bar.rect.intersects(&area)
+        {
+            self.clip(area, &mut clipped);
+            let f = self.font(Font::Ui, bar.dpi);
+            for b in &bar.buttons {
+                let text: Vec<u16> = b.label.encode_utf16().collect();
+                let (tw, th) = self.text(Font::Ui, bar.dpi, b.label);
+                let x = b.rect.x
+                    + (i32::try_from(b.rect.width).unwrap_or(0) - i32::try_from(tw).unwrap_or(0))
+                        / 2;
+                let y = b.rect.y
+                    + (i32::try_from(b.rect.height).unwrap_or(0) - i32::try_from(th).unwrap_or(0))
+                        / 2;
+                let c = if b.primary {
+                    color::TEXT_ON_ACCENT
+                } else {
+                    color::TEXT_PRIMARY
+                };
+                // SAFETY: our DC and font; NUL-free UTF-16 text with its length.
+                unsafe {
+                    let prev = SelectObject(self.mem, f);
+                    SetTextColor(self.mem, rgb(c));
+                    TextOutW(
+                        self.mem,
+                        x - ox,
+                        y - oy,
+                        text.as_ptr(),
+                        i32::try_from(text.len()).unwrap_or(0),
+                    );
+                    SelectObject(self.mem, prev);
+                }
+            }
+        }
         for label in labels {
             if !label.rect.intersects(&area) {
                 continue;
             }
-            if !clipped {
-                // SAFETY: a region in client coordinates, selected (copied) into our DC and
-                // deleted right after.
-                unsafe {
-                    let rgn = CreateRectRgn(
-                        area.x - ox,
-                        area.y - oy,
-                        area.x - ox + i32::try_from(area.width).unwrap_or(0),
-                        area.y - oy + i32::try_from(area.height).unwrap_or(0),
-                    );
-                    SelectClipRgn(self.mem, rgn);
-                    DeleteObject(rgn);
-                }
-                clipped = true;
-            }
+            self.clip(area, &mut clipped);
             let f = self.font(label.font, label.dpi);
             // SAFETY: our DC, font and NUL-free UTF-16 text with its length.
             unsafe {
@@ -685,6 +749,7 @@ impl OverlayWindow for WinOverlay {
     fn set_cursor(&mut self, cursor: Cursor) {
         let id = match cursor {
             Cursor::Cross => IDC_CROSS,
+            Cursor::Arrow => IDC_ARROW,
             Cursor::Move => IDC_SIZEALL,
             Cursor::SizeWe => IDC_SIZEWE,
             Cursor::SizeNs => IDC_SIZENS,
@@ -716,6 +781,9 @@ impl OverlayWindow for WinOverlay {
             if self.alive() {
                 SetWindowLongPtrW(self.hwnd, GWLP_USERDATA, 0);
                 DestroyWindow(self.hwnd);
+            }
+            if CURRENT.get() == self.hwnd as usize {
+                CURRENT.set(0);
             }
             self.hwnd = std::ptr::null_mut();
             for (_, _, f) in self.fonts.borrow_mut().drain(..) {
@@ -902,6 +970,35 @@ mod tests {
             [a[0], a[1], a[2]],
             "the border above the selection"
         );
+        // The toolbar (Step 51): no room below or above on the 150 % monitor, so inside the
+        // selection's bottom edge; the Pin button is accent-filled and GDI drew its label.
+        let bar = scene
+            .toolbar
+            .clone()
+            .expect("a toolbar next to the selection");
+        assert_eq!(bar.dpi, 144);
+        assert_eq!(
+            (
+                bar.rect.x - picture.x,
+                bar.rect.y - picture.y,
+                bar.rect.width,
+                bar.rect.height
+            ),
+            (640, 193, 360, 48)
+        );
+        let pin = bar.buttons[0].rect;
+        let (mut fill, mut ink) = (0, 0);
+        for y in pin.y - picture.y..pin.y - picture.y + i32::try_from(pin.height).unwrap() {
+            for x in pin.x - picture.x..pin.x - picture.x + i32::try_from(pin.width).unwrap() {
+                if at(x, y) == [a[0], a[1], a[2]] {
+                    fill += 1;
+                } else {
+                    ink += 1;
+                }
+            }
+        }
+        assert!(fill > 1000, "accent fill: {fill}");
+        assert!(ink > 20, "the label's text was drawn: {ink} pixels");
         // Keys arrive as chords for the core to match.
         // SAFETY: as above.
         unsafe {

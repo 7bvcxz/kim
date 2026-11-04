@@ -424,6 +424,7 @@ scenario `e2e/tests/step12_subak_cli.rs`):
 | `cmd_and_windows_powershell_keep_working_after_an_attach_ends_or_is_killed` | §5, killed clients under cmd.exe and PowerShell 5.1 |
 | `the_cli_schema_embeds_the_ipc_and_capabilities_definitions_unchanged` | `subak-cli-v1` shares the IPC and capabilities definitions verbatim |
 | `scrollback_replay.rs` (Step 13) | `capture`, `history`, `clear-history` and `--history-limit` against real panes; reattach coherence, concurrency, resize, eviction, resync, idle cost, redaction ([SCROLLBACK §8](SCROLLBACK.md)) |
+| `milestone_a.rs` (Step 14) | real `subak attach` clients killed, detached by `Ctrl+B d`, by the end of input and by `subak detach`, reattached to the same programs with their state; 60 cycles without leaks; a reattached client's output equals the Host's history and screen; clients exit 6 when the Host is killed ([MILESTONE_A_VALIDATION](MILESTONE_A_VALIDATION.md)) |
 
 ## 10. Not implemented yet
 

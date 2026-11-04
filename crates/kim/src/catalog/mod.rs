@@ -156,6 +156,7 @@ pub const KNOWN_RUNS: &[(&str, &str)] = &[
 pub const KNOWN_PERMISSIONS: &[(&str, &str)] = &[
     ("global-hotkeys", "Registers system-wide shortcuts"),
     ("keyboard-hook", "Installs a low-level keyboard hook"),
+    ("mouse-hook", "Installs a low-level mouse hook"),
     ("screen-capture", "Captures the screen"),
     ("clipboard", "Reads and writes the clipboard"),
     ("input-injection", "Injects keyboard and mouse input"),

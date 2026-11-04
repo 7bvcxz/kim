@@ -1,0 +1,41 @@
+{
+  "schema": "ddalgak.rules",
+  "schema_version": 1,
+  "hotkey_contract": 1,
+  "active_profile": "default",
+  "profiles": [
+    {
+      "id": "default",
+      "title": "Default",
+      "default_mode": "base",
+      "modes": [
+        {
+          "id": "base",
+          "title": "Base"
+        }
+      ],
+      "rules": [
+        {
+          "id": "fake-emergency",
+          "title": "Fake emergency",
+          "enabled": true,
+          "trigger": {
+            "keys": "F13"
+          },
+          "steps": [
+            {
+              "type": "remap",
+              "to": "Ctrl+Alt+Shift+Escape"
+            }
+          ],
+          "consent": {
+            "input-injection": {
+              "granted_at": "2026-11-04T09:00:00Z",
+              "via": "gui"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

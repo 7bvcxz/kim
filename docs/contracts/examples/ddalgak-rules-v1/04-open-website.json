@@ -1,0 +1,44 @@
+{
+  "schema": "ddalgak.rules",
+  "schema_version": 1,
+  "hotkey_contract": 1,
+  "active_profile": "default",
+  "profiles": [
+    {
+      "id": "default",
+      "title": "Websites",
+      "default_mode": "base",
+      "modes": [{"id": "base", "title": "Base"}],
+      "rules": [
+        {
+          "id": "kim-repo",
+          "title": "Open the Kim repository",
+          "enabled": true,
+          "trigger": {"keys": "Ctrl+Shift+F9"},
+          "steps": [{"type": "open_url", "url": "https://github.com/hellomouv/kim"}],
+          "consent": {"launch-programs": {"granted_at": "2026-11-04T09:40:00Z", "via": "gui", "fingerprint": "sha256:fa0b97ff8459f1d562cd49dfef59de849146a136c566a51e4a1d5f7c924ea21b"}}
+        },
+        {
+          "id": "search-docs",
+          "title": "Open the AutoHotkey v2 hotkey reference",
+          "enabled": true,
+          "trigger": {"keys": "Ctrl+Shift+F10"},
+          "steps": [{"type": "open_url", "url": "https://www.autohotkey.com/docs/v2/Hotkeys.htm#Symbols"}],
+          "consent": {"launch-programs": {"granted_at": "2026-11-04T09:41:00Z", "via": "gui", "fingerprint": "sha256:9135c38b8194c4f510fab7c8e3194db6a1eddfe4fc01b9040aafdb0460cb73f6"}}
+        },
+        {
+          "id": "morning-tabs",
+          "title": "Open two dashboards, one after the other",
+          "enabled": true,
+          "trigger": {"keys": "Ctrl+Shift+F11"},
+          "steps": [
+            {"type": "open_url", "url": "http://localhost:3000/status?view=compact"},
+            {"type": "delay", "ms": 300},
+            {"type": "open_url", "url": "https://example.com/calendar#today"}
+          ],
+          "consent": {"launch-programs": {"granted_at": "2026-11-04T09:42:00Z", "via": "gui", "fingerprint": "sha256:873e76042eb9e7319337f52560fb8ee1f2acbf29640c65986bb9118d6750b7da"}}
+        }
+      ]
+    }
+  ]
+}

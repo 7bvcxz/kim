@@ -1,0 +1,35 @@
+{
+  "schema": "ddalgak.simulation",
+  "schema_version": 1,
+  "kind": "simulate",
+  "profile": "default",
+  "revision": 2,
+  "context": {
+    "mode": "base",
+    "engine": "paused",
+    "focus": "normal",
+    "app": null,
+    "ime_composing": false
+  },
+  "event": {
+    "keys": "RCtrl",
+    "on": "release",
+    "source": "physical"
+  },
+  "decision": {
+    "outcome": "skipped",
+    "code": "skipped_paused",
+    "rule": "turn-off",
+    "key_reaches_app": true,
+    "candidates": [
+      {
+        "rule": "turn-off",
+        "result": "inactive",
+        "reason": "The engine is paused; only pause and resume rules run."
+      }
+    ]
+  },
+  "effects": [],
+  "injected_events": 0,
+  "opened": []
+}

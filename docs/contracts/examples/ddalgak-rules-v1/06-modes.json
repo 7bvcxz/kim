@@ -1,0 +1,102 @@
+{
+  "schema": "ddalgak.rules",
+  "schema_version": 1,
+  "hotkey_contract": 1,
+  "active_profile": "default",
+  "profiles": [
+    {
+      "id": "default",
+      "title": "Modes",
+      "description": "User-defined modes: hold CapsLock for a navigation layer, switch, cycle and return.",
+      "default_mode": "base",
+      "modes": [
+        {"id": "base", "title": "Base"},
+        {"id": "nav", "title": "Navigation", "color": "#B7A6F5"},
+        {"id": "symbols", "title": "Symbols", "color": "#E8C27A"}
+      ],
+      "rules": [
+        {
+          "id": "hold-nav",
+          "title": "Hold CapsLock for the navigation layer",
+          "enabled": true,
+          "trigger": {"keys": "CapsLock"},
+          "steps": [{"type": "mode", "op": "hold", "mode": "nav"}]
+        },
+        {
+          "id": "set-nav",
+          "title": "Ctrl+Shift+F1 switches to Navigation",
+          "enabled": true,
+          "trigger": {"keys": "Ctrl+Shift+F1"},
+          "steps": [{"type": "mode", "op": "set", "mode": "nav"}]
+        },
+        {
+          "id": "cycle-modes",
+          "title": "Ctrl+Shift+F2 cycles Base, Navigation, Symbols",
+          "enabled": true,
+          "trigger": {"keys": "Ctrl+Shift+F2"},
+          "steps": [{"type": "mode", "op": "cycle", "modes": ["base", "nav", "symbols"]}]
+        },
+        {
+          "id": "back",
+          "title": "Ctrl+Shift+F3 returns to the previous mode",
+          "enabled": true,
+          "trigger": {"keys": "Ctrl+Shift+F3"},
+          "steps": [{"type": "mode", "op": "previous"}]
+        },
+        {
+          "id": "home-mode",
+          "title": "Escape in a mode returns to Base and still reaches the application",
+          "enabled": true,
+          "modes": ["nav", "symbols"],
+          "trigger": {"keys": "Escape", "pass_through": true},
+          "steps": [{"type": "mode", "op": "default"}]
+        },
+        {
+          "id": "nav-left",
+          "title": "H is Left in Navigation",
+          "enabled": true,
+          "modes": ["nav"],
+          "trigger": {"keys": "code:KeyH"},
+          "steps": [{"type": "remap", "to": "Left"}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T10:00:00Z", "via": "gui"}}
+        },
+        {
+          "id": "nav-down",
+          "title": "J is Down in Navigation",
+          "enabled": true,
+          "modes": ["nav"],
+          "trigger": {"keys": "code:KeyJ"},
+          "steps": [{"type": "remap", "to": "Down"}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T10:00:00Z", "via": "gui"}}
+        },
+        {
+          "id": "nav-up",
+          "title": "K is Up in Navigation",
+          "enabled": true,
+          "modes": ["nav"],
+          "trigger": {"keys": "code:KeyK"},
+          "steps": [{"type": "remap", "to": "Up"}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T10:00:00Z", "via": "gui"}}
+        },
+        {
+          "id": "nav-right",
+          "title": "L is Right in Navigation",
+          "enabled": true,
+          "modes": ["nav"],
+          "trigger": {"keys": "code:KeyL"},
+          "steps": [{"type": "remap", "to": "Right"}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T10:00:00Z", "via": "gui"}}
+        },
+        {
+          "id": "arrow-symbol",
+          "title": "A types → in Symbols",
+          "enabled": true,
+          "modes": ["symbols"],
+          "trigger": {"keys": "code:KeyA"},
+          "steps": [{"type": "type_text", "text": "→"}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T10:00:00Z", "via": "gui"}}
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,566 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/hellomouv/kim/blob/main/docs/contracts/schemas/ddalgak-rules-v1.schema.json",
+  "title": "Ddalgak rules document, schema_version 1",
+  "description": "Ddalgak's rules file (%APPDATA%\\mouv\\ddalgak\\rules.json) and its export format: profiles, modes and rules (trigger, conditions, ordered steps, priority, pass-through, enabled state, consent). See docs/DDALGAK_RULE_MODEL.md. Triggers use the key names of the hotkey contract v1 (docs/HOTKEY_CONTRACT.md §5) with Ddalgak's extensions (bare modifiers, lock keys). Objects are open: unknown fields are preserved, but an unknown field or step type inside a rule makes that rule inactive, never broader (DDALGAK_RULE_MODEL §9). Cross-references (unique IDs, mode and profile references, self-triggering outputs, duplicate triggers) are checked by the semantic rules of DDALGAK_RULE_MODEL §8, which `cargo xtask schema-check` also runs on the examples.",
+  "type": "object",
+  "required": ["schema", "schema_version", "hotkey_contract", "active_profile", "profiles"],
+  "properties": {
+    "schema": {"const": "ddalgak.rules"},
+    "schema_version": {"const": 1},
+    "hotkey_contract": {"description": "Version of the key syntax used by triggers (HOTKEY_CONTRACT §16).", "const": 1},
+    "revision": {
+      "description": "Incremented by every write; writers pass the revision they read and fail with `rule_conflict` if it changed (GUI and CLI editing at the same time).",
+      "type": "integer",
+      "minimum": 0
+    },
+    "active_profile": {"$ref": "#/$defs/profile_id"},
+    "settings": {"$ref": "#/$defs/settings"},
+    "exported": {
+      "description": "Present only in an exported file. Import ignores `settings`, `active_profile` and every `consent`, and adds the profiles with their rules disabled until the user reviews them (DDALGAK_RULE_MODEL §10).",
+      "type": "object",
+      "required": ["exported_at", "by_version"],
+      "properties": {
+        "exported_at": {"type": "string", "format": "date-time"},
+        "by_version": {"$ref": "#/$defs/semver"}
+      }
+    },
+    "profiles": {"type": "array", "minItems": 1, "maxItems": 64, "items": {"$ref": "#/$defs/profile"}}
+  },
+  "$defs": {
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$"
+    },
+    "profile_id": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$"},
+    "mode_id": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$"},
+    "rule_id": {
+      "description": "Stable rule ID, unique in the document. It forms the hotkey action ID `rule.<id>` (HOTKEY_CONTRACT §13.4), so it is one lowercase segment; generated IDs are `r-<uuid>`.",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{1,47}$"
+    },
+    "title": {"type": "string", "minLength": 1, "maxLength": 80},
+    "settings": {
+      "type": "object",
+      "properties": {
+        "engine_on_start": {
+          "description": "`off` (default): the engine (and its keyboard hook) stays off until the user turns it on. `on`: the user chose to start with the engine on. Never `on` after an unclean exit or an emergency off (DDALGAK_SAFETY §4).",
+          "enum": ["off", "on"]
+        },
+        "activity": {
+          "type": "object",
+          "properties": {
+            "persist": {"description": "Keep the activity list (rule IDs, outcomes, times; never keys or text) in a capped local file. Default false: memory only.", "type": "boolean"},
+            "max_entries": {"type": "integer", "minimum": 50, "maximum": 10000}
+          }
+        },
+        "max_runs_per_second": {"description": "Per-rule rate limit; further triggers are dropped with `rate_limited`. Default 20.", "type": "integer", "minimum": 1, "maximum": 100}
+      }
+    },
+    "profile": {
+      "type": "object",
+      "required": ["id", "title", "default_mode", "modes", "rules"],
+      "properties": {
+        "id": {"$ref": "#/$defs/profile_id"},
+        "title": {"$ref": "#/$defs/title"},
+        "description": {"type": "string", "maxLength": 500},
+        "default_mode": {"$ref": "#/$defs/mode_id"},
+        "modes": {"type": "array", "minItems": 1, "maxItems": 32, "items": {"$ref": "#/$defs/mode"}},
+        "rules": {"type": "array", "maxItems": 1000, "items": {"$ref": "#/$defs/rule"}}
+      }
+    },
+    "mode": {
+      "type": "object",
+      "required": ["id", "title"],
+      "properties": {
+        "id": {"$ref": "#/$defs/mode_id"},
+        "title": {"$ref": "#/$defs/title"},
+        "color": {"description": "Shown in the mode indicator, always together with the mode's title.", "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$"}
+      }
+    },
+    "trigger_syntax": {
+      "description": "Hotkey contract v1 chords and sequences (one to four chords) without char: keys or leaders, plus the lock keys CapsLock and NumLock as keys, or one bare side-specific modifier (RAlt, LCtrl, ...). DDALGAK_RULE_MODEL §3.",
+      "type": "string",
+      "pattern": "^((L|R)(Ctrl|Alt|Shift)|(((L|R)?Ctrl\\+)?((L|R)?Alt\\+)?|AltGr\\+)((L|R)?Shift\\+)?((L|R)?Win\\+)?([A-Z0-9]|F([1-9]|1[0-9]|2[0-4])|Escape|Tab|Enter|Space|Backspace|Insert|Delete|Home|End|PageUp|PageDown|Up|Down|Left|Right|Plus|Minus|Comma|Period|Numpad[0-9]|NumpadAdd|NumpadSubtract|NumpadMultiply|NumpadDivide|NumpadDecimal|NumpadEnter|PrintScreen|Pause|ScrollLock|CapsLock|NumLock|ContextMenu|MediaPlayPause|MediaStop|MediaNext|MediaPrevious|VolumeUp|VolumeDown|VolumeMute|HangulMode|Hanja|KanaMode|Convert|NonConvert|code:(Key[A-Z]|Digit[0-9]|Minus|Equal|BracketLeft|BracketRight|Backslash|Semicolon|Quote|Backquote|Comma|Period|Slash|IntlBackslash|IntlRo|IntlYen|Lang[1-5]))( (((L|R)?Ctrl\\+)?((L|R)?Alt\\+)?|AltGr\\+)((L|R)?Shift\\+)?((L|R)?Win\\+)?([A-Z0-9]|F([1-9]|1[0-9]|2[0-4])|Escape|Tab|Enter|Space|Backspace|Insert|Delete|Home|End|PageUp|PageDown|Up|Down|Left|Right|Plus|Minus|Comma|Period|Numpad[0-9]|NumpadAdd|NumpadSubtract|NumpadMultiply|NumpadDivide|NumpadDecimal|NumpadEnter|PrintScreen|Pause|ScrollLock|CapsLock|NumLock|ContextMenu|MediaPlayPause|MediaStop|MediaNext|MediaPrevious|VolumeUp|VolumeDown|VolumeMute|HangulMode|Hanja|KanaMode|Convert|NonConvert|code:(Key[A-Z]|Digit[0-9]|Minus|Equal|BracketLeft|BracketRight|Backslash|Semicolon|Quote|Backquote|Comma|Period|Slash|IntlBackslash|IntlRo|IntlYen|Lang[1-5]))){0,3})$"
+    },
+    "reserved_free": {
+      "description": "Rejects the scope-independent reserved chords of HOTKEY_CONTRACT §7 in any step. Kept identical to `$defs.reserved_free` of kim-hotkeys-v1 (checked by `cargo xtask schema-check`).",
+      "allOf": [
+        {
+          "description": "Ctrl+Alt+Delete is the Secure Attention Sequence (reserved by the OS, HOTKEY_CONTRACT §7.1)",
+          "not": {
+            "type": "string",
+            "pattern": "(^| )((L|R)?Ctrl\\+(L|R)?Alt\\+((L|R)?Shift\\+)?(Delete|NumpadDecimal))( |$)"
+          }
+        },
+        {
+          "description": "chords with the Windows key are reserved by the OS (HOTKEY_CONTRACT §7.1)",
+          "not": {"type": "string", "pattern": "(^| )(([A-Za-z]+\\+)*(L|R)?Win\\+\\S+)( |$)"}
+        },
+        {
+          "description": "Ctrl+Shift+Escape opens Task Manager (reserved by the OS, HOTKEY_CONTRACT §7.1)",
+          "not": {"type": "string", "pattern": "(^| )((L|R)?Ctrl\\+(L|R)?Shift\\+Escape)( |$)"}
+        },
+        {
+          "description": "Ctrl+Escape opens Start (reserved by the OS, HOTKEY_CONTRACT §7.1)",
+          "not": {"type": "string", "pattern": "(^| )((L|R)?Ctrl\\+Escape)( |$)"}
+        },
+        {
+          "description": "Alt+Tab task switching is reserved by the OS (HOTKEY_CONTRACT §7.1)",
+          "not": {"type": "string", "pattern": "(^| )(((L|R)?Ctrl\\+)?(L|R)?Alt\\+((L|R)?Shift\\+)?Tab)( |$)"}
+        },
+        {
+          "description": "Alt+Escape window cycling is reserved by the OS (HOTKEY_CONTRACT §7.1)",
+          "not": {"type": "string", "pattern": "(^| )((L|R)?Alt\\+((L|R)?Shift\\+)?Escape)( |$)"}
+        },
+        {
+          "description": "Alt+Shift+PrintScreen toggles High Contrast (reserved by the OS, HOTKEY_CONTRACT §7.1)",
+          "not": {"type": "string", "pattern": "(^| )((L|R)?Alt\\+(L|R)?Shift\\+PrintScreen)( |$)"}
+        },
+        {
+          "description": "Alt+F4 closes the window (reserved by Kim, HOTKEY_CONTRACT §7.2)",
+          "not": {"type": "string", "pattern": "(^| )((L|R)?Alt\\+F4)( |$)"}
+        },
+        {
+          "description": "Ctrl+Alt+Shift+Escape is the emergency chord (reserved by Kim, HOTKEY_CONTRACT §7.4)",
+          "not": {"type": "string", "pattern": "(^| )((L|R)?Ctrl\\+(L|R)?Alt\\+(L|R)?Shift\\+Escape)( |$)"}
+        },
+        {
+          "description": "input method mode keys are reserved (HOTKEY_CONTRACT §7.3)",
+          "not": {
+            "type": "string",
+            "pattern": "(^| )(([A-Za-z]+\\+)*(HangulMode|Hanja|KanaMode|Convert|NonConvert|code:Lang[1-5]))( |$)"
+          }
+        }
+      ]
+    },
+    "trigger_keys": {
+      "description": "A rule trigger: valid syntax, none of the reserved chords, and no F12 (reserved for debuggers in global scope, HOTKEY_CONTRACT §7.1). Rule triggers are always global.",
+      "type": "string",
+      "allOf": [
+        {"$ref": "#/$defs/trigger_syntax"},
+        {"$ref": "#/$defs/reserved_free"},
+        {
+          "description": "F12 with any modifiers is reserved in global scope (HOTKEY_CONTRACT §7.1)",
+          "not": {"type": "string", "pattern": "(^| )(([A-Za-z]+\\+)*F12)( |$)"}
+        }
+      ]
+    },
+    "output_step_syntax": {
+      "description": "One output chord, or one bare modifier including LWin/RWin. Outputs may use Win chords and IME keys (RAlt acting as HangulMode is a common Korean remap).",
+      "type": "string",
+      "pattern": "^((L|R)(Ctrl|Alt|Shift|Win)|(((L|R)?Ctrl\\+)?((L|R)?Alt\\+)?|AltGr\\+)((L|R)?Shift\\+)?((L|R)?Win\\+)?([A-Z0-9]|F([1-9]|1[0-9]|2[0-4])|Escape|Tab|Enter|Space|Backspace|Insert|Delete|Home|End|PageUp|PageDown|Up|Down|Left|Right|Plus|Minus|Comma|Period|Numpad[0-9]|NumpadAdd|NumpadSubtract|NumpadMultiply|NumpadDivide|NumpadDecimal|NumpadEnter|PrintScreen|Pause|ScrollLock|CapsLock|NumLock|ContextMenu|MediaPlayPause|MediaStop|MediaNext|MediaPrevious|VolumeUp|VolumeDown|VolumeMute|HangulMode|Hanja|KanaMode|Convert|NonConvert|code:(Key[A-Z]|Digit[0-9]|Minus|Equal|BracketLeft|BracketRight|Backslash|Semicolon|Quote|Backquote|Comma|Period|Slash|IntlBackslash|IntlRo|IntlYen|Lang[1-5])))$"
+    },
+    "output_sequence_syntax": {
+      "description": "One to eight output steps separated by one space, tapped in order.",
+      "type": "string",
+      "pattern": "^((L|R)(Ctrl|Alt|Shift|Win)|(((L|R)?Ctrl\\+)?((L|R)?Alt\\+)?|AltGr\\+)((L|R)?Shift\\+)?((L|R)?Win\\+)?([A-Z0-9]|F([1-9]|1[0-9]|2[0-4])|Escape|Tab|Enter|Space|Backspace|Insert|Delete|Home|End|PageUp|PageDown|Up|Down|Left|Right|Plus|Minus|Comma|Period|Numpad[0-9]|NumpadAdd|NumpadSubtract|NumpadMultiply|NumpadDivide|NumpadDecimal|NumpadEnter|PrintScreen|Pause|ScrollLock|CapsLock|NumLock|ContextMenu|MediaPlayPause|MediaStop|MediaNext|MediaPrevious|VolumeUp|VolumeDown|VolumeMute|HangulMode|Hanja|KanaMode|Convert|NonConvert|code:(Key[A-Z]|Digit[0-9]|Minus|Equal|BracketLeft|BracketRight|Backslash|Semicolon|Quote|Backquote|Comma|Period|Slash|IntlBackslash|IntlRo|IntlYen|Lang[1-5])))( ((L|R)(Ctrl|Alt|Shift|Win)|(((L|R)?Ctrl\\+)?((L|R)?Alt\\+)?|AltGr\\+)((L|R)?Shift\\+)?((L|R)?Win\\+)?([A-Z0-9]|F([1-9]|1[0-9]|2[0-4])|Escape|Tab|Enter|Space|Backspace|Insert|Delete|Home|End|PageUp|PageDown|Up|Down|Left|Right|Plus|Minus|Comma|Period|Numpad[0-9]|NumpadAdd|NumpadSubtract|NumpadMultiply|NumpadDivide|NumpadDecimal|NumpadEnter|PrintScreen|Pause|ScrollLock|CapsLock|NumLock|ContextMenu|MediaPlayPause|MediaStop|MediaNext|MediaPrevious|VolumeUp|VolumeDown|VolumeMute|HangulMode|Hanja|KanaMode|Convert|NonConvert|code:(Key[A-Z]|Digit[0-9]|Minus|Equal|BracketLeft|BracketRight|Backslash|Semicolon|Quote|Backquote|Comma|Period|Slash|IntlBackslash|IntlRo|IntlYen|Lang[1-5])))){0,7}$"
+    },
+    "output_reserved_free": {
+      "description": "Outputs Ddalgak never produces in any step.",
+      "allOf": [
+        {
+          "description": "the Secure Attention Sequence cannot and must not be synthesized (DDALGAK_SAFETY §2)",
+          "not": {
+            "type": "string",
+            "pattern": "(^| )((L|R)?Ctrl\\+(L|R)?Alt\\+((L|R)?Shift\\+)?(Delete|NumpadDecimal))( |$)"
+          }
+        },
+        {
+          "description": "the emergency chord is never produced by a rule (HOTKEY_CONTRACT §7.4)",
+          "not": {"type": "string", "pattern": "(^| )((L|R)?Ctrl\\+(L|R)?Alt\\+(L|R)?Shift\\+Escape)( |$)"}
+        }
+      ]
+    },
+    "output_key": {"type": "string", "allOf": [{"$ref": "#/$defs/output_step_syntax"}, {"$ref": "#/$defs/output_reserved_free"}]},
+    "output_sequence": {"type": "string", "allOf": [{"$ref": "#/$defs/output_sequence_syntax"}, {"$ref": "#/$defs/output_reserved_free"}]},
+    "trigger": {
+      "type": "object",
+      "required": ["keys"],
+      "properties": {
+        "keys": {"$ref": "#/$defs/trigger_keys"},
+        "on": {"description": "press (default), release (single chord released with no other key in between; a tap of a bare modifier), hold (held for hold_ms).", "enum": ["press", "release", "hold"]},
+        "hold_ms": {"type": "integer", "minimum": 200, "maximum": 5000},
+        "repeat": {"description": "Auto-repeat fires the rule again (press only). Default false.", "type": "boolean"},
+        "pass_through": {"description": "The original key also reaches the application (AutoHotkey's `~`). Default false: the key is consumed when the rule fires.", "type": "boolean"},
+        "injected": {
+          "description": "`ignore` (default): only physical input triggers the rule. `accept`: input injected by other programs (an on-screen keyboard, remote-control software) may trigger it too. Ddalgak's own injected input never triggers any rule.",
+          "enum": ["ignore", "accept"]
+        }
+      },
+      "allOf": [
+        {
+          "description": "Sequences fire on press only (HOTKEY_CONTRACT §5.4).",
+          "anyOf": [
+            {"properties": {"keys": {"pattern": "^\\S+$"}}},
+            {"not": {"required": ["on"]}},
+            {"properties": {"on": {"const": "press"}}}
+          ]
+        },
+        {
+          "description": "hold_ms is only allowed with on: hold.",
+          "anyOf": [
+            {"not": {"required": ["hold_ms"]}},
+            {"required": ["on"], "properties": {"on": {"const": "hold"}}}
+          ]
+        },
+        {
+          "description": "repeat: true is only allowed with on: press.",
+          "anyOf": [
+            {"not": {"required": ["repeat"]}},
+            {"properties": {"repeat": {"const": false}}},
+            {"not": {"required": ["on"]}},
+            {"properties": {"on": {"const": "press"}}}
+          ]
+        }
+      ]
+    },
+    "app_matcher": {
+      "description": "The focused window's process: by image file name (case-insensitive) or by full path.",
+      "type": "object",
+      "oneOf": [
+        {"required": ["exe"], "not": {"required": ["path"]}},
+        {"required": ["path"], "not": {"required": ["exe"]}}
+      ],
+      "properties": {
+        "exe": {"type": "string", "pattern": "^[^\\\\/:*?\"<>|\\x00-\\x1f]{1,255}\\.(exe|EXE|Exe)$"},
+        "path": {"$ref": "#/$defs/program_path"}
+      }
+    },
+    "conditions": {
+      "description": "All present conditions must hold when the trigger fires (evaluated from Step 77; until then a rule with conditions is inactive, never unconditional).",
+      "type": "object",
+      "properties": {
+        "apps": {"type": "array", "minItems": 1, "maxItems": 32, "items": {"$ref": "#/$defs/app_matcher"}},
+        "except_apps": {"type": "array", "minItems": 1, "maxItems": 32, "items": {"$ref": "#/$defs/app_matcher"}},
+        "window_title": {
+          "type": "object",
+          "oneOf": [{"required": ["contains"]}, {"required": ["equals"]}],
+          "properties": {
+            "contains": {"type": "string", "minLength": 1, "maxLength": 200},
+            "equals": {"type": "string", "minLength": 1, "maxLength": 200}
+          }
+        }
+      }
+    },
+    "consent_record": {
+      "type": "object",
+      "required": ["granted_at", "via"],
+      "properties": {
+        "granted_at": {"type": "string", "format": "date-time"},
+        "via": {"description": "Where the user granted it: the GUI dialog or an explicit CLI flag (`--allow <permission>`). Agents (MCP) can never grant consent.", "enum": ["gui", "cli"]},
+        "fingerprint": {"description": "sha256 of the canonical targets this grant covers (DDALGAK_RULE_MODEL §6.2); a changed target needs new consent.", "type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+      }
+    },
+    "consent": {
+      "description": "Explicit grants per catalog permission (CATALOG_FORMAT §2.1). Never imported, never granted by an agent.",
+      "type": "object",
+      "properties": {
+        "input-injection": {"$ref": "#/$defs/consent_record"},
+        "launch-programs": {"allOf": [{"$ref": "#/$defs/consent_record"}, {"required": ["fingerprint"]}]},
+        "clipboard": {"$ref": "#/$defs/consent_record"}
+      }
+    },
+    "known_step_types": {
+      "enum": ["remap", "block", "send_keys", "type_text", "open_program", "open_url", "mouse_move", "mouse_scroll", "mouse_click", "mode", "engine", "delay"]
+    },
+    "injecting_step": {
+      "description": "Steps that synthesize keyboard or mouse input.",
+      "required": ["type"],
+      "properties": {"type": {"enum": ["remap", "send_keys", "type_text", "mouse_move", "mouse_scroll", "mouse_click"]}}
+    },
+    "launching_step": {
+      "required": ["type"],
+      "properties": {"type": {"enum": ["open_program", "open_url"]}}
+    },
+    "clipboard_step": {
+      "required": ["type", "method"],
+      "properties": {"type": {"const": "type_text"}, "method": {"const": "paste"}}
+    },
+    "holds_trigger": {
+      "description": "Steps that last while the trigger is held; they must be the rule's only step.",
+      "anyOf": [
+        {"required": ["type"], "properties": {"type": {"const": "remap"}}},
+        {"required": ["type", "op"], "properties": {"type": {"const": "mode"}, "op": {"const": "hold"}}},
+        {"required": ["type", "op"], "properties": {"type": {"const": "mouse_click"}, "op": {"const": "hold"}}},
+        {"required": ["type", "while_held"], "properties": {"type": {"const": "mouse_move"}}}
+      ]
+    },
+    "program_path": {
+      "description": "Absolute path to an .exe, on a drive or under a known folder token. No shell strings, no scripts, no documents.",
+      "type": "string",
+      "maxLength": 260,
+      "allOf": [
+        {"pattern": "(?i)^([a-z]:\\\\|%(programfiles|programfiles\\(x86\\)|localappdata|appdata|userprofile|systemroot)%\\\\)[^<>\"|?*\\x00-\\x1f]+\\.exe$"},
+        {
+          "description": "command interpreters and script hosts are not programs for open_program (DDALGAK_RULE_MODEL §5.4)",
+          "not": {"pattern": "(?i)(^|\\\\)(cmd|powershell|powershell_ise|pwsh|wscript|cscript|mshta|rundll32|regsvr32|wsl|bash|conhost)\\.exe$"}
+        }
+      ]
+    },
+    "folder_path": {
+      "type": "string",
+      "maxLength": 260,
+      "pattern": "(?i)^([a-z]:\\\\|%(programfiles|programfiles\\(x86\\)|localappdata|appdata|userprofile|systemroot)%(\\\\|$))[^<>\"|?*\\x00-\\x1f]*$"
+    },
+    "point": {
+      "type": "object",
+      "required": ["x", "y"],
+      "properties": {
+        "x": {"type": "integer", "minimum": -32768, "maximum": 32767},
+        "y": {"type": "integer", "minimum": -32768, "maximum": 32767},
+        "relative_to": {"description": "Default virtual_screen (all monitors, may be negative). Positions are clamped to the visible desktop.", "enum": ["virtual_screen", "primary_monitor", "active_window"]}
+      }
+    },
+    "step_remap": {
+      "type": "object",
+      "required": ["type", "to"],
+      "properties": {
+        "type": {"const": "remap"},
+        "to": {"$ref": "#/$defs/output_key"},
+        "tap": {"description": "Dual role: a quick press and release of the trigger alone sends this instead (Step 68).", "$ref": "#/$defs/output_key"},
+        "tap_ms": {"type": "integer", "minimum": 100, "maximum": 1000}
+      },
+      "anyOf": [{"not": {"required": ["tap_ms"]}}, {"required": ["tap"]}]
+    },
+    "step_block": {
+      "description": "Consume the trigger and do nothing: disables a key or chord (AutoHotkey's `Key::return`).",
+      "type": "object",
+      "required": ["type"],
+      "properties": {"type": {"const": "block"}}
+    },
+    "step_send_keys": {
+      "type": "object",
+      "required": ["type", "keys"],
+      "properties": {
+        "type": {"const": "send_keys"},
+        "keys": {"$ref": "#/$defs/output_sequence"},
+        "step_delay_ms": {"type": "integer", "minimum": 0, "maximum": 1000}
+      }
+    },
+    "step_type_text": {
+      "type": "object",
+      "required": ["type", "text"],
+      "properties": {
+        "type": {"const": "type_text"},
+        "text": {
+          "description": "Unicode text; \\n is Enter and \\t is Tab, other control characters are refused.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096,
+          "pattern": "^[^\\x00-\\x08\\x0b-\\x1f\\x7f]+$"
+        },
+        "method": {"description": "unicode (default): one Unicode key event per character, independent of layout and IME. paste: through the clipboard, which is restored afterwards (needs clipboard consent).", "enum": ["unicode", "paste"]},
+        "key_delay_ms": {"type": "integer", "minimum": 0, "maximum": 200}
+      }
+    },
+    "step_open_program": {
+      "type": "object",
+      "required": ["type"],
+      "oneOf": [
+        {"required": ["path"], "not": {"required": ["app_id"]}},
+        {"required": ["app_id"], "not": {"anyOf": [{"required": ["path"]}, {"required": ["args"]}, {"required": ["working_dir"]}]}}
+      ],
+      "properties": {
+        "type": {"const": "open_program"},
+        "path": {"$ref": "#/$defs/program_path"},
+        "app_id": {"description": "AppUserModelID of a packaged app (PackageFamilyName!AppId).", "type": "string", "pattern": "^[A-Za-z0-9._-]{3,200}![A-Za-z0-9._-]{1,64}$"},
+        "args": {
+          "description": "Separate arguments, each quoted by Ddalgak per Windows rules; never a shell string.",
+          "type": "array",
+          "maxItems": 32,
+          "items": {"type": "string", "maxLength": 1024, "pattern": "^[^\\x00-\\x1f]*$"}
+        },
+        "working_dir": {"$ref": "#/$defs/folder_path"},
+        "window": {"enum": ["normal", "maximized", "minimized"]},
+        "if_running": {"description": "start_new (default) or activate an existing window of the same program instead.", "enum": ["start_new", "activate"]}
+      }
+    },
+    "step_open_url": {
+      "type": "object",
+      "required": ["type", "url"],
+      "properties": {
+        "type": {"const": "open_url"},
+        "url": {
+          "description": "http or https only, no user name or password in the URL; opened in the user's default browser.",
+          "type": "string",
+          "maxLength": 2048,
+          "pattern": "^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?([/?#][^\\s]*)?$"
+        }
+      }
+    },
+    "step_mouse_move": {
+      "type": "object",
+      "required": ["type", "mode"],
+      "properties": {
+        "type": {"const": "mouse_move"},
+        "mode": {"enum": ["relative", "absolute"]},
+        "dx": {"type": "integer", "minimum": -10000, "maximum": 10000},
+        "dy": {"type": "integer", "minimum": -10000, "maximum": 10000},
+        "to": {"$ref": "#/$defs/point"},
+        "while_held": {
+          "description": "Keep moving in the dx/dy direction while the trigger is held (Step 71).",
+          "type": "object",
+          "required": ["speed"],
+          "properties": {
+            "speed": {"description": "Logical pixels per second.", "type": "integer", "minimum": 50, "maximum": 5000},
+            "acceleration": {"type": "integer", "minimum": 0, "maximum": 10}
+          }
+        }
+      },
+      "oneOf": [
+        {"required": ["dx", "dy"], "properties": {"mode": {"const": "relative"}}, "not": {"required": ["to"]}},
+        {"required": ["to"], "properties": {"mode": {"const": "absolute"}}, "not": {"anyOf": [{"required": ["dx"]}, {"required": ["dy"]}, {"required": ["while_held"]}]}}
+      ]
+    },
+    "step_mouse_scroll": {
+      "type": "object",
+      "required": ["type", "direction"],
+      "properties": {
+        "type": {"const": "mouse_scroll"},
+        "direction": {"enum": ["up", "down", "left", "right"]},
+        "notches": {"description": "Wheel notches (120 units each). Default 1.", "type": "integer", "minimum": 1, "maximum": 50}
+      }
+    },
+    "step_mouse_click": {
+      "type": "object",
+      "required": ["type", "button"],
+      "properties": {
+        "type": {"const": "mouse_click"},
+        "button": {"enum": ["left", "right", "middle", "x1", "x2"]},
+        "op": {"description": "click (default), double_click, or hold: the button stays down exactly as long as the trigger.", "enum": ["click", "double_click", "hold"]},
+        "at": {"$ref": "#/$defs/point"}
+      }
+    },
+    "step_mode": {
+      "type": "object",
+      "required": ["type", "op"],
+      "properties": {
+        "type": {"const": "mode"},
+        "op": {"enum": ["set", "toggle", "cycle", "hold", "previous", "default"]},
+        "mode": {"$ref": "#/$defs/mode_id"},
+        "modes": {"type": "array", "minItems": 2, "maxItems": 32, "items": {"$ref": "#/$defs/mode_id"}}
+      },
+      "oneOf": [
+        {"properties": {"op": {"enum": ["set", "toggle", "hold"]}}, "required": ["mode"], "not": {"required": ["modes"]}},
+        {"properties": {"op": {"const": "cycle"}}, "required": ["modes"], "not": {"required": ["mode"]}},
+        {"properties": {"op": {"enum": ["previous", "default"]}}, "not": {"anyOf": [{"required": ["mode"]}, {"required": ["modes"]}]}}
+      ]
+    },
+    "step_engine": {
+      "type": "object",
+      "required": ["type", "op"],
+      "properties": {
+        "type": {"const": "engine"},
+        "op": {"description": "pause, resume and toggle_pause keep the hook; disable removes it (turn it on again from the tray, the GUI, the CLI or the engine.toggle shortcut, never from a rule).", "enum": ["pause", "resume", "toggle_pause", "disable"]}
+      }
+    },
+    "step_delay": {
+      "type": "object",
+      "required": ["type", "ms"],
+      "properties": {"type": {"const": "delay"}, "ms": {"type": "integer", "minimum": 1, "maximum": 10000}}
+    },
+    "step_future": {
+      "description": "A step type added by a later version (additive). Valid in the document; the rule is inactive with `step_unsupported` in a version that does not know it.",
+      "type": "object",
+      "required": ["type"],
+      "properties": {"type": {"type": "string", "pattern": "^[a-z][a-z0-9_]{1,31}$", "not": {"$ref": "#/$defs/known_step_types"}}}
+    },
+    "step": {
+      "oneOf": [
+        {"$ref": "#/$defs/step_remap"},
+        {"$ref": "#/$defs/step_block"},
+        {"$ref": "#/$defs/step_send_keys"},
+        {"$ref": "#/$defs/step_type_text"},
+        {"$ref": "#/$defs/step_open_program"},
+        {"$ref": "#/$defs/step_open_url"},
+        {"$ref": "#/$defs/step_mouse_move"},
+        {"$ref": "#/$defs/step_mouse_scroll"},
+        {"$ref": "#/$defs/step_mouse_click"},
+        {"$ref": "#/$defs/step_mode"},
+        {"$ref": "#/$defs/step_engine"},
+        {"$ref": "#/$defs/step_delay"},
+        {"$ref": "#/$defs/step_future"}
+      ]
+    },
+    "rule": {
+      "type": "object",
+      "required": ["id", "title", "enabled", "trigger", "steps"],
+      "properties": {
+        "id": {"$ref": "#/$defs/rule_id"},
+        "title": {"$ref": "#/$defs/title"},
+        "description": {"type": "string", "maxLength": 500},
+        "enabled": {"type": "boolean"},
+        "trigger": {"$ref": "#/$defs/trigger"},
+        "modes": {"description": "Modes in which the rule is active; omitted: every mode.", "type": "array", "minItems": 1, "maxItems": 32, "items": {"$ref": "#/$defs/mode_id"}},
+        "when": {"$ref": "#/$defs/conditions"},
+        "priority": {"description": "Higher wins among equally specific candidates (DDALGAK_RULE_MODEL §7). Default 0.", "type": "integer", "minimum": -1000, "maximum": 1000},
+        "steps": {"type": "array", "minItems": 1, "maxItems": 32, "items": {"$ref": "#/$defs/step"}},
+        "on_error": {"description": "stop (default): a failing step ends the run; continue: later steps still run.", "enum": ["stop", "continue"]},
+        "consent": {"$ref": "#/$defs/consent"},
+        "created_at": {"type": "string", "format": "date-time"},
+        "updated_at": {"type": "string", "format": "date-time"}
+      },
+      "allOf": [
+        {
+          "description": "A step that lasts while the trigger is held (remap, mode hold, mouse hold, continuous move) is the rule's only step, on a single chord pressed without repeat or pass-through.",
+          "anyOf": [
+            {"properties": {"steps": {"items": {"not": {"$ref": "#/$defs/holds_trigger"}}}}},
+            {
+              "properties": {
+                "steps": {"maxItems": 1},
+                "trigger": {
+                  "properties": {
+                    "keys": {"pattern": "^\\S+$"},
+                    "on": {"const": "press"},
+                    "repeat": {"const": false},
+                    "pass_through": {"const": false}
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "description": "A bare modifier trigger (RAlt, LCtrl, ...) either remaps the key or fires on release (a tap alone), so the modifier keeps working in chords.",
+          "anyOf": [
+            {"properties": {"trigger": {"properties": {"keys": {"not": {"pattern": "^(L|R)(Ctrl|Alt|Shift)$"}}}}}},
+            {"properties": {"steps": {"items": {"required": ["type"], "properties": {"type": {"const": "remap"}}}}}},
+            {"properties": {"trigger": {"required": ["on"], "properties": {"on": {"const": "release"}}}}}
+          ]
+        },
+        {
+          "description": "Recursion guard: a rule that accepts injected input never injects input itself (DDALGAK_RULE_MODEL §7.4).",
+          "anyOf": [
+            {"properties": {"trigger": {"properties": {"injected": {"const": "ignore"}}}}},
+            {"properties": {"steps": {"items": {"not": {"$ref": "#/$defs/injecting_step"}}}}}
+          ]
+        },
+        {
+          "description": "An enabled rule that injects keyboard or mouse input needs explicit `input-injection` consent.",
+          "anyOf": [
+            {"properties": {"enabled": {"const": false}}},
+            {"properties": {"steps": {"items": {"not": {"$ref": "#/$defs/injecting_step"}}}}},
+            {"required": ["consent"], "properties": {"consent": {"required": ["input-injection"]}}}
+          ]
+        },
+        {
+          "description": "An enabled rule that opens a program or a website needs explicit `launch-programs` consent for exactly these targets.",
+          "anyOf": [
+            {"properties": {"enabled": {"const": false}}},
+            {"properties": {"steps": {"items": {"not": {"$ref": "#/$defs/launching_step"}}}}},
+            {"required": ["consent"], "properties": {"consent": {"required": ["launch-programs"]}}}
+          ]
+        },
+        {
+          "description": "An enabled rule that types through the clipboard needs explicit `clipboard` consent.",
+          "anyOf": [
+            {"properties": {"enabled": {"const": false}}},
+            {"properties": {"steps": {"items": {"not": {"$ref": "#/$defs/clipboard_step"}}}}},
+            {"required": ["consent"], "properties": {"consent": {"required": ["clipboard"]}}}
+          ]
+        }
+      ]
+    }
+  }
+}

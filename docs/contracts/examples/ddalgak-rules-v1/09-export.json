@@ -1,0 +1,39 @@
+{
+  "schema": "ddalgak.rules",
+  "schema_version": 1,
+  "hotkey_contract": 1,
+  "active_profile": "writing",
+  "exported": {"exported_at": "2026-11-04T11:00:00Z", "by_version": "0.1.0"},
+  "profiles": [
+    {
+      "id": "writing",
+      "title": "Writing (shared by a colleague)",
+      "description": "An export carries no consent and no settings. Import adds the profile with every rule disabled until reviewed.",
+      "default_mode": "base",
+      "modes": [{"id": "base", "title": "Base"}],
+      "rules": [
+        {
+          "id": "w-em-dash",
+          "title": "Ctrl+Shift+Minus types an em dash",
+          "enabled": false,
+          "trigger": {"keys": "Ctrl+Shift+Minus"},
+          "steps": [{"type": "type_text", "text": "—"}]
+        },
+        {
+          "id": "w-dictionary",
+          "title": "Ctrl+Shift+F1 opens the dictionary",
+          "enabled": false,
+          "trigger": {"keys": "Ctrl+Shift+F1"},
+          "steps": [{"type": "open_url", "url": "https://stdict.korean.go.kr/main/main.do"}]
+        },
+        {
+          "id": "w-word-count",
+          "title": "Ctrl+Shift+F2 opens the word counter",
+          "enabled": false,
+          "trigger": {"keys": "Ctrl+Shift+F2"},
+          "steps": [{"type": "open_program", "path": "%ProgramFiles%\\WordCounter\\wc.exe", "args": ["--gui"]}]
+        }
+      ]
+    }
+  ]
+}

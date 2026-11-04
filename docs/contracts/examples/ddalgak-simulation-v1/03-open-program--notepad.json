@@ -1,0 +1,46 @@
+{
+  "schema": "ddalgak.simulation",
+  "schema_version": 1,
+  "kind": "simulate",
+  "profile": "default",
+  "revision": 3,
+  "context": {
+    "mode": "base",
+    "engine": "running",
+    "focus": "normal",
+    "app": null,
+    "ime_composing": false
+  },
+  "event": {
+    "keys": "F14",
+    "on": "press",
+    "source": "physical"
+  },
+  "decision": {
+    "outcome": "fired",
+    "code": "ok",
+    "rule": "notepad",
+    "key_reaches_app": false,
+    "candidates": [
+      {
+        "rule": "notepad",
+        "result": "winner"
+      }
+    ]
+  },
+  "effects": [
+    {
+      "step": 0,
+      "type": "open_program",
+      "performed": false,
+      "summary": "Would open Notepad (found).",
+      "preview": {
+        "program": "notepad.exe",
+        "found": true,
+        "arguments": 0
+      }
+    }
+  ],
+  "injected_events": 0,
+  "opened": []
+}

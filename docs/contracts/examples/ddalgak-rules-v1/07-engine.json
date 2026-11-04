@@ -1,0 +1,46 @@
+{
+  "schema": "ddalgak.rules",
+  "schema_version": 1,
+  "hotkey_contract": 1,
+  "active_profile": "default",
+  "settings": {"engine_on_start": "on", "activity": {"persist": true, "max_entries": 500}},
+  "profiles": [
+    {
+      "id": "default",
+      "title": "Engine control",
+      "description": "Rules that pause, resume or turn off Ddalgak itself. Pause-control rules keep working while paused; after `disable` only the tray, the GUI, the CLI or the engine.toggle shortcut turn the engine on again.",
+      "default_mode": "base",
+      "modes": [{"id": "base", "title": "Base"}],
+      "rules": [
+        {
+          "id": "pause-toggle",
+          "title": "Ctrl+Shift+Pause pauses or resumes every rule",
+          "enabled": true,
+          "trigger": {"keys": "Ctrl+Shift+Pause"},
+          "steps": [{"type": "engine", "op": "toggle_pause"}]
+        },
+        {
+          "id": "pause-on-hold",
+          "title": "Holding Pause for one second pauses",
+          "enabled": true,
+          "trigger": {"keys": "Pause", "on": "hold", "hold_ms": 1000},
+          "steps": [{"type": "engine", "op": "pause"}]
+        },
+        {
+          "id": "resume",
+          "title": "Ctrl+Shift+ScrollLock resumes",
+          "enabled": true,
+          "trigger": {"keys": "Ctrl+Shift+ScrollLock"},
+          "steps": [{"type": "engine", "op": "resume"}]
+        },
+        {
+          "id": "turn-off",
+          "title": "Tap Right Ctrl alone to turn Ddalgak off",
+          "enabled": true,
+          "trigger": {"keys": "RCtrl", "on": "release"},
+          "steps": [{"type": "engine", "op": "disable"}]
+        }
+      ]
+    }
+  ]
+}

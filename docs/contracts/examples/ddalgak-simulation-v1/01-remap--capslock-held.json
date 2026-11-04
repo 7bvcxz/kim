@@ -1,0 +1,45 @@
+{
+  "schema": "ddalgak.simulation",
+  "schema_version": 1,
+  "kind": "simulate",
+  "profile": "default",
+  "revision": 7,
+  "context": {
+    "mode": "base",
+    "engine": "running",
+    "focus": "normal",
+    "app": null,
+    "ime_composing": false
+  },
+  "event": {
+    "keys": "CapsLock",
+    "on": "press",
+    "source": "physical"
+  },
+  "decision": {
+    "outcome": "fired",
+    "code": "ok",
+    "rule": "caps-to-ctrl",
+    "key_reaches_app": false,
+    "candidates": [
+      {
+        "rule": "caps-to-ctrl",
+        "result": "winner"
+      }
+    ]
+  },
+  "effects": [
+    {
+      "step": 0,
+      "type": "remap",
+      "performed": false,
+      "summary": "Left Ctrl is held while CapsLock is held; a quick tap alone sends Escape.",
+      "preview": {
+        "holds": "LCtrl",
+        "tap": "Escape"
+      }
+    }
+  ],
+  "injected_events": 0,
+  "opened": []
+}

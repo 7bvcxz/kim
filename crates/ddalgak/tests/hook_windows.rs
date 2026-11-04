@@ -65,6 +65,7 @@ fn engine(bindings: Vec<Binding>, lifetime: Duration) -> Engine {
             let _ = tx.lock().unwrap().send(c);
         }),
         Arc::new(Mutex::new(Activity::default())),
+        Box::new(SendInputBackend),
     );
     worker.queue().send(Msg::Rules(Rules {
         generation: 1,

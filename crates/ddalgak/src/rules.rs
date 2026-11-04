@@ -10,14 +10,16 @@
 //!   turned on with it, and a running engine keeps its previous rules.
 //! - Of the active profile's enabled rules, every rule with an error or an `*_unsupported` info
 //!   is **inactive** with that code; the others keep working.
-//! - Of the remaining rules, those whose steps are all `engine` steps (§5.11) become bindings.
-//!   Every other action type is inactive with `step_unsupported` until its Step (68–72).
+//! - Of the remaining rules, those whose steps are all `engine` steps (§5.11), a `remap` (§5.1)
+//!   and `block` (§5.2; Step 68) become bindings. Every other action type is inactive with
+//!   `step_unsupported` until its Step (69–72, 78).
 //! - Modes: there is no mode switching before Step 72, so the profile's `default_mode` is active;
 //!   rules limited to other modes are counted, not run.
 //! - Precedence (§7.1): mode-scoped rules first, then higher `priority`, then file order.
 
+use crate::remap::Output;
 use crate::store::{self, MIGRATIONS};
-use crate::table::{Action, Binding, EngineOp, Injected, On};
+use crate::table::{Action, Binding, EngineOp, Injected, On, RemapSpec};
 use crate::trigger::{TKey, Trigger};
 use crate::validate::Context;
 use serde_json::{Map, Value, json};
@@ -77,6 +79,12 @@ impl Loaded {
         }
     }
 }
+
+/// The step types this version runs (Step 66: `engine`; Step 68: `remap`, `block`). A rule made
+/// of `engine` and `block` steps is an engine-control rule (a `block` step adds nothing to a rule
+/// that consumes its key anyway); a `remap` is always the rule's only step (schema
+/// `holds_trigger`).
+pub const RUNNABLE_STEPS: [&str; 3] = ["engine", "remap", "block"];
 
 /// Reads and interprets the rules file.
 pub fn load(path: &Path) -> Loaded {
@@ -255,35 +263,79 @@ fn compile(r: &Map<String, Value>) -> Result<(Binding, i64), (&'static str, Stri
         Some("accept") => Injected::Accept,
         Some(_) => return Err(bad("injected")),
     };
+    let steps = r
+        .get("steps")
+        .and_then(Value::as_array)
+        .ok_or(("step_invalid", "`steps` must hold 1–32 steps".to_string()))?;
+    let is_remap = steps.first().and_then(|s| s.get("type")) == Some(&json!("remap"));
     if let Some(c) = trigger.single()
         && matches!(c.key, TKey::Modifier(_))
         && on != On::Release
+        && !is_remap
     {
         return Err((
             "trigger_invalid",
             "a bare modifier fires a non-remap rule only with `on: release`".into(),
         ));
     }
-    let steps = r
-        .get("steps")
-        .and_then(Value::as_array)
-        .ok_or(("step_invalid", "`steps` must hold 1–32 steps".to_string()))?;
     let mut ops = Vec::new();
+    let mut remap = None;
     for (i, s) in steps.iter().enumerate() {
         let ty = s.get("type").and_then(Value::as_str).unwrap_or_default();
-        if ty != "engine" {
-            return Err((
-                "step_unsupported",
-                format!("`{ty}` steps are not implemented in this version yet"),
-            ));
+        match ty {
+            "engine" => {
+                let op = s
+                    .get("op")
+                    .and_then(Value::as_str)
+                    .and_then(EngineOp::parse)
+                    .ok_or(("step_invalid", format!("step {i}: unknown engine `op`")))?;
+                ops.push(op);
+            }
+            "block" => {}
+            "remap" => {
+                if steps.len() != 1 || trigger.is_sequence() || on != On::Press || repeat {
+                    return Err((
+                        "step_invalid",
+                        "a remap is the rule's only step, on a single chord pressed without repeat"
+                            .into(),
+                    ));
+                }
+                let out = |field: &str| -> Result<Option<Output>, (&'static str, String)> {
+                    s.get(field)
+                        .and_then(Value::as_str)
+                        .map(|t| Output::parse(t).map_err(|e| ("step_invalid", e)))
+                        .transpose()
+                };
+                let to = out("to")?.ok_or(("step_invalid", "a remap needs `to`".to_string()))?;
+                let tap = out("tap")?;
+                if tap.is_some() && pass_through {
+                    return Err((
+                        "step_invalid",
+                        "a dual-role remap (`tap`) cannot pass the original key through".into(),
+                    ));
+                }
+                let tap_ms = s.get("tap_ms").and_then(Value::as_u64).unwrap_or(200);
+                remap = Some(RemapSpec {
+                    to,
+                    tap,
+                    tap_ms: u32::try_from(tap_ms).unwrap_or(200).clamp(100, 1000),
+                });
+            }
+            _ => {
+                return Err((
+                    "step_unsupported",
+                    format!("`{ty}` steps are not implemented in this version yet"),
+                ));
+            }
         }
-        let op = s
-            .get("op")
-            .and_then(Value::as_str)
-            .and_then(EngineOp::parse)
-            .ok_or(("step_invalid", format!("step {i}: unknown engine `op`")))?;
-        ops.push(op);
     }
+    // Remaps and blocks are wildcards: a plain trigger matches with modifiers held (§3.2).
+    let plain = trigger.single().is_some_and(|c| c.mods.is_empty());
+    let (action, widen, injects) = match remap {
+        Some(spec) => (Action::Remap(spec), plain, true),
+        None if ops.is_empty() => (Action::Block, plain, false),
+        None => (Action::Engine(ops), false, false),
+    };
     Ok((
         Binding {
             rule: r["id"].as_str().unwrap_or_default().to_string(),
@@ -292,9 +344,9 @@ fn compile(r: &Map<String, Value>) -> Result<(Binding, i64), (&'static str, Stri
             repeat,
             pass_through,
             injected,
-            widen: false,
-            injects: false,
-            action: Action::Engine(ops),
+            widen,
+            injects,
+            action,
         },
         priority,
     ))
@@ -452,12 +504,15 @@ mod tests {
         assert_eq!(l.total, 10);
         assert_eq!(l.disabled, 1);
         assert_eq!(l.other_modes, 1);
-        assert_eq!(l.bindings.len(), 1);
+        assert_eq!(l.bindings.len(), 2);
         assert_eq!(l.bindings[0].rule, "pause-key");
         assert_eq!(
             l.bindings[0].action,
             Action::Engine(vec![EngineOp::TogglePause])
         );
+        assert_eq!(l.bindings[1].rule, "caps");
+        assert!(matches!(l.bindings[1].action, Action::Remap(_)));
+        assert!(l.bindings[1].widen && l.bindings[1].injects);
         let codes: Vec<(&str, &str)> = l
             .inactive
             .iter()
@@ -466,7 +521,6 @@ mod tests {
         assert_eq!(
             codes,
             [
-                ("caps", "step_unsupported"),
                 ("future", "step_unsupported"),
                 ("cond", "condition_unsupported"),
                 ("newer-field", "rule_unsupported"),
@@ -475,7 +529,11 @@ mod tests {
                 ("pause-key", "duplicate_rule_id"),
             ]
         );
-        assert!(l.inactive[0].reason.contains("Step 68"));
+        assert!(
+            l.inactive[0].reason.contains("newer"),
+            "{:?}",
+            l.inactive[0]
+        );
     }
 
     #[test]
@@ -541,7 +599,15 @@ mod tests {
             );
             assert_eq!(l.errors, 0, "{}", p.display());
             for b in &l.bindings {
-                assert!(b.is_engine_control(), "{}: {}", p.display(), b.rule);
+                assert!(
+                    matches!(
+                        b.action,
+                        Action::Engine(_) | Action::Remap(_) | Action::Block
+                    ),
+                    "{}: {}",
+                    p.display(),
+                    b.rule
+                );
             }
         }
         assert!(seen >= 10);

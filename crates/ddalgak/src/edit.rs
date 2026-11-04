@@ -138,7 +138,8 @@ pub fn canonical_trigger(input: &str) -> Result<String, TriggerError> {
 }
 
 /// Canonical output text (`remap` target, `send_keys`): one to eight chords; bare modifiers
-/// including `LWin`/`RWin` and `Win` chords are allowed (§5.1, §5.3).
+/// including `LWin`/`RWin` and `Win` chords are allowed (§5.1, §5.3). Mouse buttons are remap
+/// outputs only (`max == 1`); `send_keys` presses keys.
 pub fn canonical_output(input: &str, max: usize) -> Result<String, String> {
     let parts: Vec<&str> = input.split_whitespace().collect();
     if parts.is_empty() || parts.len() > max {
@@ -146,7 +147,16 @@ pub fn canonical_output(input: &str, max: usize) -> Result<String, String> {
     }
     let mut out = Vec::new();
     for p in parts {
-        out.push(canonical_step(p, true).map_err(|e| e.to_string())?);
+        let step = canonical_step(p, true).map_err(|e| e.to_string())?;
+        if max > 1 && MOUSE.iter().any(|(n, _)| step.ends_with(n)) {
+            return Err(format!(
+                "`{input}`: mouse buttons are remap targets; send_keys presses keys only"
+            ));
+        }
+        if max == 1 {
+            crate::remap::Output::parse(&step)?;
+        }
+        out.push(step);
     }
     Ok(out.join(" "))
 }
@@ -155,6 +165,40 @@ const BARE: [&str; 8] = [
     "LCtrl", "RCtrl", "LAlt", "RAlt", "LShift", "RShift", "LWin", "RWin",
 ];
 const LOCKS: [&str; 2] = ["CapsLock", "NumLock"];
+
+/// Mouse button names with the AutoHotkey-style aliases the CLI also accepts (Step 68). Triggers
+/// may use only the middle and X buttons; outputs may use all five.
+const MOUSE: [(&str, &[&str]); 5] = [
+    ("MouseLeft", &["lbutton"]),
+    ("MouseRight", &["rbutton"]),
+    ("MouseMiddle", &["mbutton"]),
+    ("MouseX1", &["xbutton1"]),
+    ("MouseX2", &["xbutton2"]),
+];
+
+/// Canonical text of a step that ends in a mouse button, if it does.
+fn canonical_mouse(step: &str) -> Option<Result<String, TriggerError>> {
+    let lower = step.to_ascii_lowercase();
+    let (prefix, name) = MOUSE.iter().find_map(|(name, aliases)| {
+        std::iter::once(name.to_ascii_lowercase())
+            .chain(aliases.iter().map(|a| (*a).to_string()))
+            .find(|n| lower == *n || lower.ends_with(&format!("+{n}")))
+            .map(|n| (&step[..step.len() - n.len()], *name))
+    })?;
+    if prefix.is_empty() {
+        return Some(Ok(name.to_string()));
+    }
+    Some(
+        Sequence::parse_input(&format!("{prefix}F1"))
+            .map_err(|e| TriggerError::Invalid(e.message))
+            .map(|seq| {
+                format!(
+                    "{}{name}",
+                    seq.to_string().strip_suffix("F1").unwrap_or_default()
+                )
+            }),
+    )
+}
 
 fn canonical_step(step: &str, output: bool) -> Result<String, TriggerError> {
     if let Some(b) = BARE.iter().find(|b| b.eq_ignore_ascii_case(step)) {
@@ -178,6 +222,9 @@ fn canonical_step(step: &str, output: bool) -> Result<String, TriggerError> {
             "{}{lock}",
             shown.strip_suffix("F1").unwrap_or_default()
         ));
+    }
+    if let Some(m) = canonical_mouse(step) {
+        return m;
     }
     let seq = Sequence::parse_input(step).map_err(|e| TriggerError::Invalid(e.message))?;
     if seq.len() != 1 {

@@ -2,7 +2,7 @@
 //!
 //! [`Core::decide`] runs inside the low-level hook callback. It is synchronous, allocation-free
 //! and bounded by the table size, and it only decides two things: whether the event is consumed
-//! and which [`Signal`] (if any) the worker thread gets. Running steps never happens here.
+//! and which [`Signal`]s (at most two) the worker thread gets. Running steps never happens here.
 //!
 //! Pipeline for one event:
 //!
@@ -13,20 +13,34 @@
 //! 3. **Consumed down, consumed up**: a key-up (and auto-repeat) is consumed exactly when its
 //!    key-down was, so applications never see half a key press (`DDALGAK-SEC-005`).
 //! 4. **Candidates** in precedence order; other programs' injected input only reaches rules with
-//!    `injected: accept`; while paused only engine-control rules remain.
+//!    `injected: accept`; while paused only engine-control rules remain. An exact chord beats a
+//!    widened remap or block (a plain-key trigger that matches with modifiers held).
 //! 5. **Stepping aside**: secure desktop or session lock, a password field, an IME composition,
 //!    or (for injecting rules) an elevated foreground window skip the rule and let the key pass
 //!    (`skipped_*`, `DDALGAK-SEC-002`, `DDALGAK-NFR-006`).
 //! 6. **Rate limit** per rule (`max_runs_per_second`), which also stops storms of auto-repeat or
 //!    of another program's injected input (`rate_limited`).
 //!
-//! The core keeps only what matching needs (keys down, one pending tap, hold or sequence step).
-//! It records no keys (`DDALGAK-SEC-001`).
+//! **Remaps** (Step 68, §5.1) keep a small fixed table of active *slots*, one per held trigger.
+//! The core decides every output event from its key state and hands the worker self-contained
+//! instructions ([`RemapOp`]): which of the trigger's modifiers to release logically while the
+//! target is held (and restore afterwards if still held), which target modifiers and which target
+//! key to press, with reference counts so two remaps holding the same output never release it
+//! early and a key the user already holds is never pressed or released by Ddalgak. A dual-role
+//! remap (`tap`) stays undecided until another key goes down (the target is pressed first and
+//! that key is sent after it, unchanged), its time passes (a one-shot timer of the hook thread,
+//! [`Core::tick`]) or the trigger goes up (the tap output is sent). Instructions carry the output
+//! keys, not rule indexes, so a held output is still released correctly after a reload.
+//!
+//! The core keeps only what matching needs (keys down, one pending tap, hold or sequence step,
+//! the active remaps). It records no keys (`DDALGAK-SEC-001`).
 
-use crate::event::{KeyEvent, KeySet, Normalizer, RawKey, Source, Transition};
-use crate::table::{CChord, Compiled, Injected, KeyMatch, On, Table};
-use crate::vk;
-use kim_hotkeys::keys::{Chord, Key};
+use crate::event::{KeyEvent, KeySet, ModState, Normalizer, RawKey, Source, Transition};
+use crate::inject::OutCode;
+use crate::remap::{Output, families};
+use crate::table::{CChord, Compiled, Injected, KeyMatch, On, RemapSpec, Table};
+use crate::vk::{self, ModKey};
+use kim_hotkeys::keys::{Chord, Key, Side};
 use kim_hotkeys::scope::Scope;
 
 /// Why a rule stepped aside (DDALGAK_RULE_MODEL §12).
@@ -62,6 +76,35 @@ pub enum FireKind {
     Sequence,
 }
 
+/// What a remap's output does now. Modifier sets are [`ModKey::bit`] bits. Self-contained: the
+/// worker needs no rule to carry it out.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RemapOp {
+    /// The target goes down: release `lift` (the user's trigger modifiers; not recorded), press
+    /// `mods` and `key` (recorded in the ledger).
+    Press {
+        lift: u8,
+        mods: u8,
+        key: Option<OutCode>,
+    },
+    /// Auto-repeat of the trigger: the target key's down again.
+    Repeat { key: OutCode },
+    /// The target goes up: release `key` and `mods`, then restore `restore` (trigger modifiers
+    /// still held; not recorded).
+    Release {
+        key: Option<OutCode>,
+        mods: u8,
+        restore: u8,
+    },
+    /// A dual-role trigger was tapped: release `lift`, tap `mods` and `key`, restore `restore`.
+    Tap {
+        lift: u8,
+        mods: u8,
+        key: Option<OutCode>,
+        restore: u8,
+    },
+}
+
 /// What the hook hands to the worker. Small and `Copy`: it goes through a bounded channel.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Signal {
@@ -85,6 +128,25 @@ pub enum Signal {
     },
     HoldCancelled {
         binding: u16,
+    },
+    /// A remap's output changes.
+    Remap {
+        binding: u16,
+        op: RemapOp,
+    },
+    /// A key the core held back while a dual role was decided, sent on unchanged after the
+    /// target (and its later repeats and its up).
+    Replay {
+        code: OutCode,
+        up: bool,
+    },
+    /// Release every output Ddalgak holds (a desktop switch, an elevated window took focus, a
+    /// key-state reset): the trigger's up would never reach the hook.
+    ReleaseAll,
+    /// Press again the user's trigger modifiers that a cancelled remap had released logically and
+    /// that are still physically held (not recorded).
+    Restore {
+        mods: u8,
     },
 }
 
@@ -114,12 +176,38 @@ pub enum Mode {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Decision {
     pub consume: bool,
+    /// Sent to the worker before `signal` (a dual role resolved by this event).
+    pub pre: Option<Signal>,
     pub signal: Option<Signal>,
+    /// Sent after `signal` (a held-back key sent on).
+    pub post: Option<Signal>,
     pub source: Source,
+    /// Arm the hook thread's one-shot timer: call [`Core::tick`] after this many milliseconds.
+    pub timer: Option<u32>,
+}
+
+impl Decision {
+    fn new(consume: bool, signal: Option<Signal>, source: Source) -> Decision {
+        Decision {
+            consume,
+            pre: None,
+            signal,
+            post: None,
+            source,
+            timer: None,
+        }
+    }
+
+    /// The signals in the order the worker must get them.
+    pub fn signals(&self) -> impl Iterator<Item = Signal> {
+        self.pre.into_iter().chain(self.signal).chain(self.post)
+    }
 }
 
 const NONE: u16 = u16::MAX;
 const SEQ_WORDS: usize = 16; // 1024 bits ≥ MAX_BINDINGS
+/// Most remaps held at the same time (one per held trigger key).
+pub const SLOTS: usize = 16;
 
 #[derive(Clone, Copy, Debug)]
 struct Seq {
@@ -182,6 +270,26 @@ impl Rate {
     }
 }
 
+/// One held remap.
+#[derive(Clone, Copy, Debug)]
+struct Slot {
+    binding: u16,
+    /// The trigger's virtual key (a mouse button's `VK_*BUTTON` for mouse triggers).
+    trigger: u16,
+    spec: RemapSpec,
+    /// The trigger's modifiers belong to the chord (an exact match without pass-through): they
+    /// are released while the target is held.
+    lifts: bool,
+    /// A dual role still undecided since this time (ms).
+    pending: Option<u32>,
+    /// Trigger modifier keys released logically and still to be restored.
+    lift: u8,
+    /// Target modifier keys this slot holds a reference to.
+    mods: u8,
+    /// This slot holds a reference to its target key.
+    key: bool,
+}
+
 /// The engine core. See the module documentation.
 #[derive(Debug)]
 pub struct Core {
@@ -194,6 +302,18 @@ pub struct Core {
     seq: Option<Seq>,
     rate: Rate,
     tripped: bool,
+    slots: [Option<Slot>; SLOTS],
+    /// References to modifier keys held as remap outputs, by [`ModKey`] index.
+    mod_refs: [u8; 8],
+    /// References to target keys and buttons held as remap outputs.
+    key_refs: [Option<(OutCode, u8)>; SLOTS],
+    /// Keys whose down was held back while a dual role was decided and then sent on: their
+    /// repeats and up are sent on too.
+    replayed: KeySet,
+}
+
+fn is_mouse(vk: u16) -> bool {
+    matches!(vk, 0x01 | 0x02 | 0x04..=0x06)
 }
 
 impl Core {
@@ -209,11 +329,17 @@ impl Core {
             seq: None,
             rate,
             tripped: false,
+            slots: [None; SLOTS],
+            mod_refs: [0; 8],
+            key_refs: [None; SLOTS],
+            replayed: KeySet::default(),
         }
     }
 
-    /// Replaces the rules (a reload). Pending taps, holds and sequences are dropped; keys whose
-    /// down was consumed keep having their up consumed.
+    /// Replaces the rules (a reload). Pending taps, holds, sequences and undecided dual roles are
+    /// dropped; keys whose down was consumed keep having their up consumed, and remaps that hold
+    /// their target keep it until their trigger goes up (their instructions carry the output
+    /// keys, not rule indexes).
     pub fn set_table(&mut self, table: Table) {
         self.rate = Rate::new(table.len(), table.max_runs_per_second);
         self.table = table;
@@ -221,6 +347,11 @@ impl Core {
         self.release = None;
         self.hold = None;
         self.seq = None;
+        for s in &mut self.slots {
+            if s.is_some_and(|x| x.pending.is_some()) {
+                *s = None;
+            }
+        }
     }
 
     pub fn table(&self) -> &Table {
@@ -232,41 +363,102 @@ impl Core {
         self.tripped
     }
 
+    /// How many remaps hold their target right now (diagnostics and tests).
+    pub fn active_remaps(&self) -> usize {
+        self.slots.iter().flatten().count()
+    }
+
     /// Forgets the key state after input went to another desktop (lock screen, UAC,
-    /// Ctrl+Alt+Del) or the session came back: key-ups made there never reached the hook. Keys
-    /// whose down was consumed keep having their up consumed.
-    pub fn reset_keys(&mut self) {
+    /// Ctrl+Alt+Del), an elevated window took focus or the session came back: key-ups made there
+    /// never reached the hook. Keys whose down was consumed keep having their up consumed. Every
+    /// remap is dropped and the worker is told to release all outputs ([`Signal::ReleaseAll`]),
+    /// because the trigger's up may never arrive.
+    pub fn reset_keys(&mut self) -> Vec<Signal> {
         self.norm.reset();
         self.release = None;
         self.hold = None;
         self.seq = None;
+        let had = self.active_remaps() > 0 || !self.replayed.is_empty();
+        self.clear_remaps();
+        if had {
+            vec![Signal::ReleaseAll]
+        } else {
+            Vec::new()
+        }
     }
 
-    /// Drops pending taps, holds and sequences (pause, session lock).
-    pub fn cancel_pending(&mut self) -> Option<Signal> {
+    /// Drops pending taps, holds, sequences and remaps (pause, stop, session lock). The worker is
+    /// told to release every output ([`Signal::ReleaseAll`], ordered after every press this core
+    /// decided before), and the user's trigger modifiers that a remap had released and that are
+    /// still physically held are restored.
+    pub fn cancel_pending(&mut self) -> Vec<Signal> {
         self.release = None;
         self.seq = None;
-        self.hold
-            .take()
-            .map(|(binding, _)| Signal::HoldCancelled { binding })
+        let mut out = Vec::new();
+        if let Some((binding, _)) = self.hold.take() {
+            out.push(Signal::HoldCancelled { binding });
+        }
+        if self.active_remaps() > 0 || !self.replayed.is_empty() {
+            out.push(Signal::ReleaseAll);
+        }
+        let phys = self.norm.mods_physical();
+        let lifted: u8 = self.slots.iter().flatten().fold(0, |a, s| a | s.lift);
+        let restore = ModKey::ALL
+            .into_iter()
+            .filter(|m| lifted & m.bit() != 0 && phys.has(*m))
+            .fold(0u8, |a, m| a | m.bit());
+        self.clear_remaps();
+        if restore != 0 {
+            out.push(Signal::Restore { mods: restore });
+        }
+        out
+    }
+
+    fn clear_remaps(&mut self) {
+        self.slots = [None; SLOTS];
+        self.mod_refs = [0; 8];
+        self.key_refs = [None; SLOTS];
+    }
+
+    /// The hook thread's timer fired at `now` (ms, the event clock): an undecided dual role whose
+    /// time passed presses its target. Returns the signal and, when the timer fired early, the
+    /// milliseconds left.
+    pub fn tick(&mut self, now: u32) -> (Option<Signal>, Option<u32>) {
+        let Some(i) = self
+            .slots
+            .iter()
+            .position(|s| s.is_some_and(|s| s.pending.is_some()))
+        else {
+            return (None, None);
+        };
+        let Some(mut s) = self.slots[i] else {
+            return (None, None);
+        };
+        let since = s.pending.unwrap_or(now);
+        let waited = now.wrapping_sub(since);
+        if waited < s.spec.tap_ms {
+            return (None, Some(s.spec.tap_ms - waited));
+        }
+        let op = self.press(&mut s);
+        s.pending = None;
+        self.slots[i] = Some(s);
+        (
+            Some(Signal::Remap {
+                binding: s.binding,
+                op,
+            }),
+            None,
+        )
     }
 
     fn pass(&self, ev: &KeyEvent, signal: Option<Signal>) -> Decision {
-        Decision {
-            consume: false,
-            signal,
-            source: ev.source,
-        }
+        Decision::new(false, signal, ev.source)
     }
 
     fn take(&mut self, ev: &KeyEvent, binding: usize, signal: Option<Signal>) -> Decision {
         self.consumed.insert(ev.vk);
         self.owner[usize::from(ev.vk & 0xFF)] = u16::try_from(binding).unwrap_or(NONE);
-        Decision {
-            consume: true,
-            signal,
-            source: ev.source,
-        }
+        Decision::new(true, signal, ev.source)
     }
 
     fn fire(&mut self, binding: usize, kind: FireKind, now: u32) -> Signal {
@@ -278,9 +470,31 @@ impl Core {
         }
     }
 
+    /// Modifiers held for the application: every source, except keys whose down Ddalgak consumed
+    /// (a remapped modifier) and including keys it sent on after holding them back.
+    fn mods(&self) -> ModState {
+        let mut m = self.norm.mods();
+        for k in ModKey::ALL {
+            if m.has(k) && self.consumed.contains(k.vk()) && !self.replayed.contains(k.vk()) {
+                m = m.without(k);
+            }
+        }
+        m
+    }
+
+    /// Whether the application sees this key held (pressed by the user or another program and
+    /// passed on, or sent on by Ddalgak).
+    fn visible_down(&self, vk: u16) -> bool {
+        self.norm.is_down(vk) && (!self.consumed.contains(vk) || self.replayed.contains(vk))
+    }
+
     /// Whether the held modifiers plus this key form a chord reserved for triggers (a widened
     /// remap never captures one: with `Tab` remapped, `Alt+Tab` still switches windows).
     fn reserved_now(&self, ev: &KeyEvent) -> bool {
+        let mods = self.mods();
+        if mods.win() {
+            return true; // every Win chord is reserved (§3.1)
+        }
         let Some(name) = vk::vk_name(ev.vk, ev.extended) else {
             return false;
         };
@@ -288,29 +502,43 @@ impl Core {
             return false;
         }
         let chord = Chord {
-            mods: self.norm.mods().as_mods(),
+            mods: mods.as_mods(),
             key: Key::Named(name),
         };
         kim_hotkeys::reserved::chord(&chord, &Scope::Context(String::new()), false).is_some()
             || name == "F12"
     }
 
-    fn chord_matches(&self, c: &CChord, ev: &KeyEvent, widen: bool) -> bool {
+    /// `Some(true)`: the chord matches exactly; `Some(false)`: only through widening (a trigger
+    /// without modifiers of a remap or block, with modifiers held); `None`: no match.
+    fn chord_match(&self, c: &CChord, ev: &KeyEvent, widen: bool) -> Option<bool> {
+        let mods = self.mods();
         let key_ok = match c.key {
             KeyMatch::Modifier(m) => {
-                return ev.modifier == Some(m) && self.norm.mods().matches_without(&c.mods, m);
+                if ev.modifier != Some(m) {
+                    return None;
+                }
+                if mods.matches_without(&c.mods, m) {
+                    return Some(true);
+                }
+                let widened = widen && c.mods.is_empty() && !mods.without(m).win();
+                return widened.then_some(false);
             }
             _ if ev.modifier.is_some() || ev.altgr_fake_ctrl => false,
             KeyMatch::Vk(v, ext) => ev.vk == v && ext.is_none_or(|e| e == ev.extended),
-            KeyMatch::Scan(s) => ev.scan == s && !ev.extended,
+            KeyMatch::Scan(s) => ev.scan == s && !ev.extended && !is_mouse(ev.vk),
         };
         if !key_ok {
-            return false;
+            return None;
         }
-        if widen && c.mods.is_empty() {
-            return !self.reserved_now(ev);
+        if mods.matches(&c.mods) {
+            return Some(true);
         }
-        self.norm.mods().matches(&c.mods)
+        (widen && c.mods.is_empty() && !self.reserved_now(ev)).then_some(false)
+    }
+
+    fn chord_matches(&self, c: &CChord, ev: &KeyEvent, widen: bool) -> bool {
+        self.chord_match(c, ev, widen).is_some()
     }
 
     fn guard(flags: &Flags) -> Option<Skip> {
@@ -322,6 +550,221 @@ impl Core {
             Some(Skip::ImeComposition)
         } else {
             None
+        }
+    }
+
+    fn key_ref(&self, code: OutCode) -> u8 {
+        self.key_refs
+            .iter()
+            .flatten()
+            .find(|(c, _)| *c == code)
+            .map_or(0, |(_, n)| *n)
+    }
+
+    /// Adds a reference; returns the count before.
+    fn add_key_ref(&mut self, code: OutCode) -> u8 {
+        if let Some(e) = self.key_refs.iter_mut().flatten().find(|(c, _)| *c == code) {
+            e.1 = e.1.saturating_add(1);
+            return e.1 - 1;
+        }
+        if let Some(e) = self.key_refs.iter_mut().find(|e| e.is_none()) {
+            *e = Some((code, 1));
+        }
+        0
+    }
+
+    /// Drops a reference; returns the count after.
+    fn drop_key_ref(&mut self, code: OutCode) -> u8 {
+        for e in &mut self.key_refs {
+            if let Some((c, n)) = e
+                && *c == code
+            {
+                *n = n.saturating_sub(1);
+                let left = *n;
+                if left == 0 {
+                    *e = None;
+                }
+                return left;
+            }
+        }
+        0
+    }
+
+    fn mod_index(m: ModKey) -> usize {
+        ModKey::ALL.iter().position(|k| *k == m).unwrap_or(0)
+    }
+
+    /// Presses a remap's target (§5.1): releases the trigger's own modifiers that the target
+    /// does not use (exact triggers only), presses the target modifiers and key that nobody holds
+    /// yet, and takes references to what it relies on.
+    fn press(&mut self, s: &mut Slot) -> RemapOp {
+        let spec = s.spec;
+        let (lift, mods, key) = self.plan_output(&spec.to, s.lifts, Some(s));
+        s.lift = lift;
+        RemapOp::Press { lift, mods, key }
+    }
+
+    /// Decides which modifiers to release and which modifiers and key to press for `out`. A held
+    /// output takes references (recorded in `refs`); a tap takes none (it is over at once).
+    fn plan_output(
+        &mut self,
+        out: &Output,
+        lifts: bool,
+        mut refs: Option<&mut Slot>,
+    ) -> (u8, u8, Option<OutCode>) {
+        let held = self.mods();
+        let mut lift = 0u8;
+        let mut send = 0u8;
+        for (want, l, r) in families(&out.mods) {
+            let (hl, hr) = (held.has(l), held.has(r));
+            let (rl, rr) = (
+                self.mod_refs[Self::mod_index(l)] > 0,
+                self.mod_refs[Self::mod_index(r)] > 0,
+            );
+            // Which key of this family serves the output, and whether it must be pressed.
+            let (use_key, keep_l, keep_r) = match want {
+                Side::None => (None, false, false),
+                Side::Any if rl || (hl && !rr) => (Some(l), hl, hr),
+                Side::Any if rr || hr => (Some(r), hl, hr),
+                Side::Any | Side::Left => (Some(l), hl, false),
+                Side::Right => (Some(r), false, hr),
+            };
+            if lifts {
+                if hl && !keep_l {
+                    lift |= l.bit();
+                }
+                if hr && !keep_r {
+                    lift |= r.bit();
+                }
+            }
+            let Some(k) = use_key else { continue };
+            let idx = Self::mod_index(k);
+            let refd = self.mod_refs[idx] > 0;
+            let visible = held.has(k) && lift & k.bit() == 0;
+            if let Some(s) = refs.as_deref_mut() {
+                if refd || !visible {
+                    self.mod_refs[idx] = self.mod_refs[idx].saturating_add(1);
+                    s.mods |= k.bit();
+                    if !refd && !visible {
+                        send |= k.bit();
+                    }
+                }
+            } else if !refd && !visible {
+                send |= k.bit();
+            }
+        }
+        let mut key = None;
+        if let Some(code) = out.key {
+            let refd = self.key_ref(code) > 0;
+            let visible = code.vk().is_some_and(|v| self.visible_down(v));
+            if let Some(s) = refs {
+                if refd || !visible {
+                    self.add_key_ref(code);
+                    s.key = true;
+                    if !refd {
+                        key = Some(code);
+                    }
+                }
+            } else if !refd && !visible {
+                key = Some(code);
+            }
+        }
+        (lift, send, key)
+    }
+
+    /// Releases a remap's target and restores the trigger modifiers it released.
+    fn release(&mut self, s: &Slot) -> RemapOp {
+        let mut key = None;
+        if s.key
+            && let Some(code) = s.spec.to.key
+            && self.drop_key_ref(code) == 0
+        {
+            key = Some(code);
+        }
+        let mut mods = 0u8;
+        for m in ModKey::ALL {
+            if s.mods & m.bit() == 0 {
+                continue;
+            }
+            let idx = Self::mod_index(m);
+            self.mod_refs[idx] = self.mod_refs[idx].saturating_sub(1);
+            if self.mod_refs[idx] > 0 {
+                continue;
+            }
+            // Another remap released it logically: the application already saw it go up, so
+            // nothing is sent and that remap does not restore it.
+            if let Some(o) = self
+                .slots
+                .iter_mut()
+                .flatten()
+                .find(|o| o.lift & m.bit() != 0)
+            {
+                o.lift &= !m.bit();
+            } else {
+                mods |= m.bit();
+            }
+        }
+        let restore = self.still_held(s.lift);
+        RemapOp::Release { key, mods, restore }
+    }
+
+    /// The modifier keys of `set` that are still held by the user or by another remap.
+    fn still_held(&self, set: u8) -> u8 {
+        let phys = self.norm.mods_physical();
+        ModKey::ALL
+            .into_iter()
+            .filter(|m| {
+                set & m.bit() != 0
+                    && (phys.has(*m) || self.mod_refs[Self::mod_index(*m)] > 0)
+                    && !(self.consumed.contains(m.vk()) && !self.replayed.contains(m.vk()))
+            })
+            .fold(0u8, |a, m| a | m.bit())
+    }
+
+    /// A dual-role trigger went up undecided: its tap output, at once.
+    fn tap(&mut self, s: &Slot) -> RemapOp {
+        let Some(out) = s.spec.tap else {
+            return RemapOp::Release {
+                key: None,
+                mods: 0,
+                restore: 0,
+            };
+        };
+        let (lift, mods, key) = self.plan_output(&out, s.lifts, None);
+        let restore = self.still_held(lift);
+        RemapOp::Tap {
+            lift,
+            mods,
+            key,
+            restore,
+        }
+    }
+
+    fn slot_of(&self, vk: u16) -> Option<usize> {
+        self.slots
+            .iter()
+            .position(|s| s.is_some_and(|s| s.trigger == vk))
+    }
+
+    /// The output a held remap repeats: its target key, or a bare-modifier target's key.
+    fn repeat_code(s: &Slot) -> Option<OutCode> {
+        if s.key {
+            return s.spec.to.key.filter(|c| !matches!(c, OutCode::Button(_)));
+        }
+        if s.spec.to.key.is_none() && s.mods != 0 {
+            return ModKey::ALL
+                .into_iter()
+                .find(|m| s.mods & m.bit() != 0)
+                .map(|m| OutCode::Vk(m.vk()));
+        }
+        None
+    }
+
+    fn replay_code(ev: &KeyEvent) -> OutCode {
+        OutCode::Exact {
+            vk: ev.vk,
+            scan: ev.scan,
+            ext: ev.extended,
         }
     }
 
@@ -350,51 +793,180 @@ impl Core {
         let vk_i = usize::from(ev.vk & 0xFF);
         match ev.transition {
             // 3. Consumed down, consumed up.
-            Transition::Up => {
-                let consume = self.consumed.remove(ev.vk);
-                self.owner[vk_i] = NONE;
-                let mut signal = None;
-                if let Some((b, k)) = self.release
-                    && k == ev.vk
-                {
-                    self.release = None;
-                    signal = Some(self.fire(usize::from(b), FireKind::Release, ev.time_ms));
+            Transition::Up => self.up(&ev, vk_i),
+            Transition::Repeat => self.repeat(&ev, vk_i),
+            Transition::Down => {
+                // A key that goes down again was up: an older pairing state is stale (its up was
+                // made where the hook could not see it).
+                self.consumed.remove(ev.vk);
+                self.replayed.remove(ev.vk);
+                let stale = self.slot_of(ev.vk).and_then(|i| self.slots[i].take());
+                let mut d = self.down(&ev, mode, flags);
+                if let Some(s) = stale {
+                    let r = Signal::Remap {
+                        binding: s.binding,
+                        op: self.release(&s),
+                    };
+                    if d.pre.is_none() {
+                        d.pre = Some(r);
+                    } else {
+                        d.post = d.post.or(Some(r));
+                    }
                 }
-                if let Some((b, k)) = self.hold
-                    && k == ev.vk
-                {
-                    self.hold = None;
-                    signal = signal.or(Some(Signal::HoldCancelled { binding: b }));
-                }
-                Decision {
-                    consume,
-                    signal,
-                    source: ev.source,
-                }
+                d
             }
-            Transition::Repeat => {
-                if !self.consumed.contains(ev.vk) {
-                    return self.pass(&ev, None);
-                }
-                let b = self.owner[vk_i];
-                let signal = self
-                    .table
-                    .compiled
-                    .get(usize::from(b))
-                    .filter(|c| c.repeat && c.on == On::Press)
-                    .map(|_| ())
-                    .map(|()| self.fire(usize::from(b), FireKind::Repeat, ev.time_ms));
-                Decision {
-                    consume: true,
-                    signal,
-                    source: ev.source,
-                }
-            }
-            Transition::Down => self.down(&ev, mode, flags),
         }
     }
 
+    fn up(&mut self, ev: &KeyEvent, vk_i: usize) -> Decision {
+        let mut consume = self.consumed.remove(ev.vk);
+        self.owner[vk_i] = NONE;
+        let mut signal = None;
+        if let Some((b, k)) = self.release
+            && k == ev.vk
+        {
+            self.release = None;
+            signal = Some(self.fire(usize::from(b), FireKind::Release, ev.time_ms));
+        }
+        if let Some((b, k)) = self.hold
+            && k == ev.vk
+        {
+            self.hold = None;
+            signal = signal.or(Some(Signal::HoldCancelled { binding: b }));
+        }
+        if let Some(i) = self.slot_of(ev.vk)
+            && let Some(s) = self.slots[i].take()
+        {
+            let op = if s.pending.is_some() {
+                self.tap(&s)
+            } else {
+                self.release(&s)
+            };
+            signal = Some(Signal::Remap {
+                binding: s.binding,
+                op,
+            });
+        }
+        let mut post = None;
+        if self.replayed.remove(ev.vk) {
+            consume = true;
+            post = Some(Signal::Replay {
+                code: Self::replay_code(ev),
+                up: true,
+            });
+        }
+        // The user lets go of a trigger modifier that a remap released logically: the
+        // application already saw it go up.
+        if let Some(m) = ev.modifier
+            && ev.source != Source::Own
+            && !consume
+            && let Some(s) = self
+                .slots
+                .iter_mut()
+                .flatten()
+                .find(|s| s.lift & m.bit() != 0)
+        {
+            s.lift &= !m.bit();
+            consume = true;
+        }
+        let mut d = Decision::new(consume, signal, ev.source);
+        d.post = post;
+        d
+    }
+
+    fn repeat(&mut self, ev: &KeyEvent, vk_i: usize) -> Decision {
+        if let Some(i) = self.slot_of(ev.vk)
+            && let Some(s) = self.slots[i]
+        {
+            let signal = if s.pending.is_some() {
+                None
+            } else {
+                Self::repeat_code(&s).map(|key| Signal::Remap {
+                    binding: s.binding,
+                    op: RemapOp::Repeat { key },
+                })
+            };
+            let mut d = Decision::new(self.consumed.contains(ev.vk), signal, ev.source);
+            if self.replayed.contains(ev.vk) {
+                d.post = Some(Signal::Replay {
+                    code: Self::replay_code(ev),
+                    up: false,
+                });
+            }
+            return d;
+        }
+        if self.replayed.contains(ev.vk) {
+            return Decision::new(
+                true,
+                Some(Signal::Replay {
+                    code: Self::replay_code(ev),
+                    up: false,
+                }),
+                ev.source,
+            );
+        }
+        if !self.consumed.contains(ev.vk) {
+            return self.pass(ev, None);
+        }
+        let b = self.owner[vk_i];
+        let signal = self
+            .table
+            .compiled
+            .get(usize::from(b))
+            .filter(|c| c.repeat && c.on == On::Press)
+            .map(|_| ())
+            .map(|()| self.fire(usize::from(b), FireKind::Repeat, ev.time_ms));
+        Decision::new(true, signal, ev.source)
+    }
+
+    /// Decides an undecided dual role because another key went down: its target is pressed
+    /// before that key reaches the application.
+    fn resolve_pending(&mut self, ev: &KeyEvent) -> Option<Signal> {
+        if is_mouse(ev.vk) {
+            return None; // clicks are not seen unless a mouse trigger exists; never decide on them
+        }
+        let i = self
+            .slots
+            .iter()
+            .position(|s| s.is_some_and(|s| s.pending.is_some() && s.trigger != ev.vk))?;
+        let mut s = self.slots[i]?;
+        let op = self.press(&mut s);
+        s.pending = None;
+        self.slots[i] = Some(s);
+        Some(Signal::Remap {
+            binding: s.binding,
+            op,
+        })
+    }
+
     fn down(&mut self, ev: &KeyEvent, mode: Mode, flags: &Flags) -> Decision {
+        // A modifier the user presses again is held for the application again: a remap that
+        // released it logically does not restore it.
+        if let Some(m) = ev.modifier {
+            for s in self.slots.iter_mut().flatten() {
+                s.lift &= !m.bit();
+            }
+        }
+        let pre = self.resolve_pending(ev);
+        let mut d = self.down_inner(ev, mode, flags);
+        if pre.is_some() {
+            d.pre = pre;
+            if !d.consume {
+                // The key must reach the application after the target: hold it back and send it
+                // on (with its repeats and its up) behind the target.
+                self.consumed.insert(ev.vk);
+                self.replayed.insert(ev.vk);
+                d.consume = true;
+                d.post = Some(Signal::Replay {
+                    code: Self::replay_code(ev),
+                    up: false,
+                });
+            }
+        }
+        d
+    }
+
+    fn down_inner(&mut self, ev: &KeyEvent, mode: Mode, flags: &Flags) -> Decision {
         // Any other key between down and up makes a release trigger not a tap.
         if let Some((_, k)) = self.release
             && k != ev.vk
@@ -414,13 +986,14 @@ impl Core {
         }
         let paused = mode == Mode::Paused;
         let mut winner: Option<usize> = None;
+        let mut widened: Option<usize> = None;
         let mut skipped: Option<(usize, Skip)> = None;
         let mut seq_start = [0u64; SEQ_WORDS];
         let mut any_seq = false;
         for (i, c) in self.table.compiled.iter().enumerate() {
-            if !self.chord_matches(&c.steps[0], ev, c.widen && c.len == 1) {
+            let Some(exact) = self.chord_match(&c.steps[0], ev, c.widen && c.len == 1) else {
                 continue;
-            }
+            };
             if ev.source == Source::Other && c.injected == Injected::Ignore {
                 skipped.get_or_insert((i, Skip::InjectedInput));
                 continue;
@@ -436,10 +1009,15 @@ impl Core {
                 }
                 continue;
             }
+            if !exact {
+                // A widened match is the fallback: an exact chord of another rule wins.
+                widened.get_or_insert(i);
+                continue;
+            }
             winner = Some(i);
             break;
         }
-        let Some(i) = winner else {
+        let Some(i) = winner.or(widened) else {
             if any_seq {
                 if let Some(s) = guard {
                     let first = (0..self.table.len()).find(|i| bit(&seq_start, *i));
@@ -455,11 +1033,7 @@ impl Core {
                     epoch: flags.focus_epoch,
                 });
                 self.consumed.insert(ev.vk);
-                return Decision {
-                    consume: true,
-                    signal: None,
-                    source: ev.source,
-                };
+                return Decision::new(true, None, ev.source);
             }
             let signal = skipped.map(|(b, code)| Signal::Skipped {
                 binding: u16::try_from(b).unwrap_or(NONE),
@@ -481,6 +1055,9 @@ impl Core {
                     code: Skip::ElevatedTarget,
                 }),
             );
+        }
+        if let Some(spec) = c.remap {
+            return self.remap_down(ev, i, &c, spec);
         }
         match c.on {
             On::Press => {
@@ -515,16 +1092,52 @@ impl Core {
         }
     }
 
+    /// A remap's trigger went down (§5.1).
+    fn remap_down(&mut self, ev: &KeyEvent, i: usize, c: &Compiled, spec: RemapSpec) -> Decision {
+        let binding = u16::try_from(i).unwrap_or(NONE);
+        let finish = |core: &mut Core, signal: Option<Signal>| {
+            if c.pass_through {
+                core.pass(ev, signal)
+            } else {
+                core.take(ev, i, signal)
+            }
+        };
+        if !self.rate.allow(i, ev.time_ms) {
+            return finish(self, Some(Signal::RateLimited { binding }));
+        }
+        let Some(free) = self.slots.iter().position(Option::is_none) else {
+            // More held remaps than slots: the key passes unchanged.
+            return self.pass(ev, None);
+        };
+        let exact_mods = !c.steps[0].mods.is_empty();
+        let mut slot = Slot {
+            binding,
+            trigger: ev.vk,
+            spec,
+            lifts: exact_mods && !c.pass_through,
+            pending: None,
+            lift: 0,
+            mods: 0,
+            key: false,
+        };
+        if spec.tap.is_some() && !c.pass_through {
+            slot.pending = Some(ev.time_ms);
+            self.slots[free] = Some(slot);
+            let mut d = finish(self, None);
+            d.timer = Some(spec.tap_ms);
+            return d;
+        }
+        let op = self.press(&mut slot);
+        self.slots[free] = Some(slot);
+        finish(self, Some(Signal::Remap { binding, op }))
+    }
+
     fn sequence_step(&mut self, ev: &KeyEvent, seq: Seq) -> Decision {
         let swallow = |core: &mut Core, signal: Option<Signal>| {
             core.consumed.insert(ev.vk);
-            Decision {
-                consume: true,
-                signal,
-                source: ev.source,
-            }
+            Decision::new(true, signal, ev.source)
         };
-        if ev.vk == vk::VK_ESCAPE && self.norm.mods().is_empty() {
+        if ev.vk == vk::VK_ESCAPE && self.mods().is_empty() {
             self.seq = None;
             return swallow(self, None);
         }

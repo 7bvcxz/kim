@@ -399,12 +399,11 @@ fn profile_index(at: &str) -> Option<usize> {
         .ok()
 }
 
-/// The Step that implements each step type this version does not run yet.
+/// The Step that implements each step type this version does not run yet (ADR 0031 moved
+/// `send_keys` to Step 69, with typing, and `delay` to Step 78, with ordered multi-step runs).
 pub const LATER_STEPS: &[(&str, &str)] = &[
-    ("remap", "Step 68"),
-    ("block", "Step 68"),
-    ("send_keys", "Step 68"),
-    ("delay", "Step 68"),
+    ("send_keys", "Step 69"),
+    ("delay", "Step 78"),
     ("type_text", "Step 69"),
     ("open_program", "Step 70"),
     ("open_url", "Step 70"),
@@ -746,7 +745,7 @@ fn extend(
                 .steps
                 .iter()
                 .enumerate()
-                .find(|(_, s)| s.kind() != "engine")
+                .find(|(_, s)| !crate::rules::RUNNABLE_STEPS.contains(&s.kind()))
             {
                 let why = match LATER_STEPS.iter().find(|(t, _)| *t == s.kind()) {
                     Some((t, step)) => {
@@ -1095,7 +1094,7 @@ pub fn chord_warning(t: &Trigger) -> Option<(&'static str, &'static str)> {
         let key = match c.key {
             TKey::Named(n) | TKey::Lock(n) => Key::Named(n),
             TKey::Code(n) => Key::Code(n),
-            TKey::Modifier(_) => continue,
+            TKey::Modifier(_) | TKey::Mouse(_) => continue,
         };
         let m = &c.mods;
         if i == 0

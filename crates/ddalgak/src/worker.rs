@@ -8,10 +8,22 @@
 //!
 //! Engine-control steps are handed to the controller (the host's main thread), which owns the
 //! lifecycle; the worker never changes the engine state itself.
+//!
+//! **Output** (Step 68): the worker owns the [`Injector`] and its ledger. It carries out the
+//! core's remap instructions ([`RemapOp`]) exactly as given, sends on keys the core held back
+//! ([`Signal::Replay`]) and releases everything it holds on [`Msg::Cancel`] (pause, stop, session
+//! lock, profile switch), on [`Signal::ReleaseAll`] (sent by the hook thread after it dropped its
+//! remaps, so it is ordered after every press the hook decided before), on the emergency chord and
+//! when it stops (`Drop`). Remap instructions carry their output keys, so a held output is released
+//! correctly even after a reload changed the rules; only the activity entry needs the current
+//! rules. A repeat is sent only for an output the ledger still holds, so a late repeat can never
+//! press again what a release-all let go.
 
-use crate::core::Signal;
+use crate::core::{RemapOp, Signal};
+use crate::inject::{Backend, Injector, OutCode, OutEvent};
 use crate::stats::Stats;
 use crate::table::{Action, Binding, EngineOp};
+use crate::vk::ModKey;
 use serde_json::{Value, json};
 use std::collections::VecDeque;
 use std::sync::atomic::Ordering;
@@ -144,14 +156,23 @@ type Sink = Box<dyn Fn(Control) + Send>;
 
 impl Worker {
     /// Starts the worker. `control` receives engine-control requests (and must wake the
-    /// controller); `activity` is shared with status reporting.
-    pub fn start(stats: Arc<Stats>, control: Sink, activity: Arc<Mutex<Activity>>) -> Worker {
+    /// controller); `activity` is shared with status reporting; `backend` injects the output
+    /// (`SendInput` in the app, a recorder in tests).
+    pub fn start(
+        stats: Arc<Stats>,
+        control: Sink,
+        activity: Arc<Mutex<Activity>>,
+        backend: Box<dyn Backend>,
+    ) -> Worker {
         let (tx, rx) = sync_channel::<Msg>(QUEUE);
         let act = Arc::clone(&activity);
         let st = Arc::clone(&stats);
         let join = std::thread::Builder::new()
             .name("ddalgak-worker".into())
-            .spawn(move || run(&rx, &control, &act, &st))
+            .spawn(move || {
+                let mut inj = Injector::new(backend);
+                run(&rx, &control, &act, &st, &mut inj);
+            })
             .expect("spawn the worker thread");
         Worker {
             queue: Queue { tx, stats },
@@ -180,7 +201,81 @@ struct Hold {
     due: Instant,
 }
 
-fn run(rx: &Receiver<Msg>, control: &Sink, activity: &Mutex<Activity>, stats: &Stats) {
+type Inj = Injector<Box<dyn Backend>>;
+
+fn mod_events(bits: u8, up: bool, tracked: bool, out: &mut Vec<(OutEvent, bool)>) {
+    let mut keys: Vec<ModKey> = ModKey::ALL
+        .into_iter()
+        .filter(|m| bits & m.bit() != 0)
+        .collect();
+    if up {
+        keys.reverse();
+    }
+    for m in keys {
+        out.push((
+            OutEvent {
+                code: OutCode::Vk(m.vk()),
+                up,
+            },
+            tracked,
+        ));
+    }
+}
+
+/// Carries out one remap instruction. Returns whether every event was inserted.
+pub fn execute(inj: &mut Injector<impl Backend>, op: RemapOp) -> bool {
+    let mut ev: Vec<(OutEvent, bool)> = Vec::new();
+    match op {
+        RemapOp::Press { lift, mods, key } => {
+            mod_events(lift, true, false, &mut ev);
+            mod_events(mods, false, true, &mut ev);
+            if let Some(k) = key {
+                ev.push((OutEvent::down(k), true));
+            }
+        }
+        RemapOp::Repeat { key } => {
+            if !inj.is_held(key) {
+                return true;
+            }
+            ev.push((OutEvent::down(key), true));
+        }
+        RemapOp::Release { key, mods, restore } => {
+            if let Some(k) = key.filter(|k| inj.is_held(*k)) {
+                ev.push((OutEvent::up(k), true));
+            }
+            let held: u8 = ModKey::ALL
+                .into_iter()
+                .filter(|m| mods & m.bit() != 0 && inj.is_held(OutCode::Vk(m.vk())))
+                .fold(0, |a, m| a | m.bit());
+            mod_events(held, true, true, &mut ev);
+            mod_events(restore, false, false, &mut ev);
+        }
+        RemapOp::Tap {
+            lift,
+            mods,
+            key,
+            restore,
+        } => {
+            mod_events(lift, true, false, &mut ev);
+            mod_events(mods, false, true, &mut ev);
+            if let Some(k) = key {
+                ev.push((OutEvent::down(k), true));
+                ev.push((OutEvent::up(k), true));
+            }
+            mod_events(mods, true, true, &mut ev);
+            mod_events(restore, false, false, &mut ev);
+        }
+    }
+    inj.send_mixed(&ev)
+}
+
+fn run(
+    rx: &Receiver<Msg>,
+    control: &Sink,
+    activity: &Mutex<Activity>,
+    stats: &Stats,
+    inj: &mut Inj,
+) {
     let mut rules: Option<Rules> = None;
     let mut holds: Vec<Hold> = Vec::new();
     loop {
@@ -207,11 +302,37 @@ fn run(rx: &Receiver<Msg>, control: &Sink, activity: &Mutex<Activity>, stats: &S
                 holds.clear();
                 rules = Some(r);
             }
-            Ok(Msg::Cancel) => holds.clear(),
+            Ok(Msg::Cancel) => {
+                holds.clear();
+                inj.release_all();
+            }
             Ok(Msg::Signal { generation, signal }) => match signal {
                 Signal::Emergency => {
                     holds.clear();
+                    inj.release_all();
                     control(Control::Emergency);
+                }
+                Signal::Remap { binding, op } => {
+                    let ok = execute(inj, op);
+                    if matches!(op, RemapOp::Press { .. } | RemapOp::Tap { .. }) {
+                        let outcome = if ok { "ok" } else { "injection_failed" };
+                        record(rules.as_ref(), generation, binding, outcome, activity);
+                    }
+                }
+                Signal::Replay { code, up } => {
+                    if up {
+                        inj.release_code(code);
+                    } else {
+                        inj.press_code(code);
+                    }
+                }
+                Signal::ReleaseAll => {
+                    inj.release_all();
+                }
+                Signal::Restore { mods } => {
+                    let mut ev = Vec::new();
+                    mod_events(mods, false, false, &mut ev);
+                    inj.send_mixed(&ev);
                 }
                 Signal::Fire { binding, .. } => {
                     fire(rules.as_ref(), generation, binding, control, activity);
@@ -287,6 +408,10 @@ fn fire(
                 });
             }
         }
+        // The key was consumed; nothing else happens (§5.2).
+        Action::Block => {}
+        // Remaps run through `Signal::Remap`; a fired remap does nothing more.
+        Action::Remap(_) => return,
     }
     record(rules, generation, binding, "ok", activity);
 }
@@ -332,6 +457,7 @@ mod tests {
                 let _ = tx.lock().unwrap().send(c);
             }),
             Arc::new(Mutex::new(Activity::default())),
+            Box::new(crate::inject::Recorder::default()),
         );
         (w, rx, stats)
     }

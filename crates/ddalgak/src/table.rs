@@ -3,11 +3,13 @@
 //!
 //! A [`Binding`] is what the engine needs from one active rule: its trigger with `on`, `repeat`,
 //! `pass_through` and the injected-input policy, whether it is an engine-control rule (which keeps
-//! working while paused) and whether it injects input (skipped over elevated windows). Bindings
-//! are given in precedence order (DDALGAK_RULE_MODEL §7.1; the loader sorts them).
-//! [`Table::compile`] turns them into fixed-size records with virtual keys and scan codes, so the
-//! hook callback compares numbers and never allocates.
+//! working while paused), whether it injects input (skipped over elevated windows) and, for a
+//! remap (Step 68), its compiled outputs. Bindings are given in precedence order
+//! (DDALGAK_RULE_MODEL §7.1; the loader sorts them). [`Table::compile`] turns them into
+//! fixed-size records with virtual keys and scan codes, so the hook callback compares numbers and
+//! never allocates.
 
+use crate::remap::Output;
 use crate::trigger::{TKey, Trigger};
 use crate::vk::{self, ModKey};
 use kim_hotkeys::keys::Mods;
@@ -59,11 +61,27 @@ impl EngineOp {
     }
 }
 
-/// What the worker runs when a binding fires. Step 66 runs engine-control rules; the other
-/// action types arrive in Steps 68–72 and are inactive until then (never broader, §9).
+/// A compiled remap (DDALGAK_RULE_MODEL §5.1): the target, the optional dual-role tap output and
+/// its time.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct RemapSpec {
+    pub to: Output,
+    pub tap: Option<Output>,
+    /// 100–1000 ms (default 200); only with `tap`.
+    pub tap_ms: u32,
+}
+
+/// What a binding does when it fires. Step 66 runs engine-control rules, Step 68 remaps and
+/// blocks; the other action types arrive in Steps 69–72 and are inactive until then (never
+/// broader, §9).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Action {
     Engine(Vec<EngineOp>),
+    /// The trigger acts as another key, chord or button while held (§5.1). The core decides the
+    /// output events; the worker sends them.
+    Remap(RemapSpec),
+    /// The trigger is consumed and nothing happens (§5.2).
+    Block,
 }
 
 /// One active rule as the engine sees it.
@@ -77,7 +95,8 @@ pub struct Binding {
     pub pass_through: bool,
     pub injected: Injected,
     /// `remap`/`block` semantics: a trigger without modifiers matches with any modifiers held,
-    /// except where that would form a reserved chord (§3.2). Used from Step 68.
+    /// except where that would form a reserved chord (§3.2); an exact chord of another rule wins
+    /// over the widened match.
     pub widen: bool,
     /// The rule injects input (skipped while an elevated window has focus).
     pub injects: bool,
@@ -121,6 +140,7 @@ pub struct Compiled {
     pub widen: bool,
     pub injects: bool,
     pub engine_control: bool,
+    pub remap: Option<RemapSpec>,
 }
 
 /// Most bindings a table holds (one profile's rule limit, DDALGAK_RULE_MODEL §2).
@@ -142,6 +162,7 @@ fn compile_chord(c: &crate::trigger::TChord) -> CChord {
         }
         TKey::Code(code) => KeyMatch::Scan(vk::code_scan(code).map_or(0, |(s, _)| s)),
         TKey::Modifier(m) => KeyMatch::Modifier(m),
+        TKey::Mouse(b) => KeyMatch::Vk(b.vk(), None),
     };
     CChord { key, mods: c.mods }
 }
@@ -173,6 +194,10 @@ impl Table {
                     widen: b.widen,
                     injects: b.injects,
                     engine_control: b.is_engine_control(),
+                    remap: match &b.action {
+                        Action::Remap(r) => Some(*r),
+                        _ => None,
+                    },
                 }
             })
             .collect();
@@ -197,5 +222,11 @@ impl Table {
 
     pub fn bindings(&self) -> &[Binding] {
         &self.bindings
+    }
+
+    /// Whether a binding has a mouse-button trigger: only then is the low-level mouse hook
+    /// installed (Step 68, ADR 0031; disclosed as the `mouse-hook` permission).
+    pub fn has_mouse(&self) -> bool {
+        self.bindings.iter().any(|b| b.trigger.mouse().is_some())
     }
 }

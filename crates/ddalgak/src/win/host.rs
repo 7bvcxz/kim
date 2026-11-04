@@ -30,7 +30,6 @@ use super::pipe::{self, Listener};
 use super::tray::{MenuCmd, Tray};
 use super::watch::FolderWatcher;
 use super::{instance, process_cpu_us, wide};
-use crate::inject::Injector;
 use crate::ipc::{self, Method};
 use crate::lifecycle::{
     Lifecycle, Markers, OffReason, Origin, Refusal, Request, StartFacts, State,
@@ -154,7 +153,6 @@ struct Host {
     activity: Arc<Mutex<Activity>>,
     hook: Option<HookThread>,
     watcher: Option<Watcher>,
-    injector: Injector<SendInputBackend>,
     markers: Markers,
     tray: Option<Tray>,
     shortcuts: Shortcuts,
@@ -283,7 +281,7 @@ impl Host {
             State::Paused => STATE_PAUSED,
         });
         if change.releases_keys() {
-            self.injector.release_all();
+            // The worker owns the output ledger: it releases every held key and button.
             self.worker.queue().send(Msg::Cancel);
             if let Some(h) = &self.hook {
                 h.cancel_pending();
@@ -447,6 +445,7 @@ impl Host {
             "hook": {
                 "installed": self.shared.installed.load(Ordering::SeqCst),
                 "observe_only": self.opts.observe_only,
+                "mouse_installed": self.shared.mouse_installed.load(Ordering::SeqCst),
             },
         })
     }
@@ -528,6 +527,7 @@ impl Host {
                     "installed": self.shared.installed.load(Ordering::SeqCst),
                     "thread_alive": alive,
                     "observe_only": self.opts.observe_only,
+                    "mouse_installed": self.shared.mouse_installed.load(Ordering::SeqCst),
                 },
                 "context_watchers": self.watcher.as_ref().map_or(0, Watcher::count),
             },
@@ -626,7 +626,6 @@ impl Host {
             | WTS_SESSION_LOGOFF => {
                 self.locked = true;
                 self.shared.set_secure_desktop(true);
-                self.injector.release_all();
                 self.worker.queue().send(Msg::Cancel);
                 if let Some(h) = &self.hook {
                     h.cancel_pending();
@@ -894,6 +893,7 @@ pub fn run(opts: Options) -> Result<(), RunError> {
             unsafe { PostMessageW(hwnd_bits as HWND, WM_HOST_CONTROL, 0, 0) };
         }),
         Arc::clone(&activity),
+        Box::new(SendInputBackend),
     );
     let tray = if opts.tray {
         Some(Tray::new(hwnd, WM_TRAY, State::Off).map_err(|e| RunError::Io(e.to_string()))?)
@@ -947,7 +947,6 @@ pub fn run(opts: Options) -> Result<(), RunError> {
             activity,
             hook: None,
             watcher: None,
-            injector: Injector::new(SendInputBackend),
             markers,
             tray,
             shortcuts,
@@ -1006,7 +1005,7 @@ pub fn run(opts: Options) -> Result<(), RunError> {
     }
     stopper.set();
     let _ = ipc_thread.join();
-    // Drops the worker, the injector (releases held keys) and the tray icon, if still there.
+    // Drops the worker (its injector releases held keys and buttons) and the tray icon.
     HOST.with(|h| {
         if let Some(mut host) = h.borrow_mut().take() {
             host.shutdown();

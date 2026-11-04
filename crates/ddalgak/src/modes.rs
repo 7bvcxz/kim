@@ -704,7 +704,7 @@ impl ModeState {
                 let start = list
                     .iter()
                     .position(|m| *m == active)
-                    .map_or(list.len() - 1, |i| i);
+                    .unwrap_or(list.len() - 1);
                 let next = (1..=list.len())
                     .map(|k| list[(start + k) % list.len()])
                     .find(|m| set.is_enabled(*m))

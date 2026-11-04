@@ -245,9 +245,8 @@ pub fn scope(cmd: Cmd, a: &Args, paths: &Paths, notify: Notify<'_>) -> Outcome {
         } else {
             Cmd::ModeDisable
         };
-        let p = profile.clone();
         let r = rule_cmd::write(as_mode, a, &files, &ctx, notify, |doc| {
-            mode_edit::set_enabled(doc, p.as_deref(), &m, on)
+            mode_edit::set_enabled(doc, profile.as_deref(), &m, on)
         })?;
         ("mode", r)
     } else if let Some(p) = profile.clone() {

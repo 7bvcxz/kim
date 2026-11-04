@@ -932,7 +932,7 @@ mod tests {
     #[test]
     fn the_scopes_example_loads_as_documented() {
         let bytes =
-            std::fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
+            std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join(
                 "../../docs/contracts/examples/ddalgak-rules-v1/16-enable-disable-scopes.json",
             ))
             .unwrap();

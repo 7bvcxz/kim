@@ -35,7 +35,7 @@ use windows_sys::Win32::System::DataExchange::COPYDATASTRUCT;
 use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     PostMessageW, SMTO_ABORTIFHUNG, SendMessageTimeoutW, WM_CHAR, WM_CLOSE, WM_COPYDATA,
-    WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_SIZE,
+    WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONUP, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SIZE,
 };
 
 const COPYDATA_TEST: usize = 0x5355_424B;
@@ -601,9 +601,14 @@ fn keyboard_paste_copy_scroll_ime_and_focus() {
     new_terminal(&ep, "keys");
     let gui = Gui::start(&ep, Some("keys"), &sandbox("input"));
     gui.state("attached");
-    // Paste (the test window's private clipboard, never the system one): CR LF becomes CR.
+    // Paste (the test window's fake clipboard, never the system one). A line that ends with a
+    // line break would run at once, so since Step 19 the window asks first, Cancel focused;
+    // Shift+Tab focuses Paste and Enter answers. CR LF becomes CR.
     let d = gui.cmd(&json!({"cmd": "paste", "text": "echo pasted-text\r\n"}));
     assert_eq!(d["clipboard"], "echo pasted-text\r\n");
+    assert_eq!(d["ask"]["focus"], "Cancel", "{}", d["ask"]);
+    gui.cmd(&json!({"cmd": "key", "vk": 0x09, "shift": true}));
+    gui.cmd(&json!({"cmd": "key", "vk": VK_RETURN}));
     gui.until("paste ran", |d| has_line(d, "pasted-text"));
     wait_for("paste in the Host", || {
         capture(&ep, "keys").contains("pasted-text")
@@ -1567,4 +1572,551 @@ fn shortcuts_off_safe_mode_and_focus_transitions() {
     gui.press(VK_TAB, true, false);
     std::thread::sleep(Duration::from_millis(200));
     assert_eq!(shown(&gui.dump()), "p");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Step 19: search, selection, the clipboard, links and "Save output…" (ADR 0048,
+// docs/SUBAK_GUI.md §12). `SUBAK-FR-047`, `SUBAK-SEC-013`, `SUBAK-SEC-014`. The window's
+// clipboard, link opener and save dialog are recording fakes in the test window: no test here
+// touches the real clipboard, opens a browser or shows a dialog.
+
+const MK_LBUTTON: usize = 0x0001;
+const MK_RBUTTON: usize = 0x0002;
+const MK_CONTROL: usize = 0x0008;
+
+/// The client point (as an `lParam`) in the middle of pane cell (`col`, `row`).
+fn cell_lparam(d: &Value, col: usize, row: usize) -> isize {
+    let cw = d["cell"][0].as_u64().unwrap() as usize;
+    let ch = d["cell"][1].as_u64().unwrap() as usize;
+    let pad = d["padding"].as_u64().unwrap() as usize;
+    let top = d["bar"]["height"].as_u64().unwrap() as usize;
+    let (x, y) = (pad + col * cw + cw / 2, top + pad + row * ch + ch / 2);
+    ((y as isize) << 16) | x as isize
+}
+
+/// The last screen row holding `needle`, and the (ASCII) column where it starts.
+fn last_on_screen(d: &Value, needle: &str) -> (usize, usize) {
+    d["screen"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+        .filter_map(|(r, l)| l.as_str().unwrap().find(needle).map(|c| (r, c)))
+        .last()
+        .unwrap_or_else(|| panic!("`{needle}` is not on the screen:\n{}", screen_text(d)))
+}
+
+impl Gui {
+    fn key_with(&self, vk: u64, ctrl: bool, shift: bool, alt: bool) -> Value {
+        self.cmd(&json!({"cmd": "key", "vk": vk, "ctrl": ctrl, "shift": shift, "alt": alt}))
+    }
+
+    /// Typed synchronously (a test command): into the search field while it is open.
+    fn typed(&self, s: &str) -> Value {
+        self.cmd(&json!({"cmd": "type", "text": s}))
+    }
+}
+
+fn hex(s: &str) -> String {
+    s.bytes().map(|b| format!("{b:02x}")).collect()
+}
+
+#[test]
+fn search_finds_output_printed_while_no_window_was_attached_and_follows_new_output() {
+    let host = Host::start("gui-find", &["--no-shell"]);
+    let ep = host.ep.clone();
+    new_terminal(&ep, "find");
+    // A first window prints 300 lines and closes: the output stays in the Host's history only.
+    {
+        let mut g = Gui::start(&ep, Some("find"), &sandbox("find1"));
+        g.state("attached");
+        g.until("the prompt", |d| screen_text(d).contains('>'));
+        g.type_text("for /l %i in (1,1,300) do @echo line %i 한글 marker-%i\r");
+        g.until("300 lines", |d| has_line(d, "line 300 한글 marker-300"));
+        assert_eq!(g.close(), 0);
+    }
+    let gui = Gui::start(&ep, Some("find"), &sandbox("find2"));
+    gui.state("attached");
+    gui.until("the history came back", |d| {
+        has_line(d, "line 300 한글 marker-300")
+    });
+    // Ctrl+Shift+F opens the bar over the pane; typing searches at once, the newest match
+    // first, selected, every match highlighted.
+    let d = gui.key_with(0x46, true, true, false);
+    assert_eq!(d["find"]["query"], "", "{}", d["find"]);
+    let d = gui.typed("marker-2");
+    assert_eq!(d["find"]["matches"], 111, "{}", d["find"]);
+    assert_eq!(d["find"]["status"], "111 of 111");
+    assert_eq!(d["selection"], "marker-2");
+    assert_eq!(d["highlights"], 111);
+    assert!(
+        d["banner"].as_str().unwrap().starts_with("find:"),
+        "{}",
+        d["banner"]
+    );
+    // Nothing reached cmd.exe while typing in the field.
+    assert!(!capture(&ep, "find").contains(">marker-2"));
+    // Enter: the next older match; Shift+Enter: newer, wrapping around to the oldest, which
+    // the view scrolls back to.
+    let d = gui.key_with(0x0D, false, false, false);
+    assert_eq!(d["find"]["status"], "110 of 111");
+    let d = gui.key_with(0x0D, false, true, false);
+    assert_eq!(d["find"]["status"], "111 of 111");
+    let d = gui.key_with(0x0D, false, true, false);
+    assert_eq!(d["find"]["status"], "1 of 111");
+    assert!(
+        d["scroll_offset"].as_u64().unwrap() > 200,
+        "{}",
+        d["scroll_offset"]
+    );
+    // Alt+R: a regular expression; Ctrl+Backspace clears the field first.
+    gui.key_with(0x08, true, false, false);
+    let d = gui.key_with(0x52, false, false, true);
+    assert_eq!(d["find"]["regex"], true);
+    let d = gui.typed(r"marker-1\d$");
+    assert_eq!(d["find"]["matches"], 10, "{}", d["find"]);
+    // A broken pattern is said in words and searches nothing.
+    let d = gui.typed("(");
+    assert!(
+        d["find"]["status"]
+            .as_str()
+            .unwrap()
+            .starts_with("Not a valid regular expression"),
+        "{}",
+        d["find"]
+    );
+    assert_eq!(d["highlights"], 0);
+    // Korean text, as a literal.
+    gui.key_with(0x08, true, false, false);
+    gui.key_with(0x52, false, false, true);
+    let d = gui.typed("한글");
+    assert!(
+        d["find"]["matches"].as_u64().unwrap() >= 300,
+        "{}",
+        d["find"]
+    );
+    assert_eq!(d["selection"], "한글");
+    // Esc closes the bar: the highlights go, the current match stays selected, and opening the
+    // bar again starts from that selection.
+    let d = gui.key_with(0x1B, false, false, false);
+    assert!(d["find"].is_null());
+    assert_eq!(d["highlights"], 0);
+    assert_eq!(d["selection"], "한글");
+    let d = gui.key_with(0x46, true, true, false);
+    assert_eq!(
+        d["find"]["query"], "한글",
+        "a one-line selection is the query"
+    );
+    gui.key_with(0x1B, false, false, false);
+    // An open search follows output the program prints on its own.
+    gui.cmd(&json!({"cmd": "key", "vk": 0x23, "ctrl": true, "shift": true}));
+    gui.typed("for /l %i in (1,1,4) do @(echo late-hit %i & ping -n 2 127.0.0.1 >nul)\r");
+    let d = gui.key_with(0x46, true, true, false);
+    assert_eq!(d["find"]["query"], "", "typing cleared the selection");
+    gui.typed("late-hit");
+    let d = gui.until("the late output found while the bar is open", |d| {
+        d["find"]["matches"] == 5
+    });
+    assert!(d["find"]["status"].as_str().unwrap().ends_with("of 5"));
+    assert!(has_line(&d, "late-hit 4"));
+}
+
+#[test]
+fn paste_asks_before_lines_that_run_or_hidden_control_sequences_and_reads_only_text() {
+    let host = Host::start("gui-paste", &["--no-shell"]);
+    let ep = host.ep.clone();
+    let (id, _) = new_standin(&ep, "paste");
+    let gui = Gui::start(&ep, Some("paste"), &sandbox("paste"));
+    gui.state("attached");
+    let got = |s: &str| format!("standin-got-{}", hex(s));
+    // One line without a line break: pasted at once, no question.
+    let d = gui.cmd(&json!({"cmd": "paste", "text": "plain"}));
+    assert!(d["ask"].is_null(), "{}", d["ask"]);
+    gui.typed("\r");
+    wait_for("the plain paste", || {
+        capture(&ep, &id).contains(&got("plain"))
+    });
+    // Two lines would run at once: the question names them, Cancel is focused; Esc and Enter
+    // on Cancel send nothing.
+    let d = gui.cmd(&json!({"cmd": "paste", "text": "one\r\ntwo\r\n"}));
+    assert_eq!(
+        d["ask"]["words"],
+        "Paste 2 lines that run at once? First line: `one`"
+    );
+    assert_eq!(d["ask"]["focus"], "Cancel");
+    assert_eq!(
+        d["ask"]["answers"],
+        json!(["Cancel", "PasteOneLine", "Paste"])
+    );
+    let d = gui.key_with(VK_ESCAPE, false, false, false);
+    assert!(d["ask"].is_null());
+    gui.cmd(&json!({"cmd": "paste", "text": "one\r\ntwo\r\n"}));
+    gui.key_with(0x0D, false, false, false);
+    // Keys typed while it asks reach nothing.
+    gui.cmd(&json!({"cmd": "paste", "text": "one\r\ntwo\r\n"}));
+    gui.typed("zzz");
+    let d = gui.key_with(VK_ESCAPE, false, false, false);
+    assert!(d["ask"].is_null());
+    std::thread::sleep(Duration::from_millis(400));
+    let c = capture(&ep, &id);
+    assert!(!c.contains(&got("one")) && !c.contains("7a7a7a"), "{c}");
+    // Paste (Shift+Tab to it): both lines run.
+    gui.cmd(&json!({"cmd": "paste", "text": "one\r\ntwo\r\n"}));
+    gui.key_with(VK_TAB, false, true, false);
+    gui.key_with(0x0D, false, false, false);
+    wait_for("both lines", || {
+        let c = capture(&ep, &id);
+        c.contains(&got("one")) && c.contains(&got("two"))
+    });
+    // As one line: line breaks become spaces, nothing runs until Enter.
+    gui.cmd(&json!({"cmd": "paste", "text": "  cd a \r\n make b\r\n"}));
+    gui.key_with(VK_TAB, false, false, false);
+    let d = gui.key_with(0x0D, false, false, false);
+    assert!(d["ask"].is_null());
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(!capture(&ep, &id).contains(&got("cd a make b")));
+    gui.typed("\r");
+    wait_for("one line", || {
+        capture(&ep, &id).contains(&got("cd a make b"))
+    });
+    // A hidden escape sequence: named in the question; pasting removes it.
+    let d = gui.cmd(&json!({"cmd": "paste", "text": "echo safe\u{1b}[2Jx"}));
+    assert!(
+        d["ask"]["words"]
+            .as_str()
+            .unwrap()
+            .starts_with("Paste 1 hidden control character (an escape sequence; removed)"),
+        "{}",
+        d["ask"]
+    );
+    assert_eq!(d["ask"]["answers"], json!(["Cancel", "Paste"]));
+    gui.key_with(VK_TAB, false, true, false);
+    gui.key_with(0x0D, false, false, false);
+    gui.typed("\r");
+    wait_for("the cleaned paste", || {
+        capture(&ep, &id).contains(&got("echo safe[2Jx"))
+    });
+    // Only plain text is ever pasted: HTML and files alone paste nothing and say so; rich
+    // text next to plain text pastes the plain text.
+    gui.cmd(
+        &json!({"cmd": "clipboard", "formats": [["HTML Format", "<b>x</b>"],
+        ["CF_HDROP", "C:\\x.txt"]]}),
+    );
+    let d = gui.key_with(0x56, true, true, false);
+    assert_eq!(d["notice"], "The clipboard holds no text to paste");
+    gui.cmd(
+        &json!({"cmd": "clipboard", "formats": [["Rich Text Format", "{\\rtf1 rich}"],
+        ["CF_UNICODETEXT", "just text"]]}),
+    );
+    gui.key_with(0x2D, false, true, false); // Shift+Insert
+    gui.typed("\r");
+    wait_for("the plain text of a rich copy", || {
+        capture(&ep, &id).contains(&got("just text"))
+    });
+    // A large paste asks too.
+    let d = gui.cmd(&json!({"cmd": "paste", "text": "x".repeat(6000)}));
+    assert!(
+        d["ask"]["words"].as_str().unwrap().contains("6 KB of text"),
+        "{}",
+        d["ask"]
+    );
+    gui.key_with(VK_ESCAPE, false, false, false);
+    gui.typed("quit\r");
+}
+
+#[test]
+fn copy_formats_keyboard_selection_select_all_and_the_pane_menu() {
+    let host = Host::start("gui-select", &["--no-shell"]);
+    let ep = host.ep.clone();
+    new_terminal(&ep, "select");
+    let gui = Gui::start(&ep, Some("select"), &sandbox("select"));
+    gui.state("attached");
+    gui.until("the prompt", |d| screen_text(d).contains('>'));
+    gui.type_text("echo alpha beta 한글\r");
+    let d = gui.until("the output", |d| has_line(d, "alpha beta 한글"));
+    let (out_row, _) = last_on_screen(&d, "alpha beta 한글");
+    let (prompt_row, _) = last_on_screen(&d, ">");
+    // Mark mode (Ctrl+Shift+M) starts at the cursor; the arrows move, Shift+End selects to the
+    // line's end, Enter copies and leaves.
+    let d = gui.key_with(0x4D, true, true, false);
+    assert_eq!(d["marking"], true);
+    for _ in out_row..prompt_row {
+        gui.key_with(0x26, false, false, false);
+    }
+    gui.key_with(0x24, false, false, false);
+    let d = gui.key_with(0x23, false, true, false);
+    assert_eq!(d["selection"], "alpha beta 한글");
+    let d = gui.key_with(0x0D, false, false, false);
+    assert_eq!(d["marking"], false);
+    assert_eq!(d["clipboard"], "alpha beta 한글");
+    assert_eq!(
+        d["clipboard_formats"],
+        json!([["CF_UNICODETEXT", "alpha beta 한글"]])
+    );
+    // Ctrl+Shift+Right in mark mode grows by words.
+    gui.key_with(0x4D, true, true, false);
+    for _ in out_row..prompt_row {
+        gui.key_with(0x26, false, false, false);
+    }
+    gui.key_with(0x24, false, false, false);
+    gui.key_with(0x27, true, true, false);
+    let d = gui.key_with(0x27, true, true, false);
+    assert_eq!(d["selection"], "alpha beta");
+    gui.key_with(VK_ESCAPE, false, false, false);
+    // Copy with colours (the pane menu's item): plain text and HTML Format.
+    gui.cmd(&json!({"cmd": "select", "from": [0, out_row], "to": [20, out_row]}));
+    let d = gui.cmd(&json!({"cmd": "menu", "id": 11}));
+    let formats = d["clipboard_formats"].as_array().unwrap();
+    assert_eq!(formats.len(), 2, "{formats:?}");
+    assert_eq!(formats[0], json!(["CF_UNICODETEXT", "alpha beta 한글"]));
+    assert_eq!(formats[1][0], "HTML Format");
+    let html = formats[1][1].as_str().unwrap();
+    assert!(html.starts_with("Version:0.9\r\nStartHTML:"), "{html}");
+    assert!(
+        html.contains("<!--StartFragment--><pre") && html.contains("alpha beta 한글"),
+        "{html}"
+    );
+    // Select all (Ctrl+Shift+A) takes the history and the screen; Ctrl+Shift+C copies it with
+    // CR LF line ends.
+    let d = gui.key_with(0x41, true, true, false);
+    assert!(
+        d["selection"]
+            .as_str()
+            .unwrap()
+            .contains("alpha beta 한글\n")
+    );
+    let d = gui.key_with(0x43, true, true, false);
+    let all = d["clipboard"].as_str().unwrap();
+    assert!(all.contains("alpha beta 한글\r\n"), "{all}");
+    assert!(!all.contains("한글\n") || all.contains("한글\r\n"));
+    // The Menu key opens the pane menu with the window's keys, then the tab's items.
+    gui.key(VK_APPS as usize);
+    let menu = gui.wait("menu", |_| true);
+    let labels: Vec<&str> = menu["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["label"].as_str().unwrap())
+        .collect();
+    for want in [
+        "Copy\tCtrl+Shift+C",
+        "Copy with colours (HTML)",
+        "Paste\tCtrl+Shift+V",
+        "Paste as one line",
+        "Select all\tCtrl+Shift+A",
+        "Select with the keyboard\tCtrl+Shift+M",
+        "Find…\tCtrl+Shift+F",
+        "Save output…",
+        "Rename…\tCtrl+Shift+R",
+    ] {
+        assert!(labels.contains(&want), "{want} in {labels:?}");
+    }
+}
+
+#[test]
+fn ctrl_click_opens_only_validated_web_addresses_with_the_open_verb() {
+    let host = Host::start("gui-links", &["--no-shell"]);
+    let ep = host.ep.clone();
+    new_terminal(&ep, "links");
+    let gui = Gui::start(&ep, Some("links"), &sandbox("links"));
+    gui.state("attached");
+    gui.until("the prompt", |d| screen_text(d).contains('>'));
+    gui.type_text("echo see https://example.com/a?b=1, or https://user:pw@evil.example/x\r");
+    let line = "see https://example.com/a?b=1, or https://user:pw@evil.example/x";
+    let d = gui.until("the output", |d| has_line(d, line));
+    let (row, col) = last_on_screen(&d, "https://example.com");
+    // A plain click does not open anything.
+    let lp = cell_lparam(&d, col + 8, row);
+    gui.post(WM_LBUTTONDOWN, MK_LBUTTON, lp);
+    gui.post(WM_LBUTTONUP, 0, lp);
+    let d = gui.dump();
+    assert_eq!(d["opened"], json!([]));
+    // Ctrl+click: handed to the (fake) OS opener with the verb `open` and the exact address,
+    // without the sentence's comma.
+    gui.post(WM_LBUTTONDOWN, MK_LBUTTON | MK_CONTROL, lp);
+    gui.post(WM_LBUTTONUP, MK_CONTROL, lp);
+    let d = gui.until("opened", |d| {
+        d["opened"].as_array().is_some_and(|a| !a.is_empty())
+    });
+    assert_eq!(
+        d["opened"],
+        json!([{"verb": "open", "target": "https://example.com/a?b=1"}])
+    );
+    // An address with a user name and password is refused and says why; it can be copied.
+    let (row2, col2) = last_on_screen(&d, "https://user:pw");
+    let lp2 = cell_lparam(&d, col2 + 10, row2);
+    gui.post(WM_LBUTTONDOWN, MK_LBUTTON | MK_CONTROL, lp2);
+    gui.post(WM_LBUTTONUP, MK_CONTROL, lp2);
+    let d = gui.until("refused", |d| !d["ask"].is_null());
+    assert_eq!(
+        d["ask"]["words"],
+        "Not opened: it contains a user name or password. Link: https://user:pw@evil.example/x"
+    );
+    assert_eq!(d["ask"]["answers"], json!(["Cancel", "CopyLink"]));
+    gui.key_with(VK_TAB, false, false, false);
+    let d = gui.key_with(0x0D, false, false, false);
+    assert_eq!(d["clipboard"], "https://user:pw@evil.example/x");
+    assert_eq!(
+        d["opened"].as_array().unwrap().len(),
+        1,
+        "nothing else opened"
+    );
+    // Ctrl+right click: the pane menu offers the link under the pointer.
+    gui.post(WM_RBUTTONDOWN, MK_RBUTTON | MK_CONTROL, lp);
+    gui.post(WM_RBUTTONUP, MK_CONTROL, lp);
+    let menu = gui.wait("menu", |_| true);
+    let items = menu["items"].as_array().unwrap();
+    assert_eq!(items[0]["label"], "Open link https://example.com/a?b=1");
+    assert_eq!(items[1]["label"], "Copy link");
+    let d = gui.cmd(&json!({"cmd": "menu", "id": items[1]["id"]}));
+    assert_eq!(d["clipboard"], "https://example.com/a?b=1");
+    let d = gui.cmd(&json!({"cmd": "menu", "id": items[0]["id"]}));
+    assert!(
+        d["opened"].as_array().unwrap().len() <= 1,
+        "the menu link was used once"
+    );
+}
+
+#[test]
+fn save_output_asks_naming_the_secrets_found_and_writes_only_the_chosen_file() {
+    let host = Host::start("gui-export", &["--no-shell"]);
+    let ep = host.ep.clone();
+    new_terminal(&ep, "export");
+    let gui = Gui::start(&ep, Some("export"), &sandbox("export"));
+    gui.state("attached");
+    gui.until("the prompt", |d| screen_text(d).contains('>'));
+    gui.type_text("echo GITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123456789\r");
+    gui.type_text("echo build ok 빌드\r");
+    gui.until("the output", |d| has_line(d, "build ok 빌드"));
+    let out = sandbox("export-out");
+    // "Save output…" asks first, naming what the secret detector found; Cancel is focused and
+    // Esc saves nothing and opens no dialog.
+    let d = gui.cmd(&json!({"cmd": "menu", "id": 17}));
+    let words = d["ask"]["words"].as_str().unwrap().to_string();
+    assert!(
+        words.starts_with("Save ") && words.contains("of `export` to a file?"),
+        "{words}"
+    );
+    assert!(words.contains("secret-looking values found"), "{words}");
+    assert_eq!(
+        d["ask"]["answers"],
+        json!(["Cancel", "SaveHidden", "SaveExact"])
+    );
+    assert_eq!(d["ask"]["focus"], "Cancel");
+    let d = gui.key_with(VK_ESCAPE, false, false, false);
+    assert!(d["ask"].is_null());
+    assert_eq!(d["save_dialog"], json!([]));
+    assert_eq!(std::fs::read_dir(&out).unwrap().count(), 0);
+    // Save with them hidden: the (fake) save dialog suggests a name and answers a path.
+    let hidden = out.join("hidden.txt");
+    gui.cmd(&json!({"cmd": "save_dialog", "path": hidden}));
+    gui.cmd(&json!({"cmd": "menu", "id": 17}));
+    gui.key_with(VK_TAB, false, false, false);
+    gui.key_with(0x0D, false, false, false);
+    // (The event comes before the key's dump reply, so it is read from the history.)
+    assert!(
+        gui.history()
+            .contains(r#""event":"saved_output","hidden":true"#),
+        "{}",
+        gui.history()
+    );
+    let text = std::fs::read_to_string(&hidden).unwrap();
+    assert!(text.contains("GITHUB_TOKEN=***"), "{text}");
+    assert!(!text.contains("ghp_"), "{text}");
+    assert!(text.contains("build ok 빌드\r\n"), "{text}");
+    let d = gui.dump();
+    let asked = d["save_dialog"][0].as_str().unwrap();
+    assert!(
+        asked.starts_with("export-output-") && asked.ends_with(".txt"),
+        "{asked}"
+    );
+    assert!(d["notice"].as_str().unwrap().contains("hidden"));
+    // Save exactly: the token is there, as the user chose.
+    let exact = out.join("exact.txt");
+    gui.cmd(&json!({"cmd": "save_dialog", "path": exact}));
+    gui.cmd(&json!({"cmd": "menu", "id": 17}));
+    gui.key_with(VK_TAB, false, true, false);
+    gui.key_with(0x0D, false, false, false);
+    assert!(
+        gui.history()
+            .contains(r#""event":"saved_output","hidden":false"#)
+    );
+    let text = std::fs::read_to_string(&exact).unwrap();
+    assert!(
+        text.contains("GITHUB_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123456789"),
+        "{text}"
+    );
+    // A cancelled dialog saves nothing.
+    gui.cmd(&json!({"cmd": "save_dialog", "path": null}));
+    gui.cmd(&json!({"cmd": "menu", "id": 17}));
+    gui.key_with(VK_TAB, false, false, false);
+    let d = gui.key_with(0x0D, false, false, false);
+    assert_eq!(d["notice"], "Nothing was saved");
+    assert_eq!(std::fs::read_dir(&out).unwrap().count(), 2);
+    let _ = std::fs::remove_dir_all(&out);
+}
+
+#[test]
+fn a_large_history_stays_responsive_while_it_is_searched() {
+    let host = Host::start("gui-huge", &["--no-shell"]);
+    let ep = host.ep.clone();
+    let (code, doc) = sub(
+        &ep,
+        &[
+            "new",
+            "huge",
+            "--size",
+            "100x30",
+            "--history-limit",
+            "20000",
+        ],
+    );
+    assert_eq!(code, 0, "{doc}");
+    let gui = Gui::start(&ep, Some("huge"), &sandbox("huge"));
+    gui.state("attached");
+    gui.until("the prompt", |d| screen_text(d).contains('>'));
+    let t = Instant::now();
+    gui.type_text(
+        "for /l %i in (1,1,15000) do @echo row %i of a large history 한글 with some text\r",
+    );
+    let until = Instant::now() + Duration::from_secs(180);
+    loop {
+        let d = gui.dump();
+        if has_line(&d, "row 15000 of a large history 한글 with some text") {
+            break;
+        }
+        assert!(Instant::now() < until, "the output did not finish");
+        std::thread::sleep(Duration::from_millis(250));
+    }
+    let printed = t.elapsed();
+    gui.key_with(0x46, true, true, false);
+    // Each typed character searches all 15 000 retained lines again.
+    let t = Instant::now();
+    let d = gui.typed("row 1499 ");
+    let typed = t.elapsed();
+    assert_eq!(d["find"]["matches"], 1, "{}", d["find"]);
+    let lines = d["find"]["lines_searched"].as_u64().unwrap();
+    let us = d["find"]["elapsed_us"].as_u64().unwrap();
+    assert!(lines >= 15_000, "{lines}");
+    // A regular expression over every line.
+    gui.key_with(0x08, true, false, false);
+    gui.key_with(0x08, true, false, false);
+    gui.key_with(0x52, false, false, true);
+    let t = Instant::now();
+    let d = gui.typed(r"row \d*5 of");
+    let regex = t.elapsed();
+    assert_eq!(d["find"]["matches"], 1500, "{}", d["find"]);
+    let regex_us = d["find"]["elapsed_us"].as_u64().unwrap();
+    // The window answers at once afterwards.
+    let t = Instant::now();
+    gui.dump();
+    let answer = t.elapsed();
+    println!(
+        "EVIDENCE large history (debug build): 15 000 rows printed in {printed:?}; typing a \
+         9-character query (9 searches) {typed:?}, the last search {lines} lines in {us} µs; \
+         regex `row \\d*5 of` 1 500 matches in {regex_us} µs ({regex:?} for its 11 characters); \
+         a dump round trip afterwards {answer:?}"
+    );
+    assert!(us < 2_000_000, "{us} µs");
+    assert!(answer < Duration::from_millis(1000), "{answer:?}");
 }

@@ -307,16 +307,23 @@ fn keyboard_selection_moves_by_cells_words_lines_and_pages() {
     v.mark_move(Motion::Right, true);
     assert_eq!(v.selected_text().as_deref(), Some("한글"));
     v.mark_move(Motion::WordRight, true);
-    assert_eq!(v.selected_text().as_deref(), Some("한글 w"));
+    assert_eq!(v.selected_text().as_deref(), Some("한글 word"));
     v.mark_move(Motion::LineEnd, true);
     assert_eq!(v.selected_text().as_deref(), Some("한글 word end"));
     // Without Shift the caret moves alone.
     v.mark_move(Motion::Up, false);
     v.mark_move(Motion::LineStart, false);
     v.mark_move(Motion::WordRight, true);
-    assert_eq!(v.selected_text().as_deref(), Some("first l"));
+    assert_eq!(v.selected_text().as_deref(), Some("first"));
+    v.mark_move(Motion::WordRight, true);
+    assert_eq!(v.selected_text().as_deref(), Some("first line"));
+    // The caret alone moves to the next word's start.
+    v.mark_move(Motion::LineStart, false);
+    v.mark_move(Motion::WordRight, false);
+    v.mark_move(Motion::Right, true);
+    assert_eq!(v.selected_text().as_deref(), Some("li"));
     v.mark_move(Motion::Down, true);
-    assert_eq!(v.selected_text().as_deref(), Some("first line\n한글 wo"));
+    assert_eq!(v.selected_text().as_deref(), Some("line\n한글 wor"));
     v.mark_end(true);
     assert!(!v.marking());
     assert!(v.has_selection());

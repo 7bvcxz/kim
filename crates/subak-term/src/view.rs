@@ -697,7 +697,7 @@ impl TermView {
                 h.col = last_col;
             }
             Motion::WordLeft | Motion::WordRight => {
-                h = self.word_step(h, m == Motion::WordRight);
+                h = self.word_step(h, m == Motion::WordRight, extend);
             }
         }
         // A wide character is one place: growing forward onto it takes both its cells, and the
@@ -722,8 +722,10 @@ impl TermView {
         self.reveal_any(h.line);
     }
 
-    /// The start of the next (or previous) word from `p`, crossing line ends.
-    fn word_step(&self, p: Point, forward: bool) -> Point {
+    /// The start of the next (or previous) word from `p`, crossing line ends; growing a
+    /// selection forward (`to_end`), the last cell of the word instead, so the selection ends
+    /// with the word as in an editor.
+    fn word_step(&self, p: Point, forward: bool, to_end: bool) -> Point {
         let (top, bottom) = (self.top_line(), self.last_line());
         let last_col = self.size().0 - 1;
         let word_at = |q: Point| -> Option<bool> {
@@ -766,7 +768,27 @@ impl TermView {
             }
         };
         let mut q = p;
-        if forward {
+        if forward && to_end {
+            // At least one cell on, over the gap, then to the word's last cell (on its line).
+            match step(q) {
+                Some(n) => q = n,
+                None => return q,
+            }
+            while word_at(q) == Some(false) {
+                match step(q) {
+                    Some(n) => q = n,
+                    None => return q,
+                }
+            }
+            while let Some(n) = step(q) {
+                let hard_break = n.line != q.line && self.line_wrapped(q.line) != Some(true);
+                if word_at(n) != Some(true) || hard_break {
+                    break;
+                }
+                q = n;
+            }
+            q
+        } else if forward {
             // Skip the rest of this word, then the gap, to the next word's first cell.
             while word_at(q) == Some(true) {
                 match step(q) {

@@ -299,6 +299,8 @@ pub struct Env {
     pub clock: fn() -> LocalTime,
     /// What starts programs and hands URLs to the shell (Step 70); shared with the launch threads.
     pub launcher: std::sync::Arc<dyn crate::launch::Launcher>,
+    /// The monitors, the pointer position and who would receive pointer input (Step 71).
+    pub screen: Box<dyn crate::mouse::Screen>,
 }
 
 impl std::fmt::Debug for Env {
@@ -308,14 +310,17 @@ impl std::fmt::Debug for Env {
 }
 
 impl Env {
-    /// Tests and the debug test host: a fixed editable target, no clipboard, the UTC clock, and
-    /// nothing is ever started ([`crate::launch::NoLauncher`]).
+    /// Tests and the debug test host: a fixed editable target, no clipboard, the UTC clock,
+    /// nothing is ever started ([`crate::launch::NoLauncher`]) and the pointer is a simulated one
+    /// on a synthetic monitor ([`crate::mouse::SimPointer::test_host`]; the real pointer is never
+    /// read).
     pub fn inert() -> Env {
         Env {
             probe: Box::new(FakeProbe::editable()),
             clipboard: Box::new(NoClipboard),
             clock: || LocalTime::utc(crate::time::now_secs()),
             launcher: std::sync::Arc::new(crate::launch::NoLauncher),
+            screen: Box::new(crate::mouse::SimPointer::test_host().screen()),
         }
     }
 }
@@ -820,6 +825,7 @@ mod tests {
                     clipboard: Box::new(clip.clone()),
                     clock: now,
                     launcher: std::sync::Arc::new(crate::launch::NoLauncher),
+                    screen: Box::new(crate::mouse::SimPointer::test_host().screen()),
                 },
                 probe,
                 clip,

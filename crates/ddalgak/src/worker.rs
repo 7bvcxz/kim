@@ -32,10 +32,21 @@
 //! given back). Pause, stop, session lock, a reload, the emergency chord and the worker's end
 //! cancel the run at its next piece (`cancelled`), after restoring the clipboard and the
 //! modifiers. A run has a timeout only while it waits, so an idle engine still has no timer.
+//!
+//! **Mouse actions** (Step 71, [`crate::mouse`]): a fired rule of mouse steps runs at once (one
+//! `SendInput` call per step, each target checked first: the secure desktop and an elevated
+//! window at the point step aside). A held button is a remap instruction like any other; when the
+//! rule names a point, the pointer moves there in the same call as the button's down. A move
+//! while held starts a motion that the worker ticks every [`mouse::TICK_MS`] (continuous) or at
+//! its repeat times (stepped) until [`Signal::MotionEnd`]; the timer exists only while a motion
+//! does. Pause, stop, session lock, a reload, a release-all, the emergency chord and the worker's
+//! end stop every motion (`cancelled`), and a motion held longer than [`mouse::MAX_HOLD_MS`] ends
+//! with `timeout`, so a lost trigger-up can never keep the pointer moving.
 
 use crate::core::{RemapOp, Signal};
 use crate::inject::{Backend, Injector, OutCode, OutEvent};
 use crate::launch;
+use crate::mouse::{self, HeldMotion};
 use crate::run::{self, Env, HotstringFire, Next, Run, RunShared};
 use crate::stats::Stats;
 use crate::table::{Action, Binding, EngineOp};
@@ -206,6 +217,8 @@ impl Worker {
                     active: None,
                     gate: Arc::new(Mutex::new(launch::Gate::default())),
                     epoch: Arc::new(AtomicU32::new(0)),
+                    motions: Vec::new(),
+                    clock: Instant::now(),
                 };
                 run(&rx, &control, &st, &mut ctx);
             })
@@ -245,6 +258,16 @@ struct Active {
     due: Instant,
 }
 
+/// A move while held (Step 71) and the rule it belongs to.
+struct Moving {
+    generation: u32,
+    binding: u16,
+    rule: String,
+    profile: String,
+    mode: String,
+    held: HeldMotion,
+}
+
 /// What the loop's typing runs and launches work with.
 struct Ctx<'a> {
     inj: &'a mut Inj,
@@ -257,6 +280,10 @@ struct Ctx<'a> {
     /// Bumped by every cancellation; a launch thread stops before its next target when it
     /// changed since the trigger fired.
     epoch: Arc<AtomicU32>,
+    /// The moves while held going on now (Step 71).
+    motions: Vec<Moving>,
+    /// The motions' clock (milliseconds since the worker started).
+    clock: Instant,
 }
 
 impl Ctx<'_> {
@@ -332,10 +359,159 @@ impl Ctx<'_> {
         }
     }
 
+    fn entry(r: &Rules, rule: &str, outcome: &str) -> Entry {
+        Entry {
+            at: crate::time::now_rfc3339(),
+            rule: rule.to_string(),
+            profile: r.profile.clone(),
+            mode: r.mode.clone(),
+            outcome: outcome.to_string(),
+        }
+    }
+
+    fn note(&self, e: Entry) {
+        if let Ok(mut a) = self.activity.lock() {
+            a.push(e);
+        }
+    }
+
+    fn now_ms(&self) -> u64 {
+        u64::try_from(self.clock.elapsed().as_millis()).unwrap_or(u64::MAX)
+    }
+
+    /// When the next motion moves (for the loop's timeout).
+    fn motion_due(&self) -> Option<Instant> {
+        let due = self.motions.iter().map(|m| m.held.due_ms).min()?;
+        Some(self.clock + Duration::from_millis(due))
+    }
+
+    /// Starts a move while held (Step 71). A stepped one moves at once.
+    fn start_motion(&mut self, r: &Rules, b: &Binding, generation: u32, binding: u16) {
+        let Action::Motion(spec) = &b.action else {
+            return;
+        };
+        // The same trigger pressed again without its up (lost elsewhere): the old one stops.
+        self.motions
+            .retain(|m| !(m.generation == generation && m.binding == binding));
+        let held = HeldMotion::new(*spec, self.now_ms());
+        self.motions.push(Moving {
+            generation,
+            binding,
+            rule: b.rule.clone(),
+            profile: r.profile.clone(),
+            mode: r.mode.clone(),
+            held,
+        });
+        self.note(Self::entry(r, &b.rule, "ok"));
+        self.tick_motions();
+    }
+
+    /// The trigger of a move while held went up: that motion stops (nothing to record).
+    fn end_motion(&mut self, generation: u32, binding: u16) {
+        self.motions
+            .retain(|m| !(m.generation == generation && m.binding == binding));
+    }
+
+    /// Ends every motion (pause, stop, lock, reload, release-all, emergency, refusal) and records
+    /// why.
+    fn stop_motions(&mut self, outcome: &str) {
+        for m in std::mem::take(&mut self.motions) {
+            self.note(Entry {
+                at: crate::time::now_rfc3339(),
+                rule: m.rule,
+                profile: m.profile,
+                mode: m.mode,
+                outcome: outcome.to_string(),
+            });
+        }
+    }
+
+    /// Moves the pointer by every due motion: the position is read, the target at the new point
+    /// checked, and one move sent (clamped onto the desktop).
+    fn tick_motions(&mut self) {
+        let now = self.now_ms();
+        if !self.motions.iter().any(|m| m.held.due_ms <= now) {
+            return;
+        }
+        // A motion held longer than the run limit ends: its trigger-up may have been lost.
+        let (expired, keep): (Vec<Moving>, Vec<Moving>) = std::mem::take(&mut self.motions)
+            .into_iter()
+            .partition(|m| m.held.expired(now));
+        self.motions = keep;
+        for m in expired {
+            self.note(Entry {
+                at: crate::time::now_rfc3339(),
+                rule: m.rule,
+                profile: m.profile,
+                mode: m.mode,
+                outcome: "timeout".into(),
+            });
+        }
+        if self.motions.is_empty() {
+            return;
+        }
+        let screen = &mut *self.env.screen;
+        let Some(layout) = screen.layout() else {
+            self.stop_motions("injection_failed");
+            return;
+        };
+        let Some(from) = screen.cursor() else {
+            self.stop_motions("skipped_secure_desktop");
+            return;
+        };
+        let mut held: Vec<HeldMotion> = self.motions.iter().map(|m| m.held).collect();
+        let (to, _) = mouse::tick_motions(&mut held, &layout, from, now);
+        for (m, h) in self.motions.iter_mut().zip(held) {
+            m.held = h;
+        }
+        if to == from {
+            return;
+        }
+        if let Some(code) = mouse::refusal(screen.target(to)) {
+            self.stop_motions(code);
+            return;
+        }
+        if !self.inj.send_balanced(&[mouse::move_event(&layout, to)]) {
+            self.stop_motions("injection_failed");
+        }
+    }
+
+    /// Runs a fired rule of mouse steps at once (Step 71).
+    fn mouse_run(&mut self, r: &Rules, b: &Binding, plan: &mouse::MousePlan) {
+        let code = mouse::run_plan(plan, &mut *self.env.screen, self.inj);
+        self.note(Self::entry(r, &b.rule, code));
+    }
+
+    /// What a held button needs before its down: a move to the rule's point, and the check of
+    /// who would receive the click (`Err`: the press steps aside with that code).
+    fn hold_pre(&mut self, at: Option<mouse::PointSpec>) -> Result<Vec<OutEvent>, &'static str> {
+        let screen = &mut *self.env.screen;
+        let (pre, point) = match at {
+            Some(spec) => {
+                let (layout, from, to) = mouse::hold_target(spec, screen)?;
+                let pre = if to == from {
+                    Vec::new()
+                } else {
+                    vec![mouse::move_event(&layout, to)]
+                };
+                (pre, to)
+            }
+            None => (Vec::new(), screen.cursor().ok_or("skipped_secure_desktop")?),
+        };
+        match mouse::refusal(screen.target(point)) {
+            Some(code) => Err(code),
+            None => Ok(pre),
+        }
+    }
+
     /// Starts a typing run for a fired rule, or drops the trigger with `busy`.
     fn start(&mut self, r: &Rules, b: &Binding, hs: Option<HotstringFire>) {
         if let Action::Launch(plan) = &b.action {
             self.launch(r, b, plan);
+            return;
+        }
+        if let Action::Mouse(plan) = &b.action {
+            self.mouse_run(r, b, plan);
             return;
         }
         if self.active.is_some() {
@@ -423,10 +599,17 @@ fn mod_events(bits: u8, up: bool, tracked: bool, out: &mut Vec<(OutEvent, bool)>
 
 /// Carries out one remap instruction. Returns whether every event was inserted.
 pub fn execute(inj: &mut Injector<impl Backend>, op: RemapOp) -> bool {
+    execute_with(inj, op, &[])
+}
+
+/// Carries out one remap instruction with `pre` (a pointer move of a held button, Step 71) sent
+/// after the trigger modifiers are released and before the target goes down, in the same call.
+pub fn execute_with(inj: &mut Injector<impl Backend>, op: RemapOp, pre: &[OutEvent]) -> bool {
     let mut ev: Vec<(OutEvent, bool)> = Vec::new();
     match op {
         RemapOp::Press { lift, mods, key } => {
             mod_events(lift, true, false, &mut ev);
+            ev.extend(pre.iter().map(|e| (*e, false)));
             mod_events(mods, false, true, &mut ev);
             if let Some(k) = key {
                 ev.push((OutEvent::down(k), true));
@@ -478,6 +661,7 @@ fn run(rx: &Receiver<Msg>, control: &Sink, stats: &Stats, ctx: &mut Ctx<'_>) {
             .iter()
             .map(|h| h.due)
             .chain(ctx.active.as_ref().map(|a| a.due))
+            .chain(ctx.motion_due())
             .min();
         let msg = match next {
             None => rx.recv().map_err(|_| RecvTimeoutError::Disconnected),
@@ -488,6 +672,7 @@ fn run(rx: &Receiver<Msg>, control: &Sink, stats: &Stats, ctx: &mut Ctx<'_>) {
         match msg {
             Err(RecvTimeoutError::Disconnected) | Ok(Msg::Stop) => {
                 ctx.cancel();
+                ctx.stop_motions("cancelled");
                 break;
             }
             Err(RecvTimeoutError::Timeout) => {
@@ -509,17 +694,20 @@ fn run(rx: &Receiver<Msg>, control: &Sink, stats: &Stats, ctx: &mut Ctx<'_>) {
             Ok(Msg::Rules(r)) => {
                 holds.clear();
                 ctx.cancel();
+                ctx.stop_motions("cancelled");
                 rules = Some(r);
             }
             Ok(Msg::Cancel) => {
                 holds.clear();
                 ctx.cancel();
+                ctx.stop_motions("cancelled");
                 ctx.inj.release_all();
             }
             Ok(Msg::Signal { generation, signal }) => match signal {
                 Signal::Emergency => {
                     holds.clear();
                     ctx.cancel();
+                    ctx.stop_motions("cancelled");
                     ctx.inj.release_all();
                     control(Control::Emergency);
                 }
@@ -531,9 +719,37 @@ fn run(rx: &Receiver<Msg>, control: &Sink, stats: &Stats, ctx: &mut Ctx<'_>) {
                     }
                 }
                 Signal::Remap { binding, op } => {
-                    let ok = execute(inj, op);
+                    // A held mouse button (Step 71): moved to its point first, and stepping aside
+                    // where the click would reach the secure desktop or an elevated window (the
+                    // trigger modifiers are still released, so the release restores them right).
+                    let held = match (op, current(rules.as_ref(), generation, binding)) {
+                        (RemapOp::Press { .. }, Some((_, b))) => match b.action {
+                            Action::MouseHold { at, .. } => Some(ctx.hold_pre(at)),
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    let inj = &mut *ctx.inj;
+                    let (op, pre, refused) = match (held, op) {
+                        (Some(Err(code)), RemapOp::Press { lift, mods, .. }) => (
+                            RemapOp::Press {
+                                lift,
+                                mods,
+                                key: None,
+                            },
+                            Vec::new(),
+                            Some(code),
+                        ),
+                        (Some(Ok(pre)), op) => (op, pre, None),
+                        (_, op) => (op, Vec::new(), None),
+                    };
+                    let ok = execute_with(inj, op, &pre);
                     if matches!(op, RemapOp::Press { .. } | RemapOp::Tap { .. }) {
-                        let outcome = if ok { "ok" } else { "injection_failed" };
+                        let outcome = match refused {
+                            Some(code) => code,
+                            None if ok => "ok",
+                            None => "injection_failed",
+                        };
                         record(rules.as_ref(), generation, binding, outcome, activity);
                     }
                 }
@@ -546,7 +762,9 @@ fn run(rx: &Receiver<Msg>, control: &Sink, stats: &Stats, ctx: &mut Ctx<'_>) {
                 }
                 Signal::ReleaseAll => {
                     inj.release_all();
+                    ctx.stop_motions("cancelled");
                 }
+                Signal::MotionEnd { binding } => ctx.end_motion(generation, binding),
                 Signal::Restore { mods } => {
                     let mut ev = Vec::new();
                     mod_events(mods, false, false, &mut ev);
@@ -556,7 +774,11 @@ fn run(rx: &Receiver<Msg>, control: &Sink, stats: &Stats, ctx: &mut Ctx<'_>) {
                     if fire(rules.as_ref(), generation, binding, control, activity)
                         && let Some((r, b)) = current(rules.as_ref(), generation, binding)
                     {
-                        ctx.start(r, b, None);
+                        if matches!(b.action, Action::Motion(_)) {
+                            ctx.start_motion(r, b, generation, binding);
+                        } else {
+                            ctx.start(r, b, None);
+                        }
                     }
                 }
                 Signal::Skipped { binding, code } => {
@@ -582,6 +804,7 @@ fn run(rx: &Receiver<Msg>, control: &Sink, stats: &Stats, ctx: &mut Ctx<'_>) {
             },
         }
         ctx.step();
+        ctx.tick_motions();
     }
 }
 
@@ -634,10 +857,14 @@ fn fire(
         }
         // The key was consumed; nothing else happens (§5.2).
         Action::Block => {}
-        // Remaps run through `Signal::Remap`; a fired remap does nothing more.
-        Action::Remap(_) => return false,
-        // Typing runs and launches record their own outcome when they end.
-        Action::Type(_) | Action::Keys(_) | Action::Launch(_) => return true,
+        // Remaps and held buttons run through `Signal::Remap`; a fired one does nothing more.
+        Action::Remap(_) | Action::MouseHold { .. } => return false,
+        // Typing runs, launches and mouse actions record their own outcome.
+        Action::Type(_)
+        | Action::Keys(_)
+        | Action::Launch(_)
+        | Action::Mouse(_)
+        | Action::Motion(_) => return true,
     }
     record(rules, generation, binding, "ok", activity);
     false

@@ -50,8 +50,8 @@
       "inactive": [
         {
           "code": "step_unsupported",
-          "reason": "`mouse_scroll` steps are not implemented in this version yet (Step 71)",
-          "rule": "scroll-later"
+          "reason": "`delay` steps are not implemented in this version yet (Step 78)",
+          "rule": "delay-later"
         }
       ],
       "last_reload": null,

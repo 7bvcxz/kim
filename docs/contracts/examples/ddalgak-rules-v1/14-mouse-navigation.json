@@ -1,0 +1,247 @@
+{
+  "schema": "ddalgak.rules",
+  "schema_version": 1,
+  "hotkey_contract": 1,
+  "active_profile": "default",
+  "profiles": [
+    {
+      "id": "default",
+      "title": "Pointer keys",
+      "description": "ScrollLock turns I, J, K and L into a pointer: glide while held, jump grid cells with Shift, nudge with Ctrl, and click, drag and scroll with the keys around them (Step 71).",
+      "default_mode": "base",
+      "modes": [
+        {"id": "base", "title": "Base"},
+        {"id": "pointer", "title": "Pointer keys", "color": "#8AB4F8"}
+      ],
+      "rules": [
+        {
+          "id": "pointer-mode",
+          "title": "ScrollLock turns pointer keys on or off",
+          "enabled": true,
+          "trigger": {"keys": "ScrollLock"},
+          "steps": [{"type": "mode", "op": "toggle", "mode": "pointer"}]
+        },
+        {
+          "id": "glide-up",
+          "title": "I glides up while held",
+          "enabled": true,
+          "modes": ["pointer"],
+          "trigger": {"keys": "I"},
+          "steps": [{"type": "mouse_move", "mode": "relative", "dx": 0, "dy": -1, "while_held": {"speed": 800, "acceleration": 2}}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T10:00:00Z", "via": "gui"}}
+        },
+        {
+          "id": "glide-down",
+          "title": "K glides down while held",
+          "enabled": true,
+          "modes": ["pointer"],
+          "trigger": {"keys": "K"},
+          "steps": [{"type": "mouse_move", "mode": "relative", "dx": 0, "dy": 1, "while_held": {"speed": 800, "acceleration": 2}}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T10:00:00Z", "via": "gui"}}
+        },
+        {
+          "id": "glide-left",
+          "title": "J glides left while held",
+          "enabled": true,
+          "modes": ["pointer"],
+          "trigger": {"keys": "J"},
+          "steps": [{"type": "mouse_move", "mode": "relative", "dx": -1, "dy": 0, "while_held": {"speed": 800, "acceleration": 2}}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T10:00:00Z", "via": "gui"}}
+        },
+        {
+          "id": "glide-right",
+          "title": "L glides right while held",
+          "enabled": true,
+          "modes": ["pointer"],
+          "trigger": {"keys": "L"},
+          "steps": [{"type": "mouse_move", "mode": "relative", "dx": 1, "dy": 0, "while_held": {"speed": 800, "acceleration": 2}}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T10:00:00Z", "via": "gui"}}
+        },
+        {
+          "id": "cell-up",
+          "title": "Shift+I jumps one grid cell up, again every 150 ms while held",
+          "enabled": true,
+          "modes": ["pointer"],
+          "trigger": {"keys": "Shift+I"},
+          "steps": [{"type": "mouse_move", "mode": "relative", "dx": 0, "dy": -1, "unit": "grid", "grid": {"columns": 16, "rows": 9}, "while_held": {"repeat_ms": 150, "delay_ms": 400}}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T10:00:00Z", "via": "gui"}}
+        },
+        {
+          "id": "cell-down",
+          "title": "Shift+K jumps one grid cell down",
+          "enabled": true,
+          "modes": ["pointer"],
+          "trigger": {"keys": "Shift+K"},
+          "steps": [{"type": "mouse_move", "mode": "relative", "dx": 0, "dy": 1, "unit": "grid", "grid": {"columns": 16, "rows": 9}, "while_held": {"repeat_ms": 150, "delay_ms": 400}}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T10:00:00Z", "via": "gui"}}
+        },
+        {
+          "id": "cell-left",
+          "title": "Shift+J jumps one grid cell left",
+          "enabled": true,
+          "modes": ["pointer"],
+          "trigger": {"keys": "Shift+J"},
+          "steps": [{"type": "mouse_move", "mode": "relative", "dx": -1, "dy": 0, "unit": "grid", "grid": {"columns": 16, "rows": 9}}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T10:00:00Z", "via": "gui"}}
+        },
+        {
+          "id": "cell-right",
+          "title": "Shift+L jumps one grid cell right",
+          "enabled": true,
+          "modes": ["pointer"],
+          "trigger": {"keys": "Shift+L"},
+          "steps": [{"type": "mouse_move", "mode": "relative", "dx": 1, "dy": 0, "unit": "grid", "grid": {"columns": 16, "rows": 9}}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T10:00:00Z", "via": "gui"}}
+        },
+        {
+          "id": "nudge-up",
+          "title": "Ctrl+I nudges one pixel up (with the keyboard's repeat)",
+          "enabled": true,
+          "modes": ["pointer"],
+          "trigger": {"keys": "Ctrl+I", "repeat": true},
+          "steps": [{"type": "mouse_move", "mode": "relative", "dx": 0, "dy": -1}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T10:00:00Z", "via": "gui"}}
+        },
+        {
+          "id": "step-right",
+          "title": "Ctrl+L steps 5 pixels right every 40 ms while held",
+          "enabled": true,
+          "modes": ["pointer"],
+          "trigger": {"keys": "Ctrl+L"},
+          "steps": [{"type": "mouse_move", "mode": "relative", "dx": 5, "dy": 0, "while_held": {"repeat_ms": 40, "delay_ms": 0}}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T10:00:00Z", "via": "gui"}}
+        },
+        {
+          "id": "click",
+          "title": "Space clicks",
+          "enabled": true,
+          "modes": ["pointer"],
+          "trigger": {"keys": "Space"},
+          "steps": [{"type": "mouse_click", "button": "left"}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T10:00:00Z", "via": "gui"}}
+        },
+        {
+          "id": "double-click",
+          "title": "Enter double-clicks",
+          "enabled": true,
+          "modes": ["pointer"],
+          "trigger": {"keys": "Enter"},
+          "steps": [{"type": "mouse_click", "button": "left", "op": "double_click"}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T10:00:00Z", "via": "gui"}}
+        },
+        {
+          "id": "drag",
+          "title": "D holds the left button (drag with I, J, K, L)",
+          "enabled": true,
+          "modes": ["pointer"],
+          "trigger": {"keys": "D"},
+          "steps": [{"type": "mouse_click", "button": "left", "op": "hold"}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T10:00:00Z", "via": "gui"}}
+        },
+        {
+          "id": "right-click",
+          "title": "R right-clicks",
+          "enabled": true,
+          "modes": ["pointer"],
+          "trigger": {"keys": "R"},
+          "steps": [{"type": "mouse_click", "button": "right"}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T10:00:00Z", "via": "gui"}}
+        },
+        {
+          "id": "middle-hold",
+          "title": "M holds the middle button (pan in maps and CAD)",
+          "enabled": true,
+          "modes": ["pointer"],
+          "trigger": {"keys": "M"},
+          "steps": [{"type": "mouse_click", "button": "middle", "op": "hold"}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T10:00:00Z", "via": "gui"}}
+        },
+        {
+          "id": "back",
+          "title": "B presses the back button",
+          "enabled": true,
+          "modes": ["pointer"],
+          "trigger": {"keys": "B"},
+          "steps": [{"type": "mouse_click", "button": "x1"}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T10:00:00Z", "via": "gui"}}
+        },
+        {
+          "id": "forward",
+          "title": "N presses the forward button",
+          "enabled": true,
+          "modes": ["pointer"],
+          "trigger": {"keys": "N"},
+          "steps": [{"type": "mouse_click", "button": "x2"}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T10:00:00Z", "via": "gui"}}
+        },
+        {
+          "id": "wheel-up",
+          "title": "U scrolls up (with the keyboard's repeat)",
+          "enabled": true,
+          "modes": ["pointer"],
+          "trigger": {"keys": "U", "repeat": true},
+          "steps": [{"type": "mouse_scroll", "direction": "up"}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T10:00:00Z", "via": "gui"}}
+        },
+        {
+          "id": "wheel-down",
+          "title": "O scrolls down",
+          "enabled": true,
+          "modes": ["pointer"],
+          "trigger": {"keys": "O", "repeat": true},
+          "steps": [{"type": "mouse_scroll", "direction": "down"}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T10:00:00Z", "via": "gui"}}
+        },
+        {
+          "id": "wheel-left",
+          "title": "Shift+U scrolls left two notches",
+          "enabled": true,
+          "modes": ["pointer"],
+          "trigger": {"keys": "Shift+U"},
+          "steps": [{"type": "mouse_scroll", "direction": "left", "notches": 2}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T10:00:00Z", "via": "gui"}}
+        },
+        {
+          "id": "wheel-right",
+          "title": "Shift+O scrolls right two notches",
+          "enabled": true,
+          "modes": ["pointer"],
+          "trigger": {"keys": "Shift+O"},
+          "steps": [{"type": "mouse_scroll", "direction": "right", "notches": 2}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T10:00:00Z", "via": "gui"}}
+        },
+        {
+          "id": "window-corner",
+          "title": "W clicks near the active window's top-left corner",
+          "enabled": true,
+          "modes": ["pointer"],
+          "trigger": {"keys": "W"},
+          "on_error": "stop",
+          "steps": [
+            {"type": "mouse_move", "mode": "absolute", "to": {"x": 24, "y": 24, "relative_to": "active_window"}},
+            {"type": "mouse_click", "button": "left"}
+          ],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T10:00:00Z", "via": "gui"}}
+        },
+        {
+          "id": "centre",
+          "title": "C moves to the middle of a 1920 × 1080 primary monitor",
+          "enabled": true,
+          "modes": ["pointer"],
+          "trigger": {"keys": "C"},
+          "steps": [{"type": "mouse_move", "mode": "absolute", "to": {"x": 960, "y": 540, "relative_to": "primary_monitor"}}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T10:00:00Z", "via": "gui"}}
+        },
+        {
+          "id": "far-left",
+          "title": "Home goes to the left monitor (clamped to the desktop when there is none)",
+          "enabled": true,
+          "modes": ["pointer"],
+          "trigger": {"keys": "Home"},
+          "steps": [{"type": "mouse_move", "mode": "absolute", "to": {"x": -960, "y": 540}}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T10:00:00Z", "via": "gui"}}
+        }
+      ]
+    }
+  ]
+}

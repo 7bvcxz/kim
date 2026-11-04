@@ -19,6 +19,11 @@
 //! always sent as down and up pairs in one call, so the ledger never keeps a unit held unless
 //! `SendInput` inserted only part of a call; [`Injector::send_balanced`] releases such leftovers
 //! at once.
+//!
+//! Step 71 adds **pointer moves** ([`OutCode::MoveTo`], normalized virtual-desktop coordinates)
+//! and **wheel notches** ([`OutCode::Wheel`]) for the mouse actions ([`crate::mouse`]). They are
+//! over at once, so the ledger never records them ([`OutCode::holds`]); a held mouse button is a
+//! [`OutCode::Button`] down and is released on every path like a key.
 
 use std::sync::Mutex;
 
@@ -95,9 +100,27 @@ pub enum OutCode {
     /// One UTF-16 unit typed as a Unicode key event (`KEYEVENTF_UNICODE`, `VK_PACKET` for the
     /// application), independent of the layout and the IME (Step 69, `type_text`).
     Unicode(u16),
+    /// A pointer move to a pixel, in normalized `MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK`
+    /// coordinates (0–65535 over the virtual desktop; Step 71, [`crate::mouse::Layout::normalize`]).
+    /// A move is over at once: it is never held, so the ledger never records it.
+    MoveTo {
+        x: u16,
+        y: u16,
+    },
+    /// One wheel notch (`delta` ±120; `horizontal`: `MOUSEEVENTF_HWHEEL`). Never held.
+    Wheel {
+        horizontal: bool,
+        delta: i16,
+    },
 }
 
 impl OutCode {
+    /// Whether a down of this output stays down until its up (keys and buttons). Moves and wheel
+    /// notches are over at once and never enter the ledger.
+    pub fn holds(self) -> bool {
+        !matches!(self, OutCode::MoveTo { .. } | OutCode::Wheel { .. })
+    }
+
     /// The virtual key, when the output is one.
     pub fn vk(self) -> Option<u16> {
         match self {
@@ -199,6 +222,9 @@ impl<B: Backend> Injector<B> {
             self.failed += (events.len() - n) as u64;
         }
         for e in &events[..n] {
+            if !e.code.holds() {
+                continue;
+            }
             if e.up {
                 self.held.retain(|c| *c != e.code);
                 global(|g| g.retain(|c| *c != e.code));
@@ -239,7 +265,7 @@ impl<B: Backend> Injector<B> {
             self.failed += (plain.len() - n) as u64;
         }
         for (e, tracked) in &events[..n] {
-            if !tracked {
+            if !tracked || !e.code.holds() {
                 continue;
             }
             if e.up {

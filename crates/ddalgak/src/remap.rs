@@ -34,6 +34,14 @@ pub struct Output {
 }
 
 impl Output {
+    /// A mouse button without modifiers (the target of a held `mouse_click`, Step 71).
+    pub fn button(b: Button) -> Output {
+        Output {
+            mods: Mods::default(),
+            key: Some(OutCode::Button(b)),
+        }
+    }
+
     /// Parses canonical output text (`to`/`tap`): one chord, a bare modifier including
     /// `LWin`/`RWin`, a lock key, a `code:` key or a mouse button, with modifiers.
     pub fn parse(text: &str) -> Result<Output, String> {

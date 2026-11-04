@@ -297,10 +297,9 @@ fn rules_doc(on_start: &str) -> Value {
                   "trigger": { "keys": "F19" },
                   "steps": [ { "type": "remap", "to": "F20" } ],
                   "consent": { "input-injection": { "granted_at": "2026-11-04T09:00:00Z", "via": "gui" } } },
-                { "id": "scroll-later", "title": "F18 scrolls (a later Step)", "enabled": true,
+                { "id": "delay-later", "title": "F18 waits (a later Step: ordered runs)", "enabled": true,
                   "trigger": { "keys": "F18" },
-                  "steps": [ { "type": "mouse_scroll", "direction": "down" } ],
-                  "consent": { "input-injection": { "granted_at": "2026-11-04T09:00:00Z", "via": "gui" } } }
+                  "steps": [ { "type": "delay", "ms": 100 } ] }
             ] } ]
     })
 }
@@ -440,7 +439,7 @@ fn the_app_lifecycle_through_the_cli() {
         json!(["pause-key", "off-key", "physical-only", "f19-remap"]),
         "remaps run from Step 68"
     );
-    assert_eq!(d["rules"]["inactive"][0]["rule"], "scroll-later");
+    assert_eq!(d["rules"]["inactive"][0]["rule"], "delay-later");
     assert_eq!(d["rules"]["inactive"][0]["code"], "step_unsupported");
     // Ddalgak's own shortcuts are registered with RegisterHotKey (obscure chords only; never
     // pressed by this test), unless another program owns them.

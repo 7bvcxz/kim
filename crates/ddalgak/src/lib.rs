@@ -32,6 +32,7 @@ pub mod ipc;
 pub mod launch;
 pub mod lifecycle;
 pub mod model;
+pub mod mouse;
 pub mod paths;
 pub mod remap;
 pub mod rules;

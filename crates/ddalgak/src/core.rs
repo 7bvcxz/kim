@@ -40,8 +40,17 @@
 //! publishes the modifier state the application sees and a count of physical key presses
 //! ([`RunShared`]), and consumes the physical release of a modifier a run released logically.
 //!
+//! **Mouse holds** (Step 71, §5.7, §5.9): a held button (`mouse_click` with `op: hold`) is a remap
+//! slot whose target is the button, so it shares the reference counts and every release path. A
+//! move while held (`while_held`) fires on its trigger's down and keeps a small record of the
+//! trigger key; the trigger's up sends [`Signal::MotionEnd`], and every path that releases the
+//! remaps (pause, stop, session lock, a desktop switch, an elevated window taking focus, a key
+//! reset) also ends every motion ([`Signal::ReleaseAll`]). A reload drops the records: the worker
+//! stops every motion when it gets new rules.
+//!
 //! The core keeps only what matching needs (keys down, one pending tap, hold or sequence step,
-//! the active remaps, the bounded hotstring buffer). It records no keys (`DDALGAK-SEC-001`).
+//! the active remaps and motions, the bounded hotstring buffer). It records no keys
+//! (`DDALGAK-SEC-001`).
 
 use crate::event::{KeyEvent, KeySet, ModState, Normalizer, RawKey, Source, Transition};
 use crate::hotstring::{self, Translate, Typed};
@@ -165,6 +174,10 @@ pub enum Signal {
         binding: u16,
         fire: HotstringFire,
     },
+    /// The trigger of a move while held went up (Step 71): that motion stops.
+    MotionEnd {
+        binding: u16,
+    },
 }
 
 /// The context the hook sees at this moment (kept current by the host's watchers).
@@ -225,6 +238,8 @@ const NONE: u16 = u16::MAX;
 const SEQ_WORDS: usize = 16; // 1024 bits ≥ MAX_BINDINGS
 /// Most remaps held at the same time (one per held trigger key).
 pub const SLOTS: usize = 16;
+/// Most moves while held at the same time (Up and Right together move diagonally).
+pub const MOTIONS: usize = 8;
 
 #[derive(Clone, Copy, Debug)]
 struct Seq {
@@ -335,6 +350,8 @@ pub struct Core {
     hs: hotstring::Buffer,
     /// Physical key presses (a number, never which keys).
     typed: u32,
+    /// Moves while held (Step 71): the trigger's virtual key and the binding.
+    motions: [Option<(u16, u16)>; MOTIONS],
 }
 
 const WIN_BITS: u8 = 0x40 | 0x80;
@@ -371,6 +388,7 @@ impl Core {
             runs: None,
             translate: None,
             typed: 0,
+            motions: [None; MOTIONS],
         }
     }
 
@@ -406,6 +424,9 @@ impl Core {
                 *s = None;
             }
         }
+        // The worker stops every motion when it gets the new rules; their trigger-ups stay
+        // consumed (their downs were).
+        self.motions = [None; MOTIONS];
     }
 
     pub fn table(&self) -> &Table {
@@ -422,6 +443,11 @@ impl Core {
         self.slots.iter().flatten().count()
     }
 
+    /// How many moves while held are going on (diagnostics and tests).
+    pub fn active_motions(&self) -> usize {
+        self.motions.iter().flatten().count()
+    }
+
     /// Forgets the key state after input went to another desktop (lock screen, UAC,
     /// Ctrl+Alt+Del), an elevated window took focus or the session came back: key-ups made there
     /// never reached the hook. Keys whose down was consumed keep having their up consumed. Every
@@ -433,7 +459,8 @@ impl Core {
         self.release = None;
         self.hold = None;
         self.seq = None;
-        let had = self.active_remaps() > 0 || !self.replayed.is_empty();
+        let had =
+            self.active_remaps() > 0 || !self.replayed.is_empty() || self.active_motions() > 0;
         self.clear_remaps();
         if had {
             vec![Signal::ReleaseAll]
@@ -454,7 +481,7 @@ impl Core {
         if let Some((binding, _)) = self.hold.take() {
             out.push(Signal::HoldCancelled { binding });
         }
-        if self.active_remaps() > 0 || !self.replayed.is_empty() {
+        if self.active_remaps() > 0 || !self.replayed.is_empty() || self.active_motions() > 0 {
             out.push(Signal::ReleaseAll);
         }
         let phys = self.norm.mods_physical();
@@ -474,6 +501,13 @@ impl Core {
         self.slots = [None; SLOTS];
         self.mod_refs = [0; 8];
         self.key_refs = [None; SLOTS];
+        self.motions = [None; MOTIONS];
+    }
+
+    fn motion_of(&self, vk: u16) -> Option<usize> {
+        self.motions
+            .iter()
+            .position(|m| m.is_some_and(|(k, _)| k == vk))
     }
 
     /// The hook thread's timer fired at `now` (ms, the event clock): an undecided dual role whose
@@ -878,12 +912,18 @@ impl Core {
                 self.consumed.remove(ev.vk);
                 self.replayed.remove(ev.vk);
                 let stale = self.slot_of(ev.vk).and_then(|i| self.slots[i].take());
+                let stale_motion = self
+                    .motion_of(ev.vk)
+                    .and_then(|i| self.motions[i].take())
+                    .map(|(_, binding)| Signal::MotionEnd { binding });
                 let mut d = self.down(&ev, mode, flags);
-                if let Some(s) = stale {
-                    let r = Signal::Remap {
+                let stale = stale
+                    .map(|s| Signal::Remap {
                         binding: s.binding,
                         op: self.release(&s),
-                    };
+                    })
+                    .or(stale_motion);
+                if let Some(r) = stale {
                     if d.pre.is_none() {
                         d.pre = Some(r);
                     } else {
@@ -923,6 +963,11 @@ impl Core {
                 binding: s.binding,
                 op,
             });
+        }
+        if let Some(i) = self.motion_of(ev.vk)
+            && let Some((_, binding)) = self.motions[i].take()
+        {
+            signal = Some(Signal::MotionEnd { binding });
         }
         let mut post = None;
         if self.replayed.remove(ev.vk) {
@@ -1161,6 +1206,9 @@ impl Core {
         if let Some(spec) = c.is_remap.then(|| self.table.remap(i)).flatten() {
             return self.remap_down(ev, i, &c, spec);
         }
+        if c.motion {
+            return self.motion_down(ev, i);
+        }
         match c.on {
             On::Press => {
                 let signal = self.fire(i, FireKind::Press, ev.time_ms);
@@ -1232,6 +1280,20 @@ impl Core {
         let op = self.press(&mut slot);
         self.slots[free] = Some(slot);
         finish(self, Some(Signal::Remap { binding, op }))
+    }
+
+    /// The trigger of a move while held went down (§5.7, Step 71): the rule fires and the core
+    /// remembers the trigger key so its up ends the motion. More motions than [`MOTIONS`]: the
+    /// key passes unchanged.
+    fn motion_down(&mut self, ev: &KeyEvent, i: usize) -> Decision {
+        let Some(free) = self.motions.iter().position(Option::is_none) else {
+            return self.pass(ev, None);
+        };
+        let signal = self.fire(i, FireKind::Press, ev.time_ms);
+        if let Signal::Fire { binding, .. } = signal {
+            self.motions[free] = Some((ev.vk, binding));
+        }
+        self.take(ev, i, Some(signal))
     }
 
     /// Hotstrings (§3.4): feeds a key that reaches the application unchanged into the bounded

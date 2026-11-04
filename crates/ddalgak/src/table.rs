@@ -91,12 +91,32 @@ pub enum Action {
     Keys(Arc<KeysSpec>),
     /// Opens programs and websites in order (§5.5, §5.6, Step 70): a launch thread per run.
     Launch(Arc<crate::launch::Plan>),
+    /// Mouse moves, clicks and wheel notches in order (§5.7–§5.9, Step 71): one short run on the
+    /// worker.
+    Mouse(Arc<crate::mouse::MousePlan>),
+    /// A mouse button held exactly as long as the trigger (`mouse_click` with `op: hold`, Step
+    /// 71): a remap whose target is the button (the core's reference-counted slots, released on
+    /// every path), moved to `at` first when the rule names a point.
+    MouseHold {
+        spec: RemapSpec,
+        at: Option<crate::mouse::PointSpec>,
+    },
+    /// A `mouse_move` with `while_held` (Step 71): the pointer moves while the trigger is held.
+    Motion(crate::mouse::MotionSpec),
 }
 
 impl Action {
     /// A typing run (`type_text`, `send_keys`).
     pub fn is_run(&self) -> bool {
         matches!(self, Action::Type(_) | Action::Keys(_))
+    }
+
+    /// The outputs the core holds while the trigger is down (a remap, a held mouse button).
+    pub fn remap_spec(&self) -> Option<RemapSpec> {
+        match self {
+            Action::Remap(r) | Action::MouseHold { spec: r, .. } => Some(*r),
+            _ => None,
+        }
     }
 }
 
@@ -162,6 +182,9 @@ pub struct Compiled {
     /// A remap: its outputs are in [`Table::remap`] (kept out of this record so the scan over
     /// every binding stays small and cache-friendly).
     pub is_remap: bool,
+    /// A held motion (`mouse_move` with `while_held`, Step 71): the core tells the worker when
+    /// its trigger goes up.
+    pub motion: bool,
 }
 
 /// Most bindings a table holds (one profile's rule limit, DDALGAK_RULE_MODEL §2).
@@ -221,17 +244,12 @@ impl Table {
                     widen: b.widen,
                     injects: b.injects,
                     engine_control: b.is_engine_control(),
-                    is_remap: matches!(b.action, Action::Remap(_)),
+                    is_remap: b.action.remap_spec().is_some(),
+                    motion: matches!(b.action, Action::Motion(_)),
                 }
             })
             .collect();
-        let remaps = bindings
-            .iter()
-            .map(|b| match &b.action {
-                Action::Remap(r) => Some(*r),
-                _ => None,
-            })
-            .collect();
+        let remaps = bindings.iter().map(|b| b.action.remap_spec()).collect();
         let hotstrings: Vec<(u16, Arc<hotstring::Spec>)> = bindings
             .iter()
             .enumerate()

@@ -601,9 +601,19 @@ step_struct!(
         dy: Option<i32>,
         #[serde(default, skip_serializing_if = "none")]
         to: Option<Point>,
+        /// `pixels` (default) or `grid` (Step 71, additive).
+        #[serde(default, skip_serializing_if = "none")]
+        unit: Option<MoveUnit>,
+        /// The virtual grid of `unit: grid` (Step 71, additive).
+        #[serde(default, skip_serializing_if = "none")]
+        grid: Option<GridSize>,
         #[serde(default, skip_serializing_if = "none")]
         while_held: Option<WhileHeld>,
     }
+);
+step_struct!(
+    /// A virtual grid over each monitor (Step 71).
+    GridSize { columns: u32, rows: u32 }
 );
 step_struct!(
     /// A point for `mouse_move` and `mouse_click`.
@@ -615,11 +625,17 @@ step_struct!(
     }
 );
 step_struct!(
-    /// Continuous movement while the trigger is held.
+    /// Movement while the trigger is held: continuous (`speed`, `acceleration`) or, since Step 71,
+    /// stepped (`repeat_ms`, `delay_ms`).
     WhileHeld {
-        speed: u32,
+        #[serde(default, skip_serializing_if = "none")]
+        speed: Option<u32>,
         #[serde(default, skip_serializing_if = "none")]
         acceleration: Option<u32>,
+        #[serde(default, skip_serializing_if = "none")]
+        repeat_ms: Option<u32>,
+        #[serde(default, skip_serializing_if = "none")]
+        delay_ms: Option<u32>,
     }
 );
 step_struct!(
@@ -692,6 +708,7 @@ snake_enum!(HotstringCase {
 snake_enum!(WindowState { Normal = "normal", Maximized = "maximized", Minimized = "minimized" });
 snake_enum!(IfRunning { StartNew = "start_new", Activate = "activate" });
 snake_enum!(MoveMode { Relative = "relative", Absolute = "absolute" });
+snake_enum!(MoveUnit { Pixels = "pixels", Grid = "grid" });
 snake_enum!(RelativeTo {
     VirtualScreen = "virtual_screen",
     PrimaryMonitor = "primary_monitor",
@@ -787,6 +804,7 @@ impl Action {
             Action::OpenUrl(s) => first(&s.extra, ""),
             Action::MouseMove(s) => first(&s.extra, "")
                 .or_else(|| s.to.as_ref().and_then(|p| first(&p.extra, "to.")))
+                .or_else(|| s.grid.as_ref().and_then(|g| first(&g.extra, "grid.")))
                 .or_else(|| {
                     s.while_held
                         .as_ref()

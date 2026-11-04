@@ -1007,3 +1007,33 @@ fn the_form_fields_are_fields_of_the_published_schema() {
         assert!(!f.label.is_empty() && !f.help.is_empty());
     }
 }
+
+#[test]
+fn a_motion_tick_costs_far_below_its_interval() {
+    // The worker's own share of a 10 ms tick: two motions, the path check over three monitors and
+    // the normalization (the platform's position read and target check are measured on Windows,
+    // win::mouse::tests).
+    let l = three();
+    let c = |dx, dy| MotionSpec {
+        dx,
+        dy,
+        unit: Unit::Pixels,
+        kind: MotionKind::Continuous {
+            speed: 3000,
+            acceleration: 5,
+        },
+    };
+    let mut held = [HeldMotion::new(c(1, 0), 0), HeldMotion::new(c(0, 1), 0)];
+    let mut p = Point::new(-2000, 100);
+    let n = 20_000u64;
+    let t = std::time::Instant::now();
+    for i in 1..=n {
+        let (q, _) = tick_motions(&mut held, &l, p, i * u64::from(TICK_MS));
+        let _ = move_event(&l, q);
+        p = q;
+    }
+    let per = t.elapsed() / u32::try_from(n).unwrap();
+    eprintln!("motion tick (compute only): {per:?}");
+    assert!(per.as_micros() < 500, "{per:?}");
+    assert!(!l.clamp(p).1, "always on the desktop: {p:?}");
+}

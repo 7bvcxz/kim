@@ -22,6 +22,11 @@
 //! obscure_key_only`): a `send_keys` run taps only `F16` through the real `SendInput`; no
 //! character is ever typed and the clipboard is never touched.
 //!
+//! Step 71 adds a smoke test of the mouse trigger path (`mouse_rules_on_obscure_keys_reach_only_
+//! a_simulated_pointer`): real injected F13–F15 drive a held button, a glide and a scroll whose
+//! output goes to a simulated pointer; **no mouse input is ever sent** (the maintainer uses this
+//! machine's pointer).
+//!
 //! Requirements: `DDALGAK-NFR-001`, `DDALGAK-NFR-002`, `DDALGAK-SEC-004`, `DDALGAK-SEC-005`,
 //! `DDALGAK-FR-002`, `DDALGAK-FR-010`, `DDALGAK-FR-011`.
 #![cfg(windows)]

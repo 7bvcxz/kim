@@ -1,6 +1,6 @@
 # Ddalgak GUI journeys and wireframes
 
-Status: **current** (Step 65, design; implemented in Steps 73–76; the type-text, shortcut and hotstring forms and the text editor's data model are machine-checked since Step 69, the program picker and website field since Step 70) · Requirements:
+Status: **current** (Step 65, design; implemented in Steps 73–76; the type-text, shortcut and hotstring forms and the text editor's data model are machine-checked since Step 69, the program picker and website field since Step 70, the Mouse form, its screen map and the playground's simulated pointer since Step 71) · Requirements:
 `DDALGAK-FR-050…053`, `DDALGAK-FR-030…042`, `DDALGAK-NFR-007` · Visual language:
 [DESIGN_SYSTEM](DESIGN_SYSTEM.md) · Model: [DDALGAK_RULE_MODEL](DDALGAK_RULE_MODEL.md)
 
@@ -182,7 +182,7 @@ Each form shows its inputs (RULE_MODEL §5), a live summary sentence, and the pe
 | Type text | Multi-line text box (Hangul, emoji), *Paste instead of typing*, delay | "Types 13 characters on 2 lines" | type for me (+ clipboard for paste) |
 | Open a program | **Choose program…** (file picker limited to `.exe`) or **Choose an app…** (installed packaged apps), arguments as a list, start folder, window state, *bring to front if running* | "Opens Notepad" | open programs |
 | Open a website | URL field with live validation (`https://` added when missing, other schemes refused) | "Opens github.com in your browser" | open programs |
-| Mouse | Segmented: *Move* (by / to / while held with speed), *Scroll* (direction, notches), *Click* (button, click, double, hold) with a small screen map showing the target point across monitors | "Moves the pointer right while held" | type for me |
+| Mouse | Segmented: *Move* (by / to; once, glide while held with speed, or repeat while held; pixels or grid cells), *Scroll* (direction, notches), *Click* (button, click, double, hold) with a small screen map showing the target point across monitors | "Moves the pointer right at 600 px/s while Right is held" | type for me |
 | Switch mode | Operation (switch to, toggle, cycle, hold, back, default) and the mode list with **+ New mode** | "Navigation while CapsLock is held" | — |
 | Pause Ddalgak | Pause, resume, toggle pause, turn off; a note that no rule can turn Ddalgak on | "Pauses all rules" | — |
 
@@ -262,6 +262,36 @@ the icon is read from the file by `win::launch::icon_preview`; the visible edito
   it; Save writes only a valid, changed draft after the consent dialog names the exact target;
   Test opens it only after its own confirmation (J5, RULE_MODEL §11).
 
+**The "Mouse" form** (Step 71 fixed its data; `crates/ddalgak/src/mouse.rs` `MOUSE_FIELDS`,
+`MouseDraft`, `summary`, `screen_map` and `Playground`, whose tests check every field against the
+rules schema; the visible editor is Step 74):
+
+| Field (rule document) | Input | Required | Default | Label and help |
+| --- | --- | --- | --- | --- |
+| `steps[0].type` | segmented | yes | move | **Mouse**: Move, Scroll or Click. Every choice works from the keyboard alone |
+| `steps[0].mode` | choice | yes (Move) | by a distance | **Move**: by a distance from where the pointer is, or to a point; the pointer never leaves the visible desktop |
+| `steps[0].dx`, `steps[0].dy` | numbers | yes (by) | 0 | **Right** / **Down** (negative: left / up): logical pixels, scaled by the monitor's display scale, or grid cells |
+| `steps[0].unit`, `steps[0].grid` | choice, columns × rows | no | pixels | **Count in**: pixels, or cells of a virtual grid over the monitor (2–64 columns and rows); the pointer jumps from cell centre to cell centre |
+| `steps[0].while_held` | choice | no | once per press | **While the keys are held**: once per press; keep moving smoothly (speed 50–5000 px/s, acceleration 0–10); or repeat the step every 20–2000 ms after a first wait (default 300 ms), independent of the keyboard's repeat settings. Grid moves repeat, never glide. A held move must be the rule's only step |
+| `steps[0].to` | point | yes (to) | — | **To**: x and y on the desktop, the primary monitor or the active window's content area; the map shows the point across the monitors |
+| `steps[0].direction`, `steps[0].notches` | choice, number | yes, no | down, 1 | **Scroll**: up, down, left or right; 1–50 notches |
+| `steps[0].button` | choice | yes (Click) | left | **Button**: left and right follow "swap buttons"; middle, back (X1), forward (X2) |
+| `steps[0].op` | choice | no | click | **Click**: click, double click, or hold exactly as long as the keys are held (released on pause, lock and every stop) |
+| `steps[0].at` | point | no | — | **At**: move to this point first |
+
+- **The screen map** draws every monitor at its place (negative coordinates included) with its
+  scale, the playground's simulated pointer and the step's target, marked when it had to be
+  moved onto the desktop ("The point is beside every monitor; the pointer goes to the nearest
+  edge").
+- **Accessible alternatives**: every action is reachable with keys only; *repeat while held*
+  replaces holding a key steady at the keyboard's pace (it works with Filter Keys and slow
+  repeat settings); grid cells need far fewer presses than pixels; a point on the primary monitor
+  or in the active window jumps in one press. The form names Windows' own Mouse Keys and ClickLock
+  settings as the system alternatives (Ddalgak offers no click-lock: a button stays down only
+  while its keys are held).
+- **Nothing moves by itself.** Save writes only a valid, changed draft after the consent dialog;
+  Test runs the draft on the playground's simulated pointer (J5): the real pointer never moves.
+
 **Advanced** (folded): *Only in modes…*, *Only in apps… / except in…*, *Window title contains…*,
 *Priority*, *If a step fails: stop / continue*, *Accept input from other programs* (shown only
 for effects that inject nothing). **Several steps…** turns the single effect into an ordered
@@ -297,6 +327,11 @@ running engine (RULE_MODEL §11).
   types into it.") without needing a real password field.
 - **Step ▸** walks through multi-step rules one step at a time. **Reset** restores the
   playground; active rules are never affected.
+- **Mouse steps** (Step 71) run on a **simulated pointer** over the real monitor layout (reading
+  the layout moves nothing): the trace shows where the pointer would go and whether it was moved
+  onto the desktop, a held move plays out while the key is held in the capture box, a held button
+  shows as pressed until the key is released. Neither Simulate nor Live ever moves, scrolls or
+  clicks the real pointer (`mouse::Playground`).
 - The box is a key-capture surface: it binds nothing by default (manifest context
   `playground`), so every key can be tested; `Tab` leaves and `Esc` is entered via *type them*.
 

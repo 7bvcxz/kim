@@ -75,8 +75,9 @@ pub struct RemapSpec {
 }
 
 /// What a binding does when it fires. Step 66 runs engine-control rules, Step 68 remaps and
-/// blocks, Step 69 typed text and sent keys, Step 70 program and website launches; the other
-/// action types arrive in Steps 71–72 and are inactive until then (never broader, §9).
+/// blocks, Step 69 typed text and sent keys, Step 70 program and website launches, Step 71 mouse
+/// moves, wheel, clicks and holds; modes arrive in Step 72 and are inactive until then (never
+/// broader, §9).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Action {
     Engine(Vec<EngineOp>),

@@ -1253,4 +1253,174 @@ mod tests {
             .count();
         assert_eq!(bs, 3);
     }
+
+    // Launches (Step 70): the real worker thread with a fake launcher that records every call.
+    use crate::launch::{self as launch_mod, Call, FakeLauncher, ShellRequest, Show, Target};
+
+    fn launch_rules(generation: u32, urls: &[&str]) -> Rules {
+        let b = |id: &str, url: &str| Binding {
+            rule: id.into(),
+            trigger: Trigger::parse("F13").unwrap(),
+            on: On::Press,
+            repeat: false,
+            pass_through: false,
+            injected: Injected::Ignore,
+            widen: false,
+            injects: false,
+            action: Action::Launch(Arc::new(launch_mod::Plan {
+                targets: vec![Target::Url(url.into())],
+                stop_on_error: true,
+            })),
+            hotstring: None,
+        };
+        Rules {
+            generation,
+            bindings: Arc::new(
+                urls.iter()
+                    .enumerate()
+                    .map(|(i, u)| b(&format!("open-{i}"), u))
+                    .collect(),
+            ),
+            profile: "default".into(),
+            mode: "base".into(),
+        }
+    }
+
+    fn launch_worker(f: &Arc<FakeLauncher>) -> Worker {
+        let env = Env {
+            launcher: Arc::clone(f) as Arc<dyn launch_mod::Launcher>,
+            ..Env::inert()
+        };
+        Worker::start(
+            Arc::new(Stats::default()),
+            Box::new(|_| {}),
+            Arc::new(Mutex::new(Activity::default())),
+            Box::new(Recorder::default()),
+            env,
+        )
+    }
+
+    #[test]
+    fn a_launch_rule_opens_its_url_once_and_records_only_its_outcome() {
+        let f = Arc::new(FakeLauncher::default());
+        let w = launch_worker(&f);
+        let q = w.queue();
+        q.send(Msg::Rules(launch_rules(
+            1,
+            &["https://example.com/reset?token=s3cret"],
+        )));
+        q.signal(1, fire(0));
+        assert_eq!(wait_outcomes(&w, 1), [("open-0".into(), "ok".into())]);
+        assert_eq!(
+            f.calls(),
+            [Call::Shell(ShellRequest {
+                verb: "open",
+                target: "https://example.com/reset?token=s3cret".into(),
+                show: Show::Normal
+            })]
+        );
+        let j = w.activity.lock().unwrap().to_json(10).to_string();
+        assert!(
+            !j.contains("example") && !j.contains("s3cret"),
+            "activity holds codes only: {j}"
+        );
+    }
+
+    #[test]
+    fn rapid_triggers_are_busy_while_running_and_rate_limited_after() {
+        let f = Arc::new(FakeLauncher::default());
+        // A slow shell hand-off: the second press arrives while the first launch still runs.
+        *f.delay.lock().unwrap() = Duration::from_millis(300);
+        let w = launch_worker(&f);
+        let q = w.queue();
+        q.send(Msg::Rules(launch_rules(
+            1,
+            &["https://example.com/", "https://example.org/"],
+        )));
+        q.signal(1, fire(0));
+        q.signal(1, fire(0));
+        // Another launch rule is not held up by the first one, nor are other messages.
+        q.signal(1, fire(1));
+        let out = wait_outcomes(&w, 3);
+        assert!(out.contains(&("open-0".into(), "busy".into())), "{out:?}");
+        assert!(out.contains(&("open-0".into(), "ok".into())), "{out:?}");
+        assert!(out.contains(&("open-1".into(), "ok".into())), "{out:?}");
+        // Finished, but within a second of its start: a double press opens nothing more.
+        *f.delay.lock().unwrap() = Duration::ZERO;
+        q.signal(1, fire(0));
+        let out = wait_outcomes(&w, 4);
+        assert_eq!(out[3], ("open-0".into(), "rate_limited".into()));
+        assert_eq!(f.calls().len(), 2, "one launch per rule");
+        std::thread::sleep(launch_mod::DEBOUNCE);
+        q.signal(1, fire(0));
+        assert_eq!(wait_outcomes(&w, 5)[4], ("open-0".into(), "ok".into()));
+        assert_eq!(f.calls().len(), 3);
+    }
+
+    #[test]
+    fn a_pause_between_targets_ends_a_launch_run_before_its_next_target() {
+        let f = Arc::new(FakeLauncher::default());
+        *f.delay.lock().unwrap() = Duration::from_millis(300);
+        let w = launch_worker(&f);
+        let q = w.queue();
+        let mut r = launch_rules(1, &["https://example.com/"]);
+        r.bindings = Arc::new(vec![Binding {
+            action: Action::Launch(Arc::new(launch_mod::Plan {
+                targets: vec![
+                    Target::Url("https://example.com/".into()),
+                    Target::Url("https://example.org/".into()),
+                ],
+                stop_on_error: true,
+            })),
+            ..r.bindings[0].clone()
+        }]);
+        q.send(Msg::Rules(r));
+        q.signal(1, fire(0));
+        std::thread::sleep(Duration::from_millis(100));
+        q.send(Msg::Cancel);
+        assert_eq!(
+            wait_outcomes(&w, 1),
+            [("open-0".into(), "cancelled".into())]
+        );
+        assert_eq!(f.calls().len(), 1, "the second target never opened");
+    }
+
+    #[test]
+    fn loading_and_reloading_launch_rules_starts_nothing_until_a_trigger() {
+        // Rules arrive (engine start, a reload, an import that was then enabled): nothing opens
+        // until the user's trigger fires.
+        let f = Arc::new(FakeLauncher::default());
+        let w = launch_worker(&f);
+        let q = w.queue();
+        q.send(Msg::Rules(launch_rules(1, &["https://example.com/"])));
+        q.send(Msg::Rules(launch_rules(
+            2,
+            &["https://example.com/", "https://example.org/"],
+        )));
+        q.send(Msg::Cancel);
+        // An old table's trigger after a reload starts nothing either.
+        q.signal(1, fire(0));
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(f.calls().is_empty(), "{:?}", f.calls());
+        assert!(outcomes(&w).is_empty());
+    }
+
+    #[test]
+    fn the_inert_environment_never_starts_anything() {
+        // Tests and the debug test host without a launch root: every launch is refused.
+        let w = Worker::start(
+            Arc::new(Stats::default()),
+            Box::new(|_| {}),
+            Arc::new(Mutex::new(Activity::default())),
+            Box::new(Recorder::default()),
+            Env::inert(),
+        );
+        let q = w.queue();
+        q.send(Msg::Rules(launch_rules(1, &["https://example.com/"])));
+        q.signal(1, fire(0));
+        assert_eq!(
+            wait_outcomes(&w, 1),
+            [("open-0".into(), "launch_failed".into())]
+        );
+    }
 }

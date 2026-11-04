@@ -644,6 +644,116 @@ mod tests {
                 "steps": [ { "type": "engine", "op": op } ] })
     }
 
+    /// A launch rule with `launch-programs` consent for exactly its targets.
+    #[allow(clippy::needless_pass_by_value)]
+    fn launch_rule(id: &str, keys: &str, steps: Value) -> Value {
+        let mut r = json!({ "id": id, "title": id, "enabled": true, "trigger": { "keys": keys },
+                            "steps": steps });
+        let fp = crate::validate::launch_fingerprint(&r);
+        r["consent"] = json!({ "launch-programs": {
+            "granted_at": "2026-11-04T09:00:00Z", "via": "cli", "fingerprint": fp } });
+        r
+    }
+
+    #[test]
+    fn launch_rules_compile_and_changed_or_unconsented_targets_stay_inactive() {
+        use crate::launch::{Show, Target};
+        // The target changed after consent (Step 65's fingerprint check): inactive.
+        let mut stale = launch_rule(
+            "stale",
+            "F15",
+            json!([{ "type": "open_url", "url": "https://example.com/" }]),
+        );
+        stale["steps"][0]["url"] = json!("https://other.example/");
+        // An environment value changed after consent: inactive as well.
+        let mut env_changed = launch_rule(
+            "env-changed",
+            "F20",
+            json!([{ "type": "open_program", "path": r"C:\Tools\t.exe",
+                     "env": [{ "name": "MODE", "value": "safe" }] }]),
+        );
+        env_changed["steps"][0]["env"][0]["value"] = json!("unsafe");
+        // An imported rule: disabled and without consent, it never runs.
+        let imported = json!({ "id": "imported", "title": "imported", "enabled": false,
+            "trigger": { "keys": "F16" },
+            "steps": [{ "type": "open_program", "path": r"D:\Tools\tool.exe" }] });
+        let l = parse(&doc(json!([
+            launch_rule(
+                "notepad",
+                "F13",
+                json!([{ "type": "open_program", "path": r"%SystemRoot%\System32\notepad.exe",
+                         "args": ["a b"], "window": "minimized", "if_running": "activate",
+                         "env": [{ "name": "K", "value": "v" }] }])
+            ),
+            launch_rule(
+                "two",
+                "F14",
+                json!([{ "type": "open_url", "url": "https://github.com/" },
+                       { "type": "open_program", "app_id": "Microsoft.WindowsCalculator_8wekyb3d8bbwe!App" }])
+            ),
+            stale,
+            imported,
+            launch_rule(
+                "mixed",
+                "F17",
+                json!([{ "type": "open_url", "url": "https://github.com/" }, { "type": "delay", "ms": 100 }])
+            ),
+            launch_rule(
+                "colon",
+                "F18",
+                json!([{ "type": "open_program", "path": r"C:\notes.txt:hidden.exe" }])
+            ),
+            launch_rule(
+                "dup-env",
+                "F19",
+                json!([{ "type": "open_program", "path": r"C:\x.exe",
+                         "env": [{ "name": "A", "value": "1" }, { "name": "a", "value": "2" }] }])
+            ),
+            env_changed,
+        ])));
+        let active: Vec<&str> = l.bindings.iter().map(|b| b.rule.as_str()).collect();
+        assert_eq!(active, ["notepad", "two"]);
+        let Action::Launch(p) = &l.bindings[0].action else {
+            panic!("{:?}", l.bindings[0].action)
+        };
+        let Target::Program(s) = &p.targets[0] else {
+            panic!("{p:?}")
+        };
+        assert_eq!((s.show, s.activate), (Show::Minimized, true));
+        assert_eq!(s.env, [("K".to_string(), "v".to_string())]);
+        assert!(
+            !l.bindings[0].injects && !l.bindings[0].widen,
+            "launches inject nothing"
+        );
+        let Action::Launch(p) = &l.bindings[1].action else {
+            panic!()
+        };
+        assert_eq!(p.targets.len(), 2);
+        assert!(p.stop_on_error);
+        let codes: Vec<(&str, &str)> = l
+            .inactive
+            .iter()
+            .map(|i| (i.rule.as_str(), i.code))
+            .collect();
+        assert_eq!(
+            codes,
+            [
+                ("stale", "consent_stale"),
+                ("mixed", "step_unsupported"),
+                ("colon", "step_invalid"),
+                ("dup-env", "step_invalid"),
+                ("env-changed", "consent_stale"),
+            ]
+        );
+        assert_eq!(l.disabled, 1);
+        for i in &l.inactive {
+            assert!(
+                !i.reason.contains("notes.txt") && !i.reason.contains("other.example"),
+                "reasons never quote targets: {i:?}"
+            );
+        }
+    }
+
     #[test]
     fn missing_invalid_and_newer_files() {
         let missing = load(Path::new("Z:/does/not/exist/rules.json"));

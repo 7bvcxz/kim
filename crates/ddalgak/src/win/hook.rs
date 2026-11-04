@@ -48,6 +48,7 @@ pub const STATE_PAUSED: u8 = 2;
 const WM_SWAP: u32 = WM_APP + 0x10;
 const WM_UNHOOK: u32 = WM_APP + 0x11;
 const WM_CANCEL: u32 = WM_APP + 0x12;
+const WM_RESET: u32 = WM_APP + 0x13;
 
 const F_SECURE: u32 = 1;
 const F_PASSWORD: u32 = 2;
@@ -62,6 +63,8 @@ pub struct Shared {
     focus_epoch: AtomicU32,
     /// The hook is installed right now.
     pub installed: AtomicBool,
+    /// The hook thread, for key-state resets requested by the watchers.
+    thread_id: AtomicU32,
     pub stats: Arc<Stats>,
     pending: Mutex<Option<(u32, Table)>>,
 }
@@ -104,6 +107,16 @@ impl Shared {
 
     pub fn set_elevated_foreground(&self, on: bool) {
         self.set_flag(F_ELEVATED, on);
+    }
+
+    /// Asks the hook thread to forget the key state: input went to another desktop (lock
+    /// screen, UAC, Ctrl+Alt+Del), so key-ups the hook never saw would leave stale modifiers.
+    pub fn request_key_reset(&self) {
+        let id = self.thread_id.load(Ordering::SeqCst);
+        if id != 0 {
+            // SAFETY: posts a message without pointers; fails harmlessly for an ended thread.
+            unsafe { PostThreadMessageW(id, WM_RESET, 0, 0) };
+        }
     }
 
     /// Focus moved (cancels a pending sequence).
@@ -296,6 +309,7 @@ impl HookThread {
             }
             Err(_) => return Err(io::Error::other("the hook thread did not start")),
         };
+        shared.thread_id.store(thread_id, Ordering::SeqCst);
         let watchdog = opts.max_lifetime.map(|limit| {
             let (tx, rx) = channel::<()>();
             let quit = QuitHandle(thread_id);
@@ -421,6 +435,13 @@ fn run(
                         }
                     });
                 }
+            }
+            WM_RESET => {
+                CTX.with(|c| {
+                    if let Some(ctx) = c.borrow_mut().as_mut() {
+                        ctx.core.reset_keys();
+                    }
+                });
             }
             WM_CANCEL => {
                 CTX.with(|c| {

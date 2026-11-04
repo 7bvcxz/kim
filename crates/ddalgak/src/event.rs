@@ -373,8 +373,8 @@ impl Normalizer {
         self.down_physical.contains(vk)
     }
 
-    /// Forgets all key state (engine start, session unlock): Windows may have delivered events
-    /// the hook never saw.
+    /// Forgets all key state (another desktop had the input, or the session came back):
+    /// Windows delivered events there that the hook never saw.
     pub fn reset(&mut self) {
         *self = Normalizer::default();
     }

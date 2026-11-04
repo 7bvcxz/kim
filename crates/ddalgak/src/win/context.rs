@@ -9,6 +9,7 @@
 //! | `EVENT_SYSTEM_FOREGROUND` | the foreground process has a higher integrity level (`skipped_elevated_target` for injecting rules); focus epoch (cancels sequences); IME composition reset |
 //! | `EVENT_OBJECT_FOCUS` | the focused control is a Win32 password edit (`ES_PASSWORD`; `skipped_password_field`) |
 //! | `EVENT_OBJECT_IME_SHOW` / `_HIDE` | an IME composition or candidate window is shown (`skipped_ime_composition`) |
+//! | `EVENT_SYSTEM_DESKTOPSWITCH` | input went to another desktop (lock screen, UAC, Ctrl+Alt+Del): the hook forgets its key state, because the key-ups made there never reach it |
 //!
 //! Limits, stated honestly: password fields drawn by browsers, UWP apps or custom controls are
 //! not recognized here (UI Automation `IsPassword` follows in Step 69, best effort per
@@ -25,9 +26,9 @@ use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     ES_PASSWORD, EVENT_OBJECT_FOCUS, EVENT_OBJECT_IME_HIDE, EVENT_OBJECT_IME_SHOW,
-    EVENT_SYSTEM_FOREGROUND, GUITHREADINFO, GWL_STYLE, GetClassNameW, GetForegroundWindow,
-    GetGUIThreadInfo, GetWindowLongW, GetWindowThreadProcessId, WINEVENT_OUTOFCONTEXT,
-    WINEVENT_SKIPOWNPROCESS,
+    EVENT_SYSTEM_DESKTOPSWITCH, EVENT_SYSTEM_FOREGROUND, GUITHREADINFO, GWL_STYLE, GetClassNameW,
+    GetForegroundWindow, GetGUIThreadInfo, GetWindowLongW, GetWindowThreadProcessId,
+    WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS,
 };
 
 struct Ctx {
@@ -116,6 +117,7 @@ unsafe extern "system" fn on_event(
                 ctx.shared.bump_focus();
                 ctx.shared.set_password_field(is_password_window(hwnd));
             }
+            EVENT_SYSTEM_DESKTOPSWITCH => ctx.shared.request_key_reset(),
             EVENT_OBJECT_IME_SHOW => ctx.shared.set_ime_composing(true),
             EVENT_OBJECT_IME_HIDE => ctx.shared.set_ime_composing(false),
             _ => {}
@@ -139,6 +141,7 @@ impl Watcher {
         let mut hooks = Vec::new();
         for (min, max) in [
             (EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND),
+            (EVENT_SYSTEM_DESKTOPSWITCH, EVENT_SYSTEM_DESKTOPSWITCH),
             (EVENT_OBJECT_FOCUS, EVENT_OBJECT_FOCUS),
             (EVENT_OBJECT_IME_SHOW, EVENT_OBJECT_IME_HIDE),
         ] {

@@ -232,6 +232,16 @@ impl Core {
         self.tripped
     }
 
+    /// Forgets the key state after input went to another desktop (lock screen, UAC,
+    /// Ctrl+Alt+Del) or the session came back: key-ups made there never reached the hook. Keys
+    /// whose down was consumed keep having their up consumed.
+    pub fn reset_keys(&mut self) {
+        self.norm.reset();
+        self.release = None;
+        self.hold = None;
+        self.seq = None;
+    }
+
     /// Drops pending taps, holds and sequences (pause, session lock).
     pub fn cancel_pending(&mut self) -> Option<Signal> {
         self.release = None;
@@ -1090,6 +1100,31 @@ mod tests {
         t.ev("LCtrl", false);
         let d = t.ev("U", false);
         assert_eq!(fired(&d), None, "focus moved: the sequence was cancelled");
+    }
+
+    #[test]
+    fn key_state_is_forgotten_after_another_desktop() {
+        // Win+L: the hook sees LWin and L go down, then the lock screen takes over and the ups
+        // never arrive. Without a reset, every trigger would miss (Win is held "forever").
+        let mut t = T::new(vec![binding("a", "Ctrl+Shift+F13")]);
+        t.down(&["LWin"]);
+        t.ev("L", false);
+        assert!(
+            fired(&t.down(&["LCtrl", "LShift", "F13"])).is_none(),
+            "stale Win blocks"
+        );
+        t.up(&["LCtrl", "LShift", "F13"]);
+        // EVENT_SYSTEM_DESKTOPSWITCH / unlock: the hook forgets the key state.
+        t.core.reset_keys();
+        assert_eq!(
+            fired(&t.down(&["LCtrl", "LShift", "F13"])),
+            Some((0, FireKind::Press))
+        );
+        t.up(&["LCtrl", "LShift", "F13"]);
+        // Pairs survive: a consumed down's up is still consumed after a reset.
+        assert!(t.down(&["LCtrl", "LShift", "F13"]).consume);
+        t.core.reset_keys();
+        assert!(t.ev("F13", true).consume);
     }
 
     #[test]

@@ -463,6 +463,7 @@ impl Host {
             WTS_SESSION_UNLOCK | WTS_CONSOLE_CONNECT | WTS_REMOTE_CONNECT => {
                 self.locked = false;
                 self.shared.set_secure_desktop(false);
+                self.shared.request_key_reset();
             }
             _ => {}
         }

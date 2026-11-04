@@ -116,7 +116,10 @@ flowchart LR
   or when the app runs elevated. `status` reports the reason as `start.off_reason`.
 - **No rule turns the engine on** (`DDALGAK-FR-004`); the lifecycle refuses it.
 - **Held keys** are released on pause, stop, emergency, session lock or disconnect, shutdown,
-  `Drop` and in the panic hook (`DDALGAK-SEC-005`).
+  `Drop` and in the panic hook (`DDALGAK-SEC-005`). After a desktop switch (lock screen, UAC,
+  Ctrl+Alt+Del) or an unlock the hook forgets its key state, so a key-up it never saw (the
+  `Win` of `Win+L`) cannot block every trigger afterwards (unit-tested; the switch events
+  themselves are **not tested** on this machine).
 - **Single instance** per user session (named mutex with the user SID in `Local\`, plus the
   pipe's first instance): a second `ddalgak-gui.exe` exits with `app_already_running` (7).
 - **Sign-in start** (opt-in): `ddalgak startup enable` writes

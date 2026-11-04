@@ -26,7 +26,7 @@ fn help_version_and_no_command() {
         "capture",
         "hotkeys",
         "planned",
-        "F1 is not registered",
+        "F1 opens the region selection overlay",
     ] {
         assert!(text.contains(word), "--help mentions {word}:\n{text}");
     }
@@ -56,8 +56,8 @@ fn capabilities_version_status_and_config_are_headless_reads() {
         .collect();
     assert_eq!(
         opens,
-        ["start", "run"],
-        "only the instance launchers open windows"
+        ["start", "run", "capture"],
+        "the instance launchers, and `capture --interactive` (the overlay, Step 50)"
     );
     assert!(
         caps["data"]["commands"]
@@ -173,7 +173,12 @@ fn hotkeys_commands_follow_the_contract() {
         noeul::hotkeys::IMPLEMENTED,
         "only implemented actions (NOEUL-FR-114)"
     );
-    let paste = &list["data"]["actions"][0];
+    let paste = list["data"]["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["id"] == "paste.float")
+        .unwrap();
     assert_eq!(paste["bindings"][0]["keys"], "F3");
     let expected = if cfg!(windows) {
         "not_running"
@@ -196,11 +201,11 @@ fn hotkeys_commands_follow_the_contract() {
         (code, refused["error"]["code"].as_str()),
         (2, Some("hotkey_reserved"))
     );
-    let (code, refused) = hk(&["set", "capture.region", "F1"]);
+    let (code, refused) = hk(&["set", "selection.mark", "Space"]);
     assert_eq!(
         (code, refused["error"]["code"].as_str()),
         (3, Some("action_not_found")),
-        "capture.region is planned, not in this build"
+        "selection.mark is planned, not in this build"
     );
     let (code, needs_yes) = hk(&["reset", "--all"]);
     assert_eq!(

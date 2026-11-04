@@ -1,0 +1,9 @@
+{
+  "type": "response",
+  "id": 5,
+  "result": {
+    "dry_run": false,
+    "cancelled": true,
+    "session": 2
+  }
+}

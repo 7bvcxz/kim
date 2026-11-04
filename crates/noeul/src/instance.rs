@@ -354,9 +354,90 @@ pub fn quit(ctx: &Ctx, a: &QuitArgs) -> Result<Outcome> {
     }
 }
 
-/// `noeul capture --region … --pin`: the instance captures and pins.
+/// The running instance, started first when `--start` asks for it (not for a dry run).
+#[cfg(windows)]
+fn session_or_start(ctx: &Ctx, start_it: bool) -> Result<client::Session> {
+    match connect(ctx)? {
+        Some(s) => Ok(s),
+        None if start_it => {
+            start(
+                ctx,
+                &StartArgs {
+                    no_tray: false,
+                    no_hotkeys: false,
+                    dry_run: false,
+                },
+            )?;
+            session(ctx)
+        }
+        None => Err(NoeulError::not_running()),
+    }
+}
+
+/// `noeul capture --interactive`: the instance opens the selection overlay, as `F1` does
+/// (NOEUL-FR-010). The overlay is a visible window on the user's desktop; this command returns
+/// as soon as it is shown (or says why not).
+fn capture_interactive(ctx: &Ctx, a: &crate::CaptureArgs) -> Result<Outcome> {
+    #[cfg(windows)]
+    {
+        let mut s = session_or_start(ctx, a.start && !a.dry_run)?;
+        // This console normally has the user's focus: let the instance bring its overlay to
+        // the foreground (harmless when this process is in the background).
+        client::allow_foreground(s.pid);
+        let v = s.request("capture.region", json!({"dry_run": a.dry_run}))?;
+        let picture = Rect::from_json(&v["picture"]).map_or_else(String::new, |r| r.to_string());
+        let human = if a.dry_run {
+            format!(
+                "Would open the selection overlay over {picture} ({} monitor(s)) (dry run: nothing was captured).\n",
+                v["monitors"]
+            )
+        } else if v["opened"] == true {
+            format!(
+                "The selection overlay is open over {picture}: drag a rectangle, Enter pins it, Esc cancels.\n"
+            )
+        } else {
+            "A selection overlay is already open; nothing changed.\n".to_string()
+        };
+        Ok(Outcome::new(v, human))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (ctx, a);
+        Err(DesktopState::Unsupported
+            .error()
+            .unwrap_or_else(unsupported))
+    }
+}
+
+/// `noeul capture --cancel`: closes an open overlay without any output.
+fn capture_cancel(ctx: &Ctx, dry_run: bool) -> Result<Outcome> {
+    #[cfg(windows)]
+    {
+        let v = session(ctx)?.request("capture.cancel", json!({"dry_run": dry_run}))?;
+        let human = match (v["session"].as_u64(), dry_run) {
+            (None, _) => "No selection overlay is open.\n".to_string(),
+            (Some(id), true) => format!("Would cancel capture session {id} (dry run).\n"),
+            (Some(id), false) => format!("Cancelled capture session {id}; nothing was kept.\n"),
+        };
+        Ok(Outcome::new(v, human))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (ctx, dry_run);
+        Err(unsupported())
+    }
+}
+
+/// `noeul capture`: `--region … --pin` (the instance captures and pins), `--interactive` (the
+/// selection overlay) or `--cancel`.
 pub fn capture(ctx: &Ctx, a: &crate::CaptureArgs) -> Result<Outcome> {
-    let region = Rect::parse(&a.region).map_err(|e| {
+    if a.cancel {
+        return capture_cancel(ctx, a.dry_run);
+    }
+    if a.interactive {
+        return capture_interactive(ctx, a);
+    }
+    let region = Rect::parse(a.region.as_deref().unwrap_or("")).map_err(|e| {
         NoeulError::new(Code::Usage, e)
             .hint("for example: noeul capture --region 0,0,400,300 --pin")
     })?;
@@ -368,21 +449,7 @@ pub fn capture(ctx: &Ctx, a: &crate::CaptureArgs) -> Result<Outcome> {
     }
     #[cfg(windows)]
     {
-        let mut s = match connect(ctx)? {
-            Some(s) => s,
-            None if a.start && !a.dry_run => {
-                start(
-                    ctx,
-                    &StartArgs {
-                        no_tray: false,
-                        no_hotkeys: false,
-                        dry_run: false,
-                    },
-                )?;
-                session(ctx)?
-            }
-            None => return Err(NoeulError::not_running()),
-        };
+        let mut s = session_or_start(ctx, a.start && !a.dry_run)?;
         let v = s.request(
             "capture",
             json!({"region": region.to_json(), "pin": true, "dry_run": a.dry_run}),
@@ -517,10 +584,11 @@ pub fn config_show() -> Result<Outcome> {
         },
     });
     let human = format!(
-        "Settings: {} ({})\n  tray_icon = {}\nShortcuts: {}\nData folder (unused in this build): {}\n",
+        "Settings: {} ({})\n  tray_icon = {}\n  keyboard_help = {}\nShortcuts: {}\nData folder (ui-state.json only, never pictures): {}\n",
         paths.config_file().display(),
         s.state.as_str(),
         s.settings.tray_icon,
+        s.settings.keyboard_help.as_str(),
         paths.hotkeys_file().display(),
         paths.data_dir.display()
     );

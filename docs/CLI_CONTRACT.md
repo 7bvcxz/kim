@@ -162,7 +162,9 @@ lifecycle). `subak` also uses `io`, `internal`, `permission_denied`, `usage`, `t
 | `terminals_running` | 7 | `host stop` would end live Terminals; it does so only with `--kill-terminals` (ADR 0003 §7). |
 
 **Noeul codes** (Step 49 foundation: the resident instance, Noeul IPC v1, region pins requested
-from the CLI, `F3` image paste; [ADR 0023](adr/0023-noeul-app-foundation.md),
+from the CLI, `F3` image paste; [ADR 0023](adr/0023-noeul-app-foundation.md). Step 50's
+`noeul capture --interactive`/`--cancel` and IPC `capture.region`/`capture.cancel` add no code:
+a request while an overlay is open succeeds with `opened: false` ([ADR 0026](adr/0026-noeul-capture-overlay.md));
 [NOEUL_REQUIREMENTS §7](NOEUL_REQUIREMENTS.md#7-planned-cli-error-codes)). `noeul` also uses
 `io`, `internal`, `permission_denied`, `usage`, `protocol_error`, `unsupported_platform`,
 `timeout`, `busy`, `confirmation_required`, `cancelled` and the `hotkeys` codes below with the

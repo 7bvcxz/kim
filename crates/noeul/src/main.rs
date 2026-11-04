@@ -1,4 +1,4 @@
-//! `noeul` — Noeul's CLI and resident instance (pre-alpha, Step 49; ADR 0023).
+//! `noeul` — Noeul's CLI and resident instance (pre-alpha, Steps 49–50; ADR 0023, ADR 0026).
 //!
 //! Follows docs/CLI_CONTRACT.md: results on stdout, diagnostics on stderr, exactly one JSON
 //! document with `--json`, documented exit codes and registered error codes, `--dry-run` for every
@@ -20,9 +20,11 @@ use std::io::{IsTerminal, Write};
 use std::process::ExitCode;
 
 const AFTER_HELP: &str = "\
-Not in this build (labeled planned): the F1 region capture overlay (Step 50), double-click to
-pin (51), copy and save (51), annotation (56), settings window (61), capture to a file or the
-clipboard and `noeul pin <file>` (62). F1 is not registered until its overlay exists.
+While Noeul runs, F1 opens the region selection overlay (drag a rectangle, Enter pins it, Esc
+cancels; `noeul capture --interactive` does the same) and F3 pins the clipboard image.
+Not in this build (labeled planned): double-click to pin and the toolbar (Step 51), copy and
+save (51), window detection and the magnifier (52), annotation (56), settings window (61),
+capture to a file or the clipboard and `noeul pin <file>` (62).
 
 Exit codes: 0 ok · 1 failure (I/O, permission) · 2 usage · 3 not found (not running, no pin)
             4 integrity (protocol, identity) · 5 incompatible or unsupported platform
@@ -36,10 +38,11 @@ Exit codes: 0 ok · 1 failure (I/O, permission) · 2 usage · 3 not found (not r
     name = "noeul",
     bin_name = "noeul",
     version,
-    about = "Noeul — small native screenshot and floating-pin tool (pre-alpha foundation)",
+    about = "Noeul — small native screenshot and floating-pin tool (pre-alpha)",
     long_about = "Noeul pins pictures to the desktop as floating windows. This pre-alpha build \
-        has the resident instance (`noeul start`), its optional tray icon, F3 to pin the \
-        clipboard image, and pins of a screen region requested from the command line.\n\n\
+        has the resident instance (`noeul start`), its optional tray icon, F1 to select a region \
+        over a frozen picture of every monitor and pin it with Enter, F3 to pin the clipboard \
+        image, and pins of a screen region requested from the command line.\n\n\
         Noeul never captures on its own, never watches the clipboard, writes no picture to disk, \
         uses no network, installs no hook or service, and never captures a locked, secure or \
         other user's desktop.",
@@ -84,7 +87,8 @@ enum Command {
     Run(StartArgs),
     /// End the instance: release its hotkeys and close its pins
     Quit(QuitArgs),
-    /// Ask the running instance to capture a region and pin it
+    /// Ask the running instance to capture a region and pin it, or to open (or cancel) the
+    /// region selection overlay as F1 does
     Capture(CaptureArgs),
     /// Pins of the running instance
     #[command(subcommand)]
@@ -128,15 +132,29 @@ pub struct QuitArgs {
 #[derive(Debug, Args)]
 pub struct CaptureArgs {
     /// The region in device pixels of the virtual desktop: x,y,width,height
-    #[arg(long, value_name = "X,Y,W,H", allow_hyphen_values = true)]
-    pub region: String,
-    /// Pin the captured region (required in this build; --output and --clipboard are planned)
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "X,Y,W,H",
+        allow_hyphen_values = true,
+        required_unless_present_any = ["interactive", "cancel"],
+        conflicts_with_all = ["interactive", "cancel"]
+    )]
+    pub region: Option<String>,
+    /// Pin the captured region (required with --region in this build; --output and --clipboard
+    /// are planned)
+    #[arg(long, requires = "region")]
     pub pin: bool,
-    /// Start Noeul first when it is not running
+    /// Open the region selection overlay on the user's desktop, as F1 does (a visible window;
+    /// the user selects, Enter pins, Esc cancels)
+    #[arg(long, conflicts_with = "cancel")]
+    pub interactive: bool,
+    /// Close an open selection overlay without pinning, copying or saving anything
     #[arg(long)]
+    pub cancel: bool,
+    /// Start Noeul first when it is not running
+    #[arg(long, conflicts_with = "cancel")]
     pub start: bool,
-    /// Check the region and the desktop; capture nothing
+    /// Check the region (or whether an overlay could open) and the desktop; capture nothing
     #[arg(long)]
     pub dry_run: bool,
 }

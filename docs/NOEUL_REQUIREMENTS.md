@@ -1,6 +1,6 @@
 # Noeul Requirements
 
-Status: **current** (product definition; the app foundation is implemented since Step 49, [ADR 0023](adr/0023-noeul-app-foundation.md)) · Owner: mouv ·
+Status: **current** (product definition; the app foundation is implemented since Step 49, [ADR 0023](adr/0023-noeul-app-foundation.md); the `F1` selection overlay since Step 50, [ADR 0026](adr/0026-noeul-capture-overlay.md), with its NOEUL-NFR-003 measurements) · Owner: mouv ·
 Step 48 · Derived from [NOEUL_PHILOSOPHY](NOEUL_PHILOSOPHY.md) and [KIM_PHILOSOPHY](KIM_PHILOSOPHY.md) ·
 Parity: [NOEUL_SNIPASTE_MATRIX](NOEUL_SNIPASTE_MATRIX.md) · UX: [NOEUL_UX_SPEC](NOEUL_UX_SPEC.md) ·
 Decision: [ADR 0021](adr/0021-noeul-product-definition.md)
@@ -217,7 +217,8 @@ OS build are recorded with every result). A budget is changed only by an ADR wit
 | NOEUL-NFR-014 | **IME.** The overlay and pins have no input-method context, so letter shortcuts work in Korean Hangul mode; the text tool enables the IME for typing and no shortcut fires during a composition. | P1 | N3 | T, M |
 | NOEUL-NFR-015 | **Linux.** Capture through the desktop portal on Wayland (with its consent dialog) or X11, pins with whatever stacking the compositor allows, global shortcuts only where the portal or X11 offers them; every limitation is documented. | P2 | N7 | T, M |
 
-How the budgets are measured (Steps 50, 51, 55 and 63 record the results):
+How the budgets are measured (Steps 50, 51, 55 and 63 record the results; Step 50's first-frame
+and memory results are in [ADR 0026](adr/0026-noeul-capture-overlay.md#measurements)):
 
 | Budget | Measured as | Method |
 | --- | --- | --- |

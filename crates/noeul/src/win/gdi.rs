@@ -29,6 +29,7 @@ use windows_sys::Win32::System::StationsAndDesktops::{
     CloseDesktop, DESKTOP_READOBJECTS, GetProcessWindowStation, GetUserObjectInformationW,
     OpenInputDesktop, UOI_FLAGS, UOI_NAME, USEROBJECTFLAGS,
 };
+use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetSystemMetrics, MONITORINFOF_PRIMARY, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
     SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, WSF_VISIBLE,
@@ -138,9 +139,17 @@ unsafe extern "system" fn monitor_proc(m: HMONITOR, _: HDC, _: *mut RECT, data: 
         ) && w > 0
             && h > 0
         {
+            let (mut dx, mut dy) = (0u32, 0u32);
+            // SAFETY: `m` comes from the enumeration; both outputs are writable u32s.
+            let hr = unsafe { GetDpiForMonitor(m, MDT_EFFECTIVE_DPI, &raw mut dx, &raw mut dy) };
             out.push(Monitor {
                 rect: Rect::new(r.left, r.top, w, h),
                 primary: info.dwFlags & MONITORINFOF_PRIMARY != 0,
+                dpi: if hr == 0 && dx > 0 {
+                    dx
+                } else {
+                    crate::capture::BASE_DPI
+                },
             });
         }
     }
@@ -211,7 +220,7 @@ fn last_error() -> u32 {
 }
 
 /// Copies `region` of the screen into a new frame.
-fn blit(ledger: &Arc<Ledger>, region: Rect) -> Result<Frame, CaptureError> {
+pub(crate) fn blit(ledger: &Arc<Ledger>, region: Rect) -> Result<Frame, CaptureError> {
     let (w, h) = (
         i32::try_from(region.width).map_err(|_| CaptureError::TooLarge)?,
         i32::try_from(region.height).map_err(|_| CaptureError::TooLarge)?,
@@ -402,11 +411,17 @@ mod tests {
 
     #[test]
     fn desktop_geometry_is_consistent() {
+        crate::win::per_monitor_dpi_awareness();
         let d = desktop();
         eprintln!("desktop state: {}", d.state.as_str());
         if d.state == DesktopState::Available {
             let v = d.virtual_rect.unwrap();
+            // Geometry only (NOEUL-SEC-007): positions, sizes and scales, never content.
+            for m in &d.monitors {
+                eprintln!("monitor {} dpi {} primary {}", m.rect, m.dpi, m.primary);
+            }
             assert!(d.monitors.iter().all(|m| v.contains(&m.rect)));
+            assert!(d.monitors.iter().all(|m| (48..=960).contains(&m.dpi)));
             assert_eq!(d.monitors.iter().filter(|m| m.primary).count(), 1);
         } else {
             assert!(d.monitors.is_empty());

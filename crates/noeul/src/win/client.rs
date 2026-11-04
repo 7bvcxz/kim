@@ -93,6 +93,14 @@ fn disconnected() -> NoeulError {
     .hint("it may be shutting down; try again")
 }
 
+/// Lets the verified instance `pid` bring a window to the foreground (its capture overlay),
+/// as the user asked from this console. Windows ignores it unless this process may set the
+/// foreground itself (*documented* `AllowSetForegroundWindow`), so it is harmless otherwise.
+pub fn allow_foreground(pid: u32) {
+    // SAFETY: a plain call with a process id; failure changes nothing.
+    unsafe { windows_sys::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow(pid) };
+}
+
 /// Connects to the instance at `endpoint`. `noeul_not_running` when nobody serves it.
 pub fn open(endpoint: &str) -> Result<Session> {
     let p = pipe::connect(endpoint, CONNECT_WAIT).map_err(|e| match e.kind() {

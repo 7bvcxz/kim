@@ -5,6 +5,7 @@
 pub mod client;
 pub mod clipboard;
 pub mod gdi;
+pub mod overlay;
 pub mod pinwnd;
 pub mod pipe;
 pub mod runtime;

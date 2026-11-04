@@ -221,3 +221,12 @@ machine), pin latency (NOEUL-NFR-004; Steps 51/53), a visible tray icon, and con
 `NOEUL-FR-110`…`NOEUL-FR-112`, `NOEUL-FR-114`, `NOEUL-NFR-001`, `NOEUL-NFR-002`, `NOEUL-NFR-006`,
 `NOEUL-NFR-008`, `NOEUL-NFR-011`, `NOEUL-NFR-014`, `NOEUL-SEC-001`…`NOEUL-SEC-005`,
 `NOEUL-SEC-008`, `NOEUL-SEC-011`, `NOEUL-SEC-012`, `KIM-FR-012`, `KIM-SEC-020`, `KIM-SEC-022`.
+
+## Notes
+
+- 2026-11-04 (Step 50): `capture.region` (`F1`) is registered since its selection overlay exists
+  ([ADR 0026](0026-noeul-capture-overlay.md)); §7's "not registered in this build" and the
+  Consequences line "`F1` is unbound until Step 50" describe Step 49 only. The full-desktop freeze
+  latency deferred here was measured there (GDI read-back of a 5120×1440 desktop: about 87 ms;
+  first frame p95 114.8 ms off-screen), and the GDI choice stands for one monitor; multi-monitor
+  latency is left to Step 58. `Monitor` gained its effective DPI (`status.desktop.monitors[].dpi`).

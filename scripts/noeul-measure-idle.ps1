@@ -1,6 +1,7 @@
-# Idle cost of the Noeul instance (ADR 0023). Release build, isolated profile, private endpoint,
-# no tray icon, paste.float bound to Ctrl+Alt+Shift+F22 (so the hotkey thread runs as in a real
-# start). Nothing is shown on the desktop and nothing is captured.
+# Idle cost of the Noeul instance (ADR 0023, ADR 0026). Release build, isolated profile, private
+# endpoint, no tray icon, capture.region and paste.float bound to Ctrl+Alt+Shift+F21/F22 (so the
+# hotkey thread runs as in a real start; F1 and F3 are never registered). Nothing is shown on the
+# desktop and nothing is captured.
 # Usage: powershell -NoProfile -File scripts\noeul-measure-idle.ps1 -Exe target\release\noeul.exe
 param([string]$Exe = 'target\release\noeul.exe', [int]$IdleSeconds = 60)
 $ErrorActionPreference = 'Stop'
@@ -9,7 +10,7 @@ $root = Join-Path $env:TEMP ("noeul-measure-" + $PID)
 $cfg = Join-Path $root 'Roaming\mouv\noeul'
 New-Item -ItemType Directory -Force $cfg | Out-Null
 New-Item -ItemType Directory -Force (Join-Path $root 'Local') | Out-Null
-'{"schema":"kim.hotkeys","schema_version":1,"tool":"noeul","overrides":[{"action":"paste.float","bindings":["Ctrl+Alt+Shift+F22"]}]}' |
+'{"schema":"kim.hotkeys","schema_version":1,"tool":"noeul","overrides":[{"action":"capture.region","bindings":["Ctrl+Alt+Shift+F21"]},{"action":"paste.float","bindings":["Ctrl+Alt+Shift+F22"]}]}' |
   Set-Content -Encoding ascii (Join-Path $cfg 'hotkeys.json')
 $env:APPDATA = Join-Path $root 'Roaming'
 $env:LOCALAPPDATA = Join-Path $root 'Local'
@@ -35,7 +36,7 @@ $cpu1 = $p.TotalProcessorTime.TotalMilliseconds
 "threads=" + $p.Threads.Count
 "handles=" + $p.HandleCount
 $st = & $exe status --endpoint $ep --json | ConvertFrom-Json
-"registration=" + $st.data.hotkeys.registrations[0].status + " " + $st.data.hotkeys.registrations[0].keys
+foreach ($r in $st.data.hotkeys.registrations) { "registration=" + $r.action + " " + $r.status + " " + $r.keys }
 "image_bytes_held=" + $st.data.memory.bytes
 $q = & $exe quit --yes --endpoint $ep --json | ConvertFrom-Json
 "quit_exited=" + $q.data.exited

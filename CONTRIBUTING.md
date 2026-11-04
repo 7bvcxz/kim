@@ -55,6 +55,7 @@ milestone M4 (`KIM-NFR-011`); macOS is out of scope.
 | `crates/kim-hotkeys` | `kim-hotkeys` | Shared hotkey library (key syntax, `hotkeys.json`, conflict checks, `RegisterHotKey` backend; [HOTKEY_CONTRACT](docs/HOTKEY_CONTRACT.md)); headless, used by `kim` and Kim Manager, later Subak, Noeul and Ddalgak (ADR 0002, ADR 0017) |
 | `crates/kim-manager` | `kim-manager` | Kim Manager GUI (egui + glow, ADR 0014); the only package allowed to depend on GUI crates so far |
 | `crates/subak` | `subak` | Subak CLI (binary `subak`): `capabilities` and the Step 08 ConPTY Host prototype (`subak host …`, [CONPTY_PROOF](docs/CONPTY_PROOF.md)); sessions and GUI arrive in later steps |
+| `crates/ddalgak` | `ddalgak` | Ddalgak automation engine: headless CLI (binary `ddalgak`) and the tray app that owns the keyboard-hook engine (binary `ddalgak-gui`); engine-control rules in Step 66 ([DDALGAK_ENGINE](docs/DDALGAK_ENGINE.md)) |
 | `xtask` | `xtask` | Repository automation (docs/schema checks, CI gate, gated e2e runner); never shipped |
 | `e2e` | `kim-e2e` | End-to-end suite; excluded from `default-members` and CI |
 

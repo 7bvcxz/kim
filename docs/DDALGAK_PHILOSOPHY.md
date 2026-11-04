@@ -1,6 +1,7 @@
 # Ddalgak Philosophy
 
-Status: **current** (Step 65, specification; nothing of Ddalgak is implemented yet) · Owner:
+Status: **current** (Step 65, specification; the engine core is implemented since Step 66,
+[DDALGAK_ENGINE](DDALGAK_ENGINE.md)) · Owner:
 mouv · Decision: [ADR 0022](adr/0022-ddalgak-rule-model-and-safety.md) · Requirements:
 [DDALGAK_REQUIREMENTS](DDALGAK_REQUIREMENTS.md) · Builds on [KIM_PHILOSOPHY](KIM_PHILOSOPHY.md)
 

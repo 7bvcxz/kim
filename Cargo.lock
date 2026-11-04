@@ -1609,6 +1609,7 @@ dependencies = [
 name = "kim-e2e"
 version = "0.0.0"
 dependencies = [
+ "ddalgak",
  "kim",
  "regex",
  "serde_json",

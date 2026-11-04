@@ -904,6 +904,76 @@ mod tests {
     }
 
     #[test]
+    fn decision_cost_with_1000_rules_stays_far_below_the_hook_budget() {
+        // DDALGAK-NFR-002 (< 1 ms p99 in the callback) and DDALGAK-NFR-004 (load 1000 rules).
+        let mods = [
+            "",
+            "Ctrl+",
+            "Alt+",
+            "Shift+",
+            "Ctrl+Shift+",
+            "Ctrl+Alt+",
+            "Alt+Shift+",
+            "Ctrl+Alt+Shift+",
+        ];
+        let keys: Vec<String> = (1..=24)
+            .filter(|n| *n != 12)
+            .map(|n| format!("F{n}"))
+            .chain(('A'..='Z').map(|c| c.to_string()))
+            .collect();
+        let mut bindings = Vec::new();
+        'outer: for m in mods {
+            for k in &keys {
+                if bindings.len() == 1000 {
+                    break 'outer;
+                }
+                let t = format!("{m}{k}");
+                if Trigger::parse(&t).is_ok() {
+                    bindings.push(binding(&format!("r-{}", bindings.len()), &t));
+                }
+            }
+        }
+        while bindings.len() < 1000 {
+            let n = bindings.len();
+            bindings.push(binding(
+                &format!("s-{n}"),
+                &format!("Ctrl+K code:Key{}", (b'A' + (n % 26) as u8) as char),
+            ));
+        }
+        let t = std::time::Instant::now();
+        let table = Table::compile(bindings, 20);
+        let compile = t.elapsed();
+        let mut core = Core::new(table);
+        let flags = Flags::default();
+        // Worst case: a key no rule uses scans every binding.
+        let raw_down = RawKey::physical(0x91, 0x46, false, 0); // ScrollLock
+        let raw_up = RawKey::physical(0x91, 0x46, true, 0);
+        let n = 20_000u32;
+        let t = std::time::Instant::now();
+        for _ in 0..n / 2 {
+            assert!(!core.decide(&raw_down, Mode::Running, &flags).consume);
+            core.decide(&raw_up, Mode::Running, &flags);
+        }
+        let per = t.elapsed() / n;
+        eprintln!(
+            "1000 rules: compile {compile:?}; decide (no match, full scan) {per:?} per event ({} build)",
+            if cfg!(debug_assertions) {
+                "debug"
+            } else {
+                "release"
+            }
+        );
+        assert!(
+            per < std::time::Duration::from_micros(500),
+            "{per:?} per event"
+        );
+        assert!(
+            compile < std::time::Duration::from_millis(100),
+            "{compile:?}"
+        );
+    }
+
+    #[test]
     fn stepping_aside_and_paused() {
         let mut t = T::new(vec![binding("a", "F13")]);
         for (flags, code) in [

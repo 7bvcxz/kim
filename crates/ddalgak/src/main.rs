@@ -160,7 +160,9 @@ fn run(cmd: Cmd, a: &Args) -> Outcome {
 }
 
 #[cfg(not(windows))]
-fn run(cmd: Cmd, _a: &Args) -> Outcome {
+fn run(cmd: Cmd, a: &Args) -> Outcome {
+    // The options that select an app endpoint have nothing to talk to here.
+    let _ = (&a.endpoint, a.dry_run);
     if cmd == Cmd::Capabilities {
         let data: Value = serde_json::from_str(CAPABILITIES).expect("valid built-in JSON");
         return Ok((data, Vec::new()));

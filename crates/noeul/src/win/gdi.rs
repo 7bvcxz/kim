@@ -142,14 +142,25 @@ unsafe extern "system" fn monitor_proc(m: HMONITOR, _: HDC, _: *mut RECT, data: 
             let (mut dx, mut dy) = (0u32, 0u32);
             // SAFETY: `m` comes from the enumeration; both outputs are writable u32s.
             let hr = unsafe { GetDpiForMonitor(m, MDT_EFFECTIVE_DPI, &raw mut dx, &raw mut dy) };
+            let rect = Rect::new(r.left, r.top, w, h);
+            let wr = info.rcWork;
+            // The work area lies inside the monitor; a degenerate one falls back to the monitor.
+            let work = match (
+                u32::try_from(wr.right - wr.left),
+                u32::try_from(wr.bottom - wr.top),
+            ) {
+                (Ok(ww), Ok(wh)) if ww > 0 && wh > 0 => Rect::new(wr.left, wr.top, ww, wh),
+                _ => rect,
+            };
             out.push(Monitor {
-                rect: Rect::new(r.left, r.top, w, h),
+                rect,
                 primary: info.dwFlags & MONITORINFOF_PRIMARY != 0,
                 dpi: if hr == 0 && dx > 0 {
                     dx
                 } else {
                     crate::capture::BASE_DPI
                 },
+                work,
             });
         }
     }

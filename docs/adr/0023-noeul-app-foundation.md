@@ -230,3 +230,9 @@ machine), pin latency (NOEUL-NFR-004; Steps 51/53), a visible tray icon, and con
   latency deferred here was measured there (GDI read-back of a 5120×1440 desktop: about 87 ms;
   first frame p95 114.8 ms off-screen), and the GDI choice stands for one monitor; multi-monitor
   latency is left to Step 58. `Monitor` gained its effective DPI (`status.desktop.monitors[].dpi`).
+- 2026-11-04 (Step 53): the pin engine is [ADR 0029](0029-noeul-pin-engine.md). Pin windows no
+  longer keep their DIB section after `UpdateLayeredWindow` (the system retains the surface), so
+  §2's "picture uploaded once" stands but §4's "a pin costs its pixels twice" now reads "once in
+  Noeul's process" (measured there). §7's shipped pin keys gained `pin.destroy`, `pin.zoom-in`,
+  `pin.zoom-out`, `pin.zoom-reset` and `pin.hide`; §8's tray gained Hide all pins / Show all pins
+  and Bring pins on screen; §5's IPC gained `pin.create`, `pin.hide` and `pin.show`.

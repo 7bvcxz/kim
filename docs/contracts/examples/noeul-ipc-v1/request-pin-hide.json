@@ -1,0 +1,8 @@
+{
+  "type": "request",
+  "id": 11,
+  "method": "pin.hide",
+  "params": {
+    "id": "pin-3"
+  }
+}

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/hellomouv/kim/blob/main/docs/contracts/schemas/noeul-ipc-v1.schema.json",
   "title": "Noeul IPC v1 message",
-  "description": "One JSON frame between the noeul CLI and the running Noeul instance (4-byte little-endian length, then the UTF-8 JSON object; at most 65536 bytes). See docs/adr/0023-noeul-app-foundation.md §4 and crates/noeul/src/ipc.rs. Errors carry registered CLI error codes (docs/CLI_CONTRACT.md §6). Pictures never cross the pipe; results carry IDs, geometry and counts only (NOEUL-SEC-008).",
+  "description": "One JSON frame between the noeul CLI and the running Noeul instance (4-byte little-endian length, then the UTF-8 JSON object; at most 65536 bytes). See docs/adr/0023-noeul-app-foundation.md §4, docs/adr/0029-noeul-pin-engine.md (pin methods, Step 53) and crates/noeul/src/ipc.rs. Errors carry registered CLI error codes (docs/CLI_CONTRACT.md §6). Pictures never cross the pipe; results carry IDs, geometry and counts only (NOEUL-SEC-008).",
   "oneOf": [
     { "$ref": "#/$defs/hello" },
     { "$ref": "#/$defs/welcome" },
@@ -38,6 +38,17 @@
         "details": { "type": "array", "items": { "type": "string" } }
       }
     },
+    "point": {
+      "description": "A point in device pixels of the virtual desktop.",
+      "type": "object",
+      "required": ["x", "y"],
+      "additionalProperties": false,
+      "properties": {
+        "x": { "type": "integer", "minimum": -1000000, "maximum": 1000000 },
+        "y": { "type": "integer", "minimum": -1000000, "maximum": 1000000 }
+      }
+    },
+    "zoom": { "description": "Pin zoom in percent; 100 = one image pixel per device pixel (Step 53).", "type": "integer", "minimum": 10, "maximum": 800 },
     "rect": {
       "description": "Device pixels of the virtual desktop.",
       "type": "object",
@@ -113,12 +124,12 @@
       "properties": {
         "type": { "const": "request" },
         "id": { "type": "integer", "minimum": 1 },
-        "method": { "enum": ["status", "activate", "capture", "capture.region", "capture.cancel", "pin.list", "pin.close", "pin.reopen", "hotkeys.reload", "quit"] },
+        "method": { "enum": ["status", "activate", "capture", "capture.region", "capture.cancel", "pin.list", "pin.create", "pin.hide", "pin.show", "pin.close", "pin.reopen", "hotkeys.reload", "quit"] },
         "params": { "$ref": "#/$defs/params" }
       }
     },
     "params": {
-      "description": "Parameters of every method (absent flags are false). capture: region and pin (required); capture.region and capture.cancel: dry_run only; pin.close: id or all; quit: force.",
+      "description": "Parameters of every method (absent flags are false). capture: region and pin (required); capture.region and capture.cancel: dry_run only; pin.create: source (region with region, or clipboard with an optional at); pin.hide, pin.show and pin.close: id or all; pin.show: on_screen; quit: force.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -128,7 +139,10 @@
         "id": { "$ref": "#/$defs/pin_id" },
         "all": { "type": "boolean" },
         "force": { "type": "boolean" },
-        "reason": { "enum": ["start"] }
+        "reason": { "enum": ["start"] },
+        "source": { "description": "pin.create: what the instance reads itself (Step 53).", "enum": ["region", "clipboard"] },
+        "at": { "description": "pin.create with source clipboard: where the picture's top-left corner goes (default: the pointer).", "$ref": "#/$defs/point" },
+        "on_screen": { "description": "pin.show: also move pins no monitor shows into the nearest work area (NOEUL-FR-067).", "type": "boolean" }
       }
     },
     "response_ok": {
@@ -146,6 +160,9 @@
             { "$ref": "#/$defs/capture_region_result" },
             { "$ref": "#/$defs/capture_cancel_result" },
             { "$ref": "#/$defs/pin_list_result" },
+            { "$ref": "#/$defs/pin_create_result" },
+            { "$ref": "#/$defs/pin_hide_result" },
+            { "$ref": "#/$defs/pin_show_result" },
             { "$ref": "#/$defs/pin_close_result" },
             { "$ref": "#/$defs/pin_reopen_result" },
             { "$ref": "#/$defs/reload_result" },
@@ -175,12 +192,13 @@
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["rect", "primary", "dpi"],
+            "required": ["rect", "primary", "dpi", "work"],
             "additionalProperties": false,
             "properties": {
               "rect": { "$ref": "#/$defs/rect" },
               "primary": { "type": "boolean" },
-              "dpi": { "description": "Effective DPI (96 = 100 %); every rectangle is in device pixels (Step 50).", "type": "integer", "minimum": 1 }
+              "dpi": { "description": "Effective DPI (96 = 100 %); every rectangle is in device pixels (Step 50).", "type": "integer", "minimum": 1 },
+              "work": { "description": "The work area: the monitor without the taskbar and docked bars; pins are placed inside it (Step 53).", "$ref": "#/$defs/rect" }
             }
           }
         }
@@ -270,11 +288,13 @@
         "capture_backend": { "description": "`synthetic` only in a debug build with the test hook NOEUL_DEV_SYNTHETIC_DESKTOP (ADR 0026).", "enum": ["gdi", "unsupported", "synthetic"] },
         "pins": {
           "type": "object",
-          "required": ["open", "reopenable"],
+          "required": ["open", "reopenable", "hidden", "off_screen"],
           "additionalProperties": false,
           "properties": {
             "open": { "$ref": "#/$defs/u64" },
-            "reopenable": { "oneOf": [{ "$ref": "#/$defs/pin_id" }, { "type": "null" }] }
+            "reopenable": { "oneOf": [{ "$ref": "#/$defs/pin_id" }, { "type": "null" }] },
+            "hidden": { "description": "Open pins that are hidden (Step 53).", "$ref": "#/$defs/u64" },
+            "off_screen": { "description": "Open pins no monitor shows enough of to reach, e.g. after a monitor was removed (Step 53, NOEUL-FR-067).", "$ref": "#/$defs/u64" }
           }
         },
         "captures": {
@@ -352,8 +372,9 @@
       "additionalProperties": false,
       "properties": {
         "id": { "$ref": "#/$defs/pin_id" },
-        "rect": { "$ref": "#/$defs/rect" },
-        "source": { "enum": ["capture", "clipboard"] }
+        "rect": { "description": "The pin window on screen: position and size at its zoom.", "$ref": "#/$defs/rect" },
+        "source": { "enum": ["capture", "clipboard"] },
+        "zoom": { "$ref": "#/$defs/zoom" }
       }
     },
     "capture_result": {
@@ -445,17 +466,62 @@
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["id", "rect", "source", "created_at"],
+            "required": ["id", "rect", "image", "zoom", "visible", "on_screen", "source", "created_at"],
             "additionalProperties": false,
             "properties": {
               "id": { "$ref": "#/$defs/pin_id" },
-              "rect": { "$ref": "#/$defs/rect" },
+              "rect": { "description": "The pin window on screen: position and size at its zoom.", "$ref": "#/$defs/rect" },
+              "image": {
+                "description": "The picture's size in pixels (100 %).",
+                "type": "object",
+                "required": ["width", "height"],
+                "additionalProperties": false,
+                "properties": {
+                  "width": { "type": "integer", "minimum": 1, "maximum": 32767 },
+                  "height": { "type": "integer", "minimum": 1, "maximum": 32767 }
+                }
+              },
+              "zoom": { "$ref": "#/$defs/zoom" },
+              "visible": { "description": "False while the pin is hidden (Step 53).", "type": "boolean" },
+              "on_screen": { "description": "Whether a monitor shows enough of the pin to reach it; null while the desktop is not available (Step 53).", "type": ["boolean", "null"] },
               "source": { "enum": ["capture", "clipboard"] },
               "created_at": { "$ref": "#/$defs/timestamp" }
             }
           }
         },
         "reopenable": { "oneOf": [{ "$ref": "#/$defs/pin_id" }, { "type": "null" }] }
+      }
+    },
+    "pin_create_result": {
+      "description": "`pin.create` (Step 53): the instance captured the region or read the clipboard itself; `pin` is null for a dry run, which captures and reads nothing.",
+      "type": "object",
+      "required": ["dry_run", "source", "pin"],
+      "additionalProperties": false,
+      "properties": {
+        "dry_run": { "type": "boolean" },
+        "source": { "enum": ["region", "clipboard"] },
+        "pin": { "oneOf": [{ "$ref": "#/$defs/pin_ref" }, { "type": "null" }] }
+      }
+    },
+    "pin_hide_result": {
+      "description": "`pin.hide` (Step 53): the pins that were (or, in a dry run, would be) hidden; pins hidden already are not listed.",
+      "type": "object",
+      "required": ["dry_run", "hidden"],
+      "additionalProperties": false,
+      "properties": {
+        "dry_run": { "type": "boolean" },
+        "hidden": { "type": "array", "items": { "$ref": "#/$defs/pin_id" } }
+      }
+    },
+    "pin_show_result": {
+      "description": "`pin.show` (Step 53): the pins that were shown again, and (with on_screen) moved into a work area.",
+      "type": "object",
+      "required": ["dry_run", "shown", "moved"],
+      "additionalProperties": false,
+      "properties": {
+        "dry_run": { "type": "boolean" },
+        "shown": { "type": "array", "items": { "$ref": "#/$defs/pin_id" } },
+        "moved": { "type": "array", "items": { "$ref": "#/$defs/pin_id" } }
       }
     },
     "pin_close_result": {

@@ -32,10 +32,21 @@
 //! given back). Pause, stop, session lock, a reload, the emergency chord and the worker's end
 //! cancel the run at its next piece (`cancelled`), after restoring the clipboard and the
 //! modifiers. A run has a timeout only while it waits, so an idle engine still has no timer.
+//!
+//! **Mouse actions** (Step 71, [`crate::mouse`]): a fired rule of mouse steps runs at once (one
+//! `SendInput` call per step, each target checked first: the secure desktop and an elevated
+//! window at the point step aside). A held button is a remap instruction like any other; when the
+//! rule names a point, the pointer moves there in the same call as the button's down. A move
+//! while held starts a motion that the worker ticks every [`mouse::TICK_MS`] (continuous) or at
+//! its repeat times (stepped) until [`Signal::MotionEnd`]; the timer exists only while a motion
+//! does. Pause, stop, session lock, a reload, a release-all, the emergency chord and the worker's
+//! end stop every motion (`cancelled`), and a motion held longer than [`mouse::MAX_HOLD_MS`] ends
+//! with `timeout`, so a lost trigger-up can never keep the pointer moving.
 
 use crate::core::{RemapOp, Signal};
 use crate::inject::{Backend, Injector, OutCode, OutEvent};
 use crate::launch;
+use crate::mouse::{self, HeldMotion};
 use crate::run::{self, Env, HotstringFire, Next, Run, RunShared};
 use crate::stats::Stats;
 use crate::table::{Action, Binding, EngineOp};
@@ -206,6 +217,8 @@ impl Worker {
                     active: None,
                     gate: Arc::new(Mutex::new(launch::Gate::default())),
                     epoch: Arc::new(AtomicU32::new(0)),
+                    motions: Vec::new(),
+                    clock: Instant::now(),
                 };
                 run(&rx, &control, &st, &mut ctx);
             })
@@ -245,6 +258,16 @@ struct Active {
     due: Instant,
 }
 
+/// A move while held (Step 71) and the rule it belongs to.
+struct Moving {
+    generation: u32,
+    binding: u16,
+    rule: String,
+    profile: String,
+    mode: String,
+    held: HeldMotion,
+}
+
 /// What the loop's typing runs and launches work with.
 struct Ctx<'a> {
     inj: &'a mut Inj,
@@ -257,6 +280,10 @@ struct Ctx<'a> {
     /// Bumped by every cancellation; a launch thread stops before its next target when it
     /// changed since the trigger fired.
     epoch: Arc<AtomicU32>,
+    /// The moves while held going on now (Step 71).
+    motions: Vec<Moving>,
+    /// The motions' clock (milliseconds since the worker started).
+    clock: Instant,
 }
 
 impl Ctx<'_> {
@@ -332,10 +359,159 @@ impl Ctx<'_> {
         }
     }
 
+    fn entry(r: &Rules, rule: &str, outcome: &str) -> Entry {
+        Entry {
+            at: crate::time::now_rfc3339(),
+            rule: rule.to_string(),
+            profile: r.profile.clone(),
+            mode: r.mode.clone(),
+            outcome: outcome.to_string(),
+        }
+    }
+
+    fn note(&self, e: Entry) {
+        if let Ok(mut a) = self.activity.lock() {
+            a.push(e);
+        }
+    }
+
+    fn now_ms(&self) -> u64 {
+        u64::try_from(self.clock.elapsed().as_millis()).unwrap_or(u64::MAX)
+    }
+
+    /// When the next motion moves (for the loop's timeout).
+    fn motion_due(&self) -> Option<Instant> {
+        let due = self.motions.iter().map(|m| m.held.due_ms).min()?;
+        Some(self.clock + Duration::from_millis(due))
+    }
+
+    /// Starts a move while held (Step 71). A stepped one moves at once.
+    fn start_motion(&mut self, r: &Rules, b: &Binding, generation: u32, binding: u16) {
+        let Action::Motion(spec) = &b.action else {
+            return;
+        };
+        // The same trigger pressed again without its up (lost elsewhere): the old one stops.
+        self.motions
+            .retain(|m| !(m.generation == generation && m.binding == binding));
+        let held = HeldMotion::new(*spec, self.now_ms());
+        self.motions.push(Moving {
+            generation,
+            binding,
+            rule: b.rule.clone(),
+            profile: r.profile.clone(),
+            mode: r.mode.clone(),
+            held,
+        });
+        self.note(Self::entry(r, &b.rule, "ok"));
+        self.tick_motions();
+    }
+
+    /// The trigger of a move while held went up: that motion stops (nothing to record).
+    fn end_motion(&mut self, generation: u32, binding: u16) {
+        self.motions
+            .retain(|m| !(m.generation == generation && m.binding == binding));
+    }
+
+    /// Ends every motion (pause, stop, lock, reload, release-all, emergency, refusal) and records
+    /// why.
+    fn stop_motions(&mut self, outcome: &str) {
+        for m in std::mem::take(&mut self.motions) {
+            self.note(Entry {
+                at: crate::time::now_rfc3339(),
+                rule: m.rule,
+                profile: m.profile,
+                mode: m.mode,
+                outcome: outcome.to_string(),
+            });
+        }
+    }
+
+    /// Moves the pointer by every due motion: the position is read, the target at the new point
+    /// checked, and one move sent (clamped onto the desktop).
+    fn tick_motions(&mut self) {
+        let now = self.now_ms();
+        if !self.motions.iter().any(|m| m.held.due_ms <= now) {
+            return;
+        }
+        // A motion held longer than the run limit ends: its trigger-up may have been lost.
+        let (expired, keep): (Vec<Moving>, Vec<Moving>) = std::mem::take(&mut self.motions)
+            .into_iter()
+            .partition(|m| m.held.expired(now));
+        self.motions = keep;
+        for m in expired {
+            self.note(Entry {
+                at: crate::time::now_rfc3339(),
+                rule: m.rule,
+                profile: m.profile,
+                mode: m.mode,
+                outcome: "timeout".into(),
+            });
+        }
+        if self.motions.is_empty() {
+            return;
+        }
+        let screen = &mut *self.env.screen;
+        let Some(layout) = screen.layout() else {
+            self.stop_motions("injection_failed");
+            return;
+        };
+        let Some(from) = screen.cursor() else {
+            self.stop_motions("skipped_secure_desktop");
+            return;
+        };
+        let mut held: Vec<HeldMotion> = self.motions.iter().map(|m| m.held).collect();
+        let (to, _) = mouse::tick_motions(&mut held, &layout, from, now);
+        for (m, h) in self.motions.iter_mut().zip(held) {
+            m.held = h;
+        }
+        if to == from {
+            return;
+        }
+        if let Some(code) = mouse::refusal(screen.target(to)) {
+            self.stop_motions(code);
+            return;
+        }
+        if !self.inj.send_balanced(&[mouse::move_event(&layout, to)]) {
+            self.stop_motions("injection_failed");
+        }
+    }
+
+    /// Runs a fired rule of mouse steps at once (Step 71).
+    fn mouse_run(&mut self, r: &Rules, b: &Binding, plan: &mouse::MousePlan) {
+        let code = mouse::run_plan(plan, &mut *self.env.screen, self.inj);
+        self.note(Self::entry(r, &b.rule, code));
+    }
+
+    /// What a held button needs before its down: a move to the rule's point, and the check of
+    /// who would receive the click (`Err`: the press steps aside with that code).
+    fn hold_pre(&mut self, at: Option<mouse::PointSpec>) -> Result<Vec<OutEvent>, &'static str> {
+        let screen = &mut *self.env.screen;
+        let (pre, point) = match at {
+            Some(spec) => {
+                let (layout, from, to) = mouse::hold_target(spec, screen)?;
+                let pre = if to == from {
+                    Vec::new()
+                } else {
+                    vec![mouse::move_event(&layout, to)]
+                };
+                (pre, to)
+            }
+            None => (Vec::new(), screen.cursor().ok_or("skipped_secure_desktop")?),
+        };
+        match mouse::refusal(screen.target(point)) {
+            Some(code) => Err(code),
+            None => Ok(pre),
+        }
+    }
+
     /// Starts a typing run for a fired rule, or drops the trigger with `busy`.
     fn start(&mut self, r: &Rules, b: &Binding, hs: Option<HotstringFire>) {
         if let Action::Launch(plan) = &b.action {
             self.launch(r, b, plan);
+            return;
+        }
+        if let Action::Mouse(plan) = &b.action {
+            self.mouse_run(r, b, plan);
             return;
         }
         if self.active.is_some() {
@@ -423,10 +599,17 @@ fn mod_events(bits: u8, up: bool, tracked: bool, out: &mut Vec<(OutEvent, bool)>
 
 /// Carries out one remap instruction. Returns whether every event was inserted.
 pub fn execute(inj: &mut Injector<impl Backend>, op: RemapOp) -> bool {
+    execute_with(inj, op, &[])
+}
+
+/// Carries out one remap instruction with `pre` (a pointer move of a held button, Step 71) sent
+/// after the trigger modifiers are released and before the target goes down, in the same call.
+pub fn execute_with(inj: &mut Injector<impl Backend>, op: RemapOp, pre: &[OutEvent]) -> bool {
     let mut ev: Vec<(OutEvent, bool)> = Vec::new();
     match op {
         RemapOp::Press { lift, mods, key } => {
             mod_events(lift, true, false, &mut ev);
+            ev.extend(pre.iter().map(|e| (*e, false)));
             mod_events(mods, false, true, &mut ev);
             if let Some(k) = key {
                 ev.push((OutEvent::down(k), true));
@@ -478,6 +661,7 @@ fn run(rx: &Receiver<Msg>, control: &Sink, stats: &Stats, ctx: &mut Ctx<'_>) {
             .iter()
             .map(|h| h.due)
             .chain(ctx.active.as_ref().map(|a| a.due))
+            .chain(ctx.motion_due())
             .min();
         let msg = match next {
             None => rx.recv().map_err(|_| RecvTimeoutError::Disconnected),
@@ -488,6 +672,7 @@ fn run(rx: &Receiver<Msg>, control: &Sink, stats: &Stats, ctx: &mut Ctx<'_>) {
         match msg {
             Err(RecvTimeoutError::Disconnected) | Ok(Msg::Stop) => {
                 ctx.cancel();
+                ctx.stop_motions("cancelled");
                 break;
             }
             Err(RecvTimeoutError::Timeout) => {
@@ -509,17 +694,20 @@ fn run(rx: &Receiver<Msg>, control: &Sink, stats: &Stats, ctx: &mut Ctx<'_>) {
             Ok(Msg::Rules(r)) => {
                 holds.clear();
                 ctx.cancel();
+                ctx.stop_motions("cancelled");
                 rules = Some(r);
             }
             Ok(Msg::Cancel) => {
                 holds.clear();
                 ctx.cancel();
+                ctx.stop_motions("cancelled");
                 ctx.inj.release_all();
             }
             Ok(Msg::Signal { generation, signal }) => match signal {
                 Signal::Emergency => {
                     holds.clear();
                     ctx.cancel();
+                    ctx.stop_motions("cancelled");
                     ctx.inj.release_all();
                     control(Control::Emergency);
                 }
@@ -531,9 +719,37 @@ fn run(rx: &Receiver<Msg>, control: &Sink, stats: &Stats, ctx: &mut Ctx<'_>) {
                     }
                 }
                 Signal::Remap { binding, op } => {
-                    let ok = execute(inj, op);
+                    // A held mouse button (Step 71): moved to its point first, and stepping aside
+                    // where the click would reach the secure desktop or an elevated window (the
+                    // trigger modifiers are still released, so the release restores them right).
+                    let held = match (op, current(rules.as_ref(), generation, binding)) {
+                        (RemapOp::Press { .. }, Some((_, b))) => match b.action {
+                            Action::MouseHold { at, .. } => Some(ctx.hold_pre(at)),
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    let inj = &mut *ctx.inj;
+                    let (op, pre, refused) = match (held, op) {
+                        (Some(Err(code)), RemapOp::Press { lift, mods, .. }) => (
+                            RemapOp::Press {
+                                lift,
+                                mods,
+                                key: None,
+                            },
+                            Vec::new(),
+                            Some(code),
+                        ),
+                        (Some(Ok(pre)), op) => (op, pre, None),
+                        (_, op) => (op, Vec::new(), None),
+                    };
+                    let ok = execute_with(inj, op, &pre);
                     if matches!(op, RemapOp::Press { .. } | RemapOp::Tap { .. }) {
-                        let outcome = if ok { "ok" } else { "injection_failed" };
+                        let outcome = match refused {
+                            Some(code) => code,
+                            None if ok => "ok",
+                            None => "injection_failed",
+                        };
                         record(rules.as_ref(), generation, binding, outcome, activity);
                     }
                 }
@@ -546,7 +762,9 @@ fn run(rx: &Receiver<Msg>, control: &Sink, stats: &Stats, ctx: &mut Ctx<'_>) {
                 }
                 Signal::ReleaseAll => {
                     inj.release_all();
+                    ctx.stop_motions("cancelled");
                 }
+                Signal::MotionEnd { binding } => ctx.end_motion(generation, binding),
                 Signal::Restore { mods } => {
                     let mut ev = Vec::new();
                     mod_events(mods, false, false, &mut ev);
@@ -556,7 +774,11 @@ fn run(rx: &Receiver<Msg>, control: &Sink, stats: &Stats, ctx: &mut Ctx<'_>) {
                     if fire(rules.as_ref(), generation, binding, control, activity)
                         && let Some((r, b)) = current(rules.as_ref(), generation, binding)
                     {
-                        ctx.start(r, b, None);
+                        if matches!(b.action, Action::Motion(_)) {
+                            ctx.start_motion(r, b, generation, binding);
+                        } else {
+                            ctx.start(r, b, None);
+                        }
                     }
                 }
                 Signal::Skipped { binding, code } => {
@@ -582,6 +804,7 @@ fn run(rx: &Receiver<Msg>, control: &Sink, stats: &Stats, ctx: &mut Ctx<'_>) {
             },
         }
         ctx.step();
+        ctx.tick_motions();
     }
 }
 
@@ -634,10 +857,14 @@ fn fire(
         }
         // The key was consumed; nothing else happens (§5.2).
         Action::Block => {}
-        // Remaps run through `Signal::Remap`; a fired remap does nothing more.
-        Action::Remap(_) => return false,
-        // Typing runs and launches record their own outcome when they end.
-        Action::Type(_) | Action::Keys(_) | Action::Launch(_) => return true,
+        // Remaps and held buttons run through `Signal::Remap`; a fired one does nothing more.
+        Action::Remap(_) | Action::MouseHold { .. } => return false,
+        // Typing runs, launches and mouse actions record their own outcome.
+        Action::Type(_)
+        | Action::Keys(_)
+        | Action::Launch(_)
+        | Action::Mouse(_)
+        | Action::Motion(_) => return true,
     }
     record(rules, generation, binding, "ok", activity);
     false
@@ -1428,5 +1655,355 @@ mod tests {
             wait_outcomes(&w, 1),
             [("open-0".into(), "launch_failed".into())]
         );
+    }
+
+    // Mouse actions (Step 71): the real worker thread with a simulated pointer as both the screen
+    // and the injection backend, on a synthetic layout; the real pointer is never touched.
+    use crate::mouse::{
+        Anchor, Layout, Monitor, MotionKind, MotionSpec, MouseStep, MoveTo, Point, PointSpec, Rect,
+        ScrollDir, SimPointer, Unit,
+    };
+
+    fn sim_layout() -> Layout {
+        Layout::new(vec![
+            Monitor::new(Rect::sized(-1920, 0, 1920, 1080), 144, false),
+            Monitor::new(Rect::sized(0, 0, 1920, 1080), 96, true),
+        ])
+        .unwrap()
+    }
+
+    fn mouse_binding(id: &str, action: Action) -> Binding {
+        Binding {
+            rule: id.into(),
+            trigger: Trigger::parse("F13").unwrap(),
+            on: On::Press,
+            repeat: false,
+            pass_through: false,
+            injected: Injected::Ignore,
+            widen: false,
+            injects: true,
+            action,
+            hotstring: None,
+        }
+    }
+
+    fn continuous(dx: i32, dy: i32, speed: u32) -> Action {
+        Action::Motion(MotionSpec {
+            dx,
+            dy,
+            unit: Unit::Pixels,
+            kind: MotionKind::Continuous {
+                speed,
+                acceleration: 0,
+            },
+        })
+    }
+
+    /// Rules: 0 a plan (move to the primary's middle, double click, scroll), 1 a hold of the
+    /// left button at a point, 2 a continuous move right, 3 a continuous move up, 4 a stepped
+    /// move left.
+    fn mouse_rules(generation: u32) -> Rules {
+        let plan = Action::Mouse(Arc::new(mouse::MousePlan {
+            steps: vec![
+                MouseStep::Move(MoveTo::At(PointSpec {
+                    x: 960,
+                    y: 540,
+                    anchor: Anchor::PrimaryMonitor,
+                })),
+                MouseStep::Click {
+                    button: Button::Left,
+                    double: true,
+                    at: None,
+                },
+                MouseStep::Scroll {
+                    dir: ScrollDir::Down,
+                    notches: 2,
+                },
+            ],
+            stop_on_error: true,
+        }));
+        let hold = Action::MouseHold {
+            spec: crate::table::RemapSpec {
+                to: crate::remap::Output::button(Button::Left),
+                tap: None,
+                tap_ms: 200,
+            },
+            at: Some(PointSpec {
+                x: -100,
+                y: 100,
+                anchor: Anchor::VirtualScreen,
+            }),
+        };
+        let stepped = Action::Motion(MotionSpec {
+            dx: -10,
+            dy: 0,
+            unit: Unit::Pixels,
+            kind: MotionKind::Stepped {
+                repeat_ms: 30,
+                delay_ms: 60,
+            },
+        });
+        Rules {
+            generation,
+            bindings: Arc::new(vec![
+                mouse_binding("centre-click", plan),
+                mouse_binding("drag", hold),
+                mouse_binding("glide-right", continuous(1, 0, 2000)),
+                mouse_binding("glide-up", continuous(0, -1, 2000)),
+                mouse_binding("step-left", stepped),
+            ]),
+            profile: "default".into(),
+            mode: "base".into(),
+        }
+    }
+
+    fn mouse_worker(sim: &SimPointer) -> Worker {
+        Worker::start(
+            Arc::new(Stats::default()),
+            Box::new(|_| {}),
+            Arc::new(Mutex::new(Activity::default())),
+            Box::new(sim.backend()),
+            Env {
+                screen: Box::new(sim.screen()),
+                ..Env::inert()
+            },
+        )
+    }
+
+    fn eventually(cond: impl Fn() -> bool) -> bool {
+        let t = Instant::now();
+        while !cond() && t.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        cond()
+    }
+
+    #[test]
+    fn a_mouse_rule_runs_its_steps_at_once_with_exactly_these_events() {
+        let sim = SimPointer::new(sim_layout(), Point::new(-500, 500));
+        let w = mouse_worker(&sim);
+        let q = w.queue();
+        q.send(Msg::Rules(mouse_rules(1)));
+        q.signal(1, fire(0));
+        assert_eq!(wait_outcomes(&w, 1), [("centre-click".into(), "ok".into())]);
+        let l = sim_layout();
+        let (x, y) = l.normalize(Point::new(960, 540));
+        let mut want = vec![OutEvent::down(OutCode::MoveTo { x, y })];
+        want.extend(mouse::click_events(Button::Left, true));
+        want.extend(mouse::wheel_events(ScrollDir::Down, 2));
+        assert_eq!(sim.events(), want);
+        assert_eq!(sim.cursor(), Point::new(960, 540));
+        // The secure desktop and an elevated window at the point step aside: nothing is sent.
+        sim.clear();
+        sim.with(|s| s.target.elevated = true);
+        q.signal(1, fire(0));
+        assert_eq!(
+            wait_outcomes(&w, 2)[1],
+            ("centre-click".into(), "skipped_elevated_target".into())
+        );
+        assert!(sim.events().is_empty());
+    }
+
+    #[test]
+    fn a_held_button_moves_to_its_point_and_is_released_on_every_path() {
+        let sim = SimPointer::new(sim_layout(), Point::new(500, 500));
+        let w = mouse_worker(&sim);
+        let q = w.queue();
+        q.send(Msg::Rules(mouse_rules(1)));
+        let press = Signal::Remap {
+            binding: 1,
+            op: RemapOp::Press {
+                lift: 0,
+                mods: 0,
+                key: Some(OutCode::Button(Button::Left)),
+            },
+        };
+        let held = || sim.with(|s| s.buttons.clone());
+        // Trigger down: the pointer goes to the point, then the button goes down, in one call.
+        q.signal(1, press);
+        assert!(eventually(|| held() == [Button::Left]));
+        let (x, y) = sim_layout().normalize(Point::new(-100, 100));
+        assert_eq!(
+            sim.events(),
+            [
+                OutEvent::down(OutCode::MoveTo { x, y }),
+                OutEvent::down(OutCode::Button(Button::Left))
+            ]
+        );
+        // Trigger up.
+        q.signal(
+            1,
+            Signal::Remap {
+                binding: 1,
+                op: RemapOp::Release {
+                    key: Some(OutCode::Button(Button::Left)),
+                    mods: 0,
+                    restore: 0,
+                },
+            },
+        );
+        assert!(eventually(|| held().is_empty()));
+        // Pause/stop/lock, a release-all (desktop switch, elevated window), the emergency chord
+        // and the worker's end each release a held button.
+        for path in [
+            Msg::Cancel,
+            Msg::Signal {
+                generation: 1,
+                signal: Signal::ReleaseAll,
+            },
+            Msg::Signal {
+                generation: 1,
+                signal: Signal::Emergency,
+            },
+        ] {
+            q.signal(1, press);
+            assert!(eventually(|| held() == [Button::Left]));
+            q.send(path);
+            assert!(eventually(|| held().is_empty()));
+        }
+        q.signal(1, press);
+        assert!(eventually(|| held() == [Button::Left]));
+        drop(q);
+        drop(w);
+        assert!(held().is_empty(), "stopping the worker releases the button");
+        // An elevated window at the point: the button never goes down, and its release later
+        // sends no unmatched up.
+        let sim = SimPointer::new(sim_layout(), Point::new(500, 500));
+        sim.with(|s| s.target.elevated = true);
+        let w = mouse_worker(&sim);
+        let q = w.queue();
+        q.send(Msg::Rules(mouse_rules(1)));
+        q.signal(1, press);
+        assert_eq!(
+            wait_outcomes(&w, 1),
+            [("drag".into(), "skipped_elevated_target".into())]
+        );
+        q.signal(
+            1,
+            Signal::Remap {
+                binding: 1,
+                op: RemapOp::Release {
+                    key: Some(OutCode::Button(Button::Left)),
+                    mods: 0,
+                    restore: 0,
+                },
+            },
+        );
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(sim.events().is_empty(), "{:?}", sim.events());
+    }
+
+    #[test]
+    fn a_move_while_held_glides_until_its_trigger_goes_up() {
+        let sim = SimPointer::new(sim_layout(), Point::new(100, 500));
+        let w = mouse_worker(&sim);
+        let q = w.queue();
+        q.send(Msg::Rules(mouse_rules(1)));
+        q.signal(1, fire(2));
+        // 2000 px/s: about 200 px in 100 ms.
+        assert!(eventually(|| sim.cursor().x >= 200));
+        q.signal(1, Signal::MotionEnd { binding: 2 });
+        std::thread::sleep(Duration::from_millis(30));
+        let stopped = sim.cursor();
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(sim.cursor(), stopped, "released: it stops");
+        assert_eq!(stopped.y, 500);
+        // Every move went right, one pixel row, never off the desktop.
+        let moves = sim.moves();
+        assert!(moves.windows(2).all(|p| p[1].x > p[0].x && p[1].y == 500));
+        assert_eq!(outcomes(&w), [("glide-right".into(), "ok".into())]);
+        // Up and right together: a diagonal, stopped at the top edge (no teleport above it).
+        q.signal(1, fire(2));
+        q.signal(1, fire(3));
+        assert!(eventually(|| sim.cursor().y == 0));
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(sim.cursor().y, 0, "the top edge holds");
+        assert!(sim.moves().iter().all(|p| p.y >= 0 && p.x < 1920));
+        q.send(Msg::Cancel);
+        let n = sim.moves().len();
+        std::thread::sleep(Duration::from_millis(60));
+        assert_eq!(sim.moves().len(), n, "a cancellation stops every motion");
+        let o = outcomes(&w);
+        assert_eq!(
+            o[o.len() - 2..],
+            [
+                ("glide-right".into(), "cancelled".into()),
+                ("glide-up".into(), "cancelled".into())
+            ]
+        );
+    }
+
+    #[test]
+    fn every_path_stops_a_motion_and_the_idle_worker_has_no_timer_again() {
+        for path in 0..5 {
+            let sim = SimPointer::new(sim_layout(), Point::new(1000, 500));
+            let stats = Arc::new(Stats::default());
+            let w = Worker::start(
+                Arc::clone(&stats),
+                Box::new(|_| {}),
+                Arc::new(Mutex::new(Activity::default())),
+                Box::new(sim.backend()),
+                Env {
+                    screen: Box::new(sim.screen()),
+                    ..Env::inert()
+                },
+            );
+            let q = w.queue();
+            q.send(Msg::Rules(mouse_rules(1)));
+            q.signal(1, fire(2));
+            assert!(eventually(|| sim.moves().len() >= 3), "{path}");
+            match path {
+                0 => q.send(Msg::Cancel),
+                1 => q.signal(1, Signal::ReleaseAll),
+                2 => q.signal(1, Signal::Emergency),
+                3 => q.send(Msg::Rules(mouse_rules(2))), // a reload
+                _ => sim.with(|s| s.target.secure_desktop = true), // a lock seen at the next tick
+            }
+            let code = if path == 4 {
+                "skipped_secure_desktop"
+            } else {
+                "cancelled"
+            };
+            assert!(
+                eventually(|| outcomes(&w).last().is_some_and(|(_, c)| c == code)),
+                "{path}: {:?}",
+                outcomes(&w)
+            );
+            let n = sim.moves().len();
+            let wakeups = stats.worker_wakeups.load(Ordering::Relaxed);
+            std::thread::sleep(Duration::from_millis(100));
+            assert_eq!(sim.moves().len(), n, "{path}: stopped");
+            assert!(
+                stats.worker_wakeups.load(Ordering::Relaxed) <= wakeups + 1,
+                "{path}: no timer once nothing moves"
+            );
+        }
+    }
+
+    #[test]
+    fn a_stepped_move_repeats_after_its_delay_and_a_signal_of_an_old_table_starts_nothing() {
+        let sim = SimPointer::new(sim_layout(), Point::new(500, 500));
+        let w = mouse_worker(&sim);
+        let q = w.queue();
+        q.send(Msg::Rules(mouse_rules(1)));
+        q.signal(1, fire(4));
+        // At once 10 px left, after 60 ms again, then every 30 ms.
+        assert!(eventually(|| sim.cursor().x <= 490));
+        assert!(eventually(|| sim.cursor().x <= 460));
+        q.signal(1, Signal::MotionEnd { binding: 4 });
+        std::thread::sleep(Duration::from_millis(30));
+        let at = sim.cursor();
+        assert!(
+            sim.moves().iter().all(|p| (500 - p.x) % 10 == 0),
+            "{:?}",
+            sim.moves()
+        );
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(sim.cursor(), at);
+        // A fire of an older generation (a reload came in between) does nothing.
+        q.send(Msg::Rules(mouse_rules(2)));
+        q.signal(1, fire(2));
+        std::thread::sleep(Duration::from_millis(60));
+        assert_eq!(sim.cursor(), at);
     }
 }

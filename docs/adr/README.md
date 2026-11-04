@@ -43,6 +43,7 @@ the requirements it serves. ADRs are immutable once **Accepted**; a later ADR ma
 | [0037](0037-ddalgak-program-and-website-launches.md) | Ddalgak launches: CreateProcessW without a shell, the shell's `open` for websites and apps, a launch thread per run | Accepted (Step 70; installed programs, the default browser, elevation and focus checks manual) |
 | [0038](0038-noeul-annotation.md) | Noeul annotation: vector objects until export, one editor for captures and pins, GDI text with fallback | Accepted (Step 56; real-desktop and real-IME checks manual) |
 | [0039](0039-subak-window-plain-win32-client.md) | The Subak window: a plain Win32 IPC client of one Terminal (`subak-gui`), no GUI framework or GPU | Accepted (Step 16; visible-window checks pending the maintainer) |
+| [0040](0040-ddalgak-mouse-actions.md) | Ddalgak mouse actions: physical desktop pixels, normalized absolute moves, holds on the remap ledger | Accepted (Step 71; real pointer, monitors, DPI and games checks manual) |
 
 "Accepted (validated in Step N)" means the decision is made, but the named Step must confirm it
 on real Windows; if validation fails, that Step writes a superseding ADR.

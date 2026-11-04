@@ -6,7 +6,7 @@
   "cli_contract": 1,
   "json_schema_version": 1,
   "implementation": "implemented",
-  "summary": "Pre-alpha: engine status, health and control of the tray app, opt-in sign-in start, the rule store (CRUD, validation, drafts, history, live reload); runs engine-control, remap and block rules",
+  "summary": "Pre-alpha: engine status, health and control of the tray app, opt-in sign-in start, rule store (CRUD, validation, drafts, history, live reload); engine, remap, block, typing, launch and mouse rules",
   "commands": [
     {
       "name": "capabilities",
@@ -51,7 +51,7 @@
     {
       "name": "engine.pause",
       "usage": "ddalgak engine pause [--endpoint <name>] [--dry-run] [--json]",
-      "summary": "Pause all rules except engine-control rules; held keys are released",
+      "summary": "Pause all rules except engine-control rules; held keys and buttons are released and pointer moves stop",
       "effect": "write",
       "network": false,
       "dry_run": true,

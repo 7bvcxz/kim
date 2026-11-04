@@ -45,7 +45,8 @@ sha2 = "0.11.1"
 # value, integrity levels and process times; since Step 69 the clipboard (paste with restore),
 # global memory for clipboard data and the IME window (hotstrings step aside in Hangul mode);
 # since Step 70 process creation, the shell's `open` (ShellExecuteExW, which wants COM on the
-# calling thread) and icon extraction for the editor's program preview.
+# calling thread) and icon extraction for the editor's program preview; since Step 71 the monitor
+# layout with each monitor's DPI and per-monitor DPI awareness for the mouse actions (HiDpi).
 windows-sys = { version = "0.61.2", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
@@ -65,6 +66,7 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
     "Win32_UI_Accessibility",
+    "Win32_UI_HiDpi",
     "Win32_UI_Input_Ime",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",

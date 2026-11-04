@@ -230,9 +230,11 @@
       "properties": {
         "from": {"$ref": "#/$defs/point"},
         "to": {"$ref": "#/$defs/point"},
-        "clamped": {"description": "The target was outside the visible desktop and was moved inside it.", "type": "boolean"},
+        "clamped": {"description": "The target was outside the visible desktop and was moved inside it (or a grid step stayed on the grid).", "type": "boolean"},
         "while_held": {"type": "boolean"},
-        "speed": {"type": "integer", "minimum": 50, "maximum": 5000}
+        "speed": {"type": "integer", "minimum": 50, "maximum": 5000},
+        "repeat_ms": {"description": "Step 71, additive: a stepped hold repeats every this many milliseconds.", "type": "integer", "minimum": 20, "maximum": 2000},
+        "unit": {"description": "Step 71, additive: `grid` when dx/dy count grid cells.", "enum": ["pixels", "grid"]}
       }
     },
     "preview_mouse_scroll": {

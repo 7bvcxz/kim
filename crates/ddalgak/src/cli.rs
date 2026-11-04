@@ -94,6 +94,19 @@ const RULE_FIELDS: &[(&str, Kind)] = &[
     ("--op", Value),
     ("--target-mode", Multi),
     ("--ms", Value),
+    ("--dx", Value),
+    ("--dy", Value),
+    ("--x", Value),
+    ("--y", Value),
+    ("--relative-to", Value),
+    ("--grid", Value),
+    ("--speed", Value),
+    ("--acceleration", Value),
+    ("--repeat-ms", Value),
+    ("--delay-ms", Value),
+    ("--direction", Value),
+    ("--notches", Value),
+    ("--button", Value),
 ];
 
 /// Options of every command that writes rules.

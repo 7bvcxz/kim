@@ -1,8 +1,9 @@
 # Ddalgak safety: risks, scope and policies
 
 Status: **current** (Step 65, specification; Step 66 ran the engine checks it owns on real
-Windows, Step 68 the remap checks, Step 69 the typing checks, Step 70 the launch checks, §11) · Requirements: `DDALGAK-SEC-001…014`, `DDALGAK-NFR-002`, `DDALGAK-NFR-006`,
-`DDALGAK-NFR-009`, `KIM-SEC-020…023` · Decisions: [ADR 0022](adr/0022-ddalgak-rule-model-and-safety.md), [ADR 0037](adr/0037-ddalgak-program-and-website-launches.md)
+Windows, Step 68 the remap checks, Step 69 the typing checks, Step 70 the launch checks, Step 71
+the mouse checks, §11) · Requirements: `DDALGAK-SEC-001…014`, `DDALGAK-NFR-002`, `DDALGAK-NFR-006`,
+`DDALGAK-NFR-009`, `KIM-SEC-020…023` · Decisions: [ADR 0022](adr/0022-ddalgak-rule-model-and-safety.md), [ADR 0037](adr/0037-ddalgak-program-and-website-launches.md), [ADR 0040](adr/0040-ddalgak-mouse-actions.md)
 
 A keyboard hook sees every key, and an injector can type into any window the user can reach.
 This document fixes what Ddalgak may and may not do with that power, what the operating system
@@ -233,8 +234,19 @@ Linux build can read Windows rules and report what it cannot do.
   because keys typed there never reach the hook (UIPI) and the trigger's up would be lost; the
   release is sent after focus moved and may itself be refused by UIPI (not tested, no elevation
   on this machine). The debug test host never injects.
+- **Mouse holds and moves** (Step 71, [ADR 0040](adr/0040-ddalgak-mouse-actions.md)): a held
+  button is a remap whose target is the button, so it is on the same reference-counted ledger
+  and every release path above (pause, turn-off, emergency, session lock, a desktop switch, an
+  elevated window taking focus, the worker's end, the panic hook); a refused down (an elevated
+  window or the secure desktop at the point) presses nothing and its release sends no unmatched
+  up. A move while held stops on its trigger's release and on every one of those paths, on a
+  reload, and after 60 s (`timeout`), so a trigger-up the hook never saw cannot keep the pointer
+  moving. Pointer moves and wheel notches are over at once and never enter the ledger. Every
+  target is clamped onto the visible desktop (the union of the monitors), so a rule can never
+  send the pointer off-screen.
 - **Event storms**: auto-repeat fires a rule again only with `repeat: true`, and the rate limit
-  applies to it too.
+  applies to it too; the auto-repeat of a held button's or a held move's trigger is consumed and
+  fires nothing.
 
 ## 11. Risk register and verification plan
 
@@ -243,7 +255,7 @@ Likelihood (L) and impact (I): **H**igh / **M**edium / **L**ow.
 | ID | Risk | L | I | Mitigation | Owner step |
 | --- | --- | --- | --- | --- | --- |
 | DR-01 | The hook is slow or blocked and Windows removes it silently, so rules stop without notice | M | M | Short callback, worker threads, hook health check on demand (§7) | 66, 82 |
-| DR-02 | A bug leaves a modifier or mouse button logically pressed | M | H | Injector ledger owned by the worker, reference-counted remap outputs, release on every exit path including an elevated window taking focus, tests per path (§10; Step 68 tested the pause and key-reset paths with real input) | 68, 71, 73 |
+| DR-02 | A bug leaves a modifier or mouse button logically pressed | M | H | Injector ledger owned by the worker, reference-counted remap outputs (held mouse buttons included since Step 71), release on every exit path including an elevated window taking focus, tests per path (§10; Step 68 tested the pause and key-reset paths with real input; Step 71 every path for held buttons and moves with a simulated pointer) | 68, 71, 73 |
 | DR-03 | The emergency chord does not work on some keyboards, laptops or remote sessions | M | H | Physical-state detection; Step 73 tests laptops, external keyboards, RDP; an ADR 0017 note if the chord must change | 73 |
 | DR-04 | Password-field detection misses custom controls | M | H | Win32 edit styles (Step 66), checked again before every typing call (Step 69); UI Automation and browser fields not yet; `except_apps`; documented as best effort (§8) | 66, 69, 82 |
 | DR-05 | Injected 한/영 (`HangulMode`) or Unicode text behaves differently across IME versions | M | M | Real-Windows tests with the Korean IME; `paste` fallback | 68, 69 |
@@ -268,7 +280,7 @@ with the reason):
 | Korean 2-set IME: composition guard, `HangulMode` output, Hangul text typing | 68, 69 |
 | US and one AltGr layout: logical versus physical triggers | 68 |
 | Stuck keys: kill the app while a remap and a mouse hold are active | 68, 71, 73 |
-| Multi-monitor with negative coordinates and mixed DPI for mouse actions | 71 |
+| Multi-monitor with negative coordinates and mixed DPI for mouse actions (Step 71: synthetic layouts tested, real monitors manual, DDALGAK_ENGINE §14) | 71 |
 | A few non-protected games; document behavior honestly | 82 |
 
 **Step 65 ran none of these**: it is a specification. Its machine checks cover the schemas, the
@@ -334,3 +346,22 @@ obscure key, is **tested**. Launches inject nothing, so they still run over an e
 DDALGAK_ENGINE §13): a real hotkey opening an installed program and a website in the real default
 browser, a packaged app, activation of a real window, a real elevated target and whether
 Windows' foreground lock lets the new window come to the front.
+
+**Step 71** (mouse actions, Windows 10 19045; details in [DDALGAK_ENGINE §14](DDALGAK_ENGINE.md),
+decision [ADR 0040](adr/0040-ddalgak-mouse-actions.md)): moves are absolute moves to a pixel
+clamped onto the union of the monitors (relative moves stop where their path leaves the desktop),
+in normalized `MOUSEEVENTF_VIRTUALDESK` coordinates computed from positions read in per-monitor
+DPI mode; the exact `INPUT` structures of moves, every button's down/up pair, double clicks and
+wheel notches are **tested** (built, never sent); logical-to-physical scaling, normalization on
+every pixel, multi-monitor layouts with negative coordinates and mixed scales, the grid, speed,
+acceleration and its caps are **tested** on synthetic layouts. A held button is on the remap
+ledger and a move while held stops on every path; both are **tested** in the core and the real
+worker thread with a simulated pointer, and the trigger path is **tested** with the real hook and
+real injected obscure keys driving a simulated pointer. The secure desktop and an elevated window
+at the point (the capture window during a drag) are refused before every step and every motion
+tick; mouse actions need no mouse hook and read positions only when a rule runs. **Not tested**
+(manual script in DDALGAK_ENGINE §14; automated tests may not move the pointer of this shared
+machine): real pointer movement, scrolling and clicks on real monitors and scales, whether
+Windows lands on the exact normalized pixel, an administrator window under the real pointer, a
+real drag, games and anti-cheat (no promise is made: programs that read raw relative input may
+ignore absolute moves), and a killed app while a button is held (Step 73).

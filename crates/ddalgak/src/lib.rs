@@ -1,6 +1,11 @@
 //! Ddalgak: a native, Windows-first automation engine (docs/DDALGAK_PHILOSOPHY.md, ADR 0022,
 //! ADR 0024).
 //!
+//! Step 71 adds **mouse actions** ([`mouse`]: moves in logical pixels or grid cells and to points
+//! across monitors with per-monitor DPI, normalized absolute `SendInput` moves that never leave
+//! the desktop, the wheel, clicks, holds on the remap ledger, motions while a key is held, a
+//! simulated pointer for the playground and the tests; ADR 0040).
+//!
 //! Step 70 adds **program and website launches** ([`launch`]: `CreateProcessW` with a quoted
 //! argument list, the shell's `open` for `http`/`https` and packaged apps, never a shell string or
 //! elevation; a launch thread per run; the editor's program picker and website field; ADR 0037).
@@ -32,6 +37,7 @@ pub mod ipc;
 pub mod launch;
 pub mod lifecycle;
 pub mod model;
+pub mod mouse;
 pub mod paths;
 pub mod remap;
 pub mod rules;

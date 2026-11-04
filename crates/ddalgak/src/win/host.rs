@@ -907,7 +907,9 @@ pub fn run(opts: Options) -> Result<(), RunError> {
         // the local clock. The test host never touches the real clipboard and sees a fixed,
         // editable target (it injects nothing anyway).
         // Launches (Step 70) go through the real launcher; the test host starts only programs in
-        // its test folder, hidden, and never hands a URL or an app to the shell.
+        // its test folder, hidden, and never hands a URL or an app to the shell. Mouse actions
+        // (Step 71) in the test host see a simulated pointer on a synthetic monitor and send to
+        // the discarding backend: a test can never move, scroll or click the real pointer.
         if opts.observe_only {
             crate::run::Env {
                 launcher: Arc::new(crate::launch::TestHostLauncher::new(
@@ -922,6 +924,8 @@ pub fn run(opts: Options) -> Result<(), RunError> {
                 clipboard: Box::new(super::typing::WinClipboard::new(hwnd)),
                 clock: super::typing::local_time,
                 launcher: Arc::new(super::launch::WinLauncher),
+                // Mouse actions (Step 71) read the monitors and the pointer when they run.
+                screen: Box::new(super::mouse::WinScreen::new(Arc::clone(&shared))),
             }
         },
     );

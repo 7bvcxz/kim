@@ -3,11 +3,13 @@
 Status: **current** · Rules document **v1** · Step 65 (specification); the engine since Step 66, the
 rule store, validation and rule commands since Step 67, remaps, blocks and mouse-button triggers
 since Step 68, `send_keys`, `type_text` and hotstrings since Step 69, `open_program` (with the
-additive `env` overrides) and `open_url` since Step 70 (§14) · Decisions:
+additive `env` overrides) and `open_url` since Step 70, `mouse_move` (with the additive grid units
+and stepped holds), `mouse_scroll` and `mouse_click` since Step 71 (§14) · Decisions:
 [ADR 0022](adr/0022-ddalgak-rule-model-and-safety.md), [ADR 0028](adr/0028-ddalgak-rule-store-validation-and-reload.md),
 [ADR 0031](adr/0031-ddalgak-remap-execution-and-mouse-hook.md),
 [ADR 0034](adr/0034-ddalgak-typing-runs-hotstrings-and-clipboard.md),
-[ADR 0037](adr/0037-ddalgak-program-and-website-launches.md) · Schemas:
+[ADR 0037](adr/0037-ddalgak-program-and-website-launches.md),
+[ADR 0040](adr/0040-ddalgak-mouse-actions.md) · Schemas:
 [ddalgak-rules-v1](contracts/schemas/ddalgak-rules-v1.schema.json),
 [ddalgak-simulation-v1](contracts/schemas/ddalgak-simulation-v1.schema.json) · Requirements:
 `DDALGAK-FR-005…042`, `DDALGAK-SEC-001…013`
@@ -119,7 +121,7 @@ release and hold), with these differences:
 | --- | --- |
 | **Lock keys** `CapsLock` and `NumLock` are keys, alone or with modifiers (`Shift+CapsLock`). | The contract leaves them to Ddalgak (§5.2 there); CapsLock is the most remapped key there is. |
 | **Bare side-specific modifiers** `LCtrl`, `RCtrl`, `LAlt`, `RAlt`, `LShift`, `RShift` are single-step triggers. | Right Alt as 한/영, a tap of Right Ctrl. Only with `remap` or `on: release` (§3.3). |
-| **Mouse buttons** `MouseMiddle`, `MouseX1`, `MouseX2` (Step 68), optionally with modifiers (`Ctrl+MouseX1`), as a whole trigger (never a sequence step). `MouseLeft` and `MouseRight` are never triggers. The CLI also accepts `MButton`, `XButton1`, `XButton2`. | Side buttons as Back, Copy or a modifier are popular remaps. A rule must never take away clicking. Mouse triggers need the low-level mouse hook, which exists only while such a rule is active ([ADR 0031](adr/0031-ddalgak-remap-execution-and-mouse-hook.md), permission `mouse-hook`, §6.1). Wheel triggers: Step 71. |
+| **Mouse buttons** `MouseMiddle`, `MouseX1`, `MouseX2` (Step 68), optionally with modifiers (`Ctrl+MouseX1`), as a whole trigger (never a sequence step). `MouseLeft` and `MouseRight` are never triggers. The CLI also accepts `MButton`, `XButton1`, `XButton2`. | Side buttons as Back, Copy or a modifier are popular remaps. A rule must never take away clicking. Mouse triggers need the low-level mouse hook, which exists only while such a rule is active ([ADR 0031](adr/0031-ddalgak-remap-execution-and-mouse-hook.md), permission `mouse-hook`, §6.1). Wheel triggers are not in this version (planned without an owner Step, [ADR 0040](adr/0040-ddalgak-mouse-actions.md) §13). |
 | **No `char:` keys.** | Translating keys to characters inside the hook can change dead-key state in the focused application. Hotstrings (Step 69) are their own trigger kind (§3.4), whose translation leaves the keyboard state untouched ([ADR 0034](adr/0034-ddalgak-typing-runs-hotstrings-and-clipboard.md)). |
 | **No leaders (`@…`).** | Rules have no prefix tables; a sequence such as `Ctrl+K Ctrl+U` is written out. |
 | Typing and navigation keys (`A`, `Space`, `Escape`, `code:KeyH`) are allowed. | `kim_reserved` (contract §7.2) protects Kim GUIs' own controls; remapping plain keys is Ddalgak's purpose. `Alt+F4` and the emergency chord stay reserved. |
@@ -441,23 +443,49 @@ never blocks the emergency chord. A rule of `block` and `engine` steps is an eng
 
 | Input | Values |
 | --- | --- |
-| `mode` | `relative` (with `dx`, `dy`, each −10000…10000 logical pixels) or `absolute` (with `to`). |
-| `to` | `{ "x", "y", "relative_to" }`; `relative_to` is `virtual_screen` (default; all monitors, may be negative), `primary_monitor` or `active_window`. |
-| `while_held` | Relative only: `{ "speed": 50–5000 px/s, "acceleration": 0–10 }`. The pointer moves in the `dx`/`dy` direction for as long as the trigger is held. |
+| `mode` | `relative` (with `dx`, `dy`, each −10000…10000) or `absolute` (with `to`). |
+| `to` | `{ "x", "y", "relative_to" }` (each −32768…32767); `relative_to` is `virtual_screen` (default; desktop pixels across all monitors, may be negative), `primary_monitor` or `active_window` (its content area). |
+| `unit` | Step 71, additive, relative only: `pixels` (default; logical pixels scaled by the display scale of the monitor the pointer is on) or `grid` (cells of `grid` on that monitor; the pointer lands on cell centres and stays on the grid). |
+| `grid` | With `unit: grid`: `{ "columns": 2–64, "rows": 2–64 }` per monitor. |
+| `while_held` | Relative only. Continuous: `{ "speed": 50–5000 logical px/s, "acceleration": 0–10 }`, the pointer glides in the `dx`/`dy` direction (a diagonal as fast as a straight line) while the trigger is held; the speed grows linearly over the first second to `speed × (1 + acceleration)`, at most 10 000 px/s. Stepped (Step 71, additive): `{ "repeat_ms": 20–2000, "delay_ms": 0–2000 }`, the step at once, after `delay_ms` (default 300) again, then every `repeat_ms`, whatever the keyboard's repeat settings. Grid moves are stepped only. |
 
-- **Behavior.** Coordinates are logical pixels scaled by the target monitor's DPI. Targets
-  outside the visible desktop are clamped to its edge (`clamped: true`). Continuous movement
-  stops on release, pause, turn-off and emergency.
-- **Outputs.** Preview `{ "from", "to", "clamped", "while_held", "speed" }`.
-- **Errors.** Runtime `skipped_elevated_target` (pointer injection over an elevated window is
-  blocked by UIPI), `injection_failed`.
+- **Behavior** (Step 71, [ADR 0040](adr/0040-ddalgak-mouse-actions.md)). The engine works in
+  physical desktop pixels read in per-monitor DPI mode. Rule coordinates are logical pixels of
+  the monitor they refer to: `dx`/`dy` scaled by the DPI of the monitor the pointer is on, a
+  `primary_monitor` point by the primary monitor's, an `active_window` point by the window's,
+  from the top-left corner of its content area; a `virtual_screen` point names a physical desktop
+  pixel (mixed scales give it no single logical size). Every move is sent as an absolute move to
+  a checked pixel (`MOUSEEVENTF_VIRTUALDESK`, normalized coordinates); a relative move starts from
+  the pointer position read just before, so the mouse speed and "enhance pointer precision"
+  settings never change the distance. **Never outside the desktop**: the visible desktop is the
+  union of the monitors; an absolute target outside every monitor lands on the nearest pixel of a
+  monitor, and a relative move stops at the last pixel before its path leaves the desktop (it
+  crosses onto an adjacent monitor), both with `clamped: true`. A move while held is ticked every
+  10 ms (continuous) or at its step times only while it lasts, at most 50 ms of distance per tick,
+  and stops on the trigger's release, pause, turn-off, the emergency chord, a session lock, a
+  desktop switch, an elevated window taking focus, a reload and after 60 s (`timeout`).
+- **Outputs.** Preview `{ "from", "to", "clamped", "while_held", "speed" }` (an absolute move
+  has no `from`); a stepped hold has `repeat_ms` instead of `speed`, a grid move `"unit": "grid"`.
+  The playground runs the step on a simulated pointer: `to` is where the pointer would go, the
+  real pointer never moves.
+- **Errors.** Validation (schema): both a distance and a point, `unit: grid` without `grid` (or
+  `grid` without the unit), a continuous grid move, both `speed` and `repeat_ms`, a move while
+  held without a direction, a move while held that is not the rule's only step (§3.3). Runtime
+  `skipped_elevated_target` (the window that would receive the input — the capture window during
+  a drag, otherwise the window at the point — belongs to an elevated process; UIPI would drop it
+  silently), `skipped_secure_desktop`, `skipped_disabled_field` (`active_window` and no window is
+  in the foreground), `injection_failed`; a move while held also `cancelled` and `timeout`.
 - **Safety.** `input-injection`. No pointer tracking: Ddalgak reads the pointer position only
-  when a rule runs.
+  when a rule runs, and mouse actions never install the mouse hook. No game or anti-cheat
+  promise: programs that read raw relative mouse input may ignore absolute moves (ADR 0040).
 
 ### 5.8 `mouse_scroll`
 
 `direction` (`up`, `down`, `left`, `right`) and `notches` (1–50, default 1; one notch is 120
-wheel units). Preview `{ "direction", "notches" }`. `input-injection`.
+wheel units). Since Step 71 one wheel event per notch (`MOUSEEVENTF_WHEEL`, positive away from the
+user, or `MOUSEEVENTF_HWHEEL`, positive to the right) in one call, at the pointer, checked like a
+click (`skipped_elevated_target`, `skipped_secure_desktop`, `injection_failed`). Preview
+`{ "direction", "notches" }`. `input-injection`.
 
 ### 5.9 `mouse_click`
 
@@ -467,9 +495,16 @@ wheel units). Preview `{ "direction", "notches" }`. `input-injection`.
 | `op` | `click` (default), `double_click` (two clicks within the system double-click time) or `hold` (the button is down exactly as long as the trigger). |
 | `at` | Optional point (as in §5.7) to move to first. |
 
-Preview `{ "button", "op", "at" }`. A held button is released on every path of
-`DDALGAK-SEC-005`. There is no bare "button down" without "up": `hold` is the only way to keep a
-button pressed. `input-injection`.
+Since Step 71: a click is the button's down and up in one call, a double click two clicks in one
+call (so they arrive within the double-click time at the same point), with the move to `at` in
+the same call. A **held** button is a remap whose target is the button (§5.1, [ADR 0040](adr/0040-ddalgak-mouse-actions.md)):
+it shares reference counts with remaps that hold the same button, releases the trigger's
+modifiers while held (a plain drag, not Ctrl+drag) and restores them, never auto-repeats, stays
+down through a reload until its trigger goes up, and is released on every path of
+`DDALGAK-SEC-005`. Errors as for `mouse_move`. Preview `{ "button", "op", "at" }` (`at` as
+clamped). There is no bare "button down" without "up": `hold` is the only way to keep a button
+pressed (no click-lock toggle; Windows' own ClickLock is the accessible alternative).
+`input-injection`.
 
 ### 5.10 `mode`: switch or toggle a user-defined mode
 
@@ -528,13 +563,16 @@ the rule is inactive (`step_unsupported`, §9).
 | `repeat`, `if`, variables | Step 78 | — |
 | Recorded macros (steps produced by the recorder) | Step 78 | as their steps |
 
-Trigger kinds planned additively: mouse wheel notches (Step 71). Mouse buttons arrived in Step 68
+Trigger kinds planned additively: mouse wheel notches (without an owner Step since Step 71,
+[ADR 0040](adr/0040-ddalgak-mouse-actions.md) §13). Mouse buttons arrived in Step 68
 (§3.1; the `mouse-hook` permission, §6.1) and hotstrings in Step 69 (§3.4). `send_keys` and
 `type_text` run from Step 69, each as the rule's only step; `open_program` and `open_url` from
-Step 70, together and in order but not mixed with other step types; and `delay`, with ordered
-multi-step runs, from Step 78 ([ADR 0031](adr/0031-ddalgak-remap-execution-and-mouse-hook.md),
+Step 70, together and in order but not mixed with other step types; `mouse_move`,
+`mouse_scroll` and `mouse_click` from Step 71 likewise (a held button or a move while held as
+the rule's only step); and `delay`, with ordered multi-step runs, from Step 78
+([ADR 0031](adr/0031-ddalgak-remap-execution-and-mouse-hook.md),
 [ADR 0034](adr/0034-ddalgak-typing-runs-hotstrings-and-clipboard.md),
-[ADR 0037](adr/0037-ddalgak-program-and-website-launches.md)); until then they are
+[ADR 0037](adr/0037-ddalgak-program-and-website-launches.md), ADR 0040); until then they are
 `step_unsupported`.
 
 ## 6. Permissions and consent
@@ -772,7 +810,7 @@ Every trigger event that reaches a candidate produces one outcome:
 | `ok` | The run finished. |
 | `skipped_paused` | The engine is paused. |
 | `skipped_password_field`, `skipped_secure_desktop`, `skipped_elevated_target`, `skipped_ime_composition` | Ddalgak stepped aside; the key passed unchanged (a hotstring's end key is given back). |
-| `skipped_disabled_field` | Typing (Step 69): the focused control was disabled or a read-only edit (when the application reports no focused control, as UWP apps do, a disabled or missing foreground window); nothing was typed. |
+| `skipped_disabled_field` | Typing (Step 69): the focused control was disabled or a read-only edit (when the application reports no focused control, as UWP apps do, a disabled or missing foreground window); nothing was typed. Mouse (Step 71): a point `relative_to: active_window` and no window in the foreground; nothing was sent. |
 | `focus_changed` | Typing (Step 69): another window or control took focus during the run; it stopped, and nothing was typed into the new window. |
 | `skipped_injected_input` | Injected input and the rule accepts only physical input. |
 | `busy` | The rule is still running (a launch rule's thread, Step 70, included). |
@@ -780,8 +818,8 @@ Every trigger event that reaches a candidate produces one outcome:
 | `injection_failed` | `SendInput` inserted fewer events than requested. UIPI failures are silent (*documented*), so the elevated-target check runs first. |
 | `program_not_found`, `program_requires_elevation`, `launch_failed`, `browser_unavailable`, `clipboard_busy` | §5. |
 | `clipboard_not_restorable`, `clipboard_restore_failed` | Paste (Step 69, §5.4): the clipboard held content that cannot be copied faithfully, so nothing was pasted and it was left alone; or the previous content could not be put back after the paste. |
-| `cancelled` | Pause, turn-off, emergency or a profile switch ended the run. |
-| `timeout` | A step did not finish in its time limit. |
+| `cancelled` | Pause, turn-off, emergency or a profile switch ended the run (since Step 71 also a move while held stopped by a session lock, a desktop switch, an elevated window taking focus or a reload). |
+| `timeout` | A step did not finish in its time limit (a move while held: 60 s). |
 
 **Activity (audit).** The app keeps the last `max_entries` (default 200, in memory) outcomes:
 `{ "at", "rule", "profile", "mode", "outcome", "step", "duration_ms" }`. Entries never contain
@@ -834,13 +872,24 @@ as `hotkey_invalid`, `hotkey_reserved`, `usage`, `confirmation_required`, `busy`
 
 | Artifact | Pins down |
 | --- | --- |
-| [ddalgak-rules-v1](contracts/schemas/ddalgak-rules-v1.schema.json) + `contracts/examples/ddalgak-rules-v1/` | Twelve valid documents (remaps and swaps, text, programs, websites, mouse, modes, engine control, profiles and conditions, an export, a future step type, since Step 68 mouse-button remaps, pass-through and a physical-position trigger in `11-remap-mouse-and-pass-through.json`, and since Step 69 hotstrings, variables and the insertion point in `12-hotstrings-and-snippets.json`, and since Step 70 environment overrides, activation and websites in order in `13-launch-options.json`). Fifty-two invalid ones (Step 70 added `javascript:`, `ms-settings:` and custom-protocol URLs, `env` with an app ID and a bad variable name; Step 69 added a hotstring with keys, with a space, `immediate` with end characters, a hotstring remap, an unknown and a second-cursor template), including recursive remaps (`recursive-remap-accepts-injected`, `recursive-send-keys-accepts-injected`), a dual role that also passes the key through (`remap-tap-with-pass-through`), the primary button and a mouse button in a sequence as triggers, the emergency chord as trigger and output, reserved OS chords (`Win+L`, `Alt+Tab`, `Ctrl+Shift+Escape`, the Secure Attention Sequence), missing consent for programs, websites, injection and clipboard, shell hosts, `file:` URLs and newer versions. |
+| [ddalgak-rules-v1](contracts/schemas/ddalgak-rules-v1.schema.json) + `contracts/examples/ddalgak-rules-v1/` | Fourteen valid documents (remaps and swaps, text, programs, websites, mouse, modes, engine control, profiles and conditions, an export, a future step type, since Step 68 mouse-button remaps, pass-through and a physical-position trigger in `11-remap-mouse-and-pass-through.json`, and since Step 69 hotstrings, variables and the insertion point in `12-hotstrings-and-snippets.json`, and since Step 70 environment overrides, activation and websites in order in `13-launch-options.json`, and since Step 71 a keyboard-mouse profile with gliding, grid and stepped moves, every button, holds, the wheel in four directions and points on the desktop, the primary monitor and the active window in `14-mouse-navigation.json`). Fifty-seven invalid ones (Step 71 added a continuous grid move, a grid unit without a grid, a move while held without a direction, both a speed and a repeat, a held button with repeat; Step 70 added `javascript:`, `ms-settings:` and custom-protocol URLs, `env` with an app ID and a bad variable name; Step 69 added a hotstring with keys, with a space, `immediate` with end characters, a hotstring remap, an unknown and a second-cursor template), including recursive remaps (`recursive-remap-accepts-injected`, `recursive-send-keys-accepts-injected`), a dual role that also passes the key through (`remap-tap-with-pass-through`), the primary button and a mouse button in a sequence as triggers, the emergency chord as trigger and output, reserved OS chords (`Win+L`, `Alt+Tab`, `Ctrl+Shift+Escape`, the Secure Attention Sequence), missing consent for programs, websites, injection and clipboard, shell hosts, `file:` URLs and newer versions. |
 | `contracts/examples/ddalgak-rules-v1/semantic-invalid/` | Thirteen schema-valid documents named `<code>--<what>.json`, each producing exactly that semantic error: `output_is_trigger` (the recursive remap `F13` → `F13`, and `send_keys` to its own trigger), duplicate IDs and triggers (since Step 69 also two hotstrings `btw`/`BTW`), unknown modes and profiles, a stale launch consent, a run over 60 s (delays, and since Step 69 slow typing). |
-| [ddalgak-simulation-v1](contracts/schemas/ddalgak-simulation-v1.schema.json) + examples | Twenty-three playground results named `<rules example>--<what>.json` and fourteen invalid ones (effects performed or input injected in `simulate`, live launches without confirmation, live input outside the playground, previews that echo text, paths, arguments or URL paths). |
+| [ddalgak-simulation-v1](contracts/schemas/ddalgak-simulation-v1.schema.json) + examples | Twenty-four playground results (Step 71 added a stepped grid move, checked against the code's own preview) named `<rules example>--<what>.json` and fourteen invalid ones (effects performed or input injected in `simulate`, live launches without confirmation, live input outside the playground, previews that echo text, paths, arguments or URL paths). |
 | [kim-hotkey-manifest-v1/ddalgak.json](contracts/examples/kim-hotkey-manifest-v1/ddalgak.json) | Ddalgak's final GUI actions: four global ones (matching the Kim catalog) and the `rules` and `playground` contexts. |
 
 **Step 66** implements the engine for engine-control rules ([DDALGAK_ENGINE](DDALGAK_ENGINE.md));
 every other step type is inactive with `step_unsupported` until its Step.
+
+**Step 71** runs `mouse_move` (§5.7), `mouse_scroll` (§5.8) and `mouse_click` (§5.9) and adds
+grid units and stepped holds ([ADR 0040](adr/0040-ddalgak-mouse-actions.md),
+[DDALGAK_ENGINE §14](DDALGAK_ENGINE.md)). The CLI writes them with the Step 67 syntax:
+`ddalgak rule add --trigger Ctrl+Alt+Shift+Right --action mouse_move --dx 1 --dy 0 --speed 600 --acceleration 3 --allow input-injection`,
+`… --action mouse_move --dx 1 --grid 16x9 --repeat-ms 150`, `… --action mouse_move --x 960 --y 540 --relative-to primary_monitor`,
+`… --action mouse_scroll --direction down --notches 3`, `… --action mouse_click --button left --op hold`,
+or any step as `--step '<json>'`. The editor's Mouse form, its summary and its screen map are
+`crates/ddalgak/src/mouse.rs` (`MouseDraft`, `MOUSE_FIELDS`, `screen_map`), checked against this
+schema; the playground's safe pointer is `mouse::Playground` over a simulated pointer
+([GUI_JOURNEYS J4, J5](DDALGAK_GUI_JOURNEYS.md)).
 
 **Step 70** runs `open_program` (§5.5) and `open_url` (§5.6) and adds the `env` overrides
 ([ADR 0037](adr/0037-ddalgak-program-and-website-launches.md), [DDALGAK_ENGINE §13](DDALGAK_ENGINE.md)).

@@ -455,19 +455,51 @@
         "dx": {"type": "integer", "minimum": -10000, "maximum": 10000},
         "dy": {"type": "integer", "minimum": -10000, "maximum": 10000},
         "to": {"$ref": "#/$defs/point"},
-        "while_held": {
-          "description": "Keep moving in the dx/dy direction while the trigger is held (Step 71).",
+        "unit": {"description": "Step 71, additive: how dx/dy count. `pixels` (default): logical pixels scaled by the display scale of the monitor the pointer is on. `grid`: cells of `grid` on that monitor; the pointer lands on cell centres and stays on the grid. Relative moves only.", "enum": ["pixels", "grid"]},
+        "grid": {
+          "description": "Step 71, additive: a virtual grid over each monitor (with `unit: grid`).",
           "type": "object",
-          "required": ["speed"],
+          "required": ["columns", "rows"],
+          "properties": {
+            "columns": {"type": "integer", "minimum": 2, "maximum": 64},
+            "rows": {"type": "integer", "minimum": 2, "maximum": 64}
+          }
+        },
+        "while_held": {
+          "description": "Keep moving in the dx/dy direction while the trigger is held (Step 71): smoothly at `speed` (logical pixels per second; `acceleration` raises it linearly over the first second up to speed × (1 + acceleration), at most 10000) or, additive, stepped: the dx/dy step at once, after `delay_ms` (default 300) again, then every `repeat_ms`, whatever the keyboard's repeat settings.",
+          "type": "object",
           "properties": {
             "speed": {"description": "Logical pixels per second.", "type": "integer", "minimum": 50, "maximum": 5000},
-            "acceleration": {"type": "integer", "minimum": 0, "maximum": 10}
-          }
+            "acceleration": {"type": "integer", "minimum": 0, "maximum": 10},
+            "repeat_ms": {"description": "Step 71, additive: a stepped hold repeats the step this often.", "type": "integer", "minimum": 20, "maximum": 2000},
+            "delay_ms": {"description": "Step 71, additive: the wait before the first repeat of a stepped hold (default 300).", "type": "integer", "minimum": 0, "maximum": 2000}
+          },
+          "oneOf": [
+            {"required": ["speed"], "not": {"anyOf": [{"required": ["repeat_ms"]}, {"required": ["delay_ms"]}]}},
+            {"required": ["repeat_ms"], "not": {"anyOf": [{"required": ["speed"]}, {"required": ["acceleration"]}]}}
+          ]
         }
       },
       "oneOf": [
         {"required": ["dx", "dy"], "properties": {"mode": {"const": "relative"}}, "not": {"required": ["to"]}},
-        {"required": ["to"], "properties": {"mode": {"const": "absolute"}}, "not": {"anyOf": [{"required": ["dx"]}, {"required": ["dy"]}, {"required": ["while_held"]}]}}
+        {"required": ["to"], "properties": {"mode": {"const": "absolute"}}, "not": {"anyOf": [{"required": ["dx"]}, {"required": ["dy"]}, {"required": ["while_held"]}, {"required": ["unit"]}, {"required": ["grid"]}]}}
+      ],
+      "allOf": [
+        {
+          "description": "`unit: grid` needs `grid`, and `grid` needs `unit: grid`.",
+          "anyOf": [
+            {"required": ["unit", "grid"], "properties": {"unit": {"const": "grid"}}},
+            {"not": {"anyOf": [{"required": ["grid"]}, {"required": ["unit"], "properties": {"unit": {"const": "grid"}}}]}}
+          ]
+        },
+        {
+          "description": "Grid moves are steps, never continuous: with `unit: grid`, `while_held` repeats (`repeat_ms`).",
+          "not": {"required": ["unit", "while_held"], "properties": {"unit": {"const": "grid"}, "while_held": {"required": ["speed"]}}}
+        },
+        {
+          "description": "A move while held needs a direction.",
+          "not": {"required": ["while_held", "dx", "dy"], "properties": {"dx": {"const": 0}, "dy": {"const": 0}}}
+        }
       ]
     },
     "step_mouse_scroll": {

@@ -10,6 +10,7 @@ pub mod instance;
 pub mod launch;
 pub mod mouse;
 pub mod pipe;
+pub mod recovery;
 pub mod startup;
 pub mod tray;
 pub mod typing;

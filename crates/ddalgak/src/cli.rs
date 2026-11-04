@@ -49,6 +49,16 @@ pub enum Cmd {
     ModeToggle,
     ModeReset,
     ModeStatus,
+    // Step 73: enable/disable per scope, and releasing stuck keys.
+    /// `enable` (the engine, or with `--rule`/`--mode`/`--profile` that scope in rules.json).
+    Enable,
+    /// `disable` (the engine, or a scope).
+    Disable,
+    ModeEnable,
+    ModeDisable,
+    /// `release`: release every key and button Ddalgak holds and keys Windows still considers
+    /// pressed although nobody holds them.
+    Release,
 }
 
 /// Options of the mode fields (`mode add`, `mode edit`; Step 72).
@@ -187,6 +197,11 @@ impl Cmd {
             Self::ModeToggle => "mode.toggle".into(),
             Self::ModeReset => "mode.reset".into(),
             Self::ModeStatus => "mode.status".into(),
+            Self::Enable => "enable".into(),
+            Self::Disable => "disable".into(),
+            Self::ModeEnable => "mode.enable".into(),
+            Self::ModeDisable => "mode.disable".into(),
+            Self::Release => "release".into(),
         }
     }
 
@@ -202,6 +217,8 @@ impl Cmd {
                 | Self::ModeRename
                 | Self::ModeCopy
                 | Self::ModeDelete
+                | Self::ModeEnable
+                | Self::ModeDisable
         )
     }
 
@@ -322,6 +339,20 @@ impl Cmd {
                 vec![("--endpoint", Value), ("--dry-run", Flag)]
             }
             Self::ModeStatus => vec![("--endpoint", Value)],
+            Self::Enable | Self::Disable => {
+                let mut v = vec![("--rule", Multi), ("--mode", Value), ("--profile", Value)];
+                if self == Self::Enable {
+                    v.push(("--allow", Multi));
+                }
+                v.extend_from_slice(WRITE);
+                v
+            }
+            Self::ModeEnable | Self::ModeDisable => {
+                let mut v = vec![("--profile", Value)];
+                v.extend_from_slice(WRITE);
+                v
+            }
+            Self::Release => vec![("--endpoint", Value), ("--dry-run", Flag)],
         };
         // Every rule command may name the app endpoint (writes ask that app to reload; scripts
         // can pass the same options to every command).
@@ -344,7 +375,9 @@ impl Cmd {
             | Self::ModeCopy
             | Self::ModeDelete
             | Self::ModeSet
-            | Self::ModeToggle => (1, 1),
+            | Self::ModeToggle
+            | Self::ModeEnable
+            | Self::ModeDisable => (1, 1),
             Self::RulesRestore => (0, 1),
             _ => (0, 0),
         }
@@ -405,6 +438,9 @@ fn command(words: &[&str]) -> Result<(Cmd, usize), String> {
         ["engine", "resume", ..] => (Cmd::Engine(Request::Resume), 2),
         ["resume", ..] => (Cmd::Engine(Request::Resume), 1),
         ["engine", "stop" | "off", ..] => (Cmd::Engine(Request::Stop), 2),
+        ["enable", ..] => (Cmd::Enable, 1),
+        ["disable", ..] => (Cmd::Disable, 1),
+        ["release", ..] => (Cmd::Release, 1),
         ["quit", ..] => (Cmd::Quit, 1),
         ["startup", "status", ..] => (Cmd::StartupStatus, 2),
         ["startup", "enable", ..] => (Cmd::StartupEnable, 2),
@@ -440,9 +476,11 @@ fn command(words: &[&str]) -> Result<(Cmd, usize), String> {
         ["mode", "toggle", ..] => (Cmd::ModeToggle, 2),
         ["mode", "reset", ..] => (Cmd::ModeReset, 2),
         ["mode", "status", ..] => (Cmd::ModeStatus, 2),
+        ["mode", "enable", ..] => (Cmd::ModeEnable, 2),
+        ["mode", "disable", ..] => (Cmd::ModeDisable, 2),
         ["mode"] | ["mode", ..] => {
             return Err(
-                "`mode` needs list, show, add, edit, rename, copy, delete, set, toggle, reset or status"
+                "`mode` needs list, show, add, edit, rename, copy, delete, enable, disable, set, toggle, reset or status"
                     .into(),
             );
         }
@@ -507,6 +545,9 @@ pub fn parse(raw: &[String]) -> Result<(Cmd, Args), (String, CliError)> {
             "rule",
             "rules",
             "mode",
+            "enable",
+            "disable",
+            "release",
         ];
         match words.first() {
             Some(w) if known.contains(w) => {
@@ -770,5 +811,38 @@ mod tests {
         assert!(p("rule add --title a --title b").is_err());
         assert!(p("rule list --yes").is_err());
         assert!(p("rule add --trigger").is_err());
+    }
+
+    #[test]
+    fn enable_disable_take_one_scope_and_release_takes_no_ids() {
+        // Step 73: the global switch and its scopes.
+        assert_eq!(p("enable").unwrap().0, Cmd::Enable);
+        assert_eq!(p("disable --dry-run").unwrap().0, Cmd::Disable);
+        let (c, a) = p("disable --rule r-1 --rule r-2").unwrap();
+        assert_eq!(
+            (c, a.all("--rule")),
+            (Cmd::Disable, &["r-1".to_string(), "r-2".to_string()][..])
+        );
+        let (_, a) = p("enable --mode nav --profile work").unwrap();
+        assert_eq!(
+            (a.get("--mode"), a.get("--profile")),
+            (Some("nav"), Some("work"))
+        );
+        assert!(p("enable --rule r-1 --allow input-injection").is_ok());
+        assert!(
+            p("disable --allow input-injection").is_err(),
+            "consent is only given when enabling"
+        );
+        assert!(p("disable extra").is_err(), "no positional words");
+        assert_eq!(p("mode disable nav").unwrap().0, Cmd::ModeDisable);
+        assert_eq!(
+            p("mode enable nav --profile work").unwrap().0,
+            Cmd::ModeEnable
+        );
+        assert!(p("mode disable").is_err(), "needs a mode ID");
+        assert_eq!(p("release --dry-run").unwrap().0, Cmd::Release);
+        assert!(p("release --yes").is_err());
+        assert_eq!(Cmd::Release.name(), "release");
+        assert_eq!(p("disable --bogus").unwrap_err().0, "disable");
     }
 }

@@ -1,0 +1,128 @@
+{
+  "command": "status",
+  "data": {
+    "activity": [],
+    "app": {
+      "elevated": false,
+      "launched_by": "user",
+      "pid": 109092,
+      "running": true,
+      "started_at": "2026-11-04T11:29:26Z",
+      "test_mode": true,
+      "tray": false,
+      "uptime_s": 0,
+      "version": "0.0.1"
+    },
+    "engine": {
+      "hook": {
+        "installed": true,
+        "mouse_installed": false,
+        "observe_only": true
+      },
+      "last_change": {
+        "origin": "startup",
+        "request": "start"
+      },
+      "off_reason": null,
+      "state": "running"
+    },
+    "indicator": {
+      "attention": "session_locked",
+      "floating": {
+        "label": "Ddalgak on",
+        "setting": "off",
+        "visible": false
+      },
+      "shape": "disc",
+      "tooltip": "Ddalgak: engine on (rules wait while the session is locked)"
+    },
+    "profile": {
+      "enabled": true,
+      "id": "default",
+      "mode": "base",
+      "mode_state": {
+        "active": "base",
+        "chain": [
+          "base"
+        ],
+        "color": null,
+        "default": "base",
+        "held": [],
+        "icon": null,
+        "indicator": {
+          "away_from_default": false,
+          "color": null,
+          "icon": null,
+          "label": "Base",
+          "title": "Base",
+          "visible": false
+        },
+        "latched": "base",
+        "live": true,
+        "origin": "start",
+        "previous": "base",
+        "since": "2026-11-04T11:29:26Z",
+        "title": "Base"
+      }
+    },
+    "rules": {
+      "active": 4,
+      "active_rules": [
+        "pause-key",
+        "off-key",
+        "physical-only",
+        "f19-remap"
+      ],
+      "active_set": {
+        "loaded_at": "2026-11-04T11:29:26Z",
+        "revision": 1
+      },
+      "disabled": 0,
+      "draft": null,
+      "engine_on_start": "on",
+      "file": "loaded",
+      "in_sync": true,
+      "inactive": [
+        {
+          "code": "step_unsupported",
+          "reason": "`delay` steps are not implemented in this version yet (Step 78)",
+          "rule": "delay-later"
+        }
+      ],
+      "last_reload": null,
+      "other_modes": 0,
+      "problem": null,
+      "revision": 1,
+      "saved": {
+        "file": "loaded",
+        "interrupted_save": false,
+        "problem": null,
+        "revision": 1
+      },
+      "total": 5
+    },
+    "session": {
+      "locked": true
+    },
+    "shortcuts": {
+      "config": "default",
+      "global": [],
+      "off": false,
+      "problem": null
+    },
+    "start": {
+      "off_reason": "default",
+      "recovered": null
+    },
+    "startup": {
+      "command": null,
+      "enabled": false,
+      "foreign": false,
+      "location": "HKCU\\Software\\mouv-test\\ddalgak-cli-recover\\Run\\mouv.ddalgak",
+      "program": "C:\\Users\\you\\AppData\\Local\\Programs\\mouv\\ddalgak\\versions\\0.0.1\\ddalgak-gui.exe"
+    }
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

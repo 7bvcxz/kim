@@ -386,3 +386,48 @@ fn rows_describe_policy_chain_users_and_problems() {
     assert_eq!(id_from_title(p, "base"), "base-2");
     assert_eq!(id_from_title(p, "9 lives"), "mode-9-lives");
 }
+
+#[test]
+fn modes_and_profiles_are_enabled_and_disabled_but_never_the_default_mode() {
+    // Step 73.
+    let mut d = doc();
+    let c = apply(&mut d, |d| set_enabled(d, None, "nav", false)).unwrap();
+    assert!(c.changed);
+    assert_eq!(c.modes, ["nav"]);
+    assert_eq!(c.rules, ["nav-left"], "the rules limited to it alone");
+    assert_eq!(d.profiles[0].modes[1].enabled, Some(false));
+    let c = apply(&mut d, |d| set_enabled(d, None, "nav", false)).unwrap();
+    assert!(!c.changed, "already disabled");
+    let c = apply(&mut d, |d| set_enabled(d, None, "nav", true)).unwrap();
+    assert!(c.changed);
+    assert_eq!(
+        d.profiles[0].modes[1].enabled, None,
+        "enabled stores no field"
+    );
+    let e = apply(&mut d, |d| set_enabled(d, None, "base", false)).unwrap_err();
+    assert_eq!(e.code(), "mode_invalid");
+    assert_eq!(
+        apply(&mut d, |d| set_enabled(d, None, "nope", false))
+            .unwrap_err()
+            .code(),
+        "mode_not_found"
+    );
+    let c = apply(&mut d, |d| set_profile_enabled(d, "p", false)).unwrap();
+    assert!(c.changed);
+    assert!(!d.profiles[0].is_enabled());
+    assert!(
+        d.profiles[0]
+            .rules
+            .iter()
+            .all(|r| r.enabled() == Some(true)),
+        "each rule keeps its own setting"
+    );
+    let c = apply(&mut d, |d| set_profile_enabled(d, "p", true)).unwrap();
+    assert!(c.changed && d.profiles[0].enabled.is_none());
+    assert_eq!(
+        apply(&mut d, |d| set_profile_enabled(d, "q", false))
+            .unwrap_err()
+            .code(),
+        "profile_not_found"
+    );
+}

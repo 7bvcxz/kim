@@ -59,8 +59,22 @@ pub struct Settings {
     /// Step 72: where the active mode is shown besides `status` and the editor's header.
     #[serde(default, skip_serializing_if = "none")]
     pub mode_indicator: Option<ModeIndicator>,
+    /// Step 73: the optional floating status indicator (off by default; drawn by Step 74).
+    #[serde(default, skip_serializing_if = "none")]
+    pub floating_indicator: Option<FloatingIndicator>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
+}
+
+/// `settings.floating_indicator` (Step 73, ADR 0046): a small always-on-top badge that never
+/// takes focus. `off` (default) never shows it, `paused` only while the engine is paused (the
+/// state users forget), `always` while the app runs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FloatingIndicator {
+    Off,
+    Paused,
+    Always,
 }
 
 /// `settings.mode_indicator` (Step 72, ADR 0043): `auto` (default) names the mode in the tray
@@ -89,10 +103,22 @@ pub struct Profile {
     #[serde(default, skip_serializing_if = "none")]
     pub description: Option<String>,
     pub default_mode: String,
+    /// Step 73: `false` keeps every rule of the profile from running while it is the active
+    /// profile (`profile_disabled`); absent means enabled. Never changed by anything but the
+    /// user (`ddalgak enable|disable --profile`).
+    #[serde(default, skip_serializing_if = "none")]
+    pub enabled: Option<bool>,
     pub modes: Vec<Mode>,
     pub rules: Vec<RuleEntry>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
+}
+
+impl Profile {
+    /// Absent `enabled` means enabled (Step 73).
+    pub fn is_enabled(&self) -> bool {
+        self.enabled != Some(false)
+    }
 }
 
 /// A user-defined named state of a profile (§7.3). Step 72 adds, additively, a short `icon`, a
@@ -113,6 +139,11 @@ pub struct Mode {
     pub one_shot: Option<bool>,
     #[serde(default, skip_serializing_if = "none")]
     pub timeout_ms: Option<u32>,
+    /// Step 73: `false` keeps the rules limited to this mode alone from running and refuses
+    /// switches to it (`mode_disabled`); absent means enabled. The default mode is never
+    /// disabled (`mode_invalid`; ignored there).
+    #[serde(default, skip_serializing_if = "none")]
+    pub enabled: Option<bool>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -128,6 +159,7 @@ impl Mode {
             parent: None,
             one_shot: None,
             timeout_ms: None,
+            enabled: None,
             extra: Map::new(),
         }
     }
@@ -975,6 +1007,7 @@ impl Document {
                 title: "Default".into(),
                 description: None,
                 default_mode: "base".into(),
+                enabled: None,
                 modes: vec![Mode::new("base", "Base")],
                 rules: Vec::new(),
                 extra: Map::new(),

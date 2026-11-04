@@ -2,8 +2,8 @@
 
 Status: **current** (Step 65, specification; Step 66 ran the engine checks it owns on real
 Windows, Step 68 the remap checks, Step 69 the typing checks, Step 70 the launch checks, Step 71
-the mouse checks, Step 72 the mode checks, §11) · Requirements: `DDALGAK-SEC-001…014`, `DDALGAK-NFR-002`, `DDALGAK-NFR-006`,
-`DDALGAK-NFR-009`, `KIM-SEC-020…023` · Decisions: [ADR 0022](adr/0022-ddalgak-rule-model-and-safety.md), [ADR 0037](adr/0037-ddalgak-program-and-website-launches.md), [ADR 0040](adr/0040-ddalgak-mouse-actions.md), [ADR 0043](adr/0043-ddalgak-modes-layers-and-runtime-mode-state.md)
+the mouse checks, Step 72 the mode checks, Step 73 the enable, disable and recovery checks, §11) · Requirements: `DDALGAK-SEC-001…014`, `DDALGAK-NFR-002`, `DDALGAK-NFR-006`,
+`DDALGAK-NFR-009`, `KIM-SEC-020…023` · Decisions: [ADR 0022](adr/0022-ddalgak-rule-model-and-safety.md), [ADR 0037](adr/0037-ddalgak-program-and-website-launches.md), [ADR 0040](adr/0040-ddalgak-mouse-actions.md), [ADR 0043](adr/0043-ddalgak-modes-layers-and-runtime-mode-state.md), [ADR 0046](adr/0046-ddalgak-enable-disable-and-recovery.md)
 
 A keyboard hook sees every key, and an injector can type into any window the user can reach.
 This document fixes what Ddalgak may and may not do with that power, what the operating system
@@ -80,14 +80,23 @@ CLI follows the identity checks of [ADR 0005](adr/0005-local-ipc.md)/[ADR 0019](
 - **Crash and emergency.** The app writes a small run marker while the engine is on and removes
   it on a clean stop. If the marker is present at start (crash, power loss, killed process), or
   the last stop was an emergency off, the engine stays off and the app says why. A broken rule
-  that crashed the engine can therefore never crash it again on the next start.
+  that crashed the engine can therefore never crash it again on the next start. Since Step 73
+  that start also releases the keys Ddalgak could have pressed that Windows still considers
+  pressed (a killed process cannot release them itself; ADR 0046).
 - **Session events.** On session lock, a switch to the secure desktop, sign-out and shutdown,
   held keys and buttons are released and running rules are cancelled; the hook stays installed
   while locked but no rule fires until the user's desktop is back. Sleep and resume are treated
-  like lock and unlock.
+  like lock and unlock. A lock never changes the engine state (Step 73): an unlock therefore never
+  resumes anything the user paused. Sign-out stops the engine cleanly.
 - **Invalid configuration** never turns the engine on, and never crashes it (`KIM-SEC-023`).
 - **Never silently re-enabled.** Not after a crash, a reboot, an update, an import or a
-  configuration change.
+  configuration change. Since Step 73 the user's own turn-off (tray, CLI, shortcut, rule) is
+  remembered: the next start stays off, even with `engine_on_start: on`, until the user turns the
+  engine on. Profiles and modes can be disabled in `rules.json` (`enabled: false`); only the user
+  turns them on again.
+- **A lost hook turns the engine off** (Step 73): a hook callback that takes as long as
+  `LowLevelHooksTimeout`, after which Windows removes the hook silently (*documented*), makes the
+  engine turn itself off, release everything and say so (§7).
 
 ## 5. Keyboard layouts and IME (Korean first)
 
@@ -142,19 +151,28 @@ CLI follows the identity checks of [ADR 0005](adr/0005-local-ipc.md)/[ADR 0019](
 - **Hook health.** Windows gives no notice when it removes a hook (*documented*). Step 66
   designs an on-demand health check, run when the editor opens or `ddalgak status` runs and
   never on a timer, that reports a removed hook and offers to reinstall it. The engine never
-  reinstalls a hook on its own.
+  reinstalls a hook on its own. Since Step 73 the callback also measures itself and the wait of
+  each physical event against the user's `LowLevelHooksTimeout` (capped at 1000 ms, 300 ms when
+  absent); one that reaches it turns the engine off (`hook_lost`), releases every key and button,
+  strikes the tray icon through and shows a notice; turning the engine on again installs a fresh
+  hook ([DDALGAK_ENGINE §16](DDALGAK_ENGINE.md)).
 - **Emergency chord** `Ctrl+Alt+Shift+Escape` (`DDALGAK-SEC-003`): evaluated first in the
   callback on the *physical* key state (events without `LLKHF_INJECTED`), so no remap, block,
   mode or invalid configuration can hide it. On detection, within the same event: uninstall the
   hook, send key-up for every key and button Ddalgak holds, cancel all runs, set the engine
   `off`, write the emergency marker (§4), and show a non-modal notice. The chord is reserved for
-  every Kim tool (HOTKEY_CONTRACT §7.4). Its choice is provisional until Step 73 verifies it on
-  real Windows (including keyboards where the chord is awkward and remote-desktop sessions); a
-  change goes through an ADR 0017 note and a contract revision.
+  every Kim tool (HOTKEY_CONTRACT §7.4). Its choice is provisional until it is verified on real
+  Windows with physical keys (including keyboards where the chord is awkward and remote-desktop
+  sessions); a change goes through an ADR 0017 note and a contract revision. Step 73 tested it in
+  the decision core with every key of the chord remapped or blocked, in any order, paused and with
+  an empty rule table, documented its interaction with Task Manager's `Ctrl+Shift+Escape` and
+  elevated windows ([DDALGAK_ENGINE §16](DDALGAK_ENGINE.md)), and left the physical-keyboard check
+  to the maintainer's manual script there; the chord stays provisional until it is run.
 - **Other ways out** (`KIM-SEC-023`): the tray menu, the `engine.toggle` shortcut (registered
-  with `RegisterHotKey`, independent of the hook), `ddalgak engine off`, `ddalgak-gui.exe
-  --no-hotkeys` or `KIM_NO_HOTKEYS` (starts with every shortcut off and the engine off),
-  `Ctrl+Shift+Escape` to end the process; Windows removes the hook when the process ends.
+  with `RegisterHotKey`, independent of the hook), `ddalgak engine off` or `ddalgak disable`,
+  `ddalgak-gui.exe --no-hotkeys` or `KIM_NO_HOTKEYS` (starts with every shortcut off and the
+  engine off), `Ctrl+Shift+Escape` to end the process; Windows removes the hook when the process
+  ends. A stuck key: `ddalgak release` or the tray's *Release stuck keys* (Step 73, §10).
 - **Visible hook** (`DDALGAK-SEC-010`): the hook exists only inside the user-started app with
   its tray icon; no CLI command starts the app, creates a tray icon or installs a hook.
 
@@ -226,7 +244,13 @@ Linux build can read Windows rules and report what it cannot do.
   only if still physically down (`SendInput` does not reset keyboard state, *documented*, M2).
   A consumed key-down always has its key-up consumed. A mode switch (Step 72) is a release path
   like any other: a remap or held button of the old mode never stays down in the new one, and a
-  held layer whose key-up may never arrive (another desktop, a lock) ends.
+  held layer whose key-up may never arrive (another desktop, a lock) ends. Since Step 73 a killed
+  app is covered too: the next start releases the keys Ddalgak could have pressed (the eight
+  modifiers and every remap or held-button output) that Windows still reports pressed, with a
+  masking key before Alt and Win; `ddalgak release` and the tray's *Release stuck keys* do the
+  same on request, leave Ddalgak's own ledger to the worker, skip modifiers the hook saw
+  physically pressed and make the hook forget its key state. These are single reads of the key
+  state at moments a crash or the user defines; nothing polls.
 - **Remaps** (Step 68, [ADR 0031](adr/0031-ddalgak-remap-execution-and-mouse-hook.md)): the
   engine core decides every output event and the worker, which owns the ledger, sends it. Shared
   outputs are reference-counted (released when the last remap lets go); a key the user already
@@ -256,9 +280,9 @@ Likelihood (L) and impact (I): **H**igh / **M**edium / **L**ow.
 
 | ID | Risk | L | I | Mitigation | Owner step |
 | --- | --- | --- | --- | --- | --- |
-| DR-01 | The hook is slow or blocked and Windows removes it silently, so rules stop without notice | M | M | Short callback, worker threads, hook health check on demand (§7) | 66, 82 |
-| DR-02 | A bug leaves a modifier or mouse button logically pressed | M | H | Injector ledger owned by the worker, reference-counted remap outputs (held mouse buttons included since Step 71), release on every exit path including an elevated window taking focus, tests per path (§10; Step 68 tested the pause and key-reset paths with real input; Step 71 every path for held buttons and moves with a simulated pointer) | 68, 71, 73 |
-| DR-03 | The emergency chord does not work on some keyboards, laptops or remote sessions | M | H | Physical-state detection; Step 73 tests laptops, external keyboards, RDP; an ADR 0017 note if the chord must change | 73 |
+| DR-01 | The hook is slow or blocked and Windows removes it silently, so rules stop without notice | M | M | Short callback, worker threads, hook health check on demand (§7); since Step 73 a callback or physical event that reaches `LowLevelHooksTimeout` turns the engine off with `hook_lost` and a notice | 66, 73, 82 |
+| DR-02 | A bug leaves a modifier or mouse button logically pressed | M | H | Injector ledger owned by the worker, reference-counted remap outputs (held mouse buttons included since Step 71), release on every exit path including an elevated window taking focus, tests per path (§10; Step 68 tested the pause and key-reset paths with real input; Step 71 every path for held buttons and moves with a simulated pointer); since Step 73 the start after a crash and `ddalgak release` release stale keys (tested with a killed test host and an injected F20) | 68, 71, 73 |
+| DR-03 | The emergency chord does not work on some keyboards, laptops or remote sessions | M | H | Physical-state detection, decided before the rule table (Step 73: tested in the core against remaps of its own keys); laptops, external keyboards, Task Manager and RDP in the maintainer's manual script (DDALGAK_ENGINE §16); an ADR 0017 note if the chord must change | 73 (manual pending) |
 | DR-04 | Password-field detection misses custom controls | M | H | Win32 edit styles (Step 66), checked again before every typing call (Step 69); UI Automation and browser fields not yet; `except_apps`; documented as best effort (§8) | 66, 69, 82 |
 | DR-05 | Injected 한/영 (`HangulMode`) or Unicode text behaves differently across IME versions | M | M | Real-Windows tests with the Korean IME; `paste` fallback | 68, 69 |
 | DR-06 | Users expect AutoHotkey scripts to work | H | M | Matrix with explicit statuses; importer previews only a declarative subset (§5 of the philosophy) | 65, 80 |
@@ -381,3 +405,23 @@ rules fired through the real hook by injected obscure keys (F13 held layer, F14 
 test host. **Not tested** (manual script in DDALGAK_ENGINE §15): switching modes while typing on
 the physical keyboard in real applications, the Korean IME during a switch, and the real tray
 indicator and its menu.
+
+**Step 73** (enable, disable, pause and recovery, Windows 10 19045; details in
+[DDALGAK_ENGINE §16](DDALGAK_ENGINE.md), decision
+[ADR 0046](adr/0046-ddalgak-enable-disable-and-recovery.md)): the user's turn-off is remembered
+across restarts (never silently re-enabled, also with `engine_on_start: on`); rules, modes and
+profiles can be disabled in `rules.json` and only the user turns them on again; the emergency chord
+is decided before the rule table and was **tested** in the core with every key of the chord
+remapped or blocked, paused, with the stepping-aside flags and an empty table; a hook callback
+that reaches `LowLevelHooksTimeout` turns the engine off (`hook_lost`), **tested** with a
+debug-lowered threshold and a real injected obscure key; a synthetic session lock (sent only to
+the test host's own window) keeps the engine state and makes a real injected key wait, **tested**;
+a killed test host comes back off and releases a stale obscure key held by injection, **tested**
+with real `SendInput`; a synthetic sign-out stops cleanly and the "reboot" follows the start
+policy, **tested**; a shortcut another program owns stays `taken` and is never taken, **tested**;
+no engine thread wakes while idle in any state, **tested**. The "secure desktop and lock screen:
+nothing fires; keys released on lock" row above is covered by the synthetic lock. **Not tested**
+(manual script in DDALGAK_ENGINE §16): the emergency chord on physical keyboards (laptop,
+external, with Task Manager and over Remote Desktop), a real lock, sign-out and reboot, a real
+stuck modifier after killing the app, a real removal of the hook by Windows (it would freeze the
+shared PC's keyboard), and the real tray icon and notices.

@@ -27,10 +27,119 @@
     { "$ref": "#/$defs/ok_mode_show" },
     { "$ref": "#/$defs/ok_mode_write" },
     { "$ref": "#/$defs/ok_mode_change" },
-    { "$ref": "#/$defs/ok_mode_status" }
+    { "$ref": "#/$defs/ok_mode_status" },
+    { "$ref": "#/$defs/ok_enable" },
+    { "$ref": "#/$defs/ok_release" }
   ],
   "$defs": {
     "mode_id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$" },
+    "indicator": {
+      "description": "Step 73 (ADR 0046): what the tray icon, its tooltip and the optional floating badge show. Every state has its own shape and words, never color alone; `ring_struck` marks an engine that is off after an emergency, a lost hook or an unclean exit. `attention` names what needs the user in a code; the floating badge is opt-in (settings.floating_indicator) and drawn by the editor app (Step 74).",
+      "type": "object",
+      "required": ["shape", "tooltip", "attention", "floating"],
+      "additionalProperties": false,
+      "properties": {
+        "shape": { "enum": ["ring", "ring_struck", "disc", "disc_notched", "bars"] },
+        "tooltip": { "type": "string", "minLength": 1, "maxLength": 127 },
+        "attention": { "enum": [null, "emergency", "hook_lost", "unclean_exit", "profile_disabled", "rules_kept_previous", "shortcut_taken", "session_locked"] },
+        "floating": {
+          "type": "object",
+          "required": ["setting", "visible", "label"],
+          "additionalProperties": false,
+          "properties": {
+            "setting": { "enum": ["off", "paused", "always"] },
+            "visible": { "type": "boolean" },
+            "label": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    },
+    "ok_enable": {
+      "description": "Step 73: `ddalgak enable|disable`. Without a scope the engine of the running app turns on or off (`scope: engine`, the data of `engine start|stop`; a disable is remembered across restarts). With `--rule`, `--mode` or `--profile` the scope is switched in rules.json through the rule store (the data of a rule write, plus `modes` for a mode and `profile` for a mode or a profile).",
+      "allOf": [
+        { "$ref": "#/$defs/envelope_ok" },
+        {
+          "properties": {
+            "command": { "enum": ["enable", "disable"] },
+            "data": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "required": ["scope", "dry_run", "would", "engine"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "scope": { "const": "engine" },
+                    "dry_run": { "const": true },
+                    "would": { "$ref": "#/$defs/transition" },
+                    "engine": { "$ref": "#/$defs/engine" }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": ["scope", "dry_run", "change", "engine"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "scope": { "const": "engine" },
+                    "dry_run": { "const": false },
+                    "change": { "$ref": "#/$defs/transition" },
+                    "engine": { "$ref": "#/$defs/engine" }
+                  }
+                },
+                {
+                  "type": "object",
+                  "required": ["scope", "dry_run", "target", "changed", "revision", "rules", "created", "notes", "problems", "backup", "snapshot", "app"],
+                  "additionalProperties": false,
+                  "properties": {
+                    "scope": { "enum": ["rule", "mode", "profile"] },
+                    "profile": { "type": "string", "minLength": 1 },
+                    "modes": { "type": "array", "items": { "$ref": "#/$defs/mode_id" } },
+                    "dry_run": { "type": "boolean" },
+                    "target": { "$ref": "#/$defs/source" },
+                    "changed": { "type": "boolean" },
+                    "revision": { "$ref": "#/$defs/revision_change" },
+                    "rules": { "type": "array", "items": { "$ref": "#/$defs/rule_id" } },
+                    "created": { "type": "null" },
+                    "notes": { "type": "array", "items": { "type": "string" } },
+                    "problems": { "type": "array", "items": { "$ref": "#/$defs/problem" } },
+                    "backup": { "type": ["string", "null"] },
+                    "snapshot": { "type": ["string", "null"] },
+                    "app": { "$ref": "#/$defs/app_after_write" }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "ok_release": {
+      "description": "Step 73: `ddalgak release`. The worker releases every key and button in Ddalgak's ledger (`held_by_ddalgak`, released after the answer), the hook forgets its key state, and of the keys Ddalgak could have pressed (`stale.checked`) those Windows still considers pressed and nobody holds get an up (`stale.released`). Counts only, never key names.",
+      "allOf": [
+        { "$ref": "#/$defs/envelope_ok" },
+        {
+          "properties": {
+            "command": { "const": "release" },
+            "data": {
+              "type": "object",
+              "required": ["dry_run", "held_by_ddalgak", "stale", "key_state_reset", "engine"],
+              "additionalProperties": false,
+              "properties": {
+                "dry_run": { "type": "boolean" },
+                "held_by_ddalgak": { "$ref": "#/$defs/count" },
+                "stale": {
+                  "type": "object",
+                  "required": ["checked", "released"],
+                  "additionalProperties": false,
+                  "properties": { "checked": { "$ref": "#/$defs/count" }, "released": { "$ref": "#/$defs/count" } }
+                },
+                "key_state_reset": { "type": "boolean" },
+                "engine": { "$ref": "#/$defs/engine" }
+              }
+            }
+          }
+        }
+      ]
+    },
     "mode_state": {
       "description": "The active mode (Step 72, DDALGAK_RULE_MODEL §7.3): the newest held layer or the latched mode, the layers held now, the previous latched mode, the default mode, the precedence chain (the mode and its parents), why and since when. `live: false` when the engine is off or the app is not running: then this is the default mode, where every start begins (the active mode is never restored, ADR 0043). Names and IDs only, never keys.",
       "type": "object",
@@ -145,7 +254,7 @@
         { "$ref": "#/$defs/envelope_ok" },
         {
           "properties": {
-            "command": { "enum": ["mode.add", "mode.edit", "mode.rename", "mode.copy", "mode.delete"] },
+            "command": { "enum": ["mode.add", "mode.edit", "mode.rename", "mode.copy", "mode.delete", "mode.enable", "mode.disable"] },
             "data": {
               "type": "object",
               "required": ["dry_run", "target", "changed", "revision", "modes", "rules", "created", "notes", "problems", "backup", "snapshot", "app"],
@@ -256,7 +365,7 @@
         "state": { "$ref": "#/$defs/state" },
         "off_reason": {
           "description": "Why the engine is off (null while it is on).",
-          "enum": [null, "default", "unclean_exit", "emergency", "no_hotkeys", "elevated", "stopped", "app_not_running"]
+          "enum": [null, "default", "unclean_exit", "emergency", "no_hotkeys", "elevated", "stopped", "disabled", "hook_lost", "app_not_running"]
         },
         "last_change": {
           "oneOf": [
@@ -270,7 +379,7 @@
                 "origin": {
                   "description": "tray, cli, startup, shutdown, session, emergency, shortcut:<action>, rule:<rule id>",
                   "type": "string",
-                  "pattern": "^(tray|cli|startup|shutdown|session|emergency|shortcut:engine\\.(toggle|pause)|rule:[a-z][a-z0-9-]{1,47})$"
+                  "pattern": "^(tray|cli|startup|shutdown|session|emergency|hook_lost|shortcut:engine\\.(toggle|pause)|rule:[a-z][a-z0-9-]{1,47})$"
                 }
               },
               "not": {
@@ -346,7 +455,7 @@
     },
     "inactive_code": {
       "description": "Codes of DDALGAK_RULE_MODEL §8 that keep a rule inactive: errors, and the *_unsupported infos of this version.",
-      "enum": ["trigger_invalid", "trigger_reserved", "output_reserved", "step_invalid", "recursion_risk", "consent_missing", "rule_invalid", "duplicate_profile_id", "duplicate_rule_id", "unknown_mode", "output_is_trigger", "duplicate_trigger", "duplicate_binding", "consent_stale", "run_too_long", "step_unsupported", "condition_unsupported", "rule_unsupported"]
+      "enum": ["trigger_invalid", "trigger_reserved", "output_reserved", "step_invalid", "recursion_risk", "consent_missing", "rule_invalid", "duplicate_profile_id", "duplicate_rule_id", "unknown_mode", "output_is_trigger", "duplicate_trigger", "duplicate_binding", "consent_stale", "run_too_long", "step_unsupported", "condition_unsupported", "rule_unsupported", "profile_disabled", "mode_disabled"]
     },
     "revision": { "type": "integer", "minimum": 0 },
     "saved_file": {
@@ -506,19 +615,35 @@
                   "type": "object",
                   "required": ["off_reason"],
                   "additionalProperties": false,
-                  "properties": { "off_reason": { "enum": ["default", "unclean_exit", "emergency", "no_hotkeys", "elevated"] } }
+                  "properties": {
+                    "off_reason": { "enum": ["default", "unclean_exit", "emergency", "no_hotkeys", "elevated", "disabled"] },
+                    "recovered": {
+                      "description": "Step 73: after an unclean exit, the keys Ddalgak could have pressed that were checked and those released because Windows still considered them pressed (null after a clean exit).",
+                      "oneOf": [
+                        { "type": "null" },
+                        {
+                          "type": "object",
+                          "required": ["checked", "released"],
+                          "additionalProperties": false,
+                          "properties": { "checked": { "$ref": "#/$defs/count" }, "released": { "$ref": "#/$defs/count" } }
+                        }
+                      ]
+                    }
+                  }
                 },
                 "profile": {
-                  "description": "The active profile and its active mode (`mode`; Step 72 adds the full `mode_state`).",
+                  "description": "The active profile and its active mode (`mode`; Step 72 adds the full `mode_state`; Step 73 `enabled`: false when the user disabled the profile, then none of its rules run).",
                   "type": "object",
                   "required": ["id", "mode"],
                   "additionalProperties": false,
                   "properties": {
                     "id": { "type": "string" },
                     "mode": { "type": "string" },
-                    "mode_state": { "$ref": "#/$defs/mode_state" }
+                    "mode_state": { "$ref": "#/$defs/mode_state" },
+                    "enabled": { "type": "boolean" }
                   }
                 },
+                "indicator": { "$ref": "#/$defs/indicator" },
                 "rules": { "$ref": "#/$defs/rules" },
                 "shortcuts": { "$ref": "#/$defs/shortcuts" },
                 "session": {
@@ -581,7 +706,7 @@
                     "required": ["code", "message"],
                     "additionalProperties": false,
                     "properties": {
-                      "code": { "enum": ["hook_thread_ended", "hook_may_have_been_removed", "signals_dropped", "callback_panicked", "rules_invalid", "shortcut_taken"] },
+                      "code": { "enum": ["hook_thread_ended", "hook_may_have_been_removed", "hook_lost", "signals_dropped", "callback_panicked", "rules_invalid", "shortcut_taken"] },
                       "message": { "type": "string", "minLength": 1 }
                     }
                   }
@@ -600,7 +725,8 @@
                         "installed": { "type": "boolean" },
                         "thread_alive": { "type": "boolean" },
                         "observe_only": { "type": "boolean" },
-                        "mouse_installed": { "description": "The low-level mouse hook is installed (only while a mouse-button rule is active).", "type": "boolean" }
+                        "mouse_installed": { "description": "The low-level mouse hook is installed (only while a mouse-button rule is active).", "type": "boolean" },
+                        "timeout_us": { "description": "Step 73: a callback (or a physical event's wait) this long turns the engine off (`hook_lost`): the user's LowLevelHooksTimeout capped at 1 s, or 300 ms when it is not set; 0 before the first hook.", "$ref": "#/$defs/count" }
                       }
                     },
                     "context_watchers": { "$ref": "#/$defs/count" }
@@ -639,6 +765,7 @@
                     },
                     "late_events": { "$ref": "#/$defs/count" },
                     "max_delay_ms": { "$ref": "#/$defs/count" },
+                    "hook_timeouts": { "description": "Step 73: callbacks that reached the hook timeout (each turned the engine off with hook_lost).", "$ref": "#/$defs/count" },
                     "wakeups": {
                       "type": "object",
                       "required": ["hook_thread", "worker", "host"],
@@ -1189,7 +1316,7 @@
       ]
     },
     "error_code": {
-      "enum": ["io", "internal", "permission_denied", "hook_failed", "usage", "rule_invalid", "hotkey_invalid", "hotkey_reserved", "not_installed", "engine_not_running", "rule_not_found", "profile_not_found", "mode_not_found", "snapshot_not_found", "protocol_error", "app_identity_mismatch", "rules_invalid", "unsupported_platform", "rules_from_newer_version", "engine_elevated", "app_unresponsive", "engine_off", "rule_conflict", "consent_required", "confirmation_required", "busy", "cancelled", "mode_invalid", "mode_in_use"]
+      "enum": ["io", "internal", "permission_denied", "hook_failed", "usage", "rule_invalid", "hotkey_invalid", "hotkey_reserved", "not_installed", "engine_not_running", "rule_not_found", "profile_not_found", "mode_not_found", "snapshot_not_found", "protocol_error", "app_identity_mismatch", "rules_invalid", "unsupported_platform", "rules_from_newer_version", "engine_elevated", "app_unresponsive", "engine_off", "rule_conflict", "consent_required", "confirmation_required", "busy", "cancelled", "mode_invalid", "mode_in_use", "mode_disabled"]
     },
     "failure": {
       "type": "object",
@@ -1217,7 +1344,7 @@
             { "properties": { "exit_code": { "const": 4 }, "code": { "enum": ["protocol_error", "app_identity_mismatch", "rules_invalid"] } } },
             { "properties": { "exit_code": { "const": 5 }, "code": { "enum": ["unsupported_platform", "rules_from_newer_version", "engine_elevated"] } } },
             { "properties": { "exit_code": { "const": 6 }, "code": { "const": "app_unresponsive" } } },
-            { "properties": { "exit_code": { "const": 7 }, "code": { "enum": ["engine_off", "rule_conflict", "consent_required", "confirmation_required", "busy", "mode_in_use"] } } },
+            { "properties": { "exit_code": { "const": 7 }, "code": { "enum": ["engine_off", "rule_conflict", "consent_required", "confirmation_required", "busy", "mode_in_use", "mode_disabled"] } } },
             { "properties": { "exit_code": { "const": 8 }, "code": { "const": "cancelled" } } }
           ]
         }

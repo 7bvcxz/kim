@@ -1,6 +1,12 @@
 //! Ddalgak: a native, Windows-first automation engine (docs/DDALGAK_PHILOSOPHY.md, ADR 0022,
 //! ADR 0024).
 //!
+//! Step 73 adds **enable, disable, pause and recovery**: the user's turn-off survives restarts
+//! ([`lifecycle`]), per-profile and per-mode `enabled` (`profile_disabled`, `mode_disabled`),
+//! stale-key release after a crash and on request and the hook-timeout check ([`recovery`]), and
+//! the status indicator model for the tray and the optional floating badge ([`indicator`];
+//! ADR 0046).
+//!
 //! Step 72 adds **user-defined modes and layers** ([`modes`]: exclusive modes and layers over a
 //! parent, set, toggle, cycle, hold, previous and default run inside the hook callback, one-shot
 //! and timed exits, per-mode precedence, every held output released on a switch, the indicator
@@ -38,6 +44,7 @@ pub mod core;
 pub mod edit;
 pub mod event;
 pub mod hotstring;
+pub mod indicator;
 pub mod inject;
 pub mod ipc;
 pub mod launch;
@@ -47,6 +54,7 @@ pub mod model;
 pub mod modes;
 pub mod mouse;
 pub mod paths;
+pub mod recovery;
 pub mod remap;
 pub mod rules;
 pub mod run;

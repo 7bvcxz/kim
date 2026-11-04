@@ -1,0 +1,29 @@
+{
+  "command": "enable",
+  "data": {
+    "change": {
+      "changed": true,
+      "from": "off",
+      "request": "start",
+      "to": "running"
+    },
+    "dry_run": false,
+    "engine": {
+      "hook": {
+        "installed": true,
+        "mouse_installed": false,
+        "observe_only": true
+      },
+      "last_change": {
+        "origin": "cli",
+        "request": "start"
+      },
+      "off_reason": null,
+      "state": "running"
+    },
+    "scope": "engine"
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

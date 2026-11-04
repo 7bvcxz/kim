@@ -774,6 +774,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ddalgak"
+version = "0.0.1"
+dependencies = [
+ "kim-hotkeys",
+ "regex",
+ "serde_json",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "der"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

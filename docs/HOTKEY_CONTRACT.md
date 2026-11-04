@@ -363,8 +363,12 @@ any modifiers, in all scopes (§6.2).
 ### 7.4 Emergency chord
 
 `Ctrl+Alt+Shift+Escape` belongs to Ddalgak's built-in emergency switch (§12.5). It is reserved
-in every tool so that no Kim binding can hide it. This choice is **provisional**: Step 73
-verifies it on real Windows; a change is recorded in an ADR 0017 note and a contract revision.
+in every tool so that no Kim binding can hide it. This choice is **provisional**: Step 73 tested
+it in Ddalgak's decision core (decided before any rule, also with every key of the chord remapped
+or blocked) and documented its interaction with Task Manager's `Ctrl+Shift+Escape` and with
+elevated windows ([DDALGAK_ENGINE §16](DDALGAK_ENGINE.md)); the check with physical keyboards is
+the maintainer's manual script there. A change is recorded in an ADR 0017 note and a contract
+revision.
 
 ### 7.5 Rules for defaults
 
@@ -772,7 +776,7 @@ The same switch is reachable everywhere:
 | A global binding fires unwanted actions | `<tool> hotkeys disable <action>` or `--all` from any console; or end the tool (the OS releases its hotkeys when the process ends, *documented*) |
 | The configuration is broken | Safe mode (§8.3): no global hotkeys; fix it, or `hotkeys reset --all --yes` |
 | The tool cannot be reached (frozen window) | `Ctrl+Shift+Escape` (reserved, §7.1) opens Task Manager to end it |
-| A hook backend misbehaves (Ddalgak) | The non-remappable emergency chord `Ctrl+Alt+Shift+Escape` (§7.4) removes the hook, releases held keys, cancels running actions and pauses the engine before any rule runs. Then `ddalgak hotkeys disable --all`, `--no-hotkeys`, or ending the process. Windows also removes a low-level hook that stops responding (*documented* `LowLevelHooksTimeout` behavior); Ddalgak never relies on that alone. Step 73 specifies and verifies it. |
+| A hook backend misbehaves (Ddalgak) | The non-remappable emergency chord `Ctrl+Alt+Shift+Escape` (§7.4) removes the hook, releases held keys, cancels running actions and pauses the engine before any rule runs. Then `ddalgak hotkeys disable --all`, `--no-hotkeys`, or ending the process. Windows also removes a low-level hook that stops responding (*documented* `LowLevelHooksTimeout` behavior); Ddalgak never relies on that alone: since Step 73 a callback that reaches the timeout turns its engine off (`hook_lost`) and says so, and `ddalgak release` frees keys left pressed ([DDALGAK_ENGINE §16](DDALGAK_ENGINE.md)). |
 
 A tool never re-enables bindings the user disabled. Not after a crash, a reboot, an update, an
 invalid configuration or a failed registration.

@@ -48,6 +48,7 @@ the requirements it serves. ADRs are immutable once **Accepted**; a later ADR ma
 | [0042](0042-subak-window-tabs-and-safe-close.md) | Subak window tabs, the tab keys and safe close: the Host's Terminals as tabs, one attached pane, hide/close/remove as three requests, `Ctrl+W` asks when the Host says busy, keys from the hotkey contract | Accepted (Step 17; visible-window checks pending the maintainer) |
 | [0043](0043-ddalgak-modes-layers-and-runtime-mode-state.md) | Ddalgak modes: layers over a parent, runtime mode state in the hook, never restored | Accepted (Step 72; real typing in applications and the real tray indicator checks manual) |
 | [0044](0044-noeul-pin-transforms-and-control.md) | Noeul pin transforms and control: an orientation group, a picture that never changes, click-through only with a way back, groups in memory | Accepted (Step 54; real-desktop checks manual) |
+| [0046](0046-ddalgak-enable-disable-and-recovery.md) | Ddalgak enable, disable and recovery: a remembered turn-off, scoped `enabled`, a lost hook turns the engine off, stale keys released on demand | Accepted (validated in Step 73 by automated tests; physical chord, real lock, sign-out, reboot and stuck-key checks manual) |
 
 "Accepted (validated in Step N)" means the decision is made, but the named Step must confirm it
 on real Windows; if validation fails, that Step writes a superseding ADR.

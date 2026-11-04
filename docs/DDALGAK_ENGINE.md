@@ -1,9 +1,10 @@
-# Ddalgak engine (Steps 66–72)
+# Ddalgak engine (Steps 66–73)
 
 Status: **current** (engine implemented in Step 66 for Windows, the rule store and live reload in
 Step 67, §10; remaps, blocks and mouse-button triggers in Step 68, §11; sent keys, typed text,
 paste and hotstrings in Step 69, §12; program and website launches in Step 70, §13; mouse moves,
-wheel, clicks and holds in Step 71, §14; modes and layers in Step 72, §15) · Decisions:
+wheel, clicks and holds in Step 71, §14; modes and layers in Step 72, §15; enable, disable, pause
+and recovery in Step 73, §16) · Decisions:
 [ADR 0022](adr/0022-ddalgak-rule-model-and-safety.md),
 [ADR 0024](adr/0024-ddalgak-windows-input-apis-and-permissions.md),
 [ADR 0028](adr/0028-ddalgak-rule-store-validation-and-reload.md),
@@ -11,7 +12,8 @@ wheel, clicks and holds in Step 71, §14; modes and layers in Step 72, §15) · 
 [ADR 0034](adr/0034-ddalgak-typing-runs-hotstrings-and-clipboard.md),
 [ADR 0037](adr/0037-ddalgak-program-and-website-launches.md),
 [ADR 0040](adr/0040-ddalgak-mouse-actions.md),
-[ADR 0043](adr/0043-ddalgak-modes-layers-and-runtime-mode-state.md) · Code: `crates/ddalgak` ·
+[ADR 0043](adr/0043-ddalgak-modes-layers-and-runtime-mode-state.md),
+[ADR 0046](adr/0046-ddalgak-enable-disable-and-recovery.md) · Code: `crates/ddalgak` ·
 Requirements: `DDALGAK-FR-001…010`, `DDALGAK-FR-017`, `DDALGAK-FR-020`, `DDALGAK-FR-060`, `DDALGAK-FR-071`,
 `DDALGAK-FR-011`, `DDALGAK-FR-012`, `DDALGAK-FR-013`, `DDALGAK-FR-014`, `DDALGAK-FR-015`, `DDALGAK-FR-070`,
 `DDALGAK-NFR-001`, `DDALGAK-NFR-002`, `DDALGAK-NFR-004`, `DDALGAK-SEC-001…005`,
@@ -28,10 +30,10 @@ the rule format is [DDALGAK_RULE_MODEL](DDALGAK_RULE_MODEL.md); the safety scope
 | Delivered | Not yet (owner Step) |
 | --- | --- |
 | `ddalgak-gui.exe`: the tray app that owns the engine (tray icon with state by shape and text, single instance per user session, hidden window, no editor) | the rule editor and playground windows (74, 76) |
-| The low-level keyboard hook engine: event model, trigger tables, decision core, worker, lifecycle, emergency chord, held-key ledger, rate limit, stepping aside; since Step 68 remaps and blocks, mouse-button triggers with the on-demand mouse hook (§11); since Step 69 sent keys, typed text, paste with clipboard restore and hotstrings (§12); since Step 70 program and website launches on a launch thread (§13); since Step 71 mouse moves, wheel, clicks and holds across monitors and DPI (§14); since Step 72 modes and layers with per-mode precedence (§15) | ordered multi-step runs (78), wheel triggers (unassigned, ADR 0040), the compact floating mode indicator (73) |
+| The low-level keyboard hook engine: event model, trigger tables, decision core, worker, lifecycle, emergency chord, held-key ledger, rate limit, stepping aside; since Step 68 remaps and blocks, mouse-button triggers with the on-demand mouse hook (§11); since Step 69 sent keys, typed text, paste with clipboard restore and hotstrings (§12); since Step 70 program and website launches on a launch thread (§13); since Step 71 mouse moves, wheel, clicks and holds across monitors and DPI (§14); since Step 72 modes and layers with per-mode precedence (§15); since Step 73 a remembered turn-off, per-mode and per-profile `enabled`, the lost-hook check, stale-key release and the status indicator model (§16) | ordered multi-step runs (78), wheel triggers (unassigned, ADR 0040), drawing the floating status badge (74; its model and setting exist since Step 73) |
 | Ddalgak's own global shortcuts `engine.toggle` and `engine.pause` from `hotkeys.json`, registered with `RegisterHotKey` | the `ddalgak hotkeys …` commands (81; bind by editing `hotkeys.json` until then) |
 | Rules: the engine runs **engine-control rules** (`engine` steps), since Step 68 **remap** and **block** rules (§11), since Step 69 **`send_keys`**, **`type_text`** and **hotstring** rules (§12), since Step 70 **`open_program`** and **`open_url`** rules (§13), since Step 71 **`mouse_move`**, **`mouse_scroll`** and **`mouse_click`** rules (§14), since Step 72 **`mode`** rules (§15), and keeps every other rule inactive with a stated code; since Step 67 the rule store with full validation, CRUD, drafts, history and live reload (§10) | `delay` and mixed steps (78) |
-| `ddalgak status`, `health`, `engine start|pause|resume|stop`, `pause`, `resume`, `quit`, `startup status|enable|disable`, `capabilities` with `--json` and `--dry-run`; since Step 67 `rule …` and `rules …`; since Step 72 `mode …` | `profile`, `test`, `explain` (75, 76, 77, 81) |
+| `ddalgak status`, `health`, `engine start|pause|resume|stop`, `pause`, `resume`, `quit`, `startup status|enable|disable`, `capabilities` with `--json` and `--dry-run`; since Step 67 `rule …` and `rules …`; since Step 72 `mode …`; since Step 73 `enable`, `disable` (also with `--rule`, `--mode`, `--profile` scopes), `mode enable|disable` and `release` | `profile`, `test`, `explain` (75, 76, 77, 81) |
 | Opt-in start at sign-in through the user's Run key | — |
 
 **Never broader.** A rule this version does not run is listed in `status` as inactive with its
@@ -131,14 +133,16 @@ flowchart LR
 
 | State | Hook | How to get there |
 | --- | --- | --- |
-| `off` | none | app start (default), `ddalgak engine stop`, tray, `engine.toggle`, an engine-control rule (`disable`), the emergency chord, app exit |
+| `off` | none | app start (default), `ddalgak engine stop` or `disable`, tray, `engine.toggle`, an engine-control rule (`disable`), the emergency chord, a lost hook (Step 73, §16), app exit |
 | `running` | installed | `ddalgak engine start`, tray, `engine.toggle`, `engine_on_start: on` at a clean start; `resume` from paused |
 | `paused` | installed (only engine-control rules run) | `ddalgak pause`, tray, `engine.pause`, a rule (`pause`, `toggle_pause`) |
 
 - **Start policy** (`DDALGAK-FR-003`): off unless `engine_on_start: on`; always off, with a
   notice, after an unclean exit (the run marker `%LOCALAPPDATA%\mouv\ddalgak\engine.running` was
-  left behind), after an emergency off (`engine.emergency`), with `--no-hotkeys`/`KIM_NO_HOTKEYS`,
-  or when the app runs elevated. `status` reports the reason as `start.off_reason`.
+  left behind), after an emergency off (`engine.emergency`), since Step 73 after the user turned
+  it off and did not turn it on again (`engine.disabled`, §16), with
+  `--no-hotkeys`/`KIM_NO_HOTKEYS`, or when the app runs elevated. `status` reports the reason as
+  `start.off_reason`.
 - **No rule turns the engine on** (`DDALGAK-FR-004`); the lifecycle refuses it.
 - **Held keys** are released on pause, stop, emergency, session lock or disconnect, shutdown,
   `Drop` and in the panic hook (`DDALGAK-SEC-005`); since Step 68 the worker owns the injector
@@ -171,7 +175,10 @@ The app registers `engine.toggle` and `engine.pause` with `RegisterHotKey` at st
 while the hook is off. `status` shows each as `registered`, `taken` (another program owns it;
 nothing is retried or stolen), `unsupported` (left/right modifiers or `code:` keys, which
 `RegisterHotKey` cannot express) or `unavailable` (`editor.open` before Step 74). An invalid file
-is safe mode: nothing is registered.
+is safe mode: nothing is registered. Since Step 73 a `taken` shortcut is also named once in a tray
+notice at start, in `health.problems` (`shortcut_taken`) and in the indicator's attention; it is
+never registered later, not even when the other program lets go (tested,
+`tests/cli.rs::a_taken_shortcut_is_reported_and_never_stolen`).
 
 ## 6. CLI
 
@@ -187,6 +194,9 @@ is safe mode: nothing is registered.
 | `engine pause` / `pause` | write, `--dry-run` | `engine_off` (7) when off. |
 | `engine resume` / `resume` | write, `--dry-run` | Never turns an engine on that is off. |
 | `engine stop` (`engine off`) | write, `--dry-run` | Removes the hook. |
+| `enable` / `disable` | write, `--dry-run` | Step 73, §16: the engine on or off, like `engine start`/`stop`; a `disable` is remembered across restarts until the next `enable`. With `--rule <id>…`, `--mode <id> [--profile p]` or `--profile <id>` they switch that scope in `rules.json` instead (no app needed; `--draft`, `--if-revision`, and `--allow` with `--rule`). |
+| `mode enable|disable <id>` | write, `--dry-run` | Step 73: a mode's `enabled`; never the default mode (`mode_invalid`). |
+| `release` | write, `--dry-run` | Step 73: releases Ddalgak's ledger, makes the hook forget its key state, releases stale keys Windows still considers pressed (counts only). |
 | `quit` | write, `--dry-run` | Ends the tray app (engine off first). |
 | `startup status|enable|disable` | read / write, `--dry-run` | The user's Run value only. |
 | `capabilities` | read | [tool-capabilities-v1](contracts/schemas/tool-capabilities-v1.schema.json) |
@@ -235,11 +245,11 @@ maintainer's desktop during automated runs).
 | The real app: an injected `F13` fires an engine-control rule (paused), it works while paused (resumed), `F14` turns the engine off and the hook is removed | **tested** (one unlocked run on this machine) | `tests/cli.rs::injected_input_reaches_only_accepting_rules_in_the_real_app`, example `status-paused-by-rule.json` |
 | `RegisterHotKey` registration of `engine.toggle`/`engine.pause` (`Ctrl+Alt+Shift+F13/F14`) in the running app | **tested** (`registered`) | `tests/cli.rs::the_app_lifecycle_through_the_cli` |
 | **Pressing** a registered shortcut toggles the engine with no window open | **not tested**: pressing it needs `Alt` held, and tests may inject only F13–F20 on this shared machine | manual steps below |
-| Emergency chord with physical keys | **not tested** (must not be injected; physical keys only): core unit tests cover it; real-keyboard check below and in Step 73 | manual steps below |
+| Emergency chord with physical keys | **not tested** (must not be injected; physical keys only): core unit tests cover it, since Step 73 also with every key of the chord remapped or blocked; real-keyboard check below and in §16 | manual steps below and §16 |
 | Tray icon and menu | **not tested** (would show on the maintainer's desktop); icons are built in a test without showing | manual steps below |
 | Password edit detection | **tested** on a hidden Win32 edit with `ES_PASSWORD` (not focused); focus-driven behavior **not tested** | `win::context` tests |
 | IME composition guard with the Korean IME, elevated-window skipping | **not tested** (no Korean IME test setup; no injecting rule exists yet) | Steps 68–70 |
-| Session lock releases keys and stops rules | **not tested** (needs a lock/unlock during a run) | Step 73 |
+| Session lock releases keys and stops rules | **tested** with synthetic `WM_WTSSESSION_CHANGE` messages to the test host's own window and real injected F13 (Step 73, §16); a **real** lock and unlock is a manual check | `tests/cli.rs::crash_lock_logoff_and_reboot_recover_without_re_enabling` |
 | Single instance, start policy markers, invalid rules, pipe squatter, private Run key | **tested** | `tests/cli.rs` |
 | Elevated app refuses to turn the engine on | implemented; the tests take an elevated branch that asserts `engine_elevated` when they run as administrator (as on CI runners); **not run elevated on this machine** (no elevation, AGENTS.md §5) | `tests/cli.rs` |
 
@@ -269,6 +279,7 @@ tray icon on your desktop):
 | `crates/ddalgak/src/{event,trigger,table,core,worker,lifecycle,inject,shortcuts,rules,ipc,startup,stats}.rs` | portable engine, unit-tested on every platform |
 | `crates/ddalgak/src/remap.rs` | remap outputs (`Output`), the playground preview, the editor's summary sentence and form fields (Step 68, §11) |
 | `crates/ddalgak/src/{text,hotstring,run}.rs` | typed text (encoding, variables, insertion point, previews, the text editor's data model), the hotstring matcher and its bounded buffer, typing runs with their target checks, clipboard handling and fakes (Step 69, §12) |
+| `crates/ddalgak/src/recovery.rs`, `indicator.rs`, `win/recovery.rs` | Step 73, §16: stale-key candidates and release, the hook-timeout threshold and check; the status indicator model (tray shape, tooltip, attention, floating badge); the registry read and `GetAsyncKeyState` |
 | `crates/ddalgak/src/modes.rs`, `modes/tests.rs`, `mode_edit.rs`, `mode_edit/tests.rs` | modes (Step 72, §15): the mode set and chains, the mode state machine (latched, held layers, one-shot and timed exits, the safe reset, reloads by ID), previews, summaries, the indicator and the mode menu; mode CRUD on the document, the Modes page and Switch mode form data |
 | `crates/ddalgak/src/{model,schema,validate,store,edit}.rs` | the rule store (Step 67, §10): typed model, run-time schema, validation, files, operations |
 | `crates/ddalgak/src/launch.rs` | launches (Step 70, §13): path, argument, environment and URL checks, quoting, normalization and redaction, the launch plan and gate, the fake and test-host launchers, the program picker and website field data models |
@@ -278,7 +289,7 @@ tray icon on your desktop):
 | `crates/ddalgak/src/bin/ddalgak-gui.rs` | the tray app |
 | `crates/ddalgak/hotkeys.manifest.json` | the built-in hotkey manifest (equal to the contract example) |
 | `crates/ddalgak/tests/{cli,hook_windows,launch_windows}.rs`, `tests/common/marker.rs` | real-binary, real-hook and real-launch tests; the marker program the launch tests build and start hidden |
-| `e2e/tests/step66_ddalgak_engine.rs`, `e2e/tests/step67_ddalgak_rules.rs`, `e2e/tests/step68_ddalgak_remap.rs`, `e2e/tests/step69_ddalgak_typing.rs`, `e2e/tests/step70_ddalgak_launch.rs`, `e2e/tests/step71_ddalgak_mouse.rs` | the e2e scenarios (run only through `cargo xtask e2e`) |
+| `e2e/tests/step66_ddalgak_engine.rs`, `e2e/tests/step67_ddalgak_rules.rs`, `e2e/tests/step68_ddalgak_remap.rs`, `e2e/tests/step69_ddalgak_typing.rs`, `e2e/tests/step70_ddalgak_launch.rs`, `e2e/tests/step71_ddalgak_mouse.rs`, `e2e/tests/step72_ddalgak_modes.rs`, `e2e/tests/step73_ddalgak_recovery.rs` | the e2e scenarios (run only through `cargo xtask e2e`) |
 
 ## 10. The rule store and live reload (Step 67)
 
@@ -414,8 +425,9 @@ every rule below is removed again at the end):
 9. **Elevated window**: open an administrator cmd yourself, hold CapsLock and click into it, let
    go, click back into Notepad and type: Ctrl must not be stuck.
 10. **Lock**: hold CapsLock, press Win+L, unlock, type in Notepad: Ctrl must not be stuck.
-11. **Kill** (known limit, Step 73): hold CapsLock and end `ddalgak-gui.exe` in Task Manager; if
-    Ctrl then acts stuck, one press of a physical Ctrl clears it. Report what you see.
+11. **Kill**: hold CapsLock and end `ddalgak-gui.exe` in Task Manager; if Ctrl then acts stuck,
+    one press of a physical Ctrl clears it, and since Step 73 starting the app again releases it
+    too (§16, check 9). Report what you see.
 12. Remove the rules: `ddalgak rule delete caps hangul jdown x1 noins z --yes`, then quit the app.
 
 ## 12. Typed text, sent keys, paste and hotstrings (Step 69)
@@ -806,3 +818,177 @@ everything below is removed again at the end; keep Notepad open):
 10. Remove everything: `ddalgak rule delete m-hold m-h m-j m-game m-once m-brief once-e --yes`,
     `ddalgak mode delete nav --yes`, `ddalgak mode delete game --yes`, `ddalgak mode delete once --yes`,
     `ddalgak mode delete brief --yes`, then quit the app.
+
+## 16. Enable, disable, pause and recovery (Step 73)
+
+Decision: [ADR 0046](adr/0046-ddalgak-enable-disable-and-recovery.md). Format:
+[DDALGAK_RULE_MODEL §2, §7.3, §8](DDALGAK_RULE_MODEL.md). Safety:
+[DDALGAK_SAFETY §4, §7, §10](DDALGAK_SAFETY.md).
+
+**What runs.** Every switch the user has, and what survives a restart:
+
+| Switch | How | After a restart |
+| --- | --- | --- |
+| Engine on / off (global) | `ddalgak enable` / `disable` (= `engine start` / `stop`), the tray, the `engine.toggle` shortcut; a rule can only turn it off | the user's off is remembered (`engine.disabled`): the engine stays off, even with `engine_on_start: on`, until the user turns it on; a quit, a sign-out or a lost hook is not a user's off |
+| Pause / resume (global, temporary) | `ddalgak pause` / `resume`, the tray, `engine.pause`, a rule | not kept (the start policy decides) |
+| A rule | `ddalgak disable --rule <id>…` (= `rule disable`), the editor (74) | `rules.json` |
+| A mode | `ddalgak disable --mode <id>`, `mode disable <id>` | `rules.json` (`enabled: false`); never the default mode |
+| A profile | `ddalgak disable --profile <id>` | `rules.json` (`enabled: false`) |
+| Emergency off | the physical `Ctrl+Alt+Shift+Escape` | `engine.emergency`: off with a notice |
+
+Nothing turns any of them back on by itself: not a crash, a restart, a sign-in, a reload, an
+import or a global `enable` (a disabled profile stays disabled; `enable` warns about it).
+
+**How.**
+
+| Part | What it does |
+| --- | --- |
+| Lifecycle (`lifecycle.rs`) | `Origin::is_user` (tray, CLI, shortcut, rule): a stop from there writes `engine.disabled`; a start removes it. New off reasons `disabled` and `hook_lost`; `start_policy` puts the user's off after the elevated, emergency and unclean-exit reasons |
+| Loader and modes (`rules.rs`, `modes.rs`) | A disabled profile: every enabled rule inactive with `profile_disabled`. A disabled mode: rules limited only to disabled modes are `mode_disabled`, others keep their enabled modes; a `mode` step that can only switch to disabled modes is `mode_disabled`; `ModeState` refuses switches to it, a `cycle` skips it, a reload leaves it for the default mode, the menu leaves it out |
+| Hook thread (`win/hook.rs`, `recovery.rs`) | After each callback: its own duration, and the wait of a physical event, against the threshold read once per hook (`LowLevelHooksTimeout` capped at 1000 ms, 300 ms when absent). Reaching it posts one `WM_HOOK_LOST` to the host and counts `hook_timeouts` |
+| Host (`win/host.rs`) | A lost hook: engine off (`hook_lost`), everything released, a notice. After an unclean exit: the stale-key release before anything else (`start.recovered`). `release`: the ledger (worker), the hook's key state (reset), stale keys (`recovery::stale`, modifiers the hook saw pressed left alone). A session lock: keys released, rules wait, state unchanged; `WM_ENDSESSION`: a clean stop. A taken shortcut: one notice. The indicator is rebuilt after every change |
+| Tray (`win/tray.rs`, `indicator.rs`) | The icon and tooltip from the indicator: ring, struck ring (after an emergency, a lost hook or an unclean exit), disc, notched disc (outside the default mode), bars; the tooltip names what needs attention; the menu adds *Release stuck keys* |
+| CLI (`main.rs`, `mode_cmd.rs`) | `enable`/`disable` with or without a scope, `mode enable|disable`, `release`; `status` adds `indicator`, `profile.enabled`, `start.recovered`; `health` adds `hook.timeout_us`, `counters.hook_timeouts` and the problem `hook_lost` |
+
+**Disabling releases, deterministically.** The engine off, a pause, the emergency chord and a
+session lock release every key and button Ddalgak holds at once (the worker's ledger, the core's
+remaps, held buttons and motions; `worker::tests::held_outputs_are_released_on_cancel_release_all_emergency_and_stop`).
+A scoped disable is a reload: new presses stop matching, and a key held at that moment finishes
+with its trigger's up (its output goes up with it; `core::tests::a_reload_keeps_held_outputs_until_their_trigger_goes_up`),
+so no application ever sees half a key press. Normal keys are never intercepted by any of this.
+
+**The emergency chord** is decided first in the callback on the physical key state, before the
+rule table: with every key of the chord remapped or blocked, in any order, paused, on the
+secure-desktop flag, in a password field, during an IME composition, and with an empty table (an
+unusable `rules.json` never loads) it still trips (`core::tests::the_emergency_chord_beats_remaps_and_blocks_of_its_own_keys`).
+It needs no other thread: the hook thread removes its own hook right after the callback and the
+worker releases its own ledger, so a frozen app window cannot keep the hook. Its interaction
+with Windows' own shortcuts, from the documentation:
+
+- *Documented*: a low-level keyboard hook is called for every key event before it is posted to
+  a thread's input queue; the Secure Attention Sequence (`Ctrl+Alt+Delete`) never reaches hooks;
+  `Ctrl+Shift+Escape` opens Task Manager. `Ctrl+Alt+Shift+Escape` is therefore seen by the hook,
+  and the chord passes on (Ddalgak never consumes it).
+- *Documented*: keys typed while a window of a higher integrity level has focus are not
+  delivered to a non-elevated low-level hook (UIPI, HOTKEY_CONTRACT §12.1). Task Manager can run
+  elevated; while it (or any administrator window) has focus, the chord is not seen. In that
+  window the user can end `ddalgak-gui.exe`, and Windows removes a hook when its process ends
+  (*documented*).
+- **Not documented**, so a manual check: whether Windows treats `Ctrl+Alt+Shift+Escape` as
+  `Ctrl+Shift+Escape` and opens Task Manager as well. The order matters: pressed Ctrl, Shift,
+  Escape, Alt, Windows sees `Ctrl+Shift+Escape` first; pressed with Alt before Escape it does
+  not. The chord trips on whichever of its four keys goes down last.
+- **Not documented**: a Remote Desktop client that sends key combinations to the remote computer
+  installs its own hook while it has focus; whether the local chord is still seen there is left
+  to the manual check.
+
+**When the hook or the rules go wrong: how Windows and Ddalgak recover.**
+
+1. *Bad rules.* An unusable `rules.json` is never loaded: the engine cannot be turned on with it,
+   a running engine keeps its previous rules (`kept_previous`, one notice, the tray tooltip says
+   so), and a bad rule is inactive on its own. The emergency chord, the tray, `ddalgak disable`
+   and `engine.toggle` do not depend on the rules.
+2. *A hook that stops answering.* Windows waits at most `LowLevelHooksTimeout` for a low-level
+   hook (at most 1000 ms on Windows 10 1709 and later), passes the event on and, from Windows 7
+   on, removes the hook without telling the program (*documented*). The keyboard therefore keeps
+   working, but rules would stop silently. Ddalgak measures each callback and the wait of each
+   physical event; one that reaches the threshold turns the engine off (`hook_lost`), releases
+   every key and button, strikes the tray icon through, shows a notice and lists `hook_lost` in
+   `ddalgak health` (with `hook_timeouts`, the longest callback and late events). The user's way
+   back: turn the engine on again (tray, shortcut, `ddalgak enable`), which installs a fresh
+   hook; Ddalgak never reinstalls one by itself. If it happens again, `ddalgak health --json`
+   tells what was slow.
+3. *A crashed or killed app.* Windows removes its hooks when the process ends (*documented*); keys
+   it held stay down for Windows until something sends their up. The next start stays off
+   (`unclean_exit`, struck icon) and first releases the keys Ddalgak could have pressed that
+   Windows still reports down (`start.recovered`); one press of the physical key always clears
+   one as well.
+4. *A stuck modifier while the app runs.* `ddalgak release` or the tray's *Release stuck keys*
+   releases what Ddalgak holds, makes the hook forget its key state (a key-up it never saw no
+   longer blocks triggers) and releases stale keys nobody holds; if a key still acts pressed, run
+   it once more or press the key.
+5. *A shortcut another program owns.* It stays `taken` (status, health, one notice, the tooltip);
+   Ddalgak never takes it, then or later; the tray and the CLI still turn the engine on and off.
+
+**Status without overlays.** The tray icon's shape and tooltip carry the state; notices appear
+only for an emergency, a lost hook, an unclean exit, the user's remembered off at start, a taken
+shortcut and a kept-previous reload. The optional floating badge (`settings.floating_indicator`:
+`off` by default, `paused`, `always`) is a data model in `status.indicator.floating` that the
+editor app draws (Step 74). Nothing polls: the indicator is rebuilt on events.
+
+**Measurements** (Windows 10 Pro 19045, this machine, debug test host; numbers stay local):
+
+| What | Method | Result |
+| --- | --- | --- |
+| Idle wake-ups over 2 s, engine off, running, paused and running in a (synthetically) locked session | `tests/cli.rs::the_engine_has_no_polling_loop_in_any_state`, `health` before and after | hook thread **+0**, worker **+0**, app **+1** (the second `health` request) in every state |
+| The lost-hook check in the callback | code inspection | one atomic load and two compares per callback; no allocation, no lock |
+
+**Verification on real Windows** (the shared machine: synthetic session messages go only to the
+test host's own window; only the test's own host is killed; only F13–F20 are injected; nothing is
+locked, signed out or rebooted):
+
+| Check | Status | Evidence |
+| --- | --- | --- |
+| Remembered off over a restart (also with `engine_on_start: on`), `enable` clearing it, a quit not counting as an off; enable/disable per rule, mode and profile with refusals (default mode, two scopes, consent without a rule, unknown IDs) and dry runs; a disabled profile staying disabled through starts and a global enable; `mode set` to a disabled mode refused; disabling the active mode returning to the default mode; pause keeping the hook | **tested** through the real CLI and test host | `tests/cli.rs::enable_disable_and_pause_per_scope_never_reenable_by_themselves` |
+| The loader codes, mode switches, carry and menu with disabled modes and profiles; the store operations | **tested** | `rules::tests::disabled_profiles_and_modes_…`, `modes::tests::nothing_switches_to_a_disabled_mode_…`, `mode_edit::tests::modes_and_profiles_are_enabled_…` |
+| The emergency chord with conflicting remaps and blocks of its own keys, in four orders, paused, with the stepping-aside flags and with an empty table | **tested** (decision core, no input injected) | `core::tests::the_emergency_chord_beats_remaps_and_blocks_of_its_own_keys` |
+| A synthetic session lock: engine state unchanged, `session_locked`, a real injected F13 skipped (`skipped_secure_desktop`), the rule working again after the synthetic unlock | **tested** on an unlocked desktop of this machine | `tests/cli.rs::crash_lock_logoff_and_reboot_recover_without_re_enabling` |
+| A killed test host: next start off (`unclean_exit`, struck icon); an F20 held by injection (a remap output) released at that start; a synthetic sign-out stopping cleanly; the "reboot" following `engine_on_start`; the user's off surviving a "reboot" | **tested** (real `SendInput` of F20 on an unlocked desktop) | same test |
+| A shortcut another program owns: `taken`, `shortcut_taken`, attention; never registered after the owner lets go | **tested** (the test thread owns `Ctrl+Alt+Shift+F16`) | `tests/cli.rs::a_taken_shortcut_is_reported_and_never_stolen` |
+| The lost-hook path: one real injected F17 with a debug-lowered threshold turns the engine off with `hook_lost`, struck icon, `hook_timeouts`, the `hook_lost` problem; `engine start` installs a fresh hook | **tested** on an unlocked desktop | `tests/cli.rs::a_hook_that_reaches_the_timeout_turns_the_engine_off` |
+| **A real hook removal by Windows** (a callback blocked past `LowLevelHooksTimeout`) | **not tested**: it would freeze the keyboard of the maintainer's PC for up to a second per event; the detection path is tested above, the Windows behavior is *documented* | — |
+| `release`: counts, key-state reset, the stale-key rules (ledger left to the worker, physically held modifiers left alone, `F13`–`F24` only in the test host, masking key before Alt and Win) | **tested** | `tests/cli.rs` (above), `recovery::tests` |
+| The indicator: shapes, words, attention order, the 127-character limit, the floating badge settings | **tested** (model) | `indicator::tests`, `status.indicator` in every status test |
+| **The emergency chord on a physical keyboard** (and with Task Manager, a laptop keyboard, an external keyboard, Remote Desktop), **a real lock and unlock while a remap holds its target, a real sign-out and reboot, a real stuck modifier after killing the app, the real tray icon and its notices** | **not tested**: physical keys, locking, signing out, rebooting and the tray on the maintainer's desktop are manual (AGENTS.md §5, the Step 73 assignment) | the manual script below |
+| The flaky real dual-role check (`hook_windows::real_remap_block_and_dual_role_with_obscure_keys` once saw F19 42.5 ms after F18) | **fixed**: not a timing problem — any key going down while a dual role is undecided decides it at once, by design, and parallel test runs from other checkouts injected keys into the same session. Real-input tests now take a session-wide turn, and the hold is judged on the hook's own counters (exactly two key events and a timer wake-up), a disturbed attempt retried | `tests/hook_windows.rs` |
+
+**Manual checks for the maintainer** (about twenty-five minutes; release build, the real tray
+app; every rule and setting below is removed again at the end; keep Notepad open). Leave a box
+unticked when you could not do it.
+
+1. [ ] `cargo build -p ddalgak --release`. Create `%APPDATA%\mouv\ddalgak\hotkeys.json` with the
+   example of §5 (`Ctrl+Alt+Shift+F9` toggles, `Ctrl+Alt+Shift+F10` pauses). Start
+   `target\release\ddalgak-gui.exe`: the ring icon; `ddalgak status` shows both shortcuts
+   `registered`.
+2. [ ] Add the rules: `ddalgak rule add --id caps --trigger CapsLock --action remap --to LCtrl --allow input-injection`,
+   `ddalgak rule add --id esc --trigger Escape --action remap --to F16 --allow input-injection`,
+   `ddalgak rule add --id ralt --trigger RAlt --action remap --to LShift --allow input-injection`.
+   Press `Ctrl+Alt+Shift+F9`: the disc ("engine on"). CapsLock+A selects all in Notepad.
+3. [ ] **Disable and restart**: `ddalgak disable` (the ring), quit from the tray, start the app
+   again: the ring stays, a notice says you turned it off; `ddalgak status` shows
+   `start.off_reason: disabled`. Press `Ctrl+Alt+Shift+F9`: on again. Quit and start again: it
+   starts off unless `engine_on_start: on`, and with `on` it starts on (it was on when you quit).
+4. [ ] **Pause by shortcut**: `Ctrl+Alt+Shift+F10`: two bars, CapsLock acts as CapsLock again;
+   again: the disc. **Tray**: right-click, *Pause rules*, *Resume rules*, *Turn the engine off*,
+   *Turn the engine on*.
+5. [ ] **Emergency with conflicting remaps** (Escape and Right Alt are remapped): press
+   `Ctrl+Alt+Shift+Escape` with the left modifiers, Alt before Escape: the struck ring, a notice,
+   no key stuck (type letters). Turn on again; hold CapsLock (Ctrl held by the remap), press the
+   chord: off, Ctrl not stuck. Turn on again; press the chord as Ctrl, Shift, Escape, then Alt:
+   note whether Task Manager opens too, and whether the engine turned off. Repeat with the right
+   Ctrl and Shift. If you have a laptop keyboard or an external keyboard, repeat there.
+6. [ ] **Task Manager in front**: open Task Manager (`Ctrl+Shift+Escape`), keep it in front,
+   press the chord: note whether the engine turns off (when Task Manager runs as administrator it
+   is expected not to; end `ddalgak-gui.exe` there instead and check that CapsLock works normally
+   at once).
+7. [ ] **A broken file while on**: turn the engine on, write `{ broken` into `rules.json`: a notice
+   says the previous rules are kept; the chord still turns the engine off; `ddalgak rules restore
+   --backup --yes` repairs the file.
+8. [ ] **Lock while held**: turn on, hold CapsLock, press `Win+L`, unlock, type in Notepad: Ctrl
+   is not stuck; `ddalgak status` shows the engine still on (a lock never pauses or resumes it).
+9. [ ] **Kill while held**: hold CapsLock and end `ddalgak-gui.exe` in Task Manager (Details,
+   End task). If Ctrl now acts stuck, start the app again: it starts off with the struck ring and
+   a notice that it released keys, and Ctrl works normally (`ddalgak status` shows
+   `start.recovered`).
+10. [ ] **Release stuck keys**: with the engine on and nothing held, choose *Release stuck keys*
+    in the tray: a notice with the count; `ddalgak release` prints the same counts.
+11. [ ] **Profile and mode off**: `ddalgak disable --profile default`: CapsLock acts as CapsLock;
+    the tooltip says the profile is disabled; quit and start: still disabled; `ddalgak enable`
+    warns; `ddalgak enable --profile default` brings the rules back.
+12. [ ] **Sign out and reboot**: with the engine on and `engine_on_start: on`, sign out and in
+    (with `ddalgak startup enable`): the app starts with the engine on. `ddalgak disable`, reboot:
+    the app starts with the engine off and says you turned it off. `ddalgak startup disable`.
+13. [ ] **Remote Desktop** (optional): in a Remote Desktop window that has focus, press the chord:
+    note whether the local engine turns off.
+14. [ ] Clean up: `ddalgak rule delete caps esc ralt --yes`, `ddalgak enable`, remove
+    `hotkeys.json`, quit the app.

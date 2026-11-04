@@ -75,8 +75,8 @@ pub struct RemapSpec {
 }
 
 /// What a binding does when it fires. Step 66 runs engine-control rules, Step 68 remaps and
-/// blocks, Step 69 typed text and sent keys; the other action types arrive in Steps 70–72 and are
-/// inactive until then (never broader, §9).
+/// blocks, Step 69 typed text and sent keys, Step 70 program and website launches; the other
+/// action types arrive in Steps 71–72 and are inactive until then (never broader, §9).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Action {
     Engine(Vec<EngineOp>),
@@ -89,6 +89,8 @@ pub enum Action {
     Type(Arc<TextSpec>),
     /// Taps chords in order (§5.3, Step 69): a run on the worker.
     Keys(Arc<KeysSpec>),
+    /// Opens programs and websites in order (§5.5, §5.6, Step 70): a launch thread per run.
+    Launch(Arc<crate::launch::Plan>),
 }
 
 impl Action {

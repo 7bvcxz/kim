@@ -23,9 +23,7 @@
 mod jsonschema;
 
 /// The Host's terminal model, used here as the client terminal.
-#[path = "../src/screen.rs"]
-#[allow(dead_code)]
-mod screen;
+use subak_term::screen;
 
 mod common;
 

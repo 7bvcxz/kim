@@ -722,7 +722,8 @@
                 "state": { "$ref": "#/$defs/rule_state" },
                 "code": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/inactive_code" }] },
                 "text_redacted": { "description": "Step 69: the text of each type_text step was replaced by {\"redacted\": true, \"preview\": <counts>} (the default; `--show-text` shows it).", "type": "boolean" },
-                "rule": { "description": "The rule as stored (ddalgak-rules-v1 `rule`, unknown fields included), with snippet text redacted unless `--show-text` was given.", "type": "object", "required": ["id"] },
+                "targets_redacted": { "description": "Step 70: the launch targets were redacted (the default; `--show-targets` shows them): an open_program path became {\"redacted\": true, \"program\": <file name>}, its args {\"redacted\": true, \"count\": n}, its working_dir {\"redacted\": true}, its env {\"redacted\": true, \"names\": [...]}, an open_url url {\"redacted\": true, \"shown\": <scheme://host/…>}.", "type": "boolean" },
+                "rule": { "description": "The rule as stored (ddalgak-rules-v1 `rule`, unknown fields included), with snippet text redacted unless `--show-text` and launch targets redacted unless `--show-targets` was given.", "type": "object", "required": ["id"] },
                 "problems": { "type": "array", "items": { "$ref": "#/$defs/problem" } }
               }
             }

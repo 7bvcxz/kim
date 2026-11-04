@@ -95,6 +95,9 @@ pub struct Options {
     pub startup: bool,
     /// End after this long (the debug test host never outlives its test).
     pub max_lifetime: Option<Duration>,
+    /// The debug test host only: the one folder its launches may start programs from (always
+    /// hidden); URLs are recorded there and never opened (`launch::TestHostLauncher`).
+    pub test_launch_root: Option<std::path::PathBuf>,
 }
 
 /// Why the host did not run.
@@ -903,13 +906,22 @@ pub fn run(opts: Options) -> Result<(), RunError> {
         // Typing runs ask the platform about the focused target, use the clipboard (paste) and
         // the local clock. The test host never touches the real clipboard and sees a fixed,
         // editable target (it injects nothing anyway).
+        // Launches (Step 70) go through the real launcher; the test host starts only programs in
+        // its test folder, hidden, and never hands a URL or an app to the shell.
         if opts.observe_only {
-            crate::run::Env::inert()
+            crate::run::Env {
+                launcher: Arc::new(crate::launch::TestHostLauncher::new(
+                    Arc::new(super::launch::WinLauncher),
+                    opts.test_launch_root.clone(),
+                )),
+                ..crate::run::Env::inert()
+            }
         } else {
             crate::run::Env {
                 probe: Box::new(super::typing::WinProbe::new(Arc::clone(&shared))),
                 clipboard: Box::new(super::typing::WinClipboard::new(hwnd)),
                 clock: super::typing::local_time,
+                launcher: Arc::new(super::launch::WinLauncher),
             }
         },
     );

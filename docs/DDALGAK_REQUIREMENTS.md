@@ -5,13 +5,16 @@ and the rule-store rows `DDALGAK-FR-005…007`, `DDALGAK-FR-009` since Step 67; 
 (`DDALGAK-FR-010`) and mouse-button triggers (`DDALGAK-FR-071`, middle and X buttons) since Step
 68, whose real-keyboard and mouse checks are still manual; send keys, type text and hotstrings
 (`DDALGAK-FR-011`, `DDALGAK-FR-012`, `DDALGAK-FR-070`) since Step 69, whose real-application,
-IME and clipboard checks are manual; see [DDALGAK_ENGINE](DDALGAK_ENGINE.md)
-§8, §10, §11 and §12 for what was verified; the GUI half of `DDALGAK-FR-007` and undo arrive with the
+IME and clipboard checks are manual; program and website launches (`DDALGAK-FR-013`,
+`DDALGAK-FR-014`, `DDALGAK-SEC-008`) since Step 70, whose real installed-program, browser,
+elevation and focus checks are manual; see [DDALGAK_ENGINE](DDALGAK_ENGINE.md)
+§8, §10, §11, §12 and §13 for what was verified; the GUI half of `DDALGAK-FR-007` and undo arrive with the
 editor, Step 74) · Owner: mouv ·
 Derived from [DDALGAK_PHILOSOPHY](DDALGAK_PHILOSOPHY.md) · Decisions:
 [ADR 0022](adr/0022-ddalgak-rule-model-and-safety.md), [ADR 0028](adr/0028-ddalgak-rule-store-validation-and-reload.md),
 [ADR 0031](adr/0031-ddalgak-remap-execution-and-mouse-hook.md),
-[ADR 0034](adr/0034-ddalgak-typing-runs-hotstrings-and-clipboard.md)
+[ADR 0034](adr/0034-ddalgak-typing-runs-hotstrings-and-clipboard.md),
+[ADR 0037](adr/0037-ddalgak-program-and-website-launches.md)
 
 ## 0. How to read this document
 

@@ -1,0 +1,573 @@
+{
+ "build": "release",
+ "dpi": {
+  "change_ms": 3.0328,
+  "scales": [
+   {
+    "cell": [
+     8,
+     17
+    ],
+    "frame": [
+     976,
+     526
+    ],
+    "full_frame_ms": 1.6636000000000002,
+    "glyph_cache_bytes": 18584,
+    "glyphs": 142,
+    "scale": 1.0
+   },
+   {
+    "cell": [
+     9,
+     21
+    ],
+    "frame": [
+     1100,
+     650
+    ],
+    "full_frame_ms": 1.9495,
+    "glyph_cache_bytes": 24330,
+    "glyphs": 142,
+    "scale": 1.25
+   },
+   {
+    "cell": [
+     12,
+     27
+    ],
+    "frame": [
+     1464,
+     834
+    ],
+    "full_frame_ms": 2.4864,
+    "glyph_cache_bytes": 35825,
+    "glyphs": 142,
+    "scale": 1.5
+   },
+   {
+    "cell": [
+     13,
+     30
+    ],
+    "frame": [
+     1588,
+     928
+    ],
+    "full_frame_ms": 2.8283,
+    "glyph_cache_bytes": 44189,
+    "glyphs": 142,
+    "scale": 1.75
+   },
+   {
+    "cell": [
+     15,
+     34
+    ],
+    "frame": [
+     1832,
+     1052
+    ],
+    "full_frame_ms": 3.4911,
+    "glyph_cache_bytes": 54877,
+    "glyphs": 142,
+    "scale": 2.0
+   }
+  ]
+ },
+ "fallback": {
+  "arrow": {
+   "cells": 1,
+   "char": "\u2192",
+   "face": "Cascadia Mono",
+   "fallback": false,
+   "first_frame_us": 9.1,
+   "found": true
+  },
+  "block": {
+   "cells": 1,
+   "char": "\u2593",
+   "face": "procedural",
+   "fallback": false,
+   "first_frame_us": 0.8999999999999999,
+   "found": true
+  },
+  "box": {
+   "cells": 1,
+   "char": "\u253c",
+   "face": "procedural",
+   "fallback": false,
+   "first_frame_us": 0.8999999999999999,
+   "found": true
+  },
+  "check": {
+   "cells": 1,
+   "char": "\u2713",
+   "face": "Cascadia Mono",
+   "fallback": false,
+   "first_frame_us": 10.1,
+   "found": true
+  },
+  "combining": {
+   "cells": 1,
+   "char": "e\u0301",
+   "face": "Cascadia Mono",
+   "fallback": false,
+   "first_frame_us": 11.8,
+   "found": true
+  },
+  "emoji": {
+   "cells": 2,
+   "char": "\ud83d\ude00",
+   "face": "Segoe UI Emoji",
+   "fallback": true,
+   "first_frame_us": 15.1,
+   "found": true
+  },
+  "emoji-bmp": {
+   "cells": 2,
+   "char": "\u2705",
+   "face": "Segoe UI Emoji",
+   "fallback": true,
+   "first_frame_us": 9.700000000000001,
+   "found": true
+  },
+  "hangul": {
+   "cells": 2,
+   "char": "\ud55c",
+   "face": "Malgun Gothic",
+   "fallback": true,
+   "first_frame_us": 19.2,
+   "found": true
+  },
+  "hanja": {
+   "cells": 2,
+   "char": "\u6f22",
+   "face": "Malgun Gothic",
+   "fallback": true,
+   "first_frame_us": 11.3,
+   "found": true
+  },
+  "hiragana": {
+   "cells": 2,
+   "char": "\u3042",
+   "face": "Malgun Gothic",
+   "fallback": true,
+   "first_frame_us": 10.200000000000001,
+   "found": true
+  },
+  "latin": {
+   "cells": 1,
+   "char": "A",
+   "face": "Cascadia Mono",
+   "fallback": false,
+   "first_frame_us": 27.4,
+   "found": true
+  },
+  "unassigned": {
+   "cells": 1,
+   "char": "\udbff\udffd",
+   "face": "(none: hollow box)",
+   "fallback": true,
+   "first_frame_us": 1.4,
+   "found": false
+  }
+ },
+ "idle": {
+  "comparison": {
+   "command": "target/release/examples/preview.exe --idle 60 (Kim Manager, egui 0.37 + glow)",
+   "cpu_ms_idle": 0.0,
+   "handles": 366,
+   "peak_working_set_bytes": 78270464,
+   "private_bytes": 112185344,
+   "threads": 12,
+   "working_set_bytes": 76509184
+  },
+  "cpu_renderer_gdi_window": {
+   "cpu_ms_idle": 0.0,
+   "cpu_ms_total": 0.0,
+   "handles": 95,
+   "peak_working_set_bytes": 8544256,
+   "private_bytes": 3563520,
+   "threads": 1,
+   "window": "ready 976x526",
+   "working_set_bytes": 8495104
+  },
+  "idle_seconds": 30
+ },
+ "latency": {
+  "builtin": {
+   "keys": 2000,
+   "max_us": 444.40000000000003,
+   "p50_us": 30.5,
+   "p95_us": 32.6
+  },
+  "gdi": {
+   "keys": 2000,
+   "max_us": 268.0,
+   "p50_us": 30.7,
+   "p95_us": 32.8
+  }
+ },
+ "long_output": {
+  "builtin": {
+   "bytes": 8888890,
+   "frames": 9,
+   "history_bytes": 1210000,
+   "history_lines": 10000,
+   "lines": 100000,
+   "mib_per_s": 66.59752793541881,
+   "model_bytes": 1270000,
+   "renderer_bytes": 1940616,
+   "scrollback_page_ms": 0.34901499999999996,
+   "seconds": 0.1272886
+  },
+  "gdi": {
+   "bytes": 8888890,
+   "frames": 9,
+   "history_bytes": 1210000,
+   "history_lines": 10000,
+   "lines": 100000,
+   "mib_per_s": 65.64392965307847,
+   "model_bytes": 1270000,
+   "renderer_bytes": 2057292,
+   "scrollback_page_ms": 0.37922200000000006,
+   "seconds": 0.1291377
+  }
+ },
+ "machine": "Intel Core i5-13600KF, 32 GB RAM, NVIDIA GeForce RTX 4070 Ti, Windows 10 Pro 22H2 build 19045, rustc 1.99.1 x86_64-pc-windows-gnu, release profile (thin LTO), 2026-11-04",
+ "parse": {
+  "ascii": {
+   "bytes": 33634000,
+   "mib_per_s": 72.52302406026834
+  },
+  "emoji": {
+   "bytes": 33558000,
+   "mib_per_s": 50.657508409377634
+  },
+  "korean": {
+   "bytes": 33580000,
+   "mib_per_s": 67.77872522943487
+  },
+  "sgr": {
+   "bytes": 33696000,
+   "mib_per_s": 42.197901025204494
+  },
+  "tui-repaint": {
+   "bytes": 33575310,
+   "mib_per_s": 143.43903807048392
+  }
+ },
+ "render": [
+  {
+   "cold_full_ms": 1.5058,
+   "cols": 80,
+   "frame": [
+    656,
+    424
+   ],
+   "frame_bytes": 1112576,
+   "glyph_cache_bytes": 18584,
+   "glyphs": 142,
+   "one_row_ms": 0.0162,
+   "rasterizer": "gdi",
+   "rows": 24,
+   "scale": 1.0,
+   "scroll_ms": 0.1479,
+   "warm_full_ms": 0.1764
+  },
+  {
+   "cold_full_ms": 1.9843,
+   "cols": 80,
+   "frame": [
+    984,
+    672
+   ],
+   "frame_bytes": 2644992,
+   "glyph_cache_bytes": 35825,
+   "glyphs": 142,
+   "one_row_ms": 0.0189,
+   "rasterizer": "gdi",
+   "rows": 24,
+   "scale": 1.5,
+   "scroll_ms": 0.2814,
+   "warm_full_ms": 0.3539
+  },
+  {
+   "cold_full_ms": 2.4824,
+   "cols": 80,
+   "frame": [
+    1232,
+    848
+   ],
+   "frame_bytes": 4178944,
+   "glyph_cache_bytes": 54877,
+   "glyphs": 142,
+   "one_row_ms": 0.0207,
+   "rasterizer": "gdi",
+   "rows": 24,
+   "scale": 2.0,
+   "scroll_ms": 0.3928,
+   "warm_full_ms": 0.5059
+  },
+  {
+   "cold_full_ms": 1.8295,
+   "cols": 120,
+   "frame": [
+    976,
+    526
+   ],
+   "frame_bytes": 2053504,
+   "glyph_cache_bytes": 18584,
+   "glyphs": 142,
+   "one_row_ms": 0.0293,
+   "rasterizer": "gdi",
+   "rows": 30,
+   "scale": 1.0,
+   "scroll_ms": 0.2477,
+   "warm_full_ms": 0.2897
+  },
+  {
+   "cold_full_ms": 2.7989,
+   "cols": 120,
+   "frame": [
+    1464,
+    834
+   ],
+   "frame_bytes": 4883904,
+   "glyph_cache_bytes": 35825,
+   "glyphs": 142,
+   "one_row_ms": 0.0334,
+   "rasterizer": "gdi",
+   "rows": 30,
+   "scale": 1.5,
+   "scroll_ms": 0.4462,
+   "warm_full_ms": 0.5939
+  },
+  {
+   "cold_full_ms": 3.6765,
+   "cols": 120,
+   "frame": [
+    1832,
+    1052
+   ],
+   "frame_bytes": 7709056,
+   "glyph_cache_bytes": 54877,
+   "glyphs": 142,
+   "one_row_ms": 0.035800000000000005,
+   "rasterizer": "gdi",
+   "rows": 30,
+   "scale": 2.0,
+   "scroll_ms": 0.6334,
+   "warm_full_ms": 0.844
+  },
+  {
+   "cold_full_ms": 4.1074,
+   "cols": 240,
+   "frame": [
+    1936,
+    1155
+   ],
+   "frame_bytes": 8944320,
+   "glyph_cache_bytes": 18584,
+   "glyphs": 142,
+   "one_row_ms": 0.1214,
+   "rasterizer": "gdi",
+   "rows": 67,
+   "scale": 1.0,
+   "scroll_ms": 0.8663,
+   "warm_full_ms": 1.4396
+  },
+  {
+   "cold_full_ms": 8.406600000000001,
+   "cols": 240,
+   "frame": [
+    2904,
+    1833
+   ],
+   "frame_bytes": 21292128,
+   "glyph_cache_bytes": 35825,
+   "glyphs": 142,
+   "one_row_ms": 0.12940000000000002,
+   "rasterizer": "gdi",
+   "rows": 67,
+   "scale": 1.5,
+   "scroll_ms": 1.6389,
+   "warm_full_ms": 2.3211
+  },
+  {
+   "cold_full_ms": 11.9747,
+   "cols": 240,
+   "frame": [
+    3632,
+    2310
+   ],
+   "frame_bytes": 33559680,
+   "glyph_cache_bytes": 54877,
+   "glyphs": 142,
+   "one_row_ms": 0.1356,
+   "rasterizer": "gdi",
+   "rows": 67,
+   "scale": 2.0,
+   "scroll_ms": 3.1262999999999996,
+   "warm_full_ms": 4.0727
+  },
+  {
+   "cold_full_ms": 0.4204,
+   "cols": 80,
+   "frame": [
+    656,
+    400
+   ],
+   "frame_bytes": 1049600,
+   "glyph_cache_bytes": 19487,
+   "glyphs": 142,
+   "one_row_ms": 0.0161,
+   "rasterizer": "builtin",
+   "rows": 24,
+   "scale": 1.0,
+   "scroll_ms": 0.13349999999999998,
+   "warm_full_ms": 0.15860000000000002
+  },
+  {
+   "cold_full_ms": 0.7554000000000001,
+   "cols": 80,
+   "frame": [
+    984,
+    600
+   ],
+   "frame_bytes": 2361600,
+   "glyph_cache_bytes": 37760,
+   "glyphs": 142,
+   "one_row_ms": 0.018600000000000002,
+   "rasterizer": "builtin",
+   "rows": 24,
+   "scale": 1.5,
+   "scroll_ms": 0.2577,
+   "warm_full_ms": 0.3212
+  },
+  {
+   "cold_full_ms": 1.1651,
+   "cols": 80,
+   "frame": [
+    1312,
+    800
+   ],
+   "frame_bytes": 4198400,
+   "glyph_cache_bytes": 63545,
+   "glyphs": 142,
+   "one_row_ms": 0.0183,
+   "rasterizer": "builtin",
+   "rows": 24,
+   "scale": 2.0,
+   "scroll_ms": 0.3343,
+   "warm_full_ms": 0.45489999999999997
+  },
+  {
+   "cold_full_ms": 0.6174999999999999,
+   "cols": 120,
+   "frame": [
+    976,
+    496
+   ],
+   "frame_bytes": 1936384,
+   "glyph_cache_bytes": 19487,
+   "glyphs": 142,
+   "one_row_ms": 0.0291,
+   "rasterizer": "builtin",
+   "rows": 30,
+   "scale": 1.0,
+   "scroll_ms": 0.2216,
+   "warm_full_ms": 0.2622
+  },
+  {
+   "cold_full_ms": 1.8053,
+   "cols": 120,
+   "frame": [
+    1464,
+    744
+   ],
+   "frame_bytes": 4356864,
+   "glyph_cache_bytes": 37760,
+   "glyphs": 142,
+   "one_row_ms": 0.032799999999999996,
+   "rasterizer": "builtin",
+   "rows": 30,
+   "scale": 1.5,
+   "scroll_ms": 0.429,
+   "warm_full_ms": 0.5557
+  },
+  {
+   "cold_full_ms": 2.3044,
+   "cols": 120,
+   "frame": [
+    1952,
+    992
+   ],
+   "frame_bytes": 7745536,
+   "glyph_cache_bytes": 63545,
+   "glyphs": 142,
+   "one_row_ms": 0.0327,
+   "rasterizer": "builtin",
+   "rows": 30,
+   "scale": 2.0,
+   "scroll_ms": 0.5207,
+   "warm_full_ms": 0.7279
+  },
+  {
+   "cold_full_ms": 2.4131,
+   "cols": 240,
+   "frame": [
+    1936,
+    1088
+   ],
+   "frame_bytes": 8425472,
+   "glyph_cache_bytes": 19487,
+   "glyphs": 142,
+   "one_row_ms": 0.121,
+   "rasterizer": "builtin",
+   "rows": 67,
+   "scale": 1.0,
+   "scroll_ms": 0.7986,
+   "warm_full_ms": 0.9956999999999999
+  },
+  {
+   "cold_full_ms": 5.3613,
+   "cols": 240,
+   "frame": [
+    2904,
+    1632
+   ],
+   "frame_bytes": 18957312,
+   "glyph_cache_bytes": 37760,
+   "glyphs": 142,
+   "one_row_ms": 0.1285,
+   "rasterizer": "builtin",
+   "rows": 67,
+   "scale": 1.5,
+   "scroll_ms": 1.4624,
+   "warm_full_ms": 1.9457
+  },
+  {
+   "cold_full_ms": 9.1314,
+   "cols": 240,
+   "frame": [
+    3872,
+    2176
+   ],
+   "frame_bytes": 33701888,
+   "glyph_cache_bytes": 63545,
+   "glyphs": 142,
+   "one_row_ms": 0.128,
+   "rasterizer": "builtin",
+   "rows": 67,
+   "scale": 2.0,
+   "scroll_ms": 2.1616999999999997,
+   "warm_full_ms": 3.7551
+  }
+ ],
+ "theme": {
+  "pixels_changed": true,
+  "redraw_ms": 0.2282
+ }
+}

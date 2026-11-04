@@ -196,7 +196,12 @@ impl Sandbox {
 
     /// Starts the debug test host and waits until it answers.
     fn host(&self) -> Host {
-        let child = self.spawn_host();
+        self.host_with(&[])
+    }
+
+    /// Starts the debug test host with extra options (`--test-launch-root <dir>`).
+    fn host_with(&self, extra: &[&str]) -> Host {
+        let child = self.spawn_host_with(extra);
         let mut h = Host { child };
         let until = Instant::now() + Duration::from_secs(15);
         loop {
@@ -213,6 +218,10 @@ impl Sandbox {
     }
 
     fn spawn_host(&self) -> Child {
+        self.spawn_host_with(&[])
+    }
+
+    fn spawn_host_with(&self, extra: &[&str]) -> Child {
         let mut c = Command::new(env!("CARGO_BIN_EXE_ddalgak-gui"));
         c.args([
             "--test-host",
@@ -221,6 +230,7 @@ impl Sandbox {
             "--endpoint",
             &self.endpoint,
         ])
+        .args(extra)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
@@ -1934,4 +1944,339 @@ fn typing_rules_and_hotstrings_never_put_the_text_in_any_output() {
         "{st:#}"
     );
     assert_eq!(st["data"]["activity"], json!([]), "nothing ran");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Step 70: program and website launches.
+// ---------------------------------------------------------------------------------------------
+
+#[path = "common/marker.rs"]
+mod marker;
+
+const VK_F15: u16 = 0x7E;
+const VK_F16: u16 = 0x7F;
+
+/// The CLI writes launch rules (normalized, refused, consented, redacted), and the real debug
+/// test host runs them: it starts only the test's own marker program from its launch folder,
+/// hidden, and records website hand-offs instead of opening a browser.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn launch_rules_through_the_cli_and_the_real_test_host() {
+    const SECRET: &str = "s3cret-토큰";
+    let sb = Sandbox::new("launch");
+    let built = marker::build(&sb.root.join("build"));
+    let launch_root = sb.root.join("테스트 폴더 with spaces");
+    std::fs::create_dir_all(&launch_root).unwrap();
+    let exe = launch_root.join("마커 app.exe");
+    std::fs::copy(&built, &exe).unwrap();
+    let marker_file = launch_root.join("결과 marker.txt");
+    let no_secret = |what: &str, d: &str| {
+        assert!(
+            !d.contains("s3cret") && !d.contains("토큰") && !d.contains("결과 marker"),
+            "{what} must not show a launch target: {d}"
+        );
+    };
+    // Refused with nothing written: other schemes, credentials, shell hosts, relative paths,
+    // alternate data streams, bad variable names.
+    for args in [
+        ["--action", "open_url", "--url", "javascript:alert(1)"],
+        [
+            "--action",
+            "open_url",
+            "--url",
+            "file:///C:/Windows/win.ini",
+        ],
+        ["--action", "open_url", "--url", "ms-settings:privacy"],
+        ["--action", "open_url", "--url", "zoommtg://zoom.us/join"],
+        [
+            "--action",
+            "open_url",
+            "--url",
+            "https://user:s3cret@example.com/",
+        ],
+        [
+            "--action",
+            "open_program",
+            "--path",
+            r"C:\Windows\System32\cmd.exe",
+        ],
+        ["--action", "open_program", "--path", "notepad.exe"],
+        ["--action", "open_program", "--path", r"C:\notes.txt:x.exe"],
+    ] {
+        let mut a = vec![
+            "rule",
+            "add",
+            "--trigger",
+            "F20",
+            "--allow",
+            "launch-programs",
+        ];
+        a.extend(args);
+        let (exit, d) = sb.json(&a);
+        assert_eq!(exit, 2, "{a:?}: {d:#}");
+        assert_eq!(d["error"]["code"], "usage", "{a:?}: {d:#}");
+        no_secret("a refusal", &d.to_string());
+    }
+    let (exit, d) = sb.json(&[
+        "rule",
+        "add",
+        "--trigger",
+        "F20",
+        "--action",
+        "open_program",
+        "--path",
+        r"C:\x.exe",
+        "--env",
+        "1BAD=x",
+    ]);
+    assert_eq!(
+        (exit, d["error"]["code"].as_str()),
+        (2, Some("usage")),
+        "{d:#}"
+    );
+    assert!(sb.rule_ids().is_empty(), "nothing was written");
+    // A program with a quoted path (as "Copy as path" gives it), arguments and an override.
+    let exe_arg = exe.display().to_string();
+    let marker_arg = marker_file.display().to_string();
+    let env_arg = format!("DDALGAK_TEST_VAR={SECRET}");
+    let quoted = format!("\"{exe_arg}\"");
+    let (exit, d) = sb.json(&[
+        "rule",
+        "add",
+        "--id",
+        "open-marker",
+        "--trigger",
+        "F15",
+        "--accept-injected",
+        "--action",
+        "open_program",
+        "--path",
+        &quoted,
+        "--arg",
+        &marker_arg,
+        "--arg",
+        "첫 번째 인자",
+        "--env",
+        &env_arg,
+        "--allow",
+        "launch-programs",
+    ]);
+    assert_eq!(exit, 0, "{d:#}");
+    no_secret("rule add (program)", &d.to_string());
+    // A website typed without a scheme and with a token in its query.
+    let typed = format!("Example.COM/reset?token={SECRET}");
+    let (exit, d) = sb.json(&[
+        "rule",
+        "add",
+        "--id",
+        "open-site",
+        "--trigger",
+        "F16",
+        "--accept-injected",
+        "--action",
+        "open_url",
+        "--url",
+        &typed,
+        "--allow",
+        "launch-programs",
+    ]);
+    assert_eq!(exit, 0, "{d:#}");
+    no_secret("rule add (website)", &d.to_string());
+    // Without --allow: saved disabled, consent_required.
+    let (exit, d) = sb.json(&[
+        "rule",
+        "add",
+        "--id",
+        "no-consent",
+        "--trigger",
+        "F17",
+        "--action",
+        "open_url",
+        "--url",
+        "https://example.org/",
+    ]);
+    assert_eq!(
+        (exit, d["error"]["code"].as_str()),
+        (7, Some("consent_required")),
+        "{d:#}"
+    );
+    // As stored: normalized, consent bound to exactly these targets.
+    let doc: Value = serde_json::from_slice(&sb.rules_bytes()).unwrap();
+    let rules = doc["profiles"][0]["rules"].as_array().unwrap();
+    let rule = |id: &str| rules.iter().find(|r| r["id"] == id).unwrap().clone();
+    let site = rule("open-site");
+    let normalized = ddalgak::launch::normalize_url(&typed).unwrap();
+    assert!(
+        normalized.starts_with("https://example.com/reset?token=s3cret-%ED"),
+        "{normalized}"
+    );
+    assert_eq!(site["steps"][0]["url"], normalized.as_str());
+    assert_eq!(
+        site["consent"]["launch-programs"]["fingerprint"],
+        ddalgak::validate::launch_fingerprint(&site).as_str()
+    );
+    assert_eq!(site["title"], "F16: opens example.com in your browser");
+    let prog = rule("open-marker");
+    assert_eq!(prog["steps"][0]["path"], exe_arg.as_str(), "quotes removed");
+    assert_eq!(
+        prog["steps"][0]["env"],
+        json!([{ "name": "DDALGAK_TEST_VAR", "value": SECRET }])
+    );
+    assert_eq!(rule("no-consent")["enabled"], false);
+    // Shown redacted unless --show-targets.
+    let (_, d) = sb.json(&["rule", "show", "open-site"]);
+    no_secret("rule show", &d.to_string());
+    assert_eq!(d["data"]["targets_redacted"], true);
+    assert_eq!(
+        d["data"]["rule"]["steps"][0]["url"],
+        json!({ "redacted": true, "shown": "https://example.com/…" })
+    );
+    let (_, d) = sb.json(&["rule", "show", "open-marker"]);
+    no_secret("rule show", &d.to_string());
+    let step = &d["data"]["rule"]["steps"][0];
+    assert_eq!(
+        step["path"],
+        json!({ "redacted": true, "program": "마커 app.exe" })
+    );
+    assert_eq!(step["args"], json!({ "redacted": true, "count": 2 }));
+    assert_eq!(
+        step["env"],
+        json!({ "redacted": true, "names": ["DDALGAK_TEST_VAR"] })
+    );
+    let (_, d) = sb.json(&["rule", "show", "open-site", "--show-targets"]);
+    assert_eq!(d["data"]["rule"]["steps"][0]["url"], normalized.as_str());
+    assert_eq!(d["data"]["targets_redacted"], false);
+    for args in [
+        &["rule", "list"][..],
+        &["rule", "check"],
+        &["status"],
+        &["rules", "history"],
+    ] {
+        let (_, d) = sb.json(args);
+        no_secret(&args.join(" "), &d.to_string());
+        let human = sb.run(args);
+        no_secret(&args.join(" "), &String::from_utf8_lossy(&human.stdout));
+    }
+    let human = sb.run(&["rule", "show", "open-marker"]);
+    no_secret("rule show (human)", &String::from_utf8_lossy(&human.stdout));
+    // The real test host: loading the rules starts nothing.
+    let lr = launch_root.display().to_string();
+    let mut host = sb.host_with(&["--test-launch-root", &lr]);
+    let record = ddalgak::launch::TestHostLauncher::record_file(&launch_root);
+    if elevated() {
+        eprintln!("skipped (elevated): the app refuses to turn its engine on as administrator");
+        sb.json(&["quit"]);
+        return;
+    }
+    let (_, d) = sb.json(&["engine", "start"]);
+    assert_eq!(d["data"]["engine"]["state"], "running", "{d:#}");
+    let (_, st) = sb.json(&["status"]);
+    no_secret("status with the app", &st.to_string());
+    assert_eq!(
+        st["data"]["rules"]["active_rules"],
+        json!(["open-marker", "open-site"]),
+        "{st:#}"
+    );
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(
+        !marker_file.exists() && !record.exists(),
+        "loading launched nothing"
+    );
+    if !ddalgak::win::input_desktop_available() {
+        eprintln!("skipped (locked): the launch triggers need SendInput on an unlocked desktop");
+        sb.json(&["quit"]);
+        assert_eq!(host.wait_exit(Duration::from_secs(10)), Some(0));
+        return;
+    }
+    let tap = |vk: u16| {
+        ddalgak::win::inject::send_as_other_program(&[
+            OutKey { vk, up: false },
+            OutKey { vk, up: true },
+        ])
+    };
+    let mut verified: Vec<String> = Vec::new();
+    'steps: {
+        let t = Instant::now();
+        if tap(VK_F15) != 2 {
+            eprintln!("skipped (SendInput refused) at F15: locked desktop or an elevated window");
+            break 'steps;
+        }
+        let m = marker::wait(&marker_file, Duration::from_secs(20))
+            .expect("the hidden marker program ran");
+        marker::kill_if_running(m.pid, &exe);
+        assert_eq!(m.args, ["첫 번째 인자"]);
+        assert_eq!(m.env, SECRET);
+        verified.push(format!(
+            "an injected F15 started the hidden test program from a path with spaces and Korean characters ({:?} to its marker)",
+            t.elapsed()
+        ));
+        if tap(VK_F16) != 2 {
+            eprintln!("skipped (SendInput refused) at F16");
+            break 'steps;
+        }
+        // A double press: the second one opens nothing (rate_limited, or busy while running).
+        let _ = tap(VK_F16);
+        let until = Instant::now() + Duration::from_secs(10);
+        let lines = loop {
+            let text = std::fs::read_to_string(&record).unwrap_or_default();
+            if !text.is_empty() || Instant::now() > until {
+                break text;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        };
+        std::thread::sleep(Duration::from_millis(300));
+        let lines = std::fs::read_to_string(&record).unwrap_or(lines);
+        let opened: Vec<Value> = lines
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        assert_eq!(
+            opened,
+            [json!({ "verb": "open", "target": normalized, "show": "normal" })],
+            "exactly one hand-off, the verb open on the normalized URL, no browser opened"
+        );
+        verified.push(
+            "an injected F16 handed the normalized URL to the recording shell with the verb open, once"
+                .into(),
+        );
+        let until = Instant::now() + Duration::from_secs(5);
+        let st = loop {
+            let (_, st) = sb.json(&["status"]);
+            let n = st["data"]["activity"].as_array().map_or(0, Vec::len);
+            if n >= 3 || Instant::now() > until {
+                break st;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        no_secret("status after the launches", &st.to_string());
+        let outcomes: Vec<(String, String)> = st["data"]["activity"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| {
+                (
+                    a["rule"].as_str().unwrap().to_string(),
+                    a["outcome"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect();
+        assert!(
+            outcomes.contains(&("open-marker".into(), "ok".into())),
+            "{outcomes:?}"
+        );
+        assert!(
+            outcomes.contains(&("open-site".into(), "ok".into())),
+            "{outcomes:?}"
+        );
+        assert!(
+            outcomes
+                .iter()
+                .any(|(r, o)| r == "open-site" && (o == "rate_limited" || o == "busy")),
+            "{outcomes:?}"
+        );
+        verified.push("the double press was dropped".into());
+    }
+    eprintln!("verified with the real test host: {verified:?}");
+    sb.json(&["quit"]);
+    assert_eq!(host.wait_exit(Duration::from_secs(10)), Some(0));
 }

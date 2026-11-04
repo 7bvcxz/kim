@@ -1,6 +1,6 @@
 # Ddalgak and AutoHotkey v2: feature matrix
 
-Status: **current** (inventory) · **Matrix v2, 2026-11-04** (Step 68: remap rows; Step 69: hotstring and sending rows) · Reference: AutoHotkey **v2.0.31**
+Status: **current** (inventory) · **Matrix v2, 2026-11-04** (Step 68: remap rows; Step 69: hotstring and sending rows; Step 70: `Run` rows) · Reference: AutoHotkey **v2.0.31**
 (the newest v2 entry of the official changelog, dated 2026-10-25) · Owner: mouv · Applies to:
 Ddalgak · Created in Step 65
 
@@ -12,8 +12,8 @@ names its source.
 
 **Most of this matrix is not implemented yet.** A row marked `supported` is a commitment backed
 by the specification in [DDALGAK_RULE_MODEL](DDALGAK_RULE_MODEL.md), to be implemented by the Step
-named; it is usable today only when its Evidence names a Step that shipped it (Steps 66–68 so far:
-the engine, the rule store, remaps and blocks). Every Step that implements a row updates its
+named; it is usable today only when its Evidence names a Step that shipped it (Steps 66–70 so far:
+the engine, the rule store, remaps and blocks, sending and hotstrings, launches). Every Step that implements a row updates its
 Evidence, and the matrix version and date go up with every change of a status.
 
 ## Sources and method
@@ -143,12 +143,12 @@ Where a page did not state something, the row says so instead of filling the gap
 | 4.10 | `MouseMove` absolute or relative, with a speed in Event mode | MM | `mouse_move` absolute, relative, or continuous while held with speed and acceleration | supported | 71 | — |
 | 4.11 | `MouseClickDrag` | C | Hold a button while moving (`hold` + moves); a one-step drag in Step 78 | partial | 71, 78 | — |
 | 4.12 | `CoordMode` (screen, window, client) | C, MM | `virtual_screen`, `primary_monitor`, `active_window`; no client-area mode | partial | 71 | — |
-| 4.13 | `Run` an executable with parameters | R | `open_program` with a path or packaged-app ID and an argument list (never a shell string) | supported | 70 | — |
+| 4.13 | `Run` an executable with parameters | R | `open_program` with a path or packaged-app ID and an argument list (never a shell string) | supported | 70 | Step 70: launch, worker and CLI tests, a real hidden start of the test program (DDALGAK_ENGINE §13); real installed programs manual. Also the working folder and explicit `env` overrides (AutoHotkey: `Run`'s *WorkingDir*, `EnvSet` before `Run`) |
 | 4.14 | `Run` documents, shortcuts, CLSIDs and shell verbs | R | Executables and packaged apps only in v1 | not intended | — | — |
-| 4.15 | `Run` a URL in the default browser; `mailto:` links | R | `open_url` for `http` and `https`; other schemes refused | partial | 70 | — |
+| 4.15 | `Run` a URL in the default browser; `mailto:` links | R | `open_url` for `http` and `https` (the address normalized, no credentials); `mailto:` and every other scheme refused | partial | 70 | Step 70: fake-shell and CLI tests (DDALGAK_ENGINE §13); the real default browser manual |
 | 4.16 | `*RunAs`: run as administrator | R | Never elevates (`KIM-SEC-004`, `DDALGAK-SEC-007`) | not intended | — | — |
 | 4.17 | `RunWait` and exit codes | R | A separately consented command action | planned | 79 | — |
-| 4.18 | `Run` options `Max`, `Min`, `Hide` | R | `normal`, `maximized`, `minimized`; no hidden programs | partial | 70 | — |
+| 4.18 | `Run` options `Max`, `Min`, `Hide` | R | `normal`, `maximized`, `minimized`; no hidden programs | partial | 70 | Step 70: tested through the launch path with a fake launcher; the real window states manual |
 | 4.19 | `A_Clipboard`, `ClipWait`, `ClipboardAll`, `OnClipboardChange` | CB | `type_text` paste with restore of every format (refused when one cannot be copied), kept out of clipboard history; clipboard actions in Step 79; no clipboard monitoring | partial | 69, 79 | Step 69: fake-clipboard tests; the real clipboard is a manual check (DDALGAK_ENGINE §12) |
 | 4.20 | `SetTimer`: periodic or one-shot timers | ST | Scheduled triggers with an idle budget | planned | 79 | — |
 | 4.21 | `Sleep`, rounded up to the OS timer granularity (about 10 or 15.6 ms) | SP | `delay` (1–10000 ms, 60 s per run), same granularity | supported | 67 | — |

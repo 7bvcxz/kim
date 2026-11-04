@@ -1,16 +1,20 @@
-# Ddalgak engine (Steps 66–69)
+# Ddalgak engine (Steps 66–70)
 
 Status: **current** (engine implemented in Step 66 for Windows, the rule store and live reload in
 Step 67, §10; remaps, blocks and mouse-button triggers in Step 68, §11; sent keys, typed text,
-paste and hotstrings in Step 69, §12; the other actions follow in Steps 70–72) · Decisions:
+paste and hotstrings in Step 69, §12; program and website launches in Step 70, §13; the other
+actions follow in Steps 71–72) · Decisions:
 [ADR 0022](adr/0022-ddalgak-rule-model-and-safety.md),
 [ADR 0024](adr/0024-ddalgak-windows-input-apis-and-permissions.md),
 [ADR 0028](adr/0028-ddalgak-rule-store-validation-and-reload.md),
 [ADR 0031](adr/0031-ddalgak-remap-execution-and-mouse-hook.md),
-[ADR 0034](adr/0034-ddalgak-typing-runs-hotstrings-and-clipboard.md) · Code: `crates/ddalgak` ·
+[ADR 0034](adr/0034-ddalgak-typing-runs-hotstrings-and-clipboard.md),
+[ADR 0037](adr/0037-ddalgak-program-and-website-launches.md) · Code: `crates/ddalgak` ·
 Requirements: `DDALGAK-FR-001…010`, `DDALGAK-FR-017`, `DDALGAK-FR-020`, `DDALGAK-FR-060`, `DDALGAK-FR-071`,
-`DDALGAK-FR-011`, `DDALGAK-FR-012`, `DDALGAK-FR-070`, `DDALGAK-NFR-001`, `DDALGAK-NFR-002`,
-`DDALGAK-NFR-004`, `DDALGAK-SEC-001…005`, `DDALGAK-SEC-007`, `DDALGAK-SEC-010`, `DDALGAK-SEC-011`
+`DDALGAK-FR-011`, `DDALGAK-FR-012`, `DDALGAK-FR-013`, `DDALGAK-FR-014`, `DDALGAK-FR-070`,
+`DDALGAK-NFR-001`, `DDALGAK-NFR-002`, `DDALGAK-NFR-004`, `DDALGAK-SEC-001…005`,
+`DDALGAK-SEC-007`, `DDALGAK-SEC-008`, `DDALGAK-SEC-010`, `DDALGAK-SEC-011`, `DDALGAK-SEC-013`,
+`DDALGAK-SEC-014`
 
 This document describes what the Ddalgak engine does today, how it is built, how to drive it
 from the CLI, what was measured and what was verified on real Windows. The *why* is in the ADRs;
@@ -22,15 +26,15 @@ the rule format is [DDALGAK_RULE_MODEL](DDALGAK_RULE_MODEL.md); the safety scope
 | Delivered | Not yet (owner Step) |
 | --- | --- |
 | `ddalgak-gui.exe`: the tray app that owns the engine (tray icon with state by shape and text, single instance per user session, hidden window, no editor) | the rule editor and playground windows (74, 76) |
-| The low-level keyboard hook engine: event model, trigger tables, decision core, worker, lifecycle, emergency chord, held-key ledger, rate limit, stepping aside; since Step 68 remaps and blocks, mouse-button triggers with the on-demand mouse hook (§11); since Step 69 sent keys, typed text, paste with clipboard restore and hotstrings (§12) | launches (70), mouse actions and wheel triggers (71), modes (72), ordered multi-step runs (78) |
+| The low-level keyboard hook engine: event model, trigger tables, decision core, worker, lifecycle, emergency chord, held-key ledger, rate limit, stepping aside; since Step 68 remaps and blocks, mouse-button triggers with the on-demand mouse hook (§11); since Step 69 sent keys, typed text, paste with clipboard restore and hotstrings (§12); since Step 70 program and website launches on a launch thread (§13) | mouse actions and wheel triggers (71), modes (72), ordered multi-step runs (78) |
 | Ddalgak's own global shortcuts `engine.toggle` and `engine.pause` from `hotkeys.json`, registered with `RegisterHotKey` | the `ddalgak hotkeys …` commands (81; bind by editing `hotkeys.json` until then) |
-| Rules: the engine runs **engine-control rules** (`engine` steps), since Step 68 **remap** and **block** rules (§11), since Step 69 **`send_keys`**, **`type_text`** and **hotstring** rules (§12), and keeps every other rule inactive with a stated code; since Step 67 the rule store with full validation, CRUD, drafts, history and live reload (§10) | the other action types (70–72, 78) |
+| Rules: the engine runs **engine-control rules** (`engine` steps), since Step 68 **remap** and **block** rules (§11), since Step 69 **`send_keys`**, **`type_text`** and **hotstring** rules (§12), since Step 70 **`open_program`** and **`open_url`** rules (§13), and keeps every other rule inactive with a stated code; since Step 67 the rule store with full validation, CRUD, drafts, history and live reload (§10) | the other action types (71–72, 78) |
 | `ddalgak status`, `health`, `engine start|pause|resume|stop`, `pause`, `resume`, `quit`, `startup status|enable|disable`, `capabilities` with `--json` and `--dry-run`; since Step 67 `rule …` and `rules …` | `profile`, `mode`, `test`, `explain` (72, 75, 76, 77, 81) |
 | Opt-in start at sign-in through the user's Run key | — |
 
 **Never broader.** A rule this version does not run is listed in `status` as inactive with its
-code: `step_unsupported` (an action type of a later Step — launches in 70, mouse actions in 71,
-modes in 72, `delay` and a typing step among other steps in 78 — or an unknown one),
+code: `step_unsupported` (an action type of a later Step — mouse actions in 71,
+modes in 72, `delay`, a typing step among other steps and launches mixed with other steps in 78 — or an unknown one),
 `condition_unsupported` (`when`, Step 77), `rule_unsupported` (an unknown field inside the rule),
 `trigger_invalid`/`trigger_reserved`, `duplicate_rule_id`, `duplicate_trigger` and every other
 error of DDALGAK_RULE_MODEL §8. A file that is not a usable `ddalgak.rules` v1 document is not
@@ -262,12 +266,13 @@ tray icon on your desktop):
 | `crates/ddalgak/src/remap.rs` | remap outputs (`Output`), the playground preview, the editor's summary sentence and form fields (Step 68, §11) |
 | `crates/ddalgak/src/{text,hotstring,run}.rs` | typed text (encoding, variables, insertion point, previews, the text editor's data model), the hotstring matcher and its bounded buffer, typing runs with their target checks, clipboard handling and fakes (Step 69, §12) |
 | `crates/ddalgak/src/{model,schema,validate,store,edit}.rs` | the rule store (Step 67, §10): typed model, run-time schema, validation, files, operations |
-| `crates/ddalgak/src/win/{hook,inject,context,host,tray,pipe,instance,startup,watch,typing}.rs` | Windows layer (`watch`: the folder change notifications of §10; `typing`: key translation, the target probe, the clipboard and the local clock of §12) |
+| `crates/ddalgak/src/launch.rs` | launches (Step 70, §13): path, argument, environment and URL checks, quoting, normalization and redaction, the launch plan and gate, the fake and test-host launchers, the program picker and website field data models |
+| `crates/ddalgak/src/win/{hook,inject,context,host,tray,pipe,instance,startup,watch,typing,launch}.rs` | Windows layer (`watch`: the folder change notifications of §10; `typing`: key translation, the target probe, the clipboard and the local clock of §12; `launch`: `CreateProcessW`, `ShellExecuteExW`, window activation and icon extraction of §13) |
 | `crates/ddalgak/src/main.rs`, `cli.rs`, `output.rs`, `rule_cmd.rs` | the `ddalgak` CLI (`rule_cmd`: the `rule` and `rules` commands) |
 | `crates/ddalgak/src/bin/ddalgak-gui.rs` | the tray app |
 | `crates/ddalgak/hotkeys.manifest.json` | the built-in hotkey manifest (equal to the contract example) |
-| `crates/ddalgak/tests/{cli,hook_windows}.rs` | real-binary and real-hook tests |
-| `e2e/tests/step66_ddalgak_engine.rs`, `e2e/tests/step67_ddalgak_rules.rs`, `e2e/tests/step68_ddalgak_remap.rs`, `e2e/tests/step69_ddalgak_typing.rs` | the e2e scenarios (run only through `cargo xtask e2e`) |
+| `crates/ddalgak/tests/{cli,hook_windows,launch_windows}.rs`, `tests/common/marker.rs` | real-binary, real-hook and real-launch tests; the marker program the launch tests build and start hidden |
+| `e2e/tests/step66_ddalgak_engine.rs`, `e2e/tests/step67_ddalgak_rules.rs`, `e2e/tests/step68_ddalgak_remap.rs`, `e2e/tests/step69_ddalgak_typing.rs`, `e2e/tests/step70_ddalgak_launch.rs` | the e2e scenarios (run only through `cargo xtask e2e`) |
 
 ## 10. The rule store and live reload (Step 67)
 
@@ -502,3 +507,98 @@ rule below is removed again at the end; keep Notepad open):
     still types (the foreground window decides when no focused control is reported).
 12. Remove the rules: `ddalgak rule delete t-sign t-jamo t-slow t-paste t-cursor h-btw h-sig h-ac k-copy --yes`,
     then quit the app.
+
+## 13. Program and website launches (Step 70)
+
+Decision: [ADR 0037](adr/0037-ddalgak-program-and-website-launches.md). Format:
+[DDALGAK_RULE_MODEL §5.5, §5.6](DDALGAK_RULE_MODEL.md).
+
+**What runs.** A rule made only of `open_program` and `open_url` steps (a keys trigger; launches
+mixed with other step types and hotstring launches wait for Step 78) opens its targets in order:
+a program by path, with its arguments, working folder, window state, `if_running` and explicit
+`env` overrides; a packaged app by AppUserModelID; an `http`/`https` website in the default
+browser.
+
+**How.**
+
+| Part | What it does |
+| --- | --- |
+| Loader (`rules.rs`, `launch::compile_step`) | Compiles the steps into a plan; the checks the schema cannot express (a `:` after the drive, an override name twice, a command line over 32 766 characters, a URL a browser's command line could misread) make the rule inactive with `step_invalid`, also reported by `rule check`; a stale fingerprint is `consent_stale` (§6.2) |
+| Worker | A fired launch rule passes the gate — `busy` while its previous run is still going, `rate_limited` within one second of its last start — and is handed to a short-lived `ddalgak-launch` thread; remaps and typing never wait for it. A pause, stop, reload or the emergency chord ends the run before its next target (`cancelled`) |
+| Launch thread (`launch::execute`) | Per target: expand the path (six known-folder tokens; nothing searched), check it again (a file, an `.exe`, no shell host behind a link, the working folder exists), activate a running window for `if_running: activate`, then start; records the rule ID and outcome only |
+| Windows (`win::launch::WinLauncher`) | `CreateProcessW` (the path as application name, a command line quoted per argument, no inherited handles, `STARTF_USESHOWWINDOW`, an environment block only with overrides, `AllowSetForegroundWindow(pid)`); `ShellExecuteExW` with the verb `open`, no error UI, COM on the launch thread, for checked URLs and `shell:AppsFolder\<id>` only; `ERROR_ELEVATION_REQUIRED` becomes `program_requires_elevation` and is never retried elevated |
+| CLI | `rule add/edit --action open_program --path <exe> \| --app-id <id> [--arg <a>]… [--working-dir <d>] [--window …] [--if-running …] [--env NAME=VALUE]…`, `--action open_url --url <url>`; a pasted path loses its quotes, a typed address is normalized (RULE_MODEL §5.6); `rule show` redacts targets unless `--show-targets` |
+| Editor data (`ProgramDraft`, `UrlDraft`) | The Step 74 forms: picker normalization and known-folder tokens (`C:\Users\kim\AppData\Local\…` → `%LocalAppData%\…`), field problems without quoting targets, the preview (file name, found, a real program header, arguments), the command line shown in details, the icon read from the file (`win::launch::icon_preview`), the summary sentence, canonical steps, Save/Test gating |
+| Debug test host | `--test-launch-root <dir>`: programs only from that folder and always hidden; shell hand-offs written to `<dir>\shell-open.jsonl` instead of opened; no other window activated; without the option every launch is refused |
+
+**Measurements** (Windows 10 Pro 19045, this machine, debug builds; numbers stay local, ADR 0012):
+
+| What | Method | Result |
+| --- | --- | --- |
+| A real hidden start: `execute` until `CreateProcessW` returned, and until the program had written its marker | `tests/launch_windows.rs` (the freshly built marker program; the first start of a new file includes the antivirus scan) | 68–72 ms; 97–102 ms |
+| An injected trigger through the real test host until the started program had written its marker | `tests/cli.rs::launch_rules_through_the_cli_and_the_real_test_host` | 210 ms |
+| The window search of `if_running: activate` over every top-level window of the desktop | `win::launch::tests::the_window_search_…` | 1.5 ms |
+| Idle cost | unchanged: no launch thread exists unless a launch runs; the gate is a small map touched only on a trigger | §7 |
+
+**Verification** (the shared machine: automated runs never open a browser, an installed program
+or another program's window, never trigger UAC):
+
+| Check | Status | Evidence |
+| --- | --- | --- |
+| Path rules (absolute, six tokens, characters, `:` streams, `.exe`, shell hosts even with odd case), known-folder expansion and tokenizing, Copy-as-path normalization; messages never quote a path | **tested** | `launch::tests` |
+| Argument quoting: spaces, tabs, quotes, trailing backslashes, empty arguments, Korean and emoji split back exactly by `CommandLineToArgvW` itself | **tested** (Windows' own splitter) | `win::launch::tests::windows_itself_splits_…` |
+| URL allowlist and normalization: `https://` added, case, Punycode, percent-encoding, `file:`/`javascript:`/`vbscript:`/`data:`/`ms-*:`/`search-ms:`/custom protocols and credentials refused; redaction to scheme and host | **tested** | `launch::tests`, `tests/cli.rs` |
+| Websites and packaged apps reach the shell with the verb `open` on exactly the normalized URL or `shell:AppsFolder\<id>`; no browser → `browser_unavailable`, app missing → `program_not_found`; anything else (another verb, a `file:` target, a path) refused before `ShellExecuteExW` | **tested** with a fake launcher and the real refusal path (no shell call) | `launch::tests::websites_and_apps_…`, `win::launch::tests::the_shell_is_never_given_…` |
+| Elevation required → `program_requires_elevation`, one attempt, no elevated retry | **tested** with a fake returning `ERROR_ELEVATION_REQUIRED` (a real elevated target would need UAC) | `launch::tests::programs_are_resolved_…`, `os_errors_map_…` |
+| Missing, moved, folder-instead-of-file, missing working folder, unknown token; a non-program `.exe` and a missing file through the real `CreateProcessW` (nothing starts) | **tested** | `launch::tests::missing_moved_…`, `win::launch::tests::a_missing_program_…` |
+| Duplicate rapid triggers (`busy`, `rate_limited`), cancellation between targets, nothing on load or reload, the inert environment refusing everything, activity with codes only | **tested** (the real worker thread, fake launcher) | `worker::tests` (Step 70 section) |
+| Consent: a changed URL or environment value is `consent_stale`; imported rules stay disabled; launches mixed with other steps `step_unsupported` | **tested** | `rules::tests::launch_rules_compile_…` |
+| A **real hidden start** of the test's own program from a path with spaces and Korean characters: arguments (quotes, trailing backslash, empty, emoji), working folder and the `env` override arrive exactly; a program outside the test folder is refused | **tested** | `tests/launch_windows.rs` |
+| The real test host: CLI-written rules load and start nothing; an injected `F15` starts the hidden program; an injected `F16` pressed twice gives exactly one `open` hand-off of the normalized URL (recorded, never opened) and one `rate_limited`/`busy`; no output shows a target | **tested** once on an unlocked desktop of this machine (reports **skipped** when locked or elevated) | `tests/cli.rs::launch_rules_through_the_cli_and_the_real_test_host` |
+| The icon preview read from `notepad.exe` without running it | **tested** | `win::launch::tests::icons_are_read_…` |
+| **A real hotkey opening a real installed program and a website in the real default browser**, a packaged app, `if_running: activate` with a real window, an elevated target, the foreground behavior | **not tested**: they open windows and browsers on the maintainer's desktop or need UAC (AGENTS.md §5); the manual script below | — |
+
+**Foreground and focus, honestly.** Windows lets a process put a window in front only under the
+foreground lock rules (*documented*: among others, the process received the last input event, or
+is the foreground process). Ddalgak passes its right on with `AllowSetForegroundWindow` (the new
+process's ID; `ASFW_ANY` before a shell hand-off), which helps only if Ddalgak has the right at
+that moment; whether a low-level hook's process counts as having received the input is not
+documented. When it does not, the program or browser opens behind the active window and its
+taskbar button flashes; `if_running: activate` then restores the window but may not bring it to
+the front. Ddalgak uses no workaround that defeats the lock (ADR 0037 §8). Step 5 below records
+what really happens.
+
+**Manual checks for the maintainer** (about fifteen minutes; release build, the real tray app;
+every rule is removed again at the end):
+
+1. `cargo build -p ddalgak --release`, start `target\release\ddalgak-gui.exe`, then
+   `target\release\ddalgak engine start`.
+2. Add the rules (each needs `--allow launch-programs`):
+   - `ddalgak rule add --id l-notepad --trigger Ctrl+Shift+F6 --action open_program --path "%SystemRoot%\System32\notepad.exe" --allow launch-programs`
+   - `ddalgak rule add --id l-notepad-front --trigger Ctrl+Shift+F7 --action open_program --path "%SystemRoot%\System32\notepad.exe" --if-running activate --window maximized --allow launch-programs`
+   - `ddalgak rule add --id l-calc --trigger Ctrl+Shift+F8 --action open_program --app-id Microsoft.WindowsCalculator_8wekyb3d8bbwe!App --allow launch-programs`
+   - `ddalgak rule add --id l-site --trigger Ctrl+Shift+F9 --action open_url --url github.com/hellomouv/kim --allow launch-programs`
+   - `ddalgak rule add --id l-admin --trigger Ctrl+Shift+F10 --action open_program --path "%SystemRoot%\System32\msconfig.exe" --allow launch-programs`
+
+   `ddalgak status` lists them active; `ddalgak rule show l-site` shows `https://github.com/…`.
+3. **Installed program by hotkey**: with a File Explorer window in front, press Ctrl+Shift+F6:
+   Notepad opens once (pressing twice quickly opens it once: the second press is `rate_limited`
+   in `ddalgak status`). Close it. Moved program: copy `notepad.exe` into a folder of your own,
+   add a rule for the copy (`--id l-copy --trigger Ctrl+Shift+F11`), delete the copy and press
+   Ctrl+Shift+F11: nothing opens and the activity shows `program_not_found`.
+4. **Website in the default browser**: press Ctrl+Shift+F9: the Kim repository opens in your
+   default browser (a new tab if it runs). Activity shows `l-site ok`, never the address.
+5. **Focus**: note for steps 3 and 4 whether the new window came to the front or only its taskbar
+   button flashed. With Notepad open and minimized, press Ctrl+Shift+F7: Notepad is restored and
+   maximized — report whether it came to the front. Report the same for Calculator
+   (Ctrl+Shift+F8).
+6. **Elevated target**: press Ctrl+Shift+F10: no UAC prompt appears, nothing opens, and
+   `ddalgak status` shows `l-admin program_requires_elevation` (System Configuration requires
+   administrator rights in its manifest; report it if it opens instead). Open an administrator Command Prompt yourself, give it
+   focus and press Ctrl+Shift+F6: Notepad still opens (launches inject nothing), as you, not
+   elevated (Task Manager's "Elevated" column says No).
+7. **Changed target**: `ddalgak rule edit l-site --action open_url --url example.com` is refused
+   (`consent_required`); with `--allow launch-programs` it is saved and Ctrl+Shift+F9 opens
+   example.com.
+8. Remove the rules: `ddalgak rule delete l-notepad l-notepad-front l-calc l-site l-admin l-copy --yes`,
+   then quit the app.

@@ -77,3 +77,14 @@ not aligned to two cells).
 
 `KIM-NFR-001`, `KIM-NFR-002`, `KIM-NFR-012`, `KIM-NFR-013`, `KIM-FR-009`, `KIM-FR-012`,
 `SUBAK-FR-031`, `KIM-NFR-011`.
+
+## Notes
+
+- 2026-11-04 (Step 15): [ADR 0036](0036-terminal-emulation-and-rendering-path.md) picks the
+  terminal-grid renderer of decision 2: a CPU cell-grid renderer (`subak-term`, feature `render`)
+  with GDI glyph rasterization and procedural box drawing, presented with `SetDIBitsToDevice`; no
+  GPU context. Measured idle on the reference machine with the same sampler: that window
+  3.40 MiB private / 8.10 MiB working set / 1 thread, Kim Manager's egui + glow 107.0 MiB /
+  73.0 MiB / 12 threads. For Subak this is the fallback-B trigger of decision 4 ("memory budget
+  missed or GPU stack undesired"): Step 16 builds the Subak window on plain Win32 with this
+  renderer, or justifies the GPU stack's cost in its own ADR. Kim Manager keeps egui + glow.

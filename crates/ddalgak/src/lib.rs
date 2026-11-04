@@ -1,6 +1,10 @@
 //! Ddalgak: a native, Windows-first automation engine (docs/DDALGAK_PHILOSOPHY.md, ADR 0022,
 //! ADR 0024).
 //!
+//! Step 70 adds **program and website launches** ([`launch`]: `CreateProcessW` with a quoted
+//! argument list, the shell's `open` for `http`/`https` and packaged apps, never a shell string or
+//! elevation; a launch thread per run; the editor's program picker and website field; ADR 0037).
+//!
 //! Step 68 adds **remaps and blocks** ([`remap`]; the core's remap state machine, the worker's
 //! output, the optional low-level mouse hook for mouse-button triggers; ADR 0031).
 //!
@@ -25,6 +29,7 @@ pub mod event;
 pub mod hotstring;
 pub mod inject;
 pub mod ipc;
+pub mod launch;
 pub mod lifecycle;
 pub mod model;
 pub mod paths;

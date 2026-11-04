@@ -358,6 +358,51 @@ pub fn redact_args(args: &[String]) -> Vec<String> {
     out
 }
 
+/// A verbatim command line as it may be shown: each blank-separated word goes through the rules
+/// of [`redact_args`] (a word's surrounding quotes are ignored for the decision), and the blanks
+/// between words are kept, so the rest of the line reads exactly as given.
+pub fn redact_line(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut hide_next = false;
+    let mut word = String::new();
+    let mut flush = |word: &mut String, out: &mut String| {
+        if word.is_empty() {
+            return;
+        }
+        let bare = word.trim_matches('"');
+        if hide_next {
+            out.push_str("***");
+            hide_next = false;
+        } else {
+            match bare.split_once(['=', ':']) {
+                Some((name, _)) if secret_name(name) => {
+                    let lead = word.len() - word.trim_start_matches('"').len();
+                    let trail = word.len() - word.trim_end_matches('"').len();
+                    out.push_str(&word[..lead]);
+                    out.push_str(&bare[..=name.len()]);
+                    out.push_str("***");
+                    out.push_str(&word[word.len() - trail..]);
+                }
+                _ => {
+                    hide_next = bare.starts_with(['-', '/']) && secret_name(bare);
+                    out.push_str(word);
+                }
+            }
+        }
+        word.clear();
+    };
+    for c in line.chars() {
+        if c.is_whitespace() {
+            flush(&mut word, &mut out);
+            out.push(c);
+        } else {
+            word.push(c);
+        }
+    }
+    flush(&mut word, &mut out);
+    out
+}
+
 /// Why a start failed (`spawn_failed`, IPC_PROTOCOL §6).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Failure {
@@ -380,6 +425,9 @@ pub struct Pane {
     pub id: String,
     pub index: usize,
     pub command: Command,
+    /// The verbatim command line it was started with (`terminal.create` `command_line`, or the
+    /// `--shell` line of `host serve`); `None` when `command` was quoted word by word.
+    pub command_line: Option<String>,
     /// The working directory it was started in.
     pub cwd: Option<String>,
     /// The program file that runs: `command.program` resolved on the pane's `PATH` (Step 11).
@@ -493,6 +541,8 @@ pub struct Registry {
 pub struct Spec {
     pub name: Option<Name>,
     pub command: Command,
+    /// A verbatim command line; `command` is then its split, for display and the busy rule.
+    pub command_line: Option<String>,
     pub cwd: Option<String>,
     /// Names of the environment overrides; their values never reach the model.
     pub env: EnvNames,
@@ -588,6 +638,7 @@ impl Registry {
                     id: pid,
                     index: 0,
                     command: spec.command,
+                    command_line: spec.command_line,
                     cwd: spec.cwd,
                     executable: None,
                     env: spec.env,
@@ -813,6 +864,7 @@ pub fn terminal_json(t: &Terminal, live: &dyn Fn(&Pane) -> Live) -> Value {
                         "index": p.index,
                         "cwd": p.cwd,
                         "command": command_json(&p.command),
+                        "command_line": p.command_line.as_deref().map(redact_line),
                         "executable": p.executable,
                         "env": env_json(&p.env),
                         "title": Value::Null,
@@ -905,6 +957,7 @@ mod tests {
                 program: r"C:\Windows\system32\cmd.exe".into(),
                 args: vec![],
             },
+            command_line: None,
             cwd: None,
             env: EnvNames::default(),
             size: (120, 30),
@@ -1194,6 +1247,21 @@ mod tests {
                 "build"
             ])
         );
+    }
+
+    #[test]
+    fn verbatim_command_lines_are_redacted_word_by_word_and_keep_their_blanks() {
+        assert_eq!(
+            redact_line(r#"cmd.exe /d /s /c "echo "a  b" & ver""#),
+            r#"cmd.exe /d /s /c "echo "a  b" & ver""#,
+            "nothing secret: the line is shown exactly"
+        );
+        assert_eq!(
+            redact_line(r#"tool.exe  --token=abc "--password" hunter2 /Auth:x "API_KEY=1" C:\x"#),
+            r#"tool.exe  --token=*** "--password" *** /Auth:*** "API_KEY=***" C:\x"#
+        );
+        assert_eq!(redact_line(""), "");
+        assert_eq!(redact_line("  a\tb "), "  a\tb ");
     }
 
     #[test]

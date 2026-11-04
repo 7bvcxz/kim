@@ -1,13 +1,14 @@
-//! `subak terminal new | list | info | rename | attach | stop | kill | rm` — the headless Terminal
-//! lifecycle (docs/SESSION_MODEL.md, ADR 0020) over IPC v1.
+//! `subak new | ls | info | status | attach | detach | rename | stop | kill | rm` — the headless
+//! Terminal lifecycle (docs/SESSION_MODEL.md, ADR 0020, ADR 0027, docs/SUBAK_CLI.md) over IPC v1.
+//! (`subak terminal <verb>` is their deprecated Step 10 spelling.)
 //!
-//! Every command is a short-lived client of the per-user Host. Only `terminal new` starts a Host
-//! on demand (with no Terminal of its own); the read commands never start one, and `terminal
-//! list` without a Host simply lists nothing. What each verb does to processes is fixed:
+//! Every command is a short-lived client of the per-user Host. Only `new` starts a Host on demand
+//! (with no Terminal of its own, unless `--no-start`); the read commands never start one, and
+//! `ls` or `status` without a Host simply report none. What each verb does to processes is fixed:
 //!
 //! | verb | processes | stored Terminal |
 //! | --- | --- | --- |
-//! | `attach`, detach (`Ctrl+B d`), closing this window | untouched | untouched |
+//! | `attach`, detach (`Ctrl+B d`, `subak detach`), closing this window | untouched | untouched |
 //! | `stop` | graceful (`CTRL_CLOSE_EVENT`, 5 s), then forced | kept as `stopped` |
 //! | `kill` | forced at once | removed |
 //! | `rm` | refused while it runs; `--force` = `kill` | removed |
@@ -35,7 +36,7 @@ fn host_not_running(endpoint: &str) -> CliError {
             crate::win::pipe::path(endpoint)
         ),
     )
-    .hint("create one with `subak terminal new`")
+    .hint("create one with `subak new`")
 }
 
 /// Connects without starting a Host; `None` when none runs.
@@ -115,13 +116,17 @@ fn plan_without_host(a: &Args, params: &Value) -> Result<Value, CliError> {
         }
         None => "1".into(),
     };
-    let command = match a.command.split_first() {
-        Some((program, args)) => session::Command {
+    let command = match (a.command.split_first(), &a.command_line) {
+        (Some((program, args)), _) => session::Command {
             program: program.clone(),
             args: args.to_vec(),
         },
-        None => session::split_command_line(&crate::host::default_shell()),
+        (None, Some(line)) => session::split_command_line(line),
+        (None, None) => session::split_command_line(&crate::host::default_shell()),
     };
+    if a.command_line.is_some() && command.program.is_empty() {
+        return Err(CliError::usage("--command-line must start with a program"));
+    }
     let env = pty::EnvOverrides::from_json(&params["env"]).map_err(CliError::usage)?;
     let cwd = match &a.cwd {
         Some(c) if !Path::new(c).is_absolute() => {
@@ -135,7 +140,7 @@ fn plan_without_host(a: &Args, params: &Value) -> Result<Value, CliError> {
     let executable = pty::plan(&pty::Spec {
         program: &command.program,
         args: &command.args,
-        raw_line: None,
+        raw_line: a.command_line.as_deref(),
         cwd: &cwd,
         env: &env,
         host_vars: &[],
@@ -150,9 +155,10 @@ fn plan_without_host(a: &Args, params: &Value) -> Result<Value, CliError> {
         err
     })?;
     Ok(
-        json!({"dry_run": true, "would_start_host": true, "would_create": {
+        json!({"dry_run": true, "would_start_host": !a.no_start, "would_create": {
             "name": name,
             "command": {"program": command.program, "args": session::redact_args(&command.args)},
+            "command_line": a.command_line.as_deref().map(session::redact_line),
             "executable": executable.display().to_string(),
             "cwd": cwd.display().to_string(),
             "env": session::env_json(&env.names()),
@@ -174,6 +180,7 @@ pub fn new(a: &Args, endpoint: &str) -> Result<Value, CliError> {
     let params = json!({
         "name": a.positional.first(),
         "command": command,
+        "command_line": a.command_line,
         "cwd": a.cwd,
         "env": env_param(a)?,
         "size": size_json(a),
@@ -189,26 +196,65 @@ pub fn new(a: &Args, endpoint: &str) -> Result<Value, CliError> {
                 plan["would_start_host"] = json!(false);
                 Ok(plan)
             }
+            // The error the real run would hit (CLI_CONTRACT §4.2).
+            None if a.no_start => Err(no_start(endpoint)),
             // Without a Host there is no name to collide with; everything else is checked.
             None => plan_without_host(a, &p),
         };
     }
-    // Start on demand: a Host without a Terminal of its own (ADR 0019 §5).
-    let plan = Plan {
-        shell: None,
-        idle_exit_s: crate::host::DEFAULT_IDLE_EXIT_S,
+    let (mut session, started) = if a.no_start {
+        (connect(endpoint)?.ok_or_else(|| no_start(endpoint))?, None)
+    } else {
+        // Start on demand: a Host without a Terminal of its own (ADR 0019 §5), under the
+        // per-endpoint start lock, so concurrent `new` calls share one Host.
+        let plan = Plan {
+            shell: None,
+            idle_exit_s: crate::host::DEFAULT_IDLE_EXIT_S,
+        };
+        let Connected {
+            session, started, ..
+        } = client::connect_or_start(endpoint, &plan)?;
+        (session, started)
     };
-    let Connected {
-        mut session,
-        started,
-        ..
-    } = client::connect_or_start(endpoint, &plan)?;
     let mut created = session.request_within("terminal.create", &params, CREATE_TIMEOUT)?;
     created["host"] = json!({"pid": session.host_pid, "started": started.is_some()});
-    Ok(created)
+    if !a.attach {
+        return Ok(created);
+    }
+    // `new --attach`: the creation is reported as a notice, then this terminal attaches.
+    drop(session);
+    if !a.quiet {
+        eprintln!(
+            "[subak: created Terminal `{}` ({}){}]",
+            created["name"].as_str().unwrap_or("?"),
+            created["terminal_id"].as_str().unwrap_or("?"),
+            if started.is_some() {
+                format!("; started Host pid {}", created["host"]["pid"])
+            } else {
+                String::new()
+            }
+        );
+    }
+    let id = created["terminal_id"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    let attached = client::attach(a, endpoint, Some(&id))?;
+    Ok(json!({"created": created, "attach": attached}))
 }
 
-/// `terminal list`: every Terminal of the Host, in creation order. No Host: an empty list.
+fn no_start(endpoint: &str) -> CliError {
+    CliError::new(
+        Code::HostNotRunning,
+        format!(
+            "no Subak Host is serving `{}`, and --no-start forbids starting one",
+            crate::win::pipe::path(endpoint)
+        ),
+    )
+    .hint("run without --no-start to start one on demand, or start it with `subak host start --no-shell`")
+}
+
+/// `ls`: every Terminal of the Host, in creation order. No Host: an empty list.
 pub fn list(endpoint: &str) -> Result<Value, CliError> {
     let Some(mut s) = connect(endpoint)? else {
         return Ok(json!({"terminals": [], "host": null}));
@@ -218,12 +264,57 @@ pub fn list(endpoint: &str) -> Result<Value, CliError> {
     Ok(r)
 }
 
-/// `terminal info <target>`.
+/// `status`: the Host (or that none runs), every Terminal, and every client, in one answer.
+/// Starts nothing; exits 0 also without a Host.
+pub fn status(endpoint: &str) -> Result<Value, CliError> {
+    let Some(mut s) = connect(endpoint)? else {
+        return Ok(json!({
+            "running": false, "endpoint": crate::win::pipe::path(endpoint),
+            "host": null, "terminals": [], "clients": null,
+        }));
+    };
+    let st = s.request("host.status", &json!({}))?;
+    let list = s.request("terminal.list", &json!({"detail": "summary"}))?;
+    Ok(json!({
+        "running": true, "endpoint": st["endpoint"], "host": st["host"],
+        "terminals": list["terminals"], "clients": st["clients"],
+    }))
+}
+
+/// `info <target>`: one Terminal; exit 3 (`target_not_found`) when there is none (tmux
+/// `has-session`).
 pub fn info(a: &Args, endpoint: &str) -> Result<Value, CliError> {
     require(endpoint)?.request("terminal.info", &json!({"target": target(a)}))
 }
 
-/// `terminal rename <target> <new name>`.
+/// `detach [<target>] [--client <id>]`: ends attachments of clients — every client of the
+/// Terminal, one client, or that client's attachment to the Terminal — and nothing else. Inside a
+/// pane, no target means the pane's own Terminal (`SUBAK_TERMINAL_ID`, ADR 0010 §1). Detaching
+/// never stops a process, a Terminal or the Host.
+pub fn detach(a: &Args, endpoint: &str) -> Result<Value, CliError> {
+    let target = match (a.positional.first(), a.client) {
+        (Some(t), _) => Some(t.clone()),
+        (None, Some(_)) => None,
+        (None, None) => match std::env::var("SUBAK_TERMINAL_ID") {
+            Ok(id) if session::is_id(&id, 't') => Some(id),
+            _ => {
+                return Err(CliError::usage(
+                    "`detach` needs a Terminal or --client <id> outside a Subak pane",
+                )
+                .hint("e.g. `subak detach work` detaches every client of `work`; `subak status` lists client ids"));
+            }
+        },
+    };
+    let mut s = require(endpoint)?;
+    let mut r = s.request(
+        "client.detach",
+        &json!({"target": target, "client_id": a.client, "dry_run": a.dry_run}),
+    )?;
+    r["host"] = json!({"pid": s.host_pid});
+    Ok(r)
+}
+
+/// `rename <target> <new name>`.
 pub fn rename(a: &Args, endpoint: &str) -> Result<Value, CliError> {
     let name = a.positional.get(1).map_or("", String::as_str);
     require(endpoint)?.request(
@@ -232,12 +323,13 @@ pub fn rename(a: &Args, endpoint: &str) -> Result<Value, CliError> {
     )
 }
 
-/// `terminal attach <target>`.
+/// `attach [<target>]`: without a target, the Host's only running Terminal
+/// (`ambiguous_target` with the candidates when there are several).
 pub fn attach(a: &Args, endpoint: &str) -> Result<Value, CliError> {
     if connect(endpoint)?.is_none() {
         return Err(host_not_running(endpoint));
     }
-    client::attach(a, endpoint, Some(target(a)))
+    client::attach(a, endpoint, a.positional.first().map(String::as_str))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -247,13 +339,13 @@ enum Verb {
     Rm,
 }
 
-/// `terminal stop | kill | rm <target>`: shows the plan with `--dry-run`; otherwise asks for
-/// consent (or `--yes`) whenever processes would end or the Terminal would be removed.
-pub fn end(a: &Args, endpoint: &str, cmd: &crate::cli::Cmd) -> Result<Value, CliError> {
+/// `stop | kill | rm <target>`: shows the plan with `--dry-run`; otherwise asks for consent (or
+/// `--yes`) whenever processes would end or the Terminal would be removed.
+pub fn end(a: &Args, endpoint: &str, cmd: crate::cli::Cmd) -> Result<Value, CliError> {
     use crate::cli::Cmd;
     let verb = match cmd {
-        Cmd::TerminalStop => Verb::Stop,
-        Cmd::TerminalKill => Verb::Kill,
+        Cmd::Stop => Verb::Stop,
+        Cmd::Kill => Verb::Kill,
         _ => Verb::Rm,
     };
     let method = match verb {
@@ -288,7 +380,7 @@ pub fn end(a: &Args, endpoint: &str, cmd: &crate::cli::Cmd) -> Result<Value, Cli
                 Code::InvalidState,
                 format!("Terminal `{name}` ({id}) is {state}; `rm` removes only Terminals that run nothing"),
             )
-            .hint("stop it first with `subak terminal stop`, or pass --force (with --yes) to end its processes and remove it"));
+            .hint("stop it first with `subak stop`, or pass --force (with --yes) to end its processes and remove it"));
         }
         Verb::Stop => confirm(
             a,

@@ -616,7 +616,7 @@ pub fn visible(bytes: &[u8]) -> String {
     out
 }
 
-/// A `subak host attach` (or `terminal attach <target>`) client with piped stdin and output
+/// A `subak host attach` (or `attach <target>`) client with piped stdin and output
 /// (stdout and stderr together).
 pub struct Attach {
     pub child: Child,
@@ -628,17 +628,9 @@ impl Attach {
         Self::with(&["host", "attach", "--endpoint", ep, "--size", "100x30"])
     }
 
-    /// `subak terminal attach <target>`.
+    /// `subak attach <target>`.
     pub fn terminal(ep: &str, target: &str) -> Self {
-        Self::with(&[
-            "terminal",
-            "attach",
-            target,
-            "--endpoint",
-            ep,
-            "--size",
-            "100x30",
-        ])
+        Self::with(&["attach", target, "--endpoint", ep, "--size", "100x30"])
     }
 
     fn with(args: &[&str]) -> Self {

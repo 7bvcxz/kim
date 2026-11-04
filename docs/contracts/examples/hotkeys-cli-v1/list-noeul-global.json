@@ -11,7 +11,7 @@
     "actions": [
       {
         "id": "capture.region",
-        "title": "Capture a region (F1)",
+        "title": "Capture a region",
         "scope": "global",
         "bindable": true,
         "source": "default",
@@ -28,7 +28,7 @@
       },
       {
         "id": "paste.float",
-        "title": "Paste the clipboard as a floating pin (F3)",
+        "title": "Pin the clipboard",
         "scope": "global",
         "bindable": true,
         "source": "default",
@@ -45,7 +45,7 @@
       },
       {
         "id": "pin.close",
-        "title": "Close the pin",
+        "title": "Close the pin (can be reopened)",
         "scope": "context:pin",
         "bindable": true,
         "source": "default",

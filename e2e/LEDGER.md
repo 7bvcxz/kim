@@ -45,6 +45,7 @@ Run with `cargo xtask e2e`, which refuses unless the counter below has reached 1
 | 32 | #16 Step 16 – Subak terminal window (merged; issue open for the maintainer's visible-window DPI/keyboard/focus check, `SUBAK_GUI.md` §9; also fixed #96) | `step16_subak_window.rs` (2 tests): the window opens an existing Terminal, types into it, and closing keeps it running; a crashed window leaves the pane and a new one reconnects (debug window in off-screen mode) | 2 |
 | 33 | #76 Step 71 – Ddalgak mouse movement, scrolling and click actions (merged; issue open for the maintainer's real-pointer check, `DDALGAK_ENGINE.md` §14) | `step71_ddalgak_mouse.rs` (2 tests): an agent writes a keyboard-mouse profile headlessly; the running app loads mouse rules without a mouse hook and moves no real pointer | 3 |
 | 34 | #62 Step 57 – Noeul blur, mosaic, eraser and redaction tools (merged; issue open for the maintainer's real-desktop check, `NOEUL_UX_SPEC.md` §4.10) | `step57_noeul_redaction.rs` (2 tests): the privacy tools are discoverable headlessly; redact, mosaic, erase and save without the original on the synthetic desktop | 4 |
+| 35 | #17 Step 17 – Subak terminal tabs and keyboard shortcuts | `step17_subak_tabs.rs` (2 tests): tabs follow the CLI and Ctrl+Tab switches without ending anything; Ctrl+T creates, Ctrl+W asks before ending a busy Terminal and the X only detaches. `step17_subak_hotkeys.rs` (2 tests): a user rebinds and disables the tab keys headlessly; safe mode and cross-tool checks read files only | 5 |
 
 ## E2E runs
 

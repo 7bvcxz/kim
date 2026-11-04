@@ -90,6 +90,7 @@ These are the heart of Subak. Every UI label, CLI command and doc must keep them
 | --- | --- |
 | Close the GUI window / quit the GUI app / `Ctrl+B d` (detach) | **None.** The client disconnects; every Terminal keeps running in the Host. |
 | Client crashes or is killed | **None.** Same as detach. |
+| Closing a tab with its × button / "Hide tab" | **None.** That tab detaches; the Terminal keeps running in the session manager ([SESSION_MODEL §4](SESSION_MODEL.md)). |
 | `subak attach` / `subak detach` from the CLI | **None.** Clients attach/detach freely. |
 | `Ctrl+W` / "Close Terminal" / `subak kill <terminal>` | **Kills** that Terminal's processes. Explicit, confirmed when busy, reported. |
 | Closing a pane (`Ctrl+B x`) or window (`Ctrl+B &`) | Kills that pane's / window's processes only (confirmation like tmux). |

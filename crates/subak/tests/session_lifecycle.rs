@@ -376,8 +376,19 @@ fn names_are_unique_ignoring_case_and_composition_and_renames_keep_ids() {
         .raw("cli")
         .request(1, "terminal.create", &json!({"name": "-x"}));
     assert_eq!(error_code(&r), "invalid_name", "{r}");
-    // Korean, composed and decomposed: one name.
-    let seoul = s.new_terminal(&["서버"]);
+    // Korean, composed and decomposed: one name. (Its pane gets the size it asked for and the
+    // working directory it named: tmux `new-session -x -y -c`.)
+    let windir = std::env::var("SystemRoot").unwrap();
+    let seoul = s.new_terminal(&["서버", "--size", "100x40", "--cwd", &windir]);
+    let pane = &seoul["terminal"]["windows"][0]["panes"][0];
+    assert_eq!(pane["size"], json!({"cols": 100, "rows": 40}));
+    assert_eq!(pane["cwd"], windir.as_str());
+    let mut a = Attach::terminal(&s.ep, "서버");
+    a.send(b"cd & echo cwd-mark^er\r");
+    a.expect("cwd-marker");
+    let text = a.text().to_lowercase();
+    assert!(text.contains(&windir.to_lowercase()), "{text}");
+    drop(a);
     let (_, doc) = s.cli(&["terminal", "new", "\u{1109}\u{1165}\u{1107}\u{1165}"]);
     assert_eq!(error(&doc), (7, "name_conflict"), "NFC: {doc}");
     assert_eq!(s.info("서버")["id"], seoul["terminal_id"]);

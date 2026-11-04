@@ -4,7 +4,8 @@ Status: **current** · CLI contract **v1** · Step 07 · Decision: [ADR 0015](ad
 · Requirements: `KIM-FR-010`, `KIM-FR-011`, `KIM-FR-012`, `KIM-FR-020`, `KIM-NFR-014`,
 `KIM-SEC-013`
 
-Every Kim tool's command line follows this contract: `kim` today, `subak` from Step 12, and
+Every Kim tool's command line follows this contract: `kim` today, `subak` (its `host` and
+`terminal` commands since Steps 09–10, the full CLI from Step 12), and
 every later tool. It is what agents and scripts may rely on. The `kim` command reference is
 [KIM_CLI.md](KIM_CLI.md); machine-readable schemas are in
 [contracts/schemas/](contracts/schemas/cli-envelope-v1.schema.json).
@@ -176,12 +177,19 @@ another meaning; `kim` implements them since Step 46:
 
 Subak's IPC error codes ([IPC_PROTOCOL](contracts/IPC_PROTOCOL.md)) are a separate namespace;
 the CLI maps them onto the codes above (for example IPC `invalid_params` → `usage`). Step 12
-extends this table for Subak's real CLI. `host attach` is the one command whose stdout is not a
-document: it streams the terminal, so `--json` is accepted only with `--dry-run`. The `data` of
-`host status` is the IPC `host.status` result ([IPC_PROTOCOL §4.1](contracts/IPC_PROTOCOL.md));
-`host health`, `host start` and `host stop` add the fields listed there and in
-[CONPTY_PROOF.md](CONPTY_PROOF.md). It is not yet a published schema (Step 12 publishes Subak's
-CLI schema); the envelopes are validated against `cli-envelope-v1`.
+extends this table for Subak's real CLI. `host attach` and `terminal attach` are the commands
+whose stdout is not a document: they stream the terminal, so `--json` is accepted only with
+`--dry-run`. The `data` of `host status` is the IPC `host.status` result
+([IPC_PROTOCOL §4.1](contracts/IPC_PROTOCOL.md)); `host health`, `host start` and `host stop` add
+the fields listed there and in [CONPTY_PROOF.md](CONPTY_PROOF.md). The `data` of `terminal new`,
+`list`, `info`, `rename`, `stop`, `kill` and `rm` is the result of the IPC method they call
+(`terminal.create`, `.list`, `.info`, `.rename`, `.stop`, `.kill`, `.remove`; typed by the
+`result_*` definitions of `ipc-v1.schema.json`), plus `host` (`{pid, started}` for `new`, `{pid}`
+for `list`, `null` when no Host runs). Their meanings and consent rules are in
+[SESSION_MODEL §4](SESSION_MODEL.md): `stop`, `kill` and `rm` are `destructive` and ask, or need
+`--yes`; `host stop` with live Terminals also needs `--kill-terminals`. `new`, `info` and `rm` are
+tmux words outside §2's standard verbs, chosen to match the IPC methods (ADR 0020). There is no
+published Subak CLI schema yet (Step 12); the envelopes are validated against `cli-envelope-v1`.
 
 ## 7. Output streams and the `--json` envelope
 

@@ -20,6 +20,8 @@
 // Portable modules: compiled and unit-tested on every target; until the Linux window (M4,
 // ADR 0011) only the Windows window uses them.
 #[cfg_attr(not(windows), allow(dead_code))]
+mod compose;
+#[cfg_attr(not(windows), allow(dead_code))]
 mod keys;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod layout;

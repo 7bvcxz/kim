@@ -21,6 +21,7 @@
 //! screen), and closes itself after `--test-max-seconds`.
 
 use super::Options;
+use super::compose;
 use super::keys::{self, Shortcut, Shortcuts, Typed, vk};
 use super::layout::{self, Cells, Rect};
 use super::model::{Effect, Frame as Data, Model, Phase, Want};
@@ -561,38 +562,22 @@ impl App {
     /// The client area as the window shows it, composed in memory: the frame, the background
     /// around it, the banner and the IME composition. What `WM_PAINT` presents, for test shots.
     fn composed(&self) -> Frame {
-        let theme = self.theme();
-        let (w, h) = (self.client.0.max(1), self.client.1.max(1));
-        let mut out = Frame::new(w, h, theme.background);
-        let blit = |out: &mut Frame, f: &Frame, x0: u32, y0: u32| {
-            for y in 0..f.height.min(h.saturating_sub(y0)) {
-                for x in 0..f.width.min(w.saturating_sub(x0)) {
-                    out.pixels[((y0 + y) * w + x0 + x) as usize] =
-                        f.pixels[(y * f.width + x) as usize];
-                }
-            }
-        };
-        blit(&mut out, self.renderer.frame(), 0, 0);
-        if let Some((b, o)) = &self.banner {
-            let bh = o.renderer.frame().height;
-            out.fill(0, 0, w, bh, o.renderer.theme().background);
-            blit(&mut out, o.renderer.frame(), 0, 0);
-            if !self.hc_theme() {
-                let marker = layout::px(3.0, self.dpi).max(1) as u32;
-                out.fill(0, 0, marker, bh, b.tone.color());
-                out.fill(0, bh.saturating_sub(1), w, 1, tokens::BORDER_SUBTLE);
-            }
-        }
-        if let Some(o) = &self.ime {
-            let (x, y) = self.cursor_px();
-            blit(
-                &mut out,
-                o.renderer.frame(),
-                x.max(0) as u32,
-                y.max(0) as u32,
-            );
-        }
-        out
+        let banner = self.banner.as_ref().map(|(b, o)| compose::BannerLayer {
+            frame: o.renderer.frame(),
+            fill: o.renderer.theme().background,
+            marker: (!self.hc_theme())
+                .then(|| (b.tone.color(), layout::px(3.0, self.dpi).max(1) as u32)),
+        });
+        let (x, y) = self.cursor_px();
+        compose::compose(
+            self.client,
+            self.theme().background,
+            self.renderer.frame(),
+            banner.as_ref(),
+            self.ime
+                .as_ref()
+                .map(|o| (o.renderer.frame(), (x.max(0) as u32, y.max(0) as u32))),
+        )
     }
 
     fn paint(&self) {

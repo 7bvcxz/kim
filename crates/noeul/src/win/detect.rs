@@ -963,9 +963,9 @@ mod tests {
     /// other tests' windows came and went).
     #[test]
     fn windows_that_vanish_during_the_enumeration_belong_to_no_process() {
-        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let churn = {
-            let stop = std::sync::Arc::clone(&stop);
+            let stop = Arc::clone(&stop);
             std::thread::spawn(move || {
                 let mut n = 0u32;
                 while !stop.load(std::sync::atomic::Ordering::Relaxed) || n < 50 {

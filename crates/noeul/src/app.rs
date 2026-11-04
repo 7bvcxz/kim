@@ -5478,4 +5478,90 @@ pub(crate) mod tests {
         assert!(annotation::effect_passes() > drawn);
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn every_privacy_tool_works_on_floating_pins_in_the_pin_editor() {
+        let (mut a, _syn, dir) = overlay_app("priv-pinedit");
+        // A pin of the frozen pixels, then the four tools in its editor.
+        a.action("capture.region", None);
+        drag(&mut a, (-600, 20), (-201, 219));
+        key(&mut a, "Enter", false, false);
+        let id = PinId(1);
+        let sel = Rect::new(-600, 20, 400, 200);
+        a.action("pin.annotate", Some(id));
+        assert!(a.overlay_open());
+        choose(&mut a, annotation::Tool::Mosaic);
+        drag(&mut a, (-580, 60), (-520, 120));
+        choose(&mut a, annotation::Tool::Blur);
+        drag(&mut a, (-500, 60), (-430, 120));
+        choose(&mut a, annotation::Tool::Redact);
+        assert_eq!(
+            checked_status(&a)["pins"]["editor"]["annotation"]["color"],
+            "black"
+        );
+        drag(&mut a, (-420, 60), (-360, 120));
+        choose(&mut a, annotation::Tool::Eraser);
+        drag(&mut a, (-560, 70), (-560, 110)); // through the mosaic
+        drag(&mut a, (-390, 70), (-390, 110)); // through the redaction
+        let st = checked_status(&a);
+        let kinds = &st["pins"]["editor"]["annotation"]["kinds"];
+        assert_eq!(
+            (
+                kinds["mosaic"].as_u64(),
+                kinds["blur"].as_u64(),
+                kinds["redact"].as_u64(),
+                kinds["eraser"].as_u64()
+            ),
+            (Some(1), Some(1), Some(1), Some(2))
+        );
+        key(&mut a, "Enter", false, false);
+        assert!(!a.overlay_open());
+        assert_eq!(a.status()["last_action"]["result"], "committed");
+        assert_eq!(a.pins.annotations(id).unwrap().len(), 5);
+        // The pin's window and its copy show exactly the same pixels.
+        let shown = a.pins.rendered(id).unwrap();
+        let (r, px) = (shown.rect(), shown.pixels().to_vec());
+        drop(shown);
+        a.action("pin.copy", Some(id));
+        let (_, _, copied) = png_bgra(&a.shell.copies[0].0);
+        assert!(copied == px, "the copy is what the pin shows");
+        assert_eq!(
+            px_of(&px, r, -560, 90),
+            Synthetic::pixel(-560, 90),
+            "erased back"
+        );
+        assert_ne!(
+            px_of(&px, r, -530, 90),
+            Synthetic::pixel(-530, 90),
+            "mosaic"
+        );
+        let blurred = (60..121)
+            .flat_map(|y| (-500..-429).map(move |x| (x, y)))
+            .filter(|(x, y)| px_of(&px, r, *x, *y) != Synthetic::pixel(*x, *y))
+            .count();
+        assert!(blurred > 100, "the blur changed its pixels: {blurred}");
+        all_filled(&px, r, Rect::new(-420, 60, 61, 61));
+        assert_eq!(r, sel, "the pin did not move");
+        // A pin of the clipboard (a floating image) takes a redaction the same way.
+        a.shell.clipboard = Some((40, 30));
+        a.action("paste.float", None);
+        let clip = a.pins.ids().into_iter().find(|p| *p != id).unwrap();
+        let at = a.pins.info(clip).unwrap().rect;
+        a.action("pin.annotate", Some(clip));
+        choose(&mut a, annotation::Tool::Redact);
+        drag(&mut a, (at.x + 5, at.y + 5), (at.x + 24, at.y + 14));
+        key(&mut a, "Enter", false, false);
+        let shown = a.pins.rendered(clip).unwrap();
+        all_filled(
+            shown.pixels(),
+            shown.rect(),
+            Rect::new(at.x + 5, at.y + 5, 20, 10),
+        );
+        assert_eq!(
+            px_of(shown.pixels(), shown.rect(), at.x + 30, at.y + 20),
+            [1, 1, 1, 255]
+        );
+        drop(shown);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

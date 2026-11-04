@@ -1093,6 +1093,64 @@ mod tests {
         assert_eq!(ledger.live(), (0, 0));
     }
 
+    /// The picture really reaches the window, and stays there after Noeul's temporary DIB was
+    /// freed: DWM renders the layered window's retained surface into a bitmap of ours
+    /// (`PrintWindow` with `PW_RENDERFULLCONTENT`), at 100 % and zoomed.
+    #[test]
+    fn the_window_keeps_showing_the_pictures_pixels_after_the_upload() {
+        #[link(name = "user32")]
+        unsafe extern "system" {
+            fn PrintWindow(hwnd: HWND, hdc: HDC, flags: u32) -> i32;
+        }
+        const PW_RENDERFULLCONTENT: u32 = 2;
+        let ledger = Ledger::new();
+        let (w, h) = (8u32, 6u32);
+        let mut px = Vec::new();
+        for y in 0..h {
+            for x in 0..w {
+                px.extend_from_slice(&[x as u8 * 30, y as u8 * 40, 200, 255]);
+            }
+        }
+        let frame = Frame::new(&ledger, Rect::new(FAR, FAR, w, h), px).unwrap();
+        let mut pin = create(
+            PinId(301),
+            &frame,
+            &spec(frame.rect()),
+            Style::OFF_SCREEN_TEST,
+        )
+        .unwrap();
+        let shot = |pin: &WinPin, w: u32, h: u32| -> Option<Vec<u8>> {
+            let mut s = Surface::new(w, h).unwrap();
+            // SAFETY: our window renders into our own DIB section of its size.
+            let ok = unsafe { PrintWindow(pin.hwnd(), s.dc, PW_RENDERFULLCONTENT) } != 0;
+            ok.then(|| s.pixels().to_vec())
+        };
+        let Some(got) = shot(&pin, w, h) else {
+            eprintln!("SKIP: PrintWindow could not render the window on this system");
+            return;
+        };
+        let rgb = |b: &[u8], i: usize| [b[i * 4], b[i * 4 + 1], b[i * 4 + 2]];
+        for i in 0..(w * h) as usize {
+            assert_eq!(rgb(&got, i), rgb(frame.pixels(), i), "pixel {i} at 100 %");
+        }
+        // 200 %: every picture pixel is a 2×2 block of the window.
+        pin.present(&frame, Rect::new(FAR, FAR, w * 2, h * 2))
+            .unwrap();
+        let got = shot(&pin, w * 2, h * 2).expect("rendered");
+        for (x, y) in [(0u32, 0u32), (3, 2), (7, 5)] {
+            let src = (y * w + x) as usize;
+            for (dx, dy) in [(0, 0), (1, 1)] {
+                let dst = ((y * 2 + dy) * w * 2 + x * 2 + dx) as usize;
+                assert_eq!(
+                    rgb(&got, dst),
+                    rgb(frame.pixels(), src),
+                    "({x},{y}) at 200 %"
+                );
+            }
+        }
+        drop(pin);
+    }
+
     #[test]
     fn key_names_follow_the_contract() {
         assert_eq!(vk_name(0x41).as_deref(), Some("A"));

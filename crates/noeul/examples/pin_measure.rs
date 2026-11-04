@@ -50,6 +50,21 @@ mod measure {
         c.PrivateUsage as u64
     }
 
+    /// The whole system's committed memory in bytes (every process and the kernel): shows the
+    /// copy of a layered window's picture that the system keeps outside Noeul's process.
+    fn system_commit() -> u64 {
+        use windows_sys::Win32::System::ProcessStatus::{
+            GetPerformanceInfo, PERFORMANCE_INFORMATION,
+        };
+        let mut p = PERFORMANCE_INFORMATION {
+            cb: u32::try_from(size_of::<PERFORMANCE_INFORMATION>()).unwrap_or(0),
+            ..Default::default()
+        };
+        // SAFETY: `p` is writable with `cb` set.
+        unsafe { GetPerformanceInfo(&raw mut p, p.cb) };
+        (p.CommitTotal as u64) * (p.PageSize as u64)
+    }
+
     /// User plus kernel CPU time of this process (100 ns units).
     fn cpu_time() -> u64 {
         use windows_sys::Win32::Foundation::FILETIME;
@@ -194,12 +209,14 @@ mod measure {
         println!();
         println!("memory per pin (private MiB of this process; picture = its BGRA bytes)");
         println!(
-            "size        | picture | before | with pin | at 200 % | destroyed | pin cost | budget (2× + 2 MB)"
+            "size        | picture | before | with pin | at 200 % | destroyed | pin cost | budget (2× + 2 MB) | system commit with pin / at 200 % (whole machine, noisy)"
         );
         for (w, h) in [(1920u32, 1080u32), (3840, 2160)] {
             idle(Duration::from_millis(300));
             let before = private_bytes();
             let frame = picture(&ledger, w, h);
+            idle(Duration::from_millis(300));
+            let commit0 = system_commit();
             let mut pin: WinPin = pinwnd::create(
                 PinId(1000),
                 &frame,
@@ -209,17 +226,19 @@ mod measure {
             .expect("a pin window");
             idle(Duration::from_millis(300));
             let with = private_bytes();
+            let commit1 = system_commit();
             pin.present(&frame, Rect::new(FAR, FAR, w * 2, h * 2))
                 .expect("a zoomed window");
             idle(Duration::from_millis(300));
             let zoomed = private_bytes();
+            let commit2 = system_commit();
             drop(pin);
             drop(frame);
             idle(Duration::from_millis(300));
             let after = private_bytes();
             let bytes = u64::from(w) * u64::from(h) * 4;
             println!(
-                "{w}×{h} | {} | {} | {} | {} | {} | {} | {}",
+                "{w}×{h} | {} | {} | {} | {} | {} | {} | {} | {} / {}",
                 mib(bytes),
                 mib(before),
                 mib(with),
@@ -227,6 +246,8 @@ mod measure {
                 mib(after),
                 signed_mib(before, with),
                 mib(2 * bytes + 2 * 1024 * 1024),
+                signed_mib(commit0, commit1),
+                signed_mib(commit0, commit2),
             );
         }
 

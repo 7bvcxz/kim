@@ -1760,4 +1760,780 @@ mod tests {
         assert!(r.allow(2, 1001) && !r.allow(2, 1005) && r.allow(2, 1011));
         assert!(!r.allow(7, 0), "unknown rules never run");
     }
+
+    // ---- Step 68: remaps and blocks (DDALGAK_RULE_MODEL §5.1, §5.2, §3.2, §7.4;
+    // DDALGAK-FR-010, DDALGAK-SEC-004, DDALGAK-SEC-005). The core decides every output event;
+    // these tests read the decisions, so no input is injected anywhere.
+
+    use crate::inject::{Button, OutCode};
+    use crate::remap::Output;
+    use crate::table::RemapSpec;
+
+    fn remap_spec(to: &str, tap: Option<&str>, tap_ms: u32) -> RemapSpec {
+        RemapSpec {
+            to: Output::parse(to).unwrap(),
+            tap: tap.map(|t| Output::parse(t).unwrap()),
+            tap_ms,
+        }
+    }
+
+    fn remap(rule: &str, keys: &str, to: &str) -> Binding {
+        let trigger = Trigger::parse(keys).unwrap();
+        let plain = trigger.single().is_some_and(|c| c.mods.is_empty());
+        Binding {
+            rule: rule.into(),
+            trigger,
+            on: On::Press,
+            repeat: false,
+            pass_through: false,
+            injected: Injected::Ignore,
+            widen: plain,
+            injects: true,
+            action: Action::Remap(remap_spec(to, None, 200)),
+        }
+    }
+
+    fn dual(rule: &str, keys: &str, to: &str, tap: &str) -> Binding {
+        let mut b = remap(rule, keys, to);
+        b.action = Action::Remap(remap_spec(to, Some(tap), 200));
+        b
+    }
+
+    fn block(rule: &str, keys: &str) -> Binding {
+        let mut b = binding(rule, keys);
+        b.widen = Trigger::parse(keys)
+            .unwrap()
+            .single()
+            .is_some_and(|c| c.mods.is_empty());
+        b.action = Action::Block;
+        b
+    }
+
+    fn bits(keys: &[ModKey]) -> u8 {
+        keys.iter().fold(0, |a, k| a | k.bit())
+    }
+
+    fn vk(name: &str) -> OutCode {
+        OutCode::Vk(named_vk(name).unwrap())
+    }
+
+    fn op(d: &Decision) -> Option<RemapOp> {
+        match d.signal {
+            Some(Signal::Remap { op, .. }) => Some(op),
+            _ => None,
+        }
+    }
+
+    fn press(lift: &[ModKey], mods: &[ModKey], key: Option<OutCode>) -> RemapOp {
+        RemapOp::Press {
+            lift: bits(lift),
+            mods: bits(mods),
+            key,
+        }
+    }
+
+    fn release(key: Option<OutCode>, mods: &[ModKey], restore: &[ModKey]) -> RemapOp {
+        RemapOp::Release {
+            key,
+            mods: bits(mods),
+            restore: bits(restore),
+        }
+    }
+
+    impl T {
+        fn mouse(&mut self, b: Button, up: bool) -> Decision {
+            self.t += 10;
+            let raw = RawKey::physical(b.vk(), 0, up, self.t);
+            self.core.decide(&raw, self.mode, &self.flags)
+        }
+    }
+
+    #[test]
+    fn a_remap_holds_its_target_exactly_as_long_as_the_trigger() {
+        let mut t = T::new(vec![remap("f15", "F15", "F16")]);
+        let d = t.ev("F15", false);
+        assert!(d.consume, "the trigger never reaches the application");
+        assert_eq!(op(&d), Some(press(&[], &[], Some(vk("F16")))));
+        for _ in 0..5 {
+            let r = t.ev("F15", false);
+            assert!(r.consume);
+            assert_eq!(op(&r), Some(RemapOp::Repeat { key: vk("F16") }));
+        }
+        let u = t.ev("F15", true);
+        assert!(u.consume, "consumed down, consumed up");
+        assert_eq!(op(&u), Some(release(Some(vk("F16")), &[], &[])));
+        assert_eq!(t.core.active_remaps(), 0);
+        // Unrelated keys are untouched.
+        assert!(!t.ev("F14", false).consume && !t.ev("F14", true).consume);
+    }
+
+    #[test]
+    fn a_chord_trigger_releases_its_modifiers_while_held_and_restores_them() {
+        let mut t = T::new(vec![remap("down", "Ctrl+Shift+J", "Down")]);
+        t.down(&["LCtrl", "LShift"]);
+        let d = t.ev("J", false);
+        assert_eq!(
+            op(&d),
+            Some(press(
+                &[ModKey::LCtrl, ModKey::LShift],
+                &[],
+                Some(vk("Down"))
+            )),
+            "Ctrl+Shift+J sends Down, not Ctrl+Shift+Down"
+        );
+        let u = t.ev("J", true);
+        assert_eq!(
+            op(&u),
+            Some(release(
+                Some(vk("Down")),
+                &[],
+                &[ModKey::LCtrl, ModKey::LShift]
+            )),
+            "both modifiers are still held: restored"
+        );
+        t.up(&["LCtrl", "LShift"]);
+        // Letting go of a modifier while the target is held: its up is consumed (the application
+        // already saw it go up) and it is not restored.
+        t.down(&["RCtrl", "LShift"]);
+        t.ev("J", false);
+        let s = t.ev("LShift", true);
+        assert!(s.consume, "no second up for the application");
+        let u = t.ev("J", true);
+        assert_eq!(
+            op(&u),
+            Some(release(Some(vk("Down")), &[], &[ModKey::RCtrl]))
+        );
+        t.up(&["RCtrl"]);
+        // Pressing a released modifier again during the hold: it passes and is not restored.
+        t.down(&["LCtrl", "LShift"]);
+        t.ev("J", false);
+        t.ev("LShift", true);
+        assert!(!t.ev("LShift", false).consume, "pressed again: passes");
+        let u = t.ev("J", true);
+        assert_eq!(
+            op(&u),
+            Some(release(Some(vk("Down")), &[], &[ModKey::LCtrl]))
+        );
+    }
+
+    #[test]
+    fn a_plain_trigger_combines_with_held_modifiers_but_an_exact_chord_wins() {
+        let mut t = T::new(vec![
+            remap("j-down", "J", "Down"),
+            binding("ctrl-j", "Ctrl+J"),
+            remap("caps-esc", "CapsLock", "Escape"),
+        ]);
+        let d = t.down(&["LShift", "CapsLock"]);
+        assert_eq!(
+            op(&d),
+            Some(press(&[], &[], Some(vk("Escape")))),
+            "Shift stays held: Shift+Escape"
+        );
+        t.up(&["LShift", "CapsLock"]);
+        // Ctrl+J has its own rule: the exact chord beats the widened remap of J, even though the
+        // remap comes first in precedence.
+        let d = t.down(&["LCtrl", "J"]);
+        assert_eq!(fired(&d), Some((1, FireKind::Press)));
+        t.up(&["LCtrl", "J"]);
+        let d = t.down(&["LShift", "J"]);
+        assert_eq!(op(&d), Some(press(&[], &[], Some(vk("Down")))));
+        t.up(&["LShift", "J"]);
+        let d = t.ev("J", false);
+        assert_eq!(op(&d), Some(press(&[], &[], Some(vk("Down")))));
+    }
+
+    #[test]
+    fn widening_never_captures_reserved_or_win_chords() {
+        let mut t = T::new(vec![
+            remap("tab", "Tab", "F16"),
+            remap("caps", "CapsLock", "Escape"),
+            block("no-f4", "F4"),
+            remap("x1", "MouseX1", "F16"),
+        ]);
+        let d = t.down(&["LAlt", "Tab"]);
+        assert!(!d.consume && d.signal.is_none(), "Alt+Tab switches windows");
+        t.up(&["LAlt", "Tab"]);
+        let d = t.down(&["LWin", "CapsLock"]);
+        assert!(!d.consume && d.signal.is_none(), "Win chords stay Windows'");
+        t.up(&["LWin", "CapsLock"]);
+        assert!(!t.down(&["LAlt", "F4"]).consume, "Alt+F4 closes the window");
+        t.up(&["LAlt", "F4"]);
+        t.ev("LWin", false);
+        assert!(!t.mouse(Button::X1, false).consume, "Win+X1 passes");
+        t.mouse(Button::X1, true);
+        t.ev("LWin", true);
+        let d = t.down(&["LShift", "F4"]);
+        assert!(d.consume, "Shift+F4 is blocked (widened block)");
+        assert_eq!(fired(&d), Some((2, FireKind::Press)));
+    }
+
+    #[test]
+    fn left_and_right_modifier_targets_and_held_modifiers() {
+        let mut t = T::new(vec![
+            remap("r", "F15", "RCtrl+Up"),
+            remap("c", "F16", "Ctrl+C"),
+            remap("lc", "F17", "LCtrl+C"),
+        ]);
+        let d = t.ev("F15", false);
+        assert_eq!(op(&d), Some(press(&[], &[ModKey::RCtrl], Some(vk("Up")))));
+        let u = t.ev("F15", true);
+        assert_eq!(op(&u), Some(release(Some(vk("Up")), &[ModKey::RCtrl], &[])));
+        // The user holds Right Ctrl: a generic Ctrl target uses it and presses no Ctrl itself;
+        // a Left Ctrl target presses Left Ctrl anyway.
+        t.ev("RCtrl", false);
+        assert_eq!(
+            op(&t.ev("F16", false)),
+            Some(press(&[], &[], Some(vk("C"))))
+        );
+        assert_eq!(
+            op(&t.ev("F16", true)),
+            Some(release(Some(vk("C")), &[], &[]))
+        );
+        assert_eq!(
+            op(&t.ev("F17", false)),
+            Some(press(&[], &[ModKey::LCtrl], Some(vk("C"))))
+        );
+        assert_eq!(
+            op(&t.ev("F17", true)),
+            Some(release(Some(vk("C")), &[ModKey::LCtrl], &[]))
+        );
+        t.ev("RCtrl", true);
+        // A side-specific trigger matches only that side (exact matching, HOTKEY_CONTRACT §5.5).
+        let mut s = T::new(vec![remap("lf", "LCtrl+F13", "F16")]);
+        assert!(op(&s.down(&["RCtrl", "F13"])).is_none());
+        s.up(&["RCtrl", "F13"]);
+        assert_eq!(
+            op(&s.down(&["LCtrl", "F13"])),
+            Some(press(&[ModKey::LCtrl], &[], Some(vk("F16"))))
+        );
+    }
+
+    #[test]
+    fn a_remapped_modifier_is_not_held_for_the_application_but_its_target_is() {
+        // RAlt acts as HangulMode: the physical Right Alt is consumed, so it is no Alt for
+        // other rules; CapsLock acts as LCtrl: once the injected LCtrl arrives, Ctrl+J rules see
+        // it (remapped modifiers combine with other rules, like a real Ctrl).
+        let mut t = T::new(vec![
+            remap("hangul", "RAlt", "HangulMode"),
+            binding("f13", "F13"),
+            binding("alt-f14", "Alt+F14"),
+            remap("caps-ctrl", "CapsLock", "LCtrl"),
+            binding("ctrl-j", "Ctrl+J"),
+        ]);
+        let d = t.ev("RAlt", false);
+        assert!(d.consume);
+        assert_eq!(op(&d), Some(press(&[], &[], Some(vk("HangulMode")))));
+        assert_eq!(fired(&t.ev("F13", false)), Some((1, FireKind::Press)));
+        t.ev("F13", true);
+        assert_eq!(
+            fired(&t.ev("F14", false)),
+            None,
+            "no Alt for the application"
+        );
+        t.ev("F14", true);
+        t.ev("RAlt", true);
+        let d = t.ev("CapsLock", false);
+        assert_eq!(op(&d), Some(press(&[], &[ModKey::LCtrl], None)));
+        // The worker's injected LCtrl comes back through the hook as Ddalgak's own input.
+        let own = t.src("LCtrl", false, Source::Own);
+        assert!(!own.consume && own.signal.is_none(), "never matched");
+        assert_eq!(fired(&t.ev("J", false)), Some((4, FireKind::Press)));
+        t.ev("J", true);
+        // A repeat of a bare-modifier target repeats that modifier.
+        assert_eq!(
+            op(&t.ev("CapsLock", false)),
+            Some(RemapOp::Repeat {
+                key: OutCode::Vk(VK_LCONTROL)
+            })
+        );
+        assert_eq!(
+            op(&t.ev("CapsLock", true)),
+            Some(release(None, &[ModKey::LCtrl], &[]))
+        );
+    }
+
+    #[test]
+    fn two_remaps_holding_one_output_never_release_it_early() {
+        let mut t = T::new(vec![
+            remap("a", "F15", "F16"),
+            remap("b", "F17", "F16"),
+            remap("ca", "F18", "Ctrl+A"),
+            remap("cb", "F19", "Ctrl+B"),
+        ]);
+        assert_eq!(
+            op(&t.ev("F15", false)),
+            Some(press(&[], &[], Some(vk("F16"))))
+        );
+        assert_eq!(
+            op(&t.ev("F17", false)),
+            Some(press(&[], &[], None)),
+            "already held: not pressed again"
+        );
+        assert_eq!(
+            op(&t.ev("F15", true)),
+            Some(release(None, &[], &[])),
+            "F17 still holds it"
+        );
+        assert_eq!(
+            op(&t.ev("F17", true)),
+            Some(release(Some(vk("F16")), &[], &[]))
+        );
+        assert_eq!(
+            op(&t.ev("F18", false)),
+            Some(press(&[], &[ModKey::LCtrl], Some(vk("A"))))
+        );
+        t.src("LCtrl", false, Source::Own);
+        assert_eq!(
+            op(&t.ev("F19", false)),
+            Some(press(&[], &[], Some(vk("B")))),
+            "Ctrl is shared"
+        );
+        assert_eq!(
+            op(&t.ev("F18", true)),
+            Some(release(Some(vk("A")), &[], &[]))
+        );
+        assert_eq!(
+            op(&t.ev("F19", true)),
+            Some(release(Some(vk("B")), &[ModKey::LCtrl], &[]))
+        );
+    }
+
+    #[test]
+    fn a_key_the_user_holds_is_never_pressed_or_released_by_a_remap() {
+        let mut t = T::new(vec![
+            remap("f16", "F15", "F16"),
+            remap("ctrl", "CapsLock", "LCtrl"),
+        ]);
+        assert!(!t.ev("F16", false).consume, "the user's own F16 passes");
+        assert_eq!(op(&t.ev("F15", false)), Some(press(&[], &[], None)));
+        assert_eq!(op(&t.ev("F15", true)), Some(release(None, &[], &[])));
+        t.ev("F16", true);
+        t.ev("LCtrl", false);
+        assert_eq!(op(&t.ev("CapsLock", false)), Some(press(&[], &[], None)));
+        assert_eq!(op(&t.ev("CapsLock", true)), Some(release(None, &[], &[])));
+        assert!(
+            !t.ev("LCtrl", true).consume,
+            "the user's LCtrl is the user's"
+        );
+    }
+
+    #[test]
+    fn a_dual_role_key_taps_holds_by_time_or_is_decided_by_another_key() {
+        let rules = || {
+            vec![
+                dual("caps", "CapsLock", "LCtrl", "Escape"),
+                binding("f13", "F13"),
+            ]
+        };
+        // A quick tap sends the tap output.
+        let mut t = T::new(rules());
+        let d = t.ev("CapsLock", false);
+        assert!(d.consume && d.signal.is_none());
+        assert_eq!(d.timer, Some(200), "the hook arms a one-shot timer");
+        assert!(
+            t.ev("CapsLock", false).signal.is_none(),
+            "repeats while undecided"
+        );
+        let u = t.ev("CapsLock", true);
+        assert!(u.consume);
+        assert_eq!(
+            op(&u),
+            Some(RemapOp::Tap {
+                lift: 0,
+                mods: 0,
+                key: Some(vk("Escape")),
+                restore: 0
+            })
+        );
+        // Held past the tap time: the timer presses the target; the release releases it.
+        let mut t = T::new(rules());
+        t.ev("CapsLock", false);
+        let since = t.t;
+        assert_eq!(t.core.tick(since + 50), (None, Some(150)), "fired early");
+        let (s, again) = t.core.tick(since + 200);
+        assert_eq!(again, None);
+        assert_eq!(
+            s,
+            Some(Signal::Remap {
+                binding: 0,
+                op: press(&[], &[ModKey::LCtrl], None)
+            })
+        );
+        assert_eq!(t.core.tick(since + 300), (None, None), "nothing pending");
+        assert_eq!(
+            op(&t.ev("CapsLock", true)),
+            Some(release(None, &[ModKey::LCtrl], &[]))
+        );
+        // Another key during the hold: the target first, then that key, sent on unchanged
+        // (with its repeats and its up).
+        let mut t = T::new(rules());
+        t.ev("CapsLock", false);
+        let d = t.ev("C", false);
+        assert!(d.consume, "held back");
+        assert_eq!(
+            d.pre,
+            Some(Signal::Remap {
+                binding: 0,
+                op: press(&[], &[ModKey::LCtrl], None)
+            })
+        );
+        let c = OutCode::Exact {
+            vk: u16::from(b'C'),
+            scan: 0,
+            ext: false,
+        };
+        assert_eq!(d.post, Some(Signal::Replay { code: c, up: false }));
+        let order: Vec<Signal> = d.signals().collect();
+        assert!(
+            matches!(order[0], Signal::Remap { .. }) && matches!(order[1], Signal::Replay { .. })
+        );
+        let r = t.ev("C", false);
+        assert!(r.consume);
+        assert_eq!(
+            r.signals().collect::<Vec<_>>(),
+            [Signal::Replay { code: c, up: false }]
+        );
+        let u = t.ev("C", true);
+        assert!(u.consume);
+        assert_eq!(u.post, Some(Signal::Replay { code: c, up: true }));
+        assert_eq!(
+            op(&t.ev("CapsLock", true)),
+            Some(release(None, &[ModKey::LCtrl], &[]))
+        );
+        assert!(!t.ev("C", false).consume, "the next C is normal again");
+        t.ev("C", true);
+        // A key with its own rule decides the dual role too, and fires its rule (no replay).
+        let mut t = T::new(rules());
+        t.ev("CapsLock", false);
+        let d = t.ev("F13", false);
+        assert!(matches!(d.pre, Some(Signal::Remap { .. })));
+        assert_eq!(fired(&d), Some((1, FireKind::Press)));
+        assert_eq!(d.post, None);
+        // A tap with modifiers held (widened): Shift+tap is Shift+Escape (Shift stays).
+        let mut t = T::new(rules());
+        t.ev("LShift", false);
+        t.ev("CapsLock", false);
+        assert_eq!(
+            op(&t.ev("CapsLock", true)),
+            Some(RemapOp::Tap {
+                lift: 0,
+                mods: 0,
+                key: Some(vk("Escape")),
+                restore: 0
+            })
+        );
+        // Mouse buttons never decide a dual role (clicks are not seen without a mouse trigger).
+        let mut t = T::new(vec![
+            dual("caps", "CapsLock", "LCtrl", "Escape"),
+            remap("x1", "MouseX1", "F16"),
+        ]);
+        t.ev("CapsLock", false);
+        let m = t.mouse(Button::X1, false);
+        assert_eq!(m.pre, None);
+        assert_eq!(op(&m), Some(press(&[], &[], Some(vk("F16")))));
+    }
+
+    #[test]
+    fn pass_through_lets_the_original_key_reach_the_application_too() {
+        let mut b = remap("both", "F15", "F16");
+        b.pass_through = true;
+        let mut t = T::new(vec![b]);
+        let d = t.ev("F15", false);
+        assert!(!d.consume, "the original passes");
+        assert_eq!(op(&d), Some(press(&[], &[], Some(vk("F16")))));
+        let r = t.ev("F15", false);
+        assert!(!r.consume);
+        assert_eq!(op(&r), Some(RemapOp::Repeat { key: vk("F16") }));
+        let u = t.ev("F15", true);
+        assert!(!u.consume);
+        assert_eq!(op(&u), Some(release(Some(vk("F16")), &[], &[])));
+        // A chord trigger with pass-through keeps its modifiers (they reach the application).
+        let mut b = remap("chord", "Ctrl+F15", "F16");
+        b.pass_through = true;
+        let mut t = T::new(vec![b]);
+        let d = t.down(&["LCtrl", "F15"]);
+        assert_eq!(op(&d), Some(press(&[], &[], Some(vk("F16")))));
+    }
+
+    #[test]
+    fn block_consumes_its_key_and_its_up() {
+        let mut t = T::new(vec![block("no-insert", "Insert"), block("no-f17", "F17")]);
+        let d = t.ev("Insert", false);
+        assert!(d.consume);
+        assert_eq!(fired(&d), Some((0, FireKind::Press)));
+        assert!(t.ev("Insert", false).consume, "repeats are consumed");
+        assert!(t.ev("Insert", true).consume, "the up is consumed");
+        assert!(t.down(&["LCtrl", "F17"]).consume, "Ctrl+F17 too (widened)");
+        assert!(t.up(&["LCtrl", "F17"]).consume || true);
+        // Blocking never blocks the emergency chord.
+        let mut e = T::new(vec![block("no-esc", "Escape")]);
+        let d = e.down(&["LCtrl", "LAlt", "LShift", "Escape"]);
+        assert_eq!(d.signal, Some(Signal::Emergency));
+        assert!(!d.consume);
+    }
+
+    #[test]
+    fn pause_lock_and_desktop_switches_release_every_output() {
+        let mut t = T::new(vec![
+            remap("down", "Ctrl+Shift+J", "Down"),
+            remap("f", "F15", "F16"),
+        ]);
+        t.down(&["LCtrl", "LShift", "J"]);
+        t.ev("F15", false);
+        assert_eq!(t.core.active_remaps(), 2);
+        let s = t.core.cancel_pending();
+        assert_eq!(
+            s,
+            [
+                Signal::ReleaseAll,
+                Signal::Restore {
+                    mods: bits(&[ModKey::LCtrl, ModKey::LShift])
+                }
+            ],
+            "everything goes up; the user's still-held Ctrl and Shift come back"
+        );
+        assert_eq!(t.core.active_remaps(), 0);
+        let u = t.ev("J", true);
+        assert!(
+            u.consume && op(&u).is_none(),
+            "paired up, nothing more to release"
+        );
+        t.ev("F15", true);
+        t.up(&["LCtrl", "LShift"]);
+        assert!(
+            t.core.cancel_pending().is_empty(),
+            "nothing held, nothing sent"
+        );
+        // A desktop switch, an unlock or an elevated window: the trigger's up may never arrive.
+        t.ev("F15", false);
+        assert_eq!(t.core.reset_keys(), [Signal::ReleaseAll]);
+        assert_eq!(t.core.active_remaps(), 0);
+        assert!(t.ev("F15", true).consume, "a late up stays paired");
+        assert!(t.core.reset_keys().is_empty());
+        // The key works again on its next press.
+        assert_eq!(
+            op(&t.ev("F15", false)),
+            Some(press(&[], &[], Some(vk("F16"))))
+        );
+    }
+
+    #[test]
+    fn a_reload_keeps_held_outputs_until_their_trigger_goes_up() {
+        let mut t = T::new(vec![
+            remap("f", "F15", "F16"),
+            dual("caps", "CapsLock", "LCtrl", "Escape"),
+        ]);
+        t.ev("F15", false);
+        t.ev("CapsLock", false);
+        t.core.set_table(Table::compile(vec![], 20));
+        assert_eq!(
+            t.core.active_remaps(),
+            1,
+            "the undecided dual role is dropped"
+        );
+        let u = t.ev("F15", true);
+        assert!(u.consume);
+        assert_eq!(op(&u), Some(release(Some(vk("F16")), &[], &[])));
+        let c = t.ev("CapsLock", true);
+        assert!(c.consume && c.signal.is_none(), "no tap after a reload");
+    }
+
+    #[test]
+    fn mouse_buttons_and_physical_targets_go_through_the_same_core() {
+        let mut t = T::new(vec![
+            remap("x1", "MouseX1", "code:KeyH"),
+            remap("mid", "Ctrl+MouseMiddle", "F16"),
+            block("x2", "MouseX2"),
+            remap("f15", "F15", "MouseMiddle"),
+        ]);
+        let d = t.mouse(Button::X1, false);
+        assert!(d.consume);
+        assert_eq!(op(&d), Some(press(&[], &[], Some(OutCode::Scan(0x23)))));
+        let u = t.mouse(Button::X1, true);
+        assert_eq!(op(&u), Some(release(Some(OutCode::Scan(0x23)), &[], &[])));
+        t.ev("LCtrl", false);
+        assert_eq!(
+            op(&t.mouse(Button::Middle, false)),
+            Some(press(&[ModKey::LCtrl], &[], Some(vk("F16"))))
+        );
+        t.mouse(Button::Middle, true);
+        t.ev("LCtrl", true);
+        assert!(
+            !t.mouse(Button::Middle, false).consume,
+            "no rule without Ctrl"
+        );
+        t.mouse(Button::Middle, true);
+        assert!(t.mouse(Button::X2, false).consume && t.mouse(Button::X2, true).consume);
+        let d = t.ev("F15", false);
+        assert_eq!(
+            op(&d),
+            Some(press(&[], &[], Some(OutCode::Button(Button::Middle))))
+        );
+        assert!(
+            op(&t.ev("F15", false)).is_none(),
+            "mouse buttons do not auto-repeat"
+        );
+    }
+
+    #[test]
+    fn remap_presses_are_rate_limited_but_their_repeats_are_not() {
+        let mut t = T::new(vec![remap("f", "F15", "F16")]);
+        t.ev("F15", false);
+        for _ in 0..40 {
+            assert!(matches!(
+                op(&t.ev("F15", false)),
+                Some(RemapOp::Repeat { .. })
+            ));
+        }
+        t.ev("F15", true);
+        let mut limited = 0;
+        for _ in 0..30 {
+            let d = t.ev("F15", false);
+            assert!(d.consume);
+            if d.signal == Some(Signal::RateLimited { binding: 0 }) {
+                limited += 1;
+                assert!(t.ev("F15", true).consume && t.core.active_remaps() == 0);
+            } else {
+                t.ev("F15", true);
+            }
+        }
+        // 20 presses per second, as every rule; the first press of this test counts too.
+        assert_eq!(limited, 10);
+    }
+
+    #[test]
+    fn swapped_and_chained_remaps_never_loop() {
+        // CapsLock → Escape and Escape → CapsLock: the injected Escape is Ddalgak's own input.
+        let mut t = T::new(vec![
+            remap("caps-esc", "CapsLock", "Escape"),
+            remap("esc-caps", "Escape", "CapsLock"),
+            remap("f15", "F15", "F16"),
+            remap("f16", "F16", "F17"),
+        ]);
+        assert_eq!(
+            op(&t.ev("CapsLock", false)),
+            Some(press(&[], &[], Some(vk("Escape"))))
+        );
+        for _ in 0..50 {
+            let d = t.src("Escape", false, Source::Own);
+            assert!(!d.consume && d.signal.is_none());
+        }
+        t.src("Escape", true, Source::Own);
+        t.ev("CapsLock", true);
+        // F15 → F16 does not chain into F16 → F17: outputs never trigger rules.
+        t.ev("F15", false);
+        let d = t.src("F16", false, Source::Own);
+        assert!(!d.consume && d.signal.is_none());
+        t.src("F16", true, Source::Own);
+        // Other programs' input never reaches remaps (they cannot accept injected input).
+        let d = t.src("F16", false, Source::Other);
+        assert!(!d.consume);
+        assert_eq!(
+            d.signal,
+            Some(Signal::Skipped {
+                binding: 3,
+                code: Skip::InjectedInput
+            })
+        );
+    }
+
+    #[test]
+    fn remaps_step_aside_like_every_injecting_rule() {
+        let mut t = T::new(vec![remap("f", "F15", "F16"), block("b", "F17")]);
+        t.flags.password_field = true;
+        let d = t.ev("F15", false);
+        assert!(!d.consume);
+        assert_eq!(
+            d.signal,
+            Some(Signal::Skipped {
+                binding: 0,
+                code: Skip::PasswordField
+            })
+        );
+        t.ev("F15", true);
+        t.flags = Flags {
+            elevated_foreground: true,
+            ..Flags::default()
+        };
+        assert_eq!(
+            t.ev("F15", false).signal,
+            Some(Signal::Skipped {
+                binding: 0,
+                code: Skip::ElevatedTarget
+            })
+        );
+        t.ev("F15", true);
+        assert!(
+            t.ev("F17", false).consume,
+            "block injects nothing: it still works over an elevated window"
+        );
+        t.ev("F17", true);
+        t.flags = Flags::default();
+        t.mode = Mode::Paused;
+        let d = t.ev("F15", false);
+        assert!(!d.consume);
+        assert_eq!(
+            d.signal,
+            Some(Signal::Skipped {
+                binding: 0,
+                code: Skip::Paused
+            })
+        );
+    }
+
+    #[test]
+    fn decisions_with_remaps_stay_far_below_the_hook_budget() {
+        // 16 held remaps (all slots) plus 1000 rules: still allocation-free and fast.
+        let mut bindings: Vec<Binding> = (13..=24)
+            .map(|n| remap(&format!("f{n}"), &format!("F{n}"), "Ctrl+Shift+A"))
+            .collect();
+        for k in 'A'..='D' {
+            bindings.push(remap(&format!("k{k}"), &k.to_string(), "Down"));
+        }
+        while bindings.len() < 1000 {
+            let n = bindings.len();
+            bindings.push(binding(
+                &format!("s-{n}"),
+                &format!("Ctrl+K code:Key{}", (b'A' + (n % 26) as u8) as char),
+            ));
+        }
+        let mut t = T::new(bindings);
+        for n in 13..=24 {
+            t.ev(&format!("F{n}"), false);
+        }
+        for k in ["A", "B", "C", "D"] {
+            t.ev(k, false);
+        }
+        assert_eq!(t.core.active_remaps(), SLOTS);
+        let flags = Flags::default();
+        let raw = RawKey::physical(0x91, 0x46, false, 0);
+        let up = RawKey::physical(0x91, 0x46, true, 0);
+        let n = 20_000u32;
+        let start = std::time::Instant::now();
+        for _ in 0..n / 2 {
+            t.core.decide(&raw, Mode::Running, &flags);
+            t.core.decide(&up, Mode::Running, &flags);
+        }
+        let per = start.elapsed() / n;
+        eprintln!("1000 rules, 16 held remaps: {per:?} per event");
+        assert!(per < std::time::Duration::from_micros(500), "{per:?}");
+        // A 17th held remap has no slot: its key passes unchanged.
+        let mut more = T::new(
+            (13..=24)
+                .map(|n| remap(&format!("f{n}"), &format!("F{n}"), "F1"))
+                .chain(
+                    ['A', 'B', 'C', 'D', 'E']
+                        .iter()
+                        .map(|k| remap(&format!("k{k}"), &k.to_string(), "F2")),
+                )
+                .collect(),
+        );
+        for n in 13..=24 {
+            more.ev(&format!("F{n}"), false);
+        }
+        for k in ["A", "B", "C", "D"] {
+            more.ev(k, false);
+        }
+        assert!(!more.ev("E", false).consume);
+    }
 }

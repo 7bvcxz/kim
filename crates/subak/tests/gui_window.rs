@@ -1602,7 +1602,7 @@ fn last_on_screen(d: &Value, needle: &str) -> (usize, usize) {
         .iter()
         .enumerate()
         .filter_map(|(r, l)| l.as_str().unwrap().find(needle).map(|c| (r, c)))
-        .last()
+        .next_back()
         .unwrap_or_else(|| panic!("`{needle}` is not on the screen:\n{}", screen_text(d)))
 }
 

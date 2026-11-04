@@ -402,7 +402,7 @@
       "required": ["type"],
       "oneOf": [
         {"required": ["path"], "not": {"required": ["app_id"]}},
-        {"required": ["app_id"], "not": {"anyOf": [{"required": ["path"]}, {"required": ["args"]}, {"required": ["working_dir"]}]}}
+        {"required": ["app_id"], "not": {"anyOf": [{"required": ["path"]}, {"required": ["args"]}, {"required": ["working_dir"]}, {"required": ["env"]}]}}
       ],
       "properties": {
         "type": {"const": "open_program"},
@@ -415,6 +415,20 @@
           "items": {"type": "string", "maxLength": 1024, "pattern": "^[^\\x00-\\x1f]*$"}
         },
         "working_dir": {"$ref": "#/$defs/folder_path"},
+        "env": {
+          "description": "Explicit environment overrides for this program only (Step 70), on top of the user's environment; names compare case-insensitively and must be unique (checked when the rule is compiled). Part of the launch fingerprint; values are never shown in lists, status or logs.",
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "object",
+            "required": ["name", "value"],
+            "additionalProperties": false,
+            "properties": {
+              "name": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,63}$"},
+              "value": {"type": "string", "maxLength": 4096, "pattern": "^[^\\x00-\\x1f\\x7f]*$"}
+            }
+          }
+        },
         "window": {"enum": ["normal", "maximized", "minimized"]},
         "if_running": {"description": "start_new (default) or activate an existing window of the same program instead.", "enum": ["start_new", "activate"]}
       }

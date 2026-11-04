@@ -417,11 +417,10 @@ fn profile_index(at: &str) -> Option<usize> {
 }
 
 /// The Step that implements each step type this version does not run yet (ADR 0031 moved `delay`
-/// to Step 78, with ordered multi-step runs; `send_keys` and `type_text` run since Step 69).
+/// to Step 78, with ordered multi-step runs; `send_keys` and `type_text` run since Step 69,
+/// `open_program` and `open_url` since Step 70).
 pub const LATER_STEPS: &[(&str, &str)] = &[
     ("delay", "Step 78"),
-    ("open_program", "Step 70"),
-    ("open_url", "Step 70"),
     ("mouse_move", "Step 71"),
     ("mouse_scroll", "Step 71"),
     ("mouse_click", "Step 71"),
@@ -839,6 +838,26 @@ fn extend(
                     None,
                     offers,
                 );
+            }
+            // The launch checks the schema cannot express (Step 70): a `:` after the drive, a
+            // name given twice in `env`, a command line longer than Windows takes, a URL with
+            // characters a browser's command line could misread. Without this the rule would load
+            // inactive with no problem listed. Messages never quote the target.
+            for (i, s) in rule.steps.iter().enumerate() {
+                if matches!(s, Action::OpenProgram(_) | Action::OpenUrl(_))
+                    && let Err(e) =
+                        crate::launch::compile_step(&serde_json::to_value(s).unwrap_or_default())
+                {
+                    push(
+                        item,
+                        "step_invalid",
+                        Severity::Error,
+                        format!("{at}.steps[{i}]"),
+                        format!("{at}.steps[{i}]: {e}"),
+                        None,
+                        vec![Offer::Disable],
+                    );
+                }
             }
             if ctx.check_targets {
                 for (i, s) in rule.steps.iter().enumerate() {

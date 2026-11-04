@@ -1,8 +1,8 @@
 # Ddalgak safety: risks, scope and policies
 
 Status: **current** (Step 65, specification; Step 66 ran the engine checks it owns on real
-Windows, Step 68 the remap checks, Step 69 the typing checks, §11) · Requirements: `DDALGAK-SEC-001…014`, `DDALGAK-NFR-002`, `DDALGAK-NFR-006`,
-`DDALGAK-NFR-009`, `KIM-SEC-020…023` · Decision: [ADR 0022](adr/0022-ddalgak-rule-model-and-safety.md)
+Windows, Step 68 the remap checks, Step 69 the typing checks, Step 70 the launch checks, §11) · Requirements: `DDALGAK-SEC-001…014`, `DDALGAK-NFR-002`, `DDALGAK-NFR-006`,
+`DDALGAK-NFR-009`, `KIM-SEC-020…023` · Decisions: [ADR 0022](adr/0022-ddalgak-rule-model-and-safety.md), [ADR 0037](adr/0037-ddalgak-program-and-website-launches.md)
 
 A keyboard hook sees every key, and an injector can type into any window the user can reach.
 This document fixes what Ddalgak may and may not do with that power, what the operating system
@@ -18,7 +18,7 @@ documentation is marked *documented*; the sources are listed in
 | Run as the signed-in user, without elevation, inside `ddalgak-gui.exe` that the user started (or opt-in start at sign-in) | Install a service, driver, scheduled task, `UIAccess` binary, SYSTEM or elevated component |
 | Install one low-level keyboard hook (`WH_KEYBOARD_LL`) while the engine is on, and (since Step 68) a low-level mouse hook only while the engine is on and an active rule has a mouse-button trigger (permission `mouse-hook`; the catalog disclosure is listed in [ADR 0031](adr/0031-ddalgak-remap-execution-and-mouse-hook.md)) | Hook into other processes (no DLL injection), read other programs' memory, or use kernel input filters |
 | Inject keyboard and mouse input with `SendInput` when the user's rule says so and the user consented | Inject on the secure desktop, into password fields, or into elevated windows by any workaround |
-| Start programs and hand `http(s)` links to the browser, as the user | Run shell strings, scripts or elevated programs; open network connections itself |
+| Start programs (`CreateProcessW` with a quoted argument list, Step 70) and hand `http(s)` links to the browser through the shell's `open`, as the user | Run shell strings, scripts or elevated programs (`ERROR_ELEVATION_REQUIRED` is reported, never retried elevated); hand `file:`, `javascript:`, `ms-*:` or custom-protocol links to the shell; start a program hidden; open network connections itself |
 | Keep rules, history and an optional outcome list in the user's profile | Keep, log or transmit keystrokes, typed text, clipboard contents, window titles or URLs |
 
 **Trust boundary.** Like every Kim tool, Ddalgak trusts code running as the same user at medium
@@ -312,3 +312,25 @@ text appears in no output. Read-only, disabled and password edits are recognized
 hidden windows. **Not tested** (manual script in DDALGAK_ENGINE §12): real typing into
 applications, the Korean IME (DR-05), the real clipboard, browser and UWP password fields (DR-04),
 an elevated window and a focus switch during a real run.
+
+**Step 70** (launches, Windows 10 19045; details in [DDALGAK_ENGINE §13](DDALGAK_ENGINE.md),
+decision [ADR 0037](adr/0037-ddalgak-program-and-website-launches.md)): programs start with
+`CreateProcessW` (the expanded path as application name, nothing searched, a command line quoted
+per argument and split back exactly by Windows' own `CommandLineToArgvW` in the tests, no shell,
+never elevated: `ERROR_ELEVATION_REQUIRED` becomes `program_requires_elevation`, tested with a
+fake because a real elevated target would need UAC); websites and packaged apps go only to the
+shell's `open` with a checked `http`/`https` URL or `shell:AppsFolder\<id>`, and every other
+scheme (`file:`, `javascript:`, `vbscript:`, `data:`, `ms-*:`, `search-ms:`, custom protocols) and
+credentials are refused by the schema, the CLI's normalizer, the loader and again by the Windows
+layer — **tested** with a fake shell that records the verb and target. Shell hosts are refused by
+name and again behind links; a missing or moved program ends with `program_not_found` and is
+never searched for; one run per rule at a time and one start per second stop duplicate triggers;
+a changed target or environment value makes consent stale; loading, reloading and importing
+start nothing; paths, arguments, URL paths and queries and environment values appear in no
+output unless `rule show --show-targets`. A **real hidden start** of the test's own program from
+a path with spaces and Korean characters, directly and through the real test host on an injected
+obscure key, is **tested**. Launches inject nothing, so they still run over an elevated window
+(the "others run" half of the elevated-window check above). **Not tested** (manual script in
+DDALGAK_ENGINE §13): a real hotkey opening an installed program and a website in the real default
+browser, a packaged app, activation of a real window, a real elevated target and whether
+Windows' foreground lock lets the new window come to the front.

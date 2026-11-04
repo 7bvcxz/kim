@@ -570,12 +570,23 @@ step_struct!(
         args: Option<Vec<String>>,
         #[serde(default, skip_serializing_if = "none")]
         working_dir: Option<String>,
+        /// Explicit environment overrides (Step 70).
+        #[serde(default, skip_serializing_if = "none")]
+        env: Option<Vec<EnvVar>>,
         #[serde(default, skip_serializing_if = "none")]
         window: Option<WindowState>,
         #[serde(default, skip_serializing_if = "none")]
         if_running: Option<IfRunning>,
     }
 );
+
+/// One environment override of `open_program` (`{ "name", "value" }`; the schema allows no
+/// other fields).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EnvVar {
+    pub name: String,
+    pub value: String,
+}
 step_struct!(
     /// `open_url` (§5.6).
     OpenUrl { url: String }

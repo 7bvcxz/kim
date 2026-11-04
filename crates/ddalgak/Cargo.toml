@@ -43,13 +43,16 @@ sha2 = "0.11.1"
 # window, the tray icon, WinEvent context tracking (focus, IME windows), session lock
 # notifications, the single-instance mutex, the identity-checked named pipe, the opt-in HKCU Run
 # value, integrity levels and process times; since Step 69 the clipboard (paste with restore),
-# global memory for clipboard data and the IME window (hotstrings step aside in Hangul mode).
+# global memory for clipboard data and the IME window (hotstrings step aside in Hangul mode);
+# since Step 70 process creation, the shell's `open` (ShellExecuteExW, which wants COM on the
+# calling thread) and icon extraction for the editor's program preview.
 windows-sys = { version = "0.61.2", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
     "Win32_Security",
     "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
+    "Win32_System_Com",
     "Win32_System_DataExchange",
     "Win32_System_IO",
     "Win32_System_LibraryLoader",

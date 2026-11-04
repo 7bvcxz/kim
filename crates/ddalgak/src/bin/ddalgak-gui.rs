@@ -10,7 +10,9 @@
 //! off and the engine off), `--help`, `--version`. Debug builds only (compiled out of release
 //! builds, so a shipped app always has its tray icon): `--endpoint <name>`, `--test-host`
 //! (no tray icon, the hook never consumes a key, the app ends by itself after
-//! `--test-max-seconds`, default 60) for automated tests.
+//! `--test-max-seconds`, default 60) for automated tests, and `--test-launch-root <dir>` (the test
+//! host starts programs only from that folder, always hidden, and records URLs there instead of
+//! opening them; without it every launch is refused).
 
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
@@ -39,6 +41,7 @@ fn main() -> ExitCode {
     let mut endpoint: Option<String> = None;
     let mut test_host = false;
     let mut max_secs: u64 = 60;
+    let mut test_launch_root: Option<std::path::PathBuf> = None;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -67,6 +70,11 @@ fn main() -> ExitCode {
                     .and_then(|v| v.parse().ok())
                     .unwrap_or(60)
                     .clamp(1, 600);
+            }
+            #[cfg(debug_assertions)]
+            "--test-launch-root" => {
+                i += 1;
+                test_launch_root = args.get(i).map(std::path::PathBuf::from);
             }
             other => {
                 eprintln!("ddalgak-gui: error: unknown option `{other}` (usage)");
@@ -114,6 +122,8 @@ fn main() -> ExitCode {
         no_hotkeys,
         startup,
         max_lifetime: test_host.then(|| std::time::Duration::from_secs(max_secs)),
+        // Only the test host launches from a test folder; the real app ignores it.
+        test_launch_root: test_launch_root.filter(|_| test_host),
     };
     match host::run(opts) {
         Ok(()) => ExitCode::SUCCESS,

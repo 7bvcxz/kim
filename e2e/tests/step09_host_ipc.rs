@@ -367,8 +367,8 @@ fn a_program_holding_the_pipe_name_is_refused_and_sent_nothing() {
     }
     // The squatter ends by itself after three connections; give it a moment, then make sure it
     // is gone so its output can be read even when a command never reached it.
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    while squatter.try_wait().ok().flatten().is_none() && std::time::Instant::now() < deadline {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while squatter.try_wait().ok().flatten().is_none() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(50));
     }
     let _ = squatter.kill();

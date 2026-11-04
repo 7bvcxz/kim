@@ -1134,6 +1134,10 @@ impl Model {
             .to_string();
         let shown = self.terminal().is_some_and(|t| t.id == tid);
         match name {
+            "pane.exited" if ours_pane(self) && self.closing.contains(&tid) => {
+                // This window is closing it (`Ctrl+W`): no "ended" banner; its removal follows.
+                self.update(&tid, |t| t.state = "exited".into());
+            }
             "pane.exited" if ours_pane(self) => {
                 self.update(&tid, |t| t.state = "exited".into());
                 let term = self.terminal().cloned().expect("attached");

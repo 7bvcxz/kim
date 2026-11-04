@@ -124,6 +124,8 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut lang = None;
     let mut no_hotkeys = kim_hotkeys::no_hotkeys_env();
+    // `--endpoint` exists in debug builds only.
+    #[cfg_attr(not(debug_assertions), allow(unused_mut))]
     let mut endpoint: Option<String> = None;
     let mut i = 0;
     while i < args.len() {

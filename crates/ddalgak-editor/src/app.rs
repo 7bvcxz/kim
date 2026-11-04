@@ -224,7 +224,12 @@ pub struct EditorApp {
     visible: Vec<usize>,
     /// Close the window on the next frame (a confirmed discard on close).
     close_now: bool,
+    /// The Try step's document check, kept until the form or the file changes.
+    doc_check: Option<DocCheck>,
 }
+
+/// The document checks of the form's rule for one state of the form and the file.
+type DocCheck = ((Option<form::Fields>, u64), Vec<ddalgak::validate::Problem>);
 
 impl std::fmt::Debug for EditorApp {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -284,6 +289,7 @@ impl EditorApp {
             themed: false,
             visible: Vec::new(),
             close_now: false,
+            doc_check: None,
         };
         app.start_watch();
         app.link.send(Job::Status);
@@ -379,6 +385,12 @@ impl EditorApp {
             .iter()
             .map(|i| self.rows[*i].id.clone())
             .collect()
+    }
+
+    /// Opens the form for a new rule, empty or pre-filled from a starter (J1), as
+    /// **+ New rule** and the starter buttons do; it asks first when a form has unsaved changes.
+    pub fn start_new(&mut self, starter: Option<Effect>) {
+        self.acts.push(Act::New(starter));
     }
 
     /// Notices a change of the rules folder now (what the watcher does in the real window).
@@ -528,7 +540,7 @@ impl EditorApp {
         &mut self,
         label: String,
         command: &str,
-        op: impl FnOnce(&mut ddalgak::model::Document) -> Result<Change, EditError>,
+        op: impl FnOnce(&mut ddalgak::model::Document) -> Result<Change, EditError> + Send,
     ) -> Option<Committed> {
         match self.repo.commit(command, op) {
             Ok(c) => {

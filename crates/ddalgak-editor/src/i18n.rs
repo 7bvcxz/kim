@@ -478,6 +478,11 @@ pub const LABELS: &[(&str, &str, &str)] = &[
         "저장됨; 딸깍이 다시 불러오기를 확인하지 않음",
     ),
     ("status.revision", "revision", "리비전"),
+    (
+        "status.nothing_saved",
+        "nothing saved yet: Ddalgak has no rules",
+        "아직 저장된 것이 없음: 딸깍에 규칙이 없습니다",
+    ),
     ("toast.deleted", "Deleted", "삭제됨"),
     ("toast.undone", "Undone", "실행 취소됨"),
     ("help.f1", "F1: shortcuts and help", "F1: 단축키와 도움말"),

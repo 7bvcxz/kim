@@ -29,6 +29,15 @@ fn badge_color(k: BadgeKind) -> egui::Color32 {
     }
 }
 
+/// A small field with its visible label in front; the label names it for screen readers.
+fn labeled(ui: &mut egui::Ui, label: &str, w: impl egui::Widget) -> egui::Response {
+    ui.horizontal(|ui| {
+        let l = ui.label(small(label, Colors::get().text_secondary));
+        ui.add(w).labelled_by(l.id)
+    })
+    .inner
+}
+
 /// A primary (accent) button.
 fn primary(ui: &mut egui::Ui, text: &str) -> egui::Response {
     let c = Colors::get();
@@ -302,6 +311,9 @@ impl EditorApp {
                 SaveState::KeptPrevious { reason, .. } => line.push_str(&format!(": {reason}")),
                 SaveState::Unconfirmed { why, .. } => line.push_str(&format!(": {why}")),
                 _ => {}
+            }
+            if self.loaded.state == store::FileState::Missing {
+                line = self.t("status.nothing_saved").to_string();
             }
             if !self.loaded.state.usable() {
                 line = format!(
@@ -642,41 +654,53 @@ impl EditorApp {
                 if cb.changed() {
                     self.acts.push(Act::SetEnabled(vec![r.id.clone()], on));
                 }
-                let text = format!("{}  →  {}", r.trigger, r.summary);
-                let resp = ui.add(egui::Button::selectable(
-                    selected,
-                    egui::RichText::new(text).color(if r.enabled {
-                        c.text_primary
-                    } else {
-                        c.text_secondary
-                    }),
-                ));
-                if resp.clicked() {
-                    let m = ui.input(|i| i.modifiers);
-                    self.acts.push(Act::Select {
-                        id: r.id.clone(),
-                        ctrl: m.ctrl,
-                        shift: m.shift,
-                    });
-                }
-                if resp.double_clicked() && r.editable {
-                    self.acts.push(Act::Edit(r.id.clone()));
-                }
-                for b in &r.badges {
-                    ui.label(small(
-                        format!("{} {}", b.kind.glyph(), lang.t(b.kind.key())),
-                        badge_color(b.kind),
-                    ))
-                    .on_hover_text(format!("{} ({})", b.message, b.code));
-                }
-                ui.label(small(state, state_color));
+                // State and badges keep their place at the right; a long sentence is shortened
+                // with "…" (the full sentence stays its accessible name and its tooltip).
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(small(state, state_color));
+                    for b in r.badges.iter().rev() {
+                        ui.label(small(
+                            format!("{} {}", b.kind.glyph(), lang.t(b.kind.key())),
+                            badge_color(b.kind),
+                        ))
+                        .on_hover_text(format!("{} ({})", b.message, b.code));
+                    }
+                    let text = format!("{}  →  {}", r.trigger, r.summary);
+                    let resp = ui
+                        .with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            ui.add(
+                                egui::Button::selectable(
+                                    selected,
+                                    egui::RichText::new(&text).color(if r.enabled {
+                                        c.text_primary
+                                    } else {
+                                        c.text_secondary
+                                    }),
+                                )
+                                .truncate(),
+                            )
+                        })
+                        .inner
+                        .on_hover_text(&text);
+                    if resp.clicked() {
+                        let m = ui.input(|i| i.modifiers);
+                        self.acts.push(Act::Select {
+                            id: r.id.clone(),
+                            ctrl: m.ctrl,
+                            shift: m.shift,
+                        });
+                    }
+                    if resp.double_clicked() && r.editable {
+                        self.acts.push(Act::Edit(r.id.clone()));
+                    }
+                });
             });
             let mut second = r.title.clone();
             if let Some(d) = &r.description {
                 second.push_str(" — ");
                 second.push_str(d);
             }
-            ui.label(small(second, c.text_muted));
+            ui.add(egui::Label::new(small(second, c.text_muted)).truncate());
         });
         let rect = out.response.rect;
         let zone = ui.interact(
@@ -1025,7 +1049,18 @@ impl EditorApp {
     ) {
         let c = Colors::get();
         let lang = self.lang;
-        let doc_problems = self.candidate_problems(profile);
+        let key = (
+            self.form.as_ref().map(|f| f.fields.clone()),
+            self.loaded.hash,
+        );
+        let doc_problems = match &self.doc_check {
+            Some((k, p)) if *k == key => p.clone(),
+            _ => {
+                let p = self.candidate_problems(profile);
+                self.doc_check = Some((key, p.clone()));
+                p
+            }
+        };
         let Some(f) = self.form.as_mut() else {
             return;
         };
@@ -1148,7 +1183,8 @@ impl EditorApp {
             }
         }
         // Consent is asked when saving; a missing grant is not a problem of the form.
-        let r = ddalgak::validate::check(&d.to_value(), &self.repo.context());
+        let ctx = self.repo.context();
+        let r = repo::isolated(|| ddalgak::validate::check(&d.to_value(), &ctx));
         r.all()
             .filter(|p| p.rule.as_deref() == Some(id.as_str()))
             .filter(|p| p.severity != ddalgak::validate::Severity::Info)
@@ -1709,12 +1745,13 @@ fn keys_stage(
         ui.radio_value(&mut t.on, TriggerOn::Release, lang.t("form.on_release"));
         ui.radio_value(&mut t.on, TriggerOn::Hold, lang.t("form.on_hold"));
         if t.on == TriggerOn::Hold {
-            ui.add(
+            labeled(
+                ui,
+                lang.t("form.hold_ms"),
                 egui::DragValue::new(&mut t.hold_ms)
                     .range(200..=5000)
                     .suffix(" ms"),
-            )
-            .accessible_name(lang.t("form.hold_ms"));
+            );
         }
     });
     ui.checkbox(&mut t.pass_through, lang.t("form.pass_through"));
@@ -1829,12 +1866,13 @@ fn details_stage(
                 true,
             );
             if !fl.remap.tap.trim().is_empty() {
-                ui.add(
+                labeled(
+                    ui,
+                    lang.t("field.tap_ms"),
                     egui::DragValue::new(&mut fl.remap.tap_ms)
                         .range(100..=1000)
                         .suffix(" ms"),
-                )
-                .accessible_name(lang.t("field.tap_ms"));
+                );
             }
             let trig = fl.trigger.keys.clone();
             if ddalgak::remap::widened(&trig) && !fl.remap.to.trim().is_empty() {
@@ -1868,12 +1906,13 @@ fn details_stage(
                 true,
             );
             ui.checkbox(&mut capture.add_step, lang.t("form.add_step"));
-            ui.add(
+            labeled(
+                ui,
+                lang.t("field.step_delay"),
                 egui::DragValue::new(&mut fl.keys.step_delay_ms)
                     .range(0..=1000)
                     .suffix(" ms"),
-            )
-            .accessible_name(lang.t("field.step_delay"));
+            );
             problems_for(ui, problems, &["steps[0]"]);
         }
         Effect::TypeText => {
@@ -1886,12 +1925,13 @@ fn details_stage(
             .labelled_by(lbl.id);
             ui.checkbox(&mut fl.text.variables, lang.t("field.variables"));
             ui.checkbox(&mut fl.text.paste, lang.t("field.paste"));
-            ui.add(
+            labeled(
+                ui,
+                lang.t("field.key_delay"),
                 egui::DragValue::new(&mut fl.text.key_delay_ms)
                     .range(0..=200)
                     .suffix(" ms"),
-            )
-            .accessible_name(lang.t("field.key_delay"));
+            );
             let preview = f.text_draft().preview(&form::local_now());
             ui.label(small(lang.t("form.as_typed"), c.text_muted));
             let mut shown = preview.rendered;
@@ -2113,11 +2153,11 @@ fn details_stage(
             if !fl.apps.trim().is_empty() {
                 ui.label(small(lang.t("form.apps_note"), c.warning));
             }
-            ui.horizontal(|ui| {
-                ui.label(lang.t("form.priority"));
-                ui.add(egui::DragValue::new(&mut fl.priority).range(-1000..=1000))
-                    .accessible_name(lang.t("form.priority"));
-            });
+            labeled(
+                ui,
+                lang.t("form.priority"),
+                egui::DragValue::new(&mut fl.priority).range(-1000..=1000),
+            );
             problems_for(ui, problems, &["modes", "when", "priority", "description"]);
         });
 }
@@ -2156,11 +2196,17 @@ fn mouse_form(
         MouseAction::MoveBy { dx, dy, grid, hold } => {
             ui.horizontal(|ui| {
                 ui.label(lang.t("field.right"));
-                ui.add(egui::DragValue::new(dx).range(-10_000..=10_000))
-                    .accessible_name(lang.t("field.right"));
+                labeled(
+                    ui,
+                    lang.t("field.right"),
+                    egui::DragValue::new(dx).range(-10_000..=10_000),
+                );
                 ui.label(lang.t("field.down"));
-                ui.add(egui::DragValue::new(dy).range(-10_000..=10_000))
-                    .accessible_name(lang.t("field.down"));
+                labeled(
+                    ui,
+                    lang.t("field.down"),
+                    egui::DragValue::new(dy).range(-10_000..=10_000),
+                );
             });
             let mut cells = grid.is_some();
             if ui.checkbox(&mut cells, lang.t("field.unit_grid")).changed() {
@@ -2205,16 +2251,20 @@ fn mouse_form(
             });
             match hold {
                 HoldChoice::Continuous { speed, .. } => {
-                    ui.add(egui::DragValue::new(speed).range(50..=5000).suffix(" px/s"))
-                        .accessible_name(lang.t("field.speed"));
+                    labeled(
+                        ui,
+                        lang.t("field.speed"),
+                        egui::DragValue::new(speed).range(50..=5000).suffix(" px/s"),
+                    );
                 }
                 HoldChoice::Repeat { repeat_ms, .. } => {
-                    ui.add(
+                    labeled(
+                        ui,
+                        lang.t("field.repeat_ms"),
                         egui::DragValue::new(repeat_ms)
                             .range(20..=2000)
                             .suffix(" ms"),
-                    )
-                    .accessible_name(lang.t("field.repeat_ms"));
+                    );
                 }
                 HoldChoice::Once => {}
             }
@@ -2246,8 +2296,11 @@ fn mouse_form(
                 ] {
                     ui.radio_value(dir, d, d.as_str());
                 }
-                ui.add(egui::DragValue::new(notches).range(1..=50))
-                    .accessible_name(lang.t("field.notches"));
+                labeled(
+                    ui,
+                    lang.t("field.notches"),
+                    egui::DragValue::new(notches).range(1..=50),
+                );
             });
         }
         MouseAction::Click { button, op, at } => {

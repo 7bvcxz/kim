@@ -137,7 +137,7 @@ impl Repo {
 
     /// Reads and checks `rules.json` (reading never writes).
     pub fn read(&self) -> store::Loaded {
-        store::read(&self.files, &self.context())
+        isolated(|| store::read(&self.files, &self.context()))
     }
 
     /// One transaction: lock, re-read, `op`, review, save (origin `gui`, the history names
@@ -145,7 +145,7 @@ impl Repo {
     pub fn commit(
         &self,
         command: &str,
-        op: impl FnOnce(&mut Document) -> Result<Change, EditError>,
+        op: impl FnOnce(&mut Document) -> Result<Change, EditError> + Send,
     ) -> Result<Committed, CommitError> {
         self.transact(command, op, edit::review)
     }
@@ -154,12 +154,21 @@ impl Repo {
     pub fn commit_modes(
         &self,
         command: &str,
-        op: impl FnOnce(&mut Document) -> Result<Change, EditError>,
+        op: impl FnOnce(&mut Document) -> Result<Change, EditError> + Send,
     ) -> Result<Committed, CommitError> {
         self.transact(command, op, ddalgak::mode_edit::review)
     }
 
     fn transact(
+        &self,
+        command: &str,
+        op: impl FnOnce(&mut Document) -> Result<Change, EditError> + Send,
+        review: fn(&validate::Report, &validate::Report) -> Result<(), EditError>,
+    ) -> Result<Committed, CommitError> {
+        isolated(|| self.transact_here(command, op, review))
+    }
+
+    fn transact_here(
         &self,
         command: &str,
         op: impl FnOnce(&mut Document) -> Result<Change, EditError>,
@@ -240,6 +249,18 @@ impl Repo {
             })
         })
     }
+}
+
+/// Runs `f` on a short-lived thread and returns its result. The schema validator keeps its
+/// compiled patterns and their search caches per thread; validating on a thread that ends frees
+/// that memory again, so the editor's working set does not grow with the size of the rules file
+/// it once read (ADR 0049, measured in DDALGAK_GUI_JOURNEYS §7).
+pub fn isolated<T: Send>(f: impl FnOnce() -> T + Send) -> T {
+    std::thread::scope(|s| {
+        s.spawn(f)
+            .join()
+            .unwrap_or_else(|p| std::panic::resume_unwind(p))
+    })
 }
 
 /// Adds a new rule at the end of `profile` (a fresh ID is chosen under the lock). Without the

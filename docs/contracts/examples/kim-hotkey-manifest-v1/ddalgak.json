@@ -5,10 +5,23 @@
   "tool": "ddalgak",
   "version": "0.1.0",
   "backend": "hook",
+  "contexts": [
+    { "id": "rules", "title": "Rule list" },
+    { "id": "playground", "title": "Test playground" }
+  ],
   "actions": [
     { "id": "engine.toggle", "title": "Turn the automation engine on or off", "scopes": ["global"], "defaults": [] },
     { "id": "engine.pause", "title": "Pause or resume all rules", "scopes": ["global"], "defaults": [] },
     { "id": "editor.open", "title": "Open the rule editor", "scopes": ["global", "app"], "defaults": [] },
-    { "id": "engine.emergency-off", "title": "Emergency off: remove the hook and release held keys", "scopes": ["global"], "defaults": ["Ctrl+Alt+Shift+Escape"], "bindable": false }
+    { "id": "engine.emergency-off", "title": "Emergency off: remove the hook and release held keys", "scopes": ["global"], "defaults": ["Ctrl+Alt+Shift+Escape"], "bindable": false },
+    { "id": "rules.new", "title": "New rule", "context": "rules", "defaults": ["Ctrl+N"] },
+    { "id": "rules.duplicate", "title": "Duplicate the selected rule", "context": "rules", "defaults": ["Ctrl+D"] },
+    { "id": "rules.delete", "title": "Delete the selected rules", "context": "rules", "defaults": ["Delete"], "destructive": true },
+    { "id": "rules.search", "title": "Search rules", "context": "rules", "defaults": ["Ctrl+F"] },
+    { "id": "rules.toggle", "title": "Turn the selected rules on or off", "context": "rules", "defaults": [] },
+    { "id": "rules.test", "title": "Test the selected rule in the playground", "context": "rules", "defaults": ["F5"] },
+    { "id": "rules.export", "title": "Export the selected rules or profile", "context": "rules", "defaults": [] },
+    { "id": "playground.reset", "title": "Reset the playground", "context": "playground", "defaults": [] },
+    { "id": "playground.live", "title": "Switch between simulation and live test", "context": "playground", "defaults": [] }
   ]
 }

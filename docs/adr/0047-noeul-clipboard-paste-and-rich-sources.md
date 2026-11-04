@@ -184,3 +184,12 @@ running Noeul (the default "notify" of NOEUL-SEC-010; the setting to allow silen
   that never sees a connection), the drop handler with a synthetic `HDROP`, and the e2e scenario
   `e2e/tests/step55_noeul_clipboard.rs`. The real clipboard with real applications (a browser,
   Excel, Explorer, Paint) is the manual script of [NOEUL_UX_SPEC §4.12](../NOEUL_UX_SPEC.md).
+
+## Notes
+
+- 2026-11-04 (Step 59, [ADR 0053](0053-noeul-color-picker.md)): `F3` also reads `hsl()` and
+  `hsla()` colour values (degrees with or without `deg`, percentages, an optional alpha), so every
+  text the colour picker copies pins back as a swatch. Under the debug-build test hook a copy to
+  the stand-in clipboard now replaces the stand-in folder's formats (`CF_UNICODETEXT`, or `PNG`
+  and `CF_DIBV5`), as a clipboard write replaces the clipboard; without a folder it still goes
+  nowhere, and the user's clipboard is never touched.

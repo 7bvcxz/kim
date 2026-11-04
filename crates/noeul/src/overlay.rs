@@ -73,11 +73,23 @@
 //! - *History.* `history.previous` / `history.next` (`Comma` / `Period`) step through the
 //!   rectangles of earlier successful captures over the current picture (memory only).
 //!
+//! **Annotation** (Step 56, UX spec §4.9, ADR 0038, NOEUL-FR-080…083): the toolbar gains the
+//! tools (rectangle, ellipse, line, arrow, pen, marker, text), the colour and width buttons, undo
+//! and redo. While a tool is active (phase `annotating`) presses inside the selection draw, pick
+//! or edit objects ([`crate::annotation::Editor`]) and never pin (a double-click on a label
+//! selects a word); `Escape` leaves the tool and keeps the drawing; `Enter` and Pin still pin, with
+//! the annotations. The overlay shows the annotated pixels its owner renders
+//! ([`crate::annotation::draw`] over the frozen picture, the `layer` of [`compose`]) and asks for
+//! the label's input method while one is edited. [`Mode::PinEdit`] runs the same model over a
+//! pin's picture: the selection is the pin, resizing it crops, `Enter` or Done commits, `Escape`
+//! cancels, and losing focus keeps the work.
+//!
 //! Lengths of Noeul's own drawing are *logical* pixels scaled by the DPI of the monitor they are
 //! drawn on (handles 7, handle zones 9, border band 3, small-selection limit 27, toolbar 32
 //! high, magnifier cells 8, snapping 6); every selection, readout and pin rectangle is in
 //! *device* pixels (NOEUL-FR-090).
 
+use crate::annotation::{self, Editor, Ime, Object, Order, TextKey, Tool, Typesetter};
 use crate::capture::{Monitor, scale_px};
 use crate::detect::{
     DetectMode, DetectWindow, ElementAnswer, ElementRequest, Fallback, Snapshot, check_element,
@@ -386,6 +398,96 @@ pub enum Input {
     FocusLost,
     /// The pointer capture was taken away during a drag.
     CaptureLost,
+    /// The mouse wheel (120 per notch, positive away from the user): one width level per notch
+    /// while a tool is active or an annotation is selected (Step 56).
+    Wheel(i32),
+    /// A character typed into the text label being edited (`WM_CHAR`, Step 56).
+    Char(char),
+    /// An editing key of the text label being edited (Step 56).
+    TextKey(TextKey),
+    /// An action of the `annotate` context (Step 56).
+    Annotate(AnnotateAction),
+}
+
+/// The actions of the `annotate` context (UX spec §6; Step 56). Its bindings are matched while
+/// the overlay has a confirmed selection (or a pin is edited); `annotate.done` only while there
+/// is something to end, so `Escape` otherwise still cancels the capture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnnotateAction {
+    /// `annotate.done` (`Escape`): end the label, abort the shape being drawn, or leave the tool.
+    Done,
+    Undo,
+    Redo,
+    WidthDown,
+    WidthUp,
+    /// `annotate.rectangle` … `annotate.text` (no default keys): choose that tool (again: leave it).
+    Tool(Tool),
+    /// `annotate.clear-all`: remove every annotation, as one undoable step.
+    ClearAll,
+    /// `annotate.delete` (`Delete`): the selected annotation.
+    Delete,
+    /// `annotate.select-next` / `-previous` (`N` / `Shift+N`): select annotations by keyboard.
+    SelectNext,
+    SelectPrevious,
+    /// `annotate.bring-forward` and the like (`PageUp`, `PageDown`, `Shift+PageUp`,
+    /// `Shift+PageDown`).
+    Order(Order),
+}
+
+/// The `annotate` actions this build implements, in manifest order.
+pub const ANNOTATE_IDS: &[&str] = &[
+    "annotate.done",
+    "annotate.undo",
+    "annotate.redo",
+    "annotate.width-down",
+    "annotate.width-up",
+    "annotate.rectangle",
+    "annotate.ellipse",
+    "annotate.line",
+    "annotate.arrow",
+    "annotate.pen",
+    "annotate.marker",
+    "annotate.text",
+    "annotate.clear-all",
+    "annotate.delete",
+    "annotate.select-next",
+    "annotate.select-previous",
+    "annotate.bring-forward",
+    "annotate.send-backward",
+    "annotate.bring-to-front",
+    "annotate.send-to-back",
+];
+
+impl AnnotateAction {
+    pub fn from_id(id: &str) -> Option<AnnotateAction> {
+        Some(match id {
+            "annotate.done" => AnnotateAction::Done,
+            "annotate.undo" => AnnotateAction::Undo,
+            "annotate.redo" => AnnotateAction::Redo,
+            "annotate.width-down" => AnnotateAction::WidthDown,
+            "annotate.width-up" => AnnotateAction::WidthUp,
+            "annotate.clear-all" => AnnotateAction::ClearAll,
+            "annotate.delete" => AnnotateAction::Delete,
+            "annotate.select-next" => AnnotateAction::SelectNext,
+            "annotate.select-previous" => AnnotateAction::SelectPrevious,
+            "annotate.bring-forward" => AnnotateAction::Order(Order::Forward),
+            "annotate.send-backward" => AnnotateAction::Order(Order::Backward),
+            "annotate.bring-to-front" => AnnotateAction::Order(Order::Front),
+            "annotate.send-to-back" => AnnotateAction::Order(Order::Back),
+            other => AnnotateAction::Tool(Tool::from_action(other)?),
+        })
+    }
+}
+
+/// What an overlay is for (Step 56).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    /// The capture overlay over the frozen desktop.
+    Capture,
+    /// Editing a pin's annotations: the canvas holds the pin's picture at 100 % (and room for the
+    /// toolbar), the selection is the part the pin keeps (resizing it crops), `Enter` and Done
+    /// commit, `Escape` and Cancel return the pin unchanged.
+    PinEdit,
 }
 
 /// A navigation key while the toolbar may take it (UX spec §5, ADR 0021 §5).
@@ -481,25 +583,66 @@ pub enum ToolbarItem {
     Pin,
     Copy,
     Save,
+    /// A drawing tool (Step 56).
+    Tool(Tool),
+    /// The colour: the next colour of the palette (`Shift`: the previous one).
+    Color,
+    /// The width: one level thicker, from the thickest back to the thinnest (`Shift`: thinner).
+    Width,
+    Undo,
+    Redo,
+    /// Commits a pin's edit (pin editing only; primary).
+    Done,
     Cancel,
 }
 
-/// The toolbar of this build: Pin (primary), Copy, Save, Cancel. Annotation tools, undo and redo
-/// join it with the Steps that implement them.
-pub const TOOLBAR: [ToolbarItem; 4] = [
+/// The capture overlay's toolbar (UX spec §3.1): Pin (primary), Copy, Save, the tools, colour,
+/// width, Undo, Redo, Cancel.
+pub const TOOLBAR: [ToolbarItem; 15] = [
     ToolbarItem::Pin,
     ToolbarItem::Copy,
     ToolbarItem::Save,
+    ToolbarItem::Tool(Tool::Rectangle),
+    ToolbarItem::Tool(Tool::Ellipse),
+    ToolbarItem::Tool(Tool::Line),
+    ToolbarItem::Tool(Tool::Arrow),
+    ToolbarItem::Tool(Tool::Pen),
+    ToolbarItem::Tool(Tool::Marker),
+    ToolbarItem::Tool(Tool::Text),
+    ToolbarItem::Color,
+    ToolbarItem::Width,
+    ToolbarItem::Undo,
+    ToolbarItem::Redo,
+    ToolbarItem::Cancel,
+];
+
+/// The pin editor's toolbar: Done (primary), the tools, colour, width, Undo, Redo, Cancel.
+pub const EDIT_TOOLBAR: [ToolbarItem; 13] = [
+    ToolbarItem::Done,
+    ToolbarItem::Tool(Tool::Rectangle),
+    ToolbarItem::Tool(Tool::Ellipse),
+    ToolbarItem::Tool(Tool::Line),
+    ToolbarItem::Tool(Tool::Arrow),
+    ToolbarItem::Tool(Tool::Pen),
+    ToolbarItem::Tool(Tool::Marker),
+    ToolbarItem::Tool(Tool::Text),
+    ToolbarItem::Color,
+    ToolbarItem::Width,
+    ToolbarItem::Undo,
+    ToolbarItem::Redo,
     ToolbarItem::Cancel,
 ];
 
 impl ToolbarItem {
+    /// The text of a text button; icon buttons have none (their icon is drawn by [`compose`]).
     pub fn label(self) -> &'static str {
         match self {
             ToolbarItem::Pin => "Pin",
             ToolbarItem::Copy => "Copy",
             ToolbarItem::Save => "Save",
+            ToolbarItem::Done => "Done",
             ToolbarItem::Cancel => "Cancel",
+            _ => "",
         }
     }
 
@@ -508,7 +651,29 @@ impl ToolbarItem {
             ToolbarItem::Pin => "pin",
             ToolbarItem::Copy => "copy",
             ToolbarItem::Save => "save",
+            ToolbarItem::Tool(t) => t.as_str(),
+            ToolbarItem::Color => "color",
+            ToolbarItem::Width => "width",
+            ToolbarItem::Undo => "undo",
+            ToolbarItem::Redo => "redo",
+            ToolbarItem::Done => "done",
             ToolbarItem::Cancel => "cancel",
+        }
+    }
+
+    /// Its name for people (tooltips, the docs and UI Automation in N5).
+    pub fn title(self) -> &'static str {
+        match self {
+            ToolbarItem::Pin => "Pin",
+            ToolbarItem::Copy => "Copy",
+            ToolbarItem::Save => "Save",
+            ToolbarItem::Tool(t) => t.title(),
+            ToolbarItem::Color => "Colour",
+            ToolbarItem::Width => "Line width",
+            ToolbarItem::Undo => "Undo",
+            ToolbarItem::Redo => "Redo",
+            ToolbarItem::Done => "Done",
+            ToolbarItem::Cancel => "Cancel",
         }
     }
 
@@ -516,7 +681,19 @@ impl ToolbarItem {
     fn width(self) -> u32 {
         match self {
             ToolbarItem::Cancel => 64,
-            _ => 52,
+            ToolbarItem::Pin | ToolbarItem::Copy | ToolbarItem::Save | ToolbarItem::Done => 52,
+            _ => 28,
+        }
+    }
+
+    /// Buttons of one group sit 4 logical pixels apart, groups 10.
+    fn group(self) -> u8 {
+        match self {
+            ToolbarItem::Pin | ToolbarItem::Copy | ToolbarItem::Save | ToolbarItem::Done => 0,
+            ToolbarItem::Tool(_) => 1,
+            ToolbarItem::Color | ToolbarItem::Width => 2,
+            ToolbarItem::Undo | ToolbarItem::Redo => 3,
+            ToolbarItem::Cancel => 4,
         }
     }
 }
@@ -537,7 +714,8 @@ pub enum Zone {
     Interior,
     /// A handle zone or the border band.
     Edge(Edges),
-    /// The toolbar: on this button (index into [`TOOLBAR`]), or on the bar between buttons.
+    /// The toolbar: on this button (index into the mode's toolbar), or on the bar between
+    /// buttons.
     Toolbar(Option<usize>),
     /// The size chip where it covers the selection (no room above it).
     Chip,
@@ -555,6 +733,8 @@ pub enum Phase {
     /// The first corner is marked by `selection.mark`; the next mark (or a click) sets the
     /// opposite one (Step 52).
     Marking,
+    /// An annotation tool is active, a label is edited or a stroke is drawn (Step 56).
+    Annotating,
 }
 
 impl Phase {
@@ -567,6 +747,7 @@ impl Phase {
             Phase::Moving => "moving",
             Phase::Resizing => "resizing",
             Phase::Marking => "marking",
+            Phase::Annotating => "annotating",
         }
     }
 }
@@ -688,6 +869,8 @@ enum State {
         anchor: (i32, i32),
         before: Option<Rect>,
     },
+    /// The left button draws, moves or resizes an annotation (Step 56).
+    Drawing,
 }
 
 /// The overlay of one capture session. See the module documentation.
@@ -729,6 +912,16 @@ pub struct Overlay {
     /// Where the size chip was drawn last (hit-testing follows what the user sees; the scene is
     /// recomputed after every input).
     chip_at: Cell<Option<Rect>>,
+    /// What this overlay is for (Step 56).
+    mode: Mode,
+    /// Where the selection may lie: the picture, or the pin's image in [`Mode::PinEdit`].
+    bound: Rect,
+    /// The annotations and their editor (Step 56).
+    ann: Editor,
+    /// The last plain press on the label being edited (a second one selects a word).
+    text_click: Option<((i32, i32), u32)>,
+    /// Wheel deltas not yet worth a width step.
+    wheel: i32,
 }
 
 impl Overlay {
@@ -770,6 +963,11 @@ impl Overlay {
             bar_hover: None,
             bar_pressed: None,
             chip_at: Cell::new(None),
+            mode: Mode::Capture,
+            bound: picture,
+            ann: Editor::default(),
+            text_click: None,
+            wheel: 0,
         };
         o.pointer = o.clamp(pointer);
         o.help_monitor = o.monitor_index(o.pointer);
@@ -785,6 +983,102 @@ impl Overlay {
 
     pub fn gestures(&self) -> Gestures {
         self.gestures
+    }
+
+    /// The pin editor (Step 56): an overlay over `canvas` (the pin's picture at 100 % at `pin`, and
+    /// room for the toolbar), the selection fixed to `pin` (resizing it crops), with the pin's
+    /// `objects` (in canvas pixels) ready to edit. No detection, magnifier, help or history.
+    pub fn for_pin(
+        canvas: Rect,
+        monitors: Vec<Monitor>,
+        sys: SystemValues,
+        pin: Rect,
+        objects: Vec<Object>,
+    ) -> Overlay {
+        let mut o = Overlay::new(canvas, monitors, sys, (pin.x, pin.y), None, None);
+        o.mode = Mode::PinEdit;
+        o.bound = intersection(pin, canvas).unwrap_or(canvas);
+        o.magnifier = false;
+        o.ann = Editor::new(annotation::Doc::with(objects));
+        o.set_selection(o.bound);
+        o.ann.set_clip(o.bound);
+        o
+    }
+
+    pub fn mode(&self) -> Mode {
+        self.mode
+    }
+
+    /// The buttons of this overlay's toolbar, in tab order.
+    pub fn bar(&self) -> &'static [ToolbarItem] {
+        match self.mode {
+            Mode::Capture => &TOOLBAR,
+            Mode::PinEdit => &EDIT_TOOLBAR,
+        }
+    }
+
+    /// The annotation editor (its document, tool, style and selection; Step 56).
+    pub fn editor(&self) -> &Editor {
+        &self.ann
+    }
+
+    /// The annotations as they are now, in picture pixels (an output takes these).
+    pub fn annotations(&self) -> &[Object] {
+        self.ann.objects()
+    }
+
+    /// The annotation pixels that changed since the last call (the owner re-renders them).
+    pub fn take_annotation_dirty(&mut self) -> Option<Rect> {
+        self.ann.take_dirty()
+    }
+
+    /// Lays out the labels whose text or size changed (after every input, with the platform's
+    /// typesetter).
+    pub fn typeset(&mut self, ts: &dyn Typesetter) {
+        self.ann.typeset(ts);
+    }
+
+    /// An input-method event for the label being edited (Step 56, NOEUL-NFR-014).
+    pub fn ime(&mut self, e: Ime) -> Outcome {
+        self.ann.ime(e);
+        Outcome::Stay
+    }
+
+    /// Where the caret of the label being edited is, while one is: the owner switches the input
+    /// method on for the window and puts its candidate window there (NOEUL-NFR-014).
+    pub fn ime_caret(&self) -> Option<Rect> {
+        self.ann.text_marks().map(|m| m.caret).or_else(|| {
+            // Until the label is typeset: its corner.
+            self.ann
+                .editing_text()
+                .then(|| {
+                    self.ann
+                        .selected_bounds()
+                        .and_then(annotation::Bounds::to_rect)
+                })
+                .flatten()
+        })
+    }
+
+    /// Whether the `annotate` context applies to a key: the overlay has a confirmed selection
+    /// and no button is held.
+    pub fn annotate_context(&self) -> bool {
+        self.selection().is_some() && !self.dragging()
+    }
+
+    /// Whether `annotate.done` has something to end (a label, a shape being drawn, a tool or a
+    /// selected annotation); otherwise `Escape` belongs to the outer context.
+    pub fn annotation_active(&self) -> bool {
+        self.ann.editing_text()
+            || self.ann.busy()
+            || self.ann.tool().is_some()
+            || self.ann.selected().is_some()
+    }
+
+    /// Whether a label is being edited: every key but the editing keys and `Escape` is suspended
+    /// (UX spec §6).
+    pub fn editing_text(&self) -> bool {
+        self.ann.editing_text()
     }
 
     /// The same overlay with hover detection in `mode` over `snapshot` (`None`: no window list
@@ -1004,7 +1298,7 @@ impl Overlay {
 
     /// The toolbar button with keyboard focus (`None`: the canvas has it).
     pub fn toolbar_focus(&self) -> Option<ToolbarItem> {
-        self.bar_focus.and_then(|i| TOOLBAR.get(i).copied())
+        self.bar_focus.and_then(|i| self.bar().get(i).copied())
     }
 
     pub fn picture(&self) -> Rect {
@@ -1020,6 +1314,10 @@ impl Overlay {
             State::Hover => Phase::Hover,
             State::Pressed { .. } => Phase::Pressed,
             State::Dragging { .. } => Phase::Dragging,
+            State::Drawing => Phase::Annotating,
+            State::Selected if self.ann.tool().is_some() || self.ann.editing_text() => {
+                Phase::Annotating
+            }
             State::Selected => Phase::Selected,
             State::Moving { .. } => Phase::Moving,
             State::Resizing { .. } => Phase::Resizing,
@@ -1193,6 +1491,14 @@ impl Overlay {
         let Some(s) = self.selection else {
             return Zone::Outside;
         };
+        if self.ann.tool().is_some() {
+            // A tool hides the handles: the selection is a canvas, inside or not (Step 56).
+            return if s.contains(&Rect::new(x, y, 1, 1)) {
+                Zone::Interior
+            } else {
+                Zone::Outside
+            };
+        }
         let m = self.metrics(s);
         let (px, py) = (i64::from(x), i64::from(y));
         let half = i64::from(m.half);
@@ -1239,6 +1545,11 @@ impl Overlay {
             State::Moving { .. } => Cursor::Move,
             State::Resizing { edges, .. } => edge_cursor(edges),
             State::Pressed { zone, .. } => zone_cursor(zone),
+            State::Drawing => Cursor::Cross,
+            State::Selected if self.ann.tool().is_some() => match self.zone(self.pointer) {
+                Zone::Toolbar(_) | Zone::Chip => Cursor::Arrow,
+                _ => Cursor::Cross,
+            },
             State::Selected => zone_cursor(self.zone(self.pointer)),
             State::Hover | State::Dragging { .. } | State::Marking { .. } => Cursor::Cross,
         }
@@ -1248,6 +1559,9 @@ impl Overlay {
     pub fn handle(&mut self, input: Input) -> Outcome {
         let out = self.input(input);
         self.update_element_request();
+        if let Some(s) = self.selection {
+            self.ann.set_clip(s);
+        }
         out
     }
 
@@ -1263,11 +1577,39 @@ impl Overlay {
 
     fn input(&mut self, input: Input) -> Outcome {
         match input {
+            // The pin editor keeps the work when another window becomes active.
+            Input::FocusLost if self.mode == Mode::PinEdit => Outcome::Stay,
             Input::Leave | Input::FocusLost | Input::Action(Action::Cancel) => Outcome::Cancel,
             Input::CaptureLost => {
                 self.bar_pressed = None;
+                if self.state == State::Drawing {
+                    self.ann.abort();
+                }
                 self.abort_drag();
                 Outcome::Stay
+            }
+            Input::Wheel(delta) => {
+                if self.ann.tool().is_some() || self.ann.selected().is_some() {
+                    self.wheel += delta;
+                    while self.wheel.abs() >= 120 {
+                        let up = self.wheel > 0;
+                        self.ann.step_width(up);
+                        self.wheel -= if up { 120 } else { -120 };
+                    }
+                }
+                Outcome::Stay
+            }
+            Input::Char(c) => {
+                self.ann.type_char(c);
+                Outcome::Stay
+            }
+            Input::TextKey(k) => {
+                self.ann.text_key(k);
+                Outcome::Stay
+            }
+            Input::Annotate(a) => {
+                self.click = None;
+                self.annotate(a)
             }
             Input::Move { x, y, mods } => {
                 self.mouse_at(self.clamp((x, y)));
@@ -1345,6 +1687,18 @@ impl Overlay {
         // Any press ends the wait for a second click; a plain left press in the interior may
         // complete it first.
         let first = self.click.take();
+        if self.state == State::Drawing {
+            // Another button while drawing: a right-click finishes the shape (ANN-10).
+            if button == Button::Right && self.ann.right_click() {
+                self.state = State::Selected;
+            }
+            return Outcome::Stay;
+        }
+        if self.state == State::Selected
+            && let Some(out) = self.annotation_press(button, mods, time)
+        {
+            return out;
+        }
         if let State::Marking { anchor, .. } = self.state {
             match button {
                 // A click sets the opposite corner of a marked selection.
@@ -1379,10 +1733,12 @@ impl Overlay {
                         }
                         // The size chip where it covers the selection: nothing.
                         Zone::Chip => return Outcome::Stay,
+                        // The pin editor never starts a new selection outside the pin.
+                        Zone::Outside if self.mode == Mode::PinEdit => return Outcome::Stay,
                         _ => {}
                     }
                     self.bar_focus = None; // a press in the canvas gives it the keyboard focus
-                    let plain = zone == Zone::Interior && !mods.any();
+                    let plain = zone == Zone::Interior && !mods.any() && self.mode == Mode::Capture;
                     if plain
                         && self.completes_double_click(first, time)
                         && let (Some(out), Some(s)) =
@@ -1402,6 +1758,8 @@ impl Overlay {
             },
             Button::Right => match self.state {
                 State::Hover => Outcome::Cancel,
+                // The pin editor has no selection menu and never loses its selection.
+                State::Selected if self.mode == Mode::PinEdit => Outcome::Stay,
                 State::Selected => match self.zone(self.pointer) {
                     Zone::Outside => {
                         // Right-click outside a confirmed selection clears it (NOEUL-FR-012).
@@ -1423,16 +1781,113 @@ impl Overlay {
             },
             // A middle-click inside the selection: the `[gestures] middle_click` output.
             Button::Middle => match (self.state, self.selection) {
-                (State::Selected, Some(s)) if self.zone(self.pointer) == Zone::Interior => self
-                    .gestures
-                    .middle_click
-                    .output()
-                    .map_or(Outcome::Stay, |out| {
-                        Outcome::Output(out, s, Via::MiddleClick)
-                    }),
+                (State::Selected, Some(s))
+                    if self.zone(self.pointer) == Zone::Interior && self.mode == Mode::Capture =>
+                {
+                    self.gestures
+                        .middle_click
+                        .output()
+                        .map_or(Outcome::Stay, |out| {
+                            Outcome::Output(out, s, Via::MiddleClick)
+                        })
+                }
                 _ => Outcome::Stay,
             },
         }
+    }
+
+    /// A press while annotating (UX spec §4.2 rule 6, §4.9): with a tool, a label being edited or
+    /// an annotation selected, presses go to the editor first. `None`: the press belongs to the
+    /// selection as before.
+    fn annotation_press(&mut self, button: Button, mods: Mods, time: u32) -> Option<Outcome> {
+        let tool = self.ann.tool().is_some();
+        if !(tool || self.ann.editing_text() || self.ann.selected().is_some()) {
+            return None;
+        }
+        let at = self.pointer;
+        if matches!(self.zone(at), Zone::Toolbar(_) | Zone::Chip) {
+            return None;
+        }
+        match button {
+            Button::Left => {
+                let inside = self
+                    .selection
+                    .is_some_and(|s| s.contains(&Rect::new(at.0, at.1, 1, 1)));
+                let dpi = self.monitor_at(at).dpi;
+                let first = self.text_click.take();
+                if self.ann.editing_text()
+                    && inside
+                    && !mods.any()
+                    && self.completes_double_click(first, time)
+                {
+                    // FLOW-14: a double-click on a word of the label selects it; no pin.
+                    self.ann.select_word_at(at);
+                    return Some(Outcome::Stay);
+                }
+                if (inside || self.ann.handle_at(at, dpi).is_some()) && self.ann.press(at, dpi) {
+                    self.bar_focus = None;
+                    self.text_click = (!mods.any()).then_some((at, time));
+                    if self.ann.busy() {
+                        self.state = State::Drawing;
+                    }
+                    return Some(Outcome::Stay);
+                }
+                // With a tool, a press elsewhere does nothing (it never pins or reselects).
+                tool.then_some(Outcome::Stay)
+            }
+            Button::Right => {
+                // A right-click ends a label, finishes a shape, else leaves the tool (ANN-10).
+                if self.ann.editing_text() {
+                    self.ann.end_text();
+                } else if !self.ann.right_click() {
+                    self.ann.set_tool(None);
+                }
+                Some(Outcome::Stay)
+            }
+            Button::Middle => tool.then_some(Outcome::Stay),
+        }
+    }
+
+    /// An `annotate` action (Step 56).
+    fn annotate(&mut self, a: AnnotateAction) -> Outcome {
+        if !self.annotate_context() {
+            return Outcome::Stay;
+        }
+        match a {
+            AnnotateAction::Done => {
+                self.ann.done();
+            }
+            AnnotateAction::Undo => {
+                self.ann.undo();
+            }
+            AnnotateAction::Redo => {
+                self.ann.redo();
+            }
+            AnnotateAction::WidthDown | AnnotateAction::WidthUp => {
+                self.ann.step_width(a == AnnotateAction::WidthUp);
+            }
+            AnnotateAction::Tool(t) => self.choose_tool(t),
+            AnnotateAction::ClearAll => {
+                self.ann.clear_all();
+            }
+            AnnotateAction::Delete => {
+                self.ann.delete_selected();
+            }
+            AnnotateAction::SelectNext | AnnotateAction::SelectPrevious => {
+                self.ann.select_step(a == AnnotateAction::SelectNext);
+            }
+            AnnotateAction::Order(o) => {
+                self.ann.reorder(o);
+            }
+        }
+        Outcome::Stay
+    }
+
+    /// Chooses a tool; choosing the active one again leaves it (its button toggles).
+    fn choose_tool(&mut self, t: Tool) {
+        let next = (self.ann.tool() != Some(t)).then_some(t);
+        self.ann.set_tool(next);
+        self.text_click = None;
     }
 
     fn pointer_moved(&mut self) {
@@ -1472,11 +1927,16 @@ impl Overlay {
             State::Resizing { edges, grab, start } => {
                 self.selection = Some(self.resized(start, edges, p.0 - grab.0, p.1 - grab.1));
             }
+            State::Drawing => self.ann.drag(p, self.shift),
             State::Selected => {
                 self.bar_hover = match self.zone(p) {
                     Zone::Toolbar(i) => i,
                     _ => None,
                 };
+                if self.ann.marking() {
+                    // A keyboard-drawn shape follows the pointer to its end point.
+                    self.ann.drag(p, self.shift);
+                }
             }
             _ => {}
         }
@@ -1505,6 +1965,10 @@ impl Overlay {
                 self.history_at = None;
             }
             State::Moving { .. } | State::Resizing { .. } => self.state = State::Selected,
+            State::Drawing => {
+                self.ann.release(self.pointer, self.shift);
+                self.state = State::Selected;
+            }
             State::Selected => {
                 if let Some((i, shift)) = self.bar_pressed.take()
                     && self.zone(self.pointer) == Zone::Toolbar(Some(i))
@@ -1522,12 +1986,49 @@ impl Overlay {
         let Some(s) = self.selection else {
             return Outcome::Stay;
         };
-        match TOOLBAR.get(i) {
-            Some(ToolbarItem::Pin) => Outcome::Output(Output::Pin, s, via),
+        let item = self.bar().get(i).copied();
+        if matches!(
+            item,
+            Some(ToolbarItem::Pin | ToolbarItem::Copy | ToolbarItem::Save | ToolbarItem::Done)
+        ) {
+            // An output keeps a shape still being drawn with the keyboard and the label typed.
+            self.ann.finish();
+        }
+        match item {
+            Some(ToolbarItem::Pin | ToolbarItem::Done) => Outcome::Output(Output::Pin, s, via),
             Some(ToolbarItem::Copy) => Outcome::Output(Output::Copy, s, via),
             Some(ToolbarItem::Save) if shift => Outcome::Output(Output::QuickSave, s, via),
             Some(ToolbarItem::Save) => Outcome::Output(Output::Save, s, via),
             Some(ToolbarItem::Cancel) => Outcome::Cancel,
+            Some(ToolbarItem::Tool(t)) => {
+                self.choose_tool(t);
+                // The canvas takes the keyboard, so the pointer keys and Space draw at once.
+                self.bar_focus = None;
+                Outcome::Stay
+            }
+            Some(ToolbarItem::Color) => {
+                self.ann.step_color(!shift);
+                Outcome::Stay
+            }
+            Some(ToolbarItem::Width) => {
+                let max = (annotation::WIDTHS.len() - 1) as u8;
+                if shift {
+                    self.ann.step_width(false);
+                } else if self.ann.level() >= max {
+                    while self.ann.step_width(false) && self.ann.level() > 0 {}
+                } else {
+                    self.ann.step_width(true);
+                }
+                Outcome::Stay
+            }
+            Some(ToolbarItem::Undo) => {
+                self.ann.undo();
+                Outcome::Stay
+            }
+            Some(ToolbarItem::Redo) => {
+                self.ann.redo();
+                Outcome::Stay
+            }
             None => Outcome::Stay,
         }
     }
@@ -1541,7 +2042,7 @@ impl Overlay {
         if self.state != State::Selected || self.selection.is_none() {
             return Outcome::Stay;
         }
-        let count = TOOLBAR.len();
+        let count = self.bar().len();
         self.bar_focus = match (n, self.bar_focus) {
             (Nav::Next, None) => Some(0),
             (Nav::Next, Some(i)) => (i + 1 < count).then_some(i + 1),
@@ -1583,6 +2084,7 @@ impl Overlay {
                 | State::Dragging { .. }
                 | State::Moving { .. }
                 | State::Resizing { .. }
+                | State::Drawing
         )
     }
 
@@ -1595,6 +2097,20 @@ impl Overlay {
         match a {
             // Settings of the session work in every state.
             Action::Cancel => return Outcome::Cancel,
+            // The pin editor has no detection, magnifier, history or other outputs.
+            Action::DetectCycle
+            | Action::Magnifier
+            | Action::Full
+            | Action::Last
+            | Action::HistoryPrevious
+            | Action::HistoryNext
+            | Action::Copy
+            | Action::Save
+            | Action::QuickSave
+                if self.mode == Mode::PinEdit =>
+            {
+                return Outcome::Stay;
+            }
             Action::DetectCycle => {
                 self.detect.mode = self.detect.mode.next();
                 self.detect.element = None;
@@ -1629,6 +2145,42 @@ impl Overlay {
             return Outcome::Stay;
         }
         let marking = matches!(self.state, State::Marking { .. });
+        if matches!(
+            a,
+            Action::Pin | Action::Copy | Action::Save | Action::QuickSave
+        ) && !marking
+        {
+            // An output keeps a shape still being drawn with the keyboard.
+            self.ann.finish();
+        }
+        // With a tool, `selection.mark` draws: the start of a shape, then its end (Step 56).
+        if a == Action::Mark
+            && self.state == State::Selected
+            && let Some(s) = self.selection
+            && self.ann.tool().is_some()
+        {
+            let p = clamp_point(self.pointer, s);
+            let dpi = self.monitor_at(p).dpi;
+            self.ann.mark(p, dpi, self.shift);
+            return Outcome::Stay;
+        }
+        if a == Action::Mark && self.mode == Mode::PinEdit {
+            return Outcome::Stay;
+        }
+        // While an annotation is selected, the selection keys act on it.
+        if let (Action::Move(d) | Action::Grow(d) | Action::Shrink(d), Some(_)) =
+            (a, self.ann.selected())
+            && !self.ann.editing_text()
+        {
+            let n = self.key_step();
+            let (dx, dy) = step(d);
+            match a {
+                Action::Move(_) => self.ann.nudge(dx * n, dy * n),
+                Action::Grow(_) => self.ann.resize_by((dx, dy), n, true),
+                _ => self.ann.resize_by((dx, dy), n, false),
+            };
+            return Outcome::Stay;
+        }
         let output = |o: Output| move |s: Rect| Outcome::Output(o, s, Via::Key);
         match a {
             // Nothing is confirmed while a corner is marked.
@@ -1733,9 +2285,9 @@ impl Overlay {
         self.state = State::Selected;
     }
 
-    /// `start` moved by (dx, dy), kept inside the picture.
+    /// `start` moved by (dx, dy), kept inside the picture (the pin's image when editing one).
     fn moved(&self, start: Rect, dx: i32, dy: i32) -> Rect {
-        let p = self.picture;
+        let p = self.bound;
         let max_x = p.right() - i64::from(start.width);
         let max_y = p.bottom() - i64::from(start.height);
         let x =
@@ -1753,7 +2305,7 @@ impl Overlay {
     /// `start` with the edges in `edges` moved by (dx, dy), at least one pixel, inside the picture;
     /// an edge dragged across the opposite one flips the rectangle.
     fn resized(&self, start: Rect, edges: Edges, dx: i32, dy: i32) -> Rect {
-        let p = self.picture;
+        let p = self.bound;
         let (pl, pr, pt, pb) = (i64::from(p.x), p.right(), i64::from(p.y), p.bottom());
         let mut l = i64::from(start.x);
         let mut r = start.right();
@@ -1794,7 +2346,7 @@ impl Overlay {
 
     /// `s` with the edge towards `d` moved out by `n` device pixels, inside the picture.
     fn grown(&self, s: Rect, d: Dir, n: i32) -> Rect {
-        let p = self.picture;
+        let p = self.bound;
         let n = i64::from(n.max(1));
         let (mut l, mut r, mut t, mut b) = (i64::from(s.x), s.right(), i64::from(s.y), s.bottom());
         match d {
@@ -1874,13 +2426,16 @@ impl Overlay {
             help: None,
             toolbar: None,
             magnifier: None,
+            annotation: None,
+            layered: self.mode == Mode::PinEdit,
         };
         if let Some(s) = shown {
             // The border sits just outside the selection; on a picture edge it moves inside so
             // it stays visible (UX spec §10).
             scene.accent = Some(clamp_into(grow(s, 1), self.picture));
             scene.halo = Some(clamp_into(grow(s, 2), self.picture));
-            if confirmed {
+            // A tool hides the handles: presses inside draw (Step 56).
+            if confirmed && self.ann.tool().is_none() {
                 let m = self.metrics(s);
                 scene.handles = handle_centers(s, &m)
                     .iter()
@@ -1894,8 +2449,11 @@ impl Overlay {
                     .collect();
             }
         }
-        let note = protected.then_some(PROTECTED_NOTE);
-        let chip = self.chip(shown, note, measure);
+        // The size readout of the annotation drawn or selected (NOEUL-FR-083).
+        let note = protected
+            .then(|| PROTECTED_NOTE.to_string())
+            .or_else(|| self.ann.measure());
+        let chip = self.chip(shown, note.as_deref(), measure);
         // Hit-testing follows what is drawn (the toolbar avoids the chip; a press on the chip
         // where it covers the selection is not a click).
         self.chip_at.set(Some(chip.rect));
@@ -1903,24 +2461,36 @@ impl Overlay {
         let bar = self.toolbar(Some(chip.rect));
         scene.chip = Some(chip);
         if let Some(bar) = &bar {
+            let doc = self.ann.doc();
             scene.toolbar = Some(ToolbarScene {
                 rect: bar.rect,
                 dpi: bar.dpi,
-                buttons: TOOLBAR
+                buttons: self
+                    .bar()
                     .iter()
-                    .zip(bar.buttons)
+                    .zip(bar.buttons.iter().copied())
                     .enumerate()
                     .map(|(i, (item, rect))| ButtonScene {
                         rect,
                         label: item.label(),
-                        primary: *item == ToolbarItem::Pin,
+                        item: *item,
+                        primary: matches!(item, ToolbarItem::Pin | ToolbarItem::Done),
                         hover: self.bar_hover == Some(i),
                         pressed: self.bar_pressed.is_some_and(|(p, _)| p == i),
                         focus: self.bar_focus == Some(i),
+                        active: matches!(item, ToolbarItem::Tool(t) if self.ann.tool() == Some(*t)),
+                        disabled: match item {
+                            ToolbarItem::Undo => doc.undo_steps() == 0 && !self.ann.busy(),
+                            ToolbarItem::Redo => doc.redo_steps() == 0,
+                            _ => false,
+                        },
+                        color: self.ann.color().1,
+                        level: self.ann.level(),
                     })
                     .collect(),
             });
         }
+        scene.annotation = self.annotation_scene();
         if !self.dragging() {
             let lines = match &self.banner {
                 Some(b) => Some(vec![b.clone()]),
@@ -1937,6 +2507,9 @@ impl Overlay {
     /// marking) and next to a confirmed selection where a press would start something new or
     /// resize; not while moving it, nor over its inside, the toolbar or the size chip.
     fn magnifier_wanted(&self) -> bool {
+        if self.mode == Mode::PinEdit {
+            return false;
+        }
         match self.state {
             State::Hover
             | State::Dragging { .. }
@@ -1944,7 +2517,7 @@ impl Overlay {
             | State::Marking { .. } => true,
             State::Pressed { zone, .. } => matches!(zone, Zone::Outside | Zone::Edge(_)),
             State::Selected => matches!(self.zone(self.pointer), Zone::Outside | Zone::Edge(_)),
-            State::Moving { .. } => false,
+            State::Moving { .. } | State::Drawing => false,
         }
     }
 
@@ -2005,12 +2578,13 @@ impl Overlay {
     }
 
     /// The toolbar's place and buttons (UX spec §3.1): next to a confirmed selection while no
-    /// button is held, sized for the monitor under the selection's bottom-right corner. Right-
-    /// aligned with the selection, 6 logical pixels below it; above it when there is no room
-    /// below on that monitor (and above the size chip if they would meet); inside its bottom
-    /// edge when there is room neither below nor above (a selection filling the monitor).
+    /// button is held (and while an annotation is drawn), sized for the monitor under the
+    /// selection's bottom-right corner ([`toolbar_layout`]).
     fn toolbar(&self, chip: Option<Rect>) -> Option<ToolbarLayout> {
-        if !matches!(self.state, State::Selected | State::Pressed { .. }) {
+        if !matches!(
+            self.state,
+            State::Selected | State::Pressed { .. } | State::Drawing
+        ) {
             return None;
         }
         let s = self.selection?;
@@ -2019,45 +2593,51 @@ impl Overlay {
             i32::try_from(s.bottom() - 1).unwrap_or(s.y),
         );
         let m = self.monitor_at(corner);
-        let px = |l: u32| i64::from(m.px(l));
-        let (pad, gap, bh) = (px(4), px(4), px(24));
-        let widths: Vec<i64> = TOOLBAR.iter().map(|b| px(b.width())).collect();
-        let w = 2 * pad + widths.iter().sum::<i64>() + gap * (widths.len() as i64 - 1);
-        let h = 2 * pad + bh;
-        let off = px(6) + 2; // beyond the border and its halo
-        let mr = m.rect;
-        let (ml, mt, mrr, mb) = (i64::from(mr.x), i64::from(mr.y), mr.right(), mr.bottom());
-        let fits = |y: i64| y >= mt && y + h <= mb;
-        let clamp_x = |x: i64| x.min(mrr - w).max(ml);
-        let mut x = clamp_x(s.right() - w);
-        let below = s.bottom() + off;
-        let above = i64::from(s.y) - off - h;
-        let meets_chip =
-            |x: i64, y: i64| chip.is_some_and(|c| rect_from(x, y, x + w, y + h).intersects(&c));
-        let y = if fits(below) {
-            below
-        } else if fits(above) && !meets_chip(x, above) {
-            above
-        } else if let Some(c) = chip.filter(|_| fits(above))
-            && fits(i64::from(c.y) - gap - h)
-        {
-            i64::from(c.y) - gap - h
-        } else {
-            // Inside the bottom edge, right-aligned (FLOW-38).
-            x = clamp_x(s.right() - px(6) - w).max(i64::from(s.x));
-            (s.bottom() - px(6) - h).max(i64::from(s.y)).max(mt)
-        };
-        let rect = rect_from(x, y, x + w, y + h);
-        let mut buttons = [Rect::new(0, 0, 0, 0); TOOLBAR.len()];
-        let mut bx = x + pad;
-        for (b, bw) in buttons.iter_mut().zip(&widths) {
-            *b = rect_from(bx, y + pad, bx + bw, y + pad + bh);
-            bx += bw + gap;
+        Some(toolbar_layout(self.bar(), s, &m, chip))
+    }
+
+    /// The selected annotation's box and handles, and the caret, selected text and composition
+    /// of the label being edited, inside the picture (Step 56).
+    fn annotation_scene(&self) -> Option<AnnotationScene> {
+        let pic = self.picture;
+        let outline = self
+            .ann
+            .selected_bounds()
+            .and_then(annotation::Bounds::to_rect)
+            .and_then(|r| intersection(r, pic));
+        let handles: Vec<Rect> = self
+            .ann
+            .selected_handles()
+            .iter()
+            .filter_map(|(_, c)| {
+                let m = self.monitor_at((c.x as i32, c.y as i32));
+                let h = i64::from(m.px(7));
+                let (cx, cy) = (c.x.round() as i64, c.y.round() as i64);
+                intersection(
+                    rect_from(cx - h / 2, cy - h / 2, cx - h / 2 + h, cy - h / 2 + h),
+                    pic,
+                )
+            })
+            .collect();
+        let marks = self.ann.text_marks();
+        if outline.is_none() && handles.is_empty() && marks.is_none() {
+            return None;
         }
-        Some(ToolbarLayout {
-            rect,
-            buttons,
-            dpi: m.dpi,
+        let clip = |v: Vec<Rect>| -> Vec<Rect> {
+            v.into_iter().filter_map(|r| intersection(r, pic)).collect()
+        };
+        Some(AnnotationScene {
+            outline,
+            handles,
+            caret: marks.as_ref().and_then(|m| intersection(m.caret, pic)),
+            text_selection: marks
+                .as_ref()
+                .map(|m| clip(m.selection.clone()))
+                .unwrap_or_default(),
+            composition: marks
+                .as_ref()
+                .map(|m| clip(m.composition.clone()))
+                .unwrap_or_default(),
         })
     }
 
@@ -2156,11 +2736,99 @@ impl Overlay {
 }
 
 /// Where the toolbar and its buttons are (device pixels).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ToolbarLayout {
-    rect: Rect,
-    buttons: [Rect; TOOLBAR.len()],
-    dpi: u32,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolbarLayout {
+    pub rect: Rect,
+    /// One per button, in tab order.
+    pub buttons: Vec<Rect>,
+    pub dpi: u32,
+}
+
+/// Where a toolbar of `items` goes next to the selection `s` on monitor `m` (UX spec §3.1):
+/// right-aligned with the selection, 6 logical pixels below it; above it when there is no room
+/// below on that monitor (and above the size chip `chip` if they would meet); inside its bottom
+/// edge when there is room neither below nor above (a selection filling the monitor). Buttons
+/// wrap into more rows when the bar is wider than the monitor (Step 56). The pin editor sizes
+/// its canvas with the same function.
+pub fn toolbar_layout(
+    items: &[ToolbarItem],
+    s: Rect,
+    m: &Monitor,
+    chip: Option<Rect>,
+) -> ToolbarLayout {
+    let px = |l: u32| i64::from(m.px(l));
+    let (pad, gap, group, bh) = (px(4), px(4), px(10), px(24));
+    let mr = m.rect;
+    let (ml, mt, mrr, mb) = (i64::from(mr.x), i64::from(mr.y), mr.right(), mr.bottom());
+    let max_w = (mrr - ml).max(1);
+    // Rows of (x offset in the bar, width).
+    let mut rows: Vec<Vec<(i64, i64)>> = vec![Vec::new()];
+    let mut end = pad;
+    let mut widest = 0;
+    for (i, item) in items.iter().enumerate() {
+        let bw = px(item.width());
+        let sep = match i.checked_sub(1).map(|j| items[j]) {
+            Some(prev) if prev.group() != item.group() => group,
+            Some(_) => gap,
+            None => 0,
+        };
+        let row_empty = rows.last().is_none_or(Vec::is_empty);
+        let x = if row_empty { pad } else { end + sep };
+        if !row_empty && x + bw + pad > max_w {
+            widest = widest.max(end + pad);
+            rows.push(vec![(pad, bw)]);
+            end = pad + bw;
+        } else {
+            if let Some(r) = rows.last_mut() {
+                r.push((x, bw));
+            }
+            end = x + bw;
+        }
+    }
+    widest = widest.max(end + pad);
+    let n = rows.len() as i64;
+    let (w, h) = (widest, 2 * pad + n * bh + (n - 1) * gap);
+    let off = px(6) + 2; // beyond the border and its halo
+    let fits = |y: i64| y >= mt && y + h <= mb;
+    let clamp_x = |x: i64| x.min(mrr - w).max(ml);
+    let mut x = clamp_x(s.right() - w);
+    let below = s.bottom() + off;
+    let above = i64::from(s.y) - off - h;
+    let meets_chip =
+        |x: i64, y: i64| chip.is_some_and(|c| rect_from(x, y, x + w, y + h).intersects(&c));
+    let y = if fits(below) {
+        below
+    } else if fits(above) && !meets_chip(x, above) {
+        above
+    } else if let Some(c) = chip.filter(|_| fits(above))
+        && fits(i64::from(c.y) - gap - h)
+    {
+        i64::from(c.y) - gap - h
+    } else {
+        // Inside the bottom edge, right-aligned (FLOW-38).
+        x = clamp_x(s.right() - px(6) - w).max(i64::from(s.x).min(mrr - w).max(ml));
+        (s.bottom() - px(6) - h).max(i64::from(s.y)).max(mt)
+    };
+    let rect = rect_from(x, y, x + w, y + h);
+    let mut buttons = Vec::with_capacity(items.len());
+    for (r, row) in rows.iter().enumerate() {
+        let by = y + pad + r as i64 * (bh + gap);
+        for (bx, bw) in row {
+            buttons.push(rect_from(x + bx, by, x + bx + bw, by + bh));
+        }
+    }
+    ToolbarLayout {
+        rect,
+        buttons,
+        dpi: m.dpi,
+    }
+}
+
+/// `p` moved inside `r`.
+fn clamp_point(p: (i32, i32), r: Rect) -> (i32, i32) {
+    let max_x = i32::try_from(r.right() - 1).unwrap_or(i32::MAX).max(r.x);
+    let max_y = i32::try_from(r.bottom() - 1).unwrap_or(i32::MAX).max(r.y);
+    (p.0.clamp(r.x, max_x), p.1.clamp(r.y, max_y))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2392,6 +3060,24 @@ pub struct Scene {
     pub toolbar: Option<ToolbarScene>,
     /// The magnifier near the pointer (Step 52).
     pub magnifier: Option<MagnifierScene>,
+    /// The selected annotation's box and handles, the caret, selected text and composition of a
+    /// label being edited (Step 56).
+    pub annotation: Option<AnnotationScene>,
+    /// Pin editing: a layered window, so pixels are premultiplied and the canvas outside the
+    /// pin's picture stays transparent (Step 56).
+    pub layered: bool,
+}
+
+/// What the overlay draws for annotation editing, over the annotated pixels (Step 56).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AnnotationScene {
+    /// The box around the selected annotation (or the label being edited).
+    pub outline: Option<Rect>,
+    pub handles: Vec<Rect>,
+    pub caret: Option<Rect>,
+    pub text_selection: Vec<Rect>,
+    /// The underline of an input-method composition.
+    pub composition: Vec<Rect>,
 }
 
 /// The note of the size chip over a window protected from capture (NOEUL-SEC-004).
@@ -2478,12 +3164,21 @@ pub struct ToolbarScene {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ButtonScene {
     pub rect: Rect,
+    /// The text of a text button (`""` for an icon button).
     pub label: &'static str,
-    /// The accent-filled primary button (Pin).
+    pub item: ToolbarItem,
+    /// The accent-filled primary button (Pin, or Done when editing a pin).
     pub primary: bool,
     pub hover: bool,
     pub pressed: bool,
     pub focus: bool,
+    /// The active tool (Step 56).
+    pub active: bool,
+    /// Undo or Redo with nothing to undo or redo.
+    pub disabled: bool,
+    /// The current annotation colour and width level (the colour, width and marker icons).
+    pub color: annotation::Rgba,
+    pub level: u8,
 }
 
 impl ButtonScene {
@@ -2509,6 +3204,15 @@ impl Scene {
             out.extend(t.buttons.iter().map(ButtonScene::ring));
         }
         out.extend(self.magnifier.iter().map(|m| m.rect));
+        if let Some(a) = &self.annotation {
+            if let Some(o) = a.outline {
+                out.extend(outline_strips(grow(o, 1), 1));
+            }
+            out.extend(a.handles.iter().copied());
+            out.extend(a.caret);
+            out.extend(a.text_selection.iter().copied());
+            out.extend(a.composition.iter().copied());
+        }
         out
     }
 }
@@ -2577,6 +3281,8 @@ pub mod color {
     pub const TEXT_SECONDARY: [u8; 3] = [0xA9, 0xA6, 0xB8];
     /// `text.on-accent` as RGB (the Pin button's label).
     pub const TEXT_ON_ACCENT: [u8; 3] = [0x0E, 0x0E, 0x12];
+    /// `text.primary` as BGRA (annotation handles, the colour swatch's frame).
+    pub const TEXT_PRIMARY_BGRA: [u8; 4] = [0xF0, 0xE6, 0xE8, 0xFF];
 }
 
 /// Brightness kept outside the selection: a black veil of about 45 % (UX spec §10), as n/256.
@@ -2589,11 +3295,24 @@ pub fn dim_pixel(p: [u8; 4]) -> [u8; 4] {
     [d(p[0]), d(p[1]), d(p[2]), 0xFF]
 }
 
+/// One premultiplied BGRA pixel (a layered window's format).
+#[inline]
+pub fn premultiply(p: [u8; 4]) -> [u8; 4] {
+    let a = u32::from(p[3]);
+    if a == 255 {
+        return p;
+    }
+    let m = |c: u8| ((u32::from(c) * a + 127) / 255) as u8;
+    [m(p[0]), m(p[1]), m(p[2]), p[3]]
+}
+
 /// Writes the pixels of `scene` inside `area` into `out`, a BGRA buffer of the frozen picture's
 /// size and position (`frozen.rect()`): the picture dimmed outside the selection and plain inside
-/// it, then the outlines, handles and label boxes. Label text is drawn by the platform after
-/// this, clipped to `area`.
-pub fn compose(frozen: &Frame, scene: &Scene, area: Rect, out: &mut [u8]) {
+/// it — inside, the pixels of `layer` (the annotated selection, Step 56) where it has them — then
+/// the outlines, handles, label boxes, toolbar icons and annotation marks. In a layered scene
+/// (pin editing) pixels are premultiplied and transparency is kept. Label text is drawn by the
+/// platform after this, clipped to `area`.
+pub fn compose(frozen: &Frame, layer: Option<&Frame>, scene: &Scene, area: Rect, out: &mut [u8]) {
     let pic = frozen.rect();
     let Some(area) = intersection(area, pic) else {
         return;
@@ -2607,6 +3326,8 @@ pub fn compose(frozen: &Frame, scene: &Scene, area: Rect, out: &mut [u8]) {
     let oy = (i64::from(area.y) - i64::from(pic.y)) as usize;
     let w = area.width as usize;
     let sel = scene.selection.and_then(|s| intersection(s, area));
+    let layered = scene.layered;
+    let shown = |p: [u8; 4]| if layered { premultiply(p) } else { p };
     for row in 0..area.height as usize {
         let y = oy + row;
         let start = y * stride + ox * 4;
@@ -2627,7 +3348,37 @@ pub fn compose(frozen: &Frame, scene: &Scene, area: Rect, out: &mut [u8]) {
             .zip(line_src.as_chunks::<4>().0)
             .enumerate()
         {
-            *o = if i >= k0 && i < k1 { *s } else { dim_pixel(*s) };
+            *o = if i >= k0 && i < k1 {
+                shown(*s)
+            } else if layered {
+                // Dimmed but as transparent as it was (the canvas around a pin stays clear).
+                let p = premultiply(*s);
+                let d = dim_pixel(p);
+                [d[0], d[1], d[2], p[3]]
+            } else {
+                dim_pixel(*s)
+            };
+        }
+        // The annotated pixels inside the selection.
+        if k0 < k1
+            && let Some(l) = layer
+        {
+            let lr = l.rect();
+            if ay >= i64::from(lr.y) && ay < lr.bottom() {
+                let x0 = (i64::from(area.x) + k0 as i64).max(i64::from(lr.x));
+                let x1 = (i64::from(area.x) + k1 as i64).min(lr.right());
+                if x0 < x1 {
+                    let lstride = lr.width as usize * 4;
+                    let lrow = (ay - i64::from(lr.y)) as usize * lstride;
+                    let lpx = l.pixels();
+                    for x in x0..x1 {
+                        let li = lrow + (x - i64::from(lr.x)) as usize * 4;
+                        let oi = (x - i64::from(area.x)) as usize * 4;
+                        let p = [lpx[li], lpx[li + 1], lpx[li + 2], lpx[li + 3]];
+                        line_out[oi..oi + 4].copy_from_slice(&shown(p));
+                    }
+                }
+            }
         }
     }
     let mut fill = |r: Rect, c: [u8; 4]| {
@@ -2670,15 +3421,54 @@ pub fn compose(frozen: &Frame, scene: &Scene, area: Rect, out: &mut [u8]) {
                 (true, false, true) => color::ACCENT_HOVER,
                 (true, false, false) => color::ACCENT,
                 (false, true, _) => color::BG_SELECTED,
+                (false, false, _) if b.active => color::BG_SELECTED,
                 (false, false, true) => color::BG_HOVER,
                 (false, false, false) => color::BG_OVERLAY,
             };
             fill(b.rect, c);
+            if b.active {
+                // The active tool: an accent bar under its icon.
+                let m = scale_px(2, t.dpi);
+                fill(
+                    Rect::new(
+                        b.rect.x + i32::try_from(m * 2).unwrap_or(0),
+                        b.rect.y + i32::try_from(b.rect.height.saturating_sub(m)).unwrap_or(0),
+                        b.rect.width.saturating_sub(m * 4),
+                        m,
+                    ),
+                    color::ACCENT,
+                );
+            }
+            if b.item == ToolbarItem::Color {
+                let side = scale_px(12, t.dpi);
+                let sw = Rect::new(
+                    b.rect.x + i32::try_from((b.rect.width.saturating_sub(side)) / 2).unwrap_or(0),
+                    b.rect.y + i32::try_from((b.rect.height.saturating_sub(side)) / 2).unwrap_or(0),
+                    side,
+                    side,
+                );
+                fill(sw, color::TEXT_PRIMARY_BGRA);
+                fill(grow(sw, -1), [b.color.b, b.color.g, b.color.r, 0xFF]);
+            }
             if b.focus {
                 for r in outline_strips(b.ring(), 2) {
                     fill(r, color::FOCUS_RING);
                 }
             }
+        }
+    }
+    if let Some(a) = &scene.annotation {
+        if let Some(o) = a.outline {
+            for r in outline_strips(grow(o, 1), 1) {
+                fill(r, color::ACCENT);
+            }
+        }
+        for h in &a.handles {
+            fill(*h, color::HALO);
+            fill(grow(*h, -1), color::TEXT_PRIMARY_BGRA);
+        }
+        for r in a.caret.iter().chain(&a.composition) {
+            fill(*r, color::ACCENT);
         }
     }
     if let Some(m) = &scene.magnifier {
@@ -2727,6 +3517,142 @@ pub fn compose(frozen: &Frame, scene: &Scene, area: Rect, out: &mut [u8]) {
         for r in outline_strips(c, 1) {
             fill(r, color::ACCENT);
         }
+    }
+    if let Some(a) = &scene.annotation {
+        for r in &a.text_selection {
+            blend(out, pic, area, *r, color::ACCENT, 90);
+        }
+    }
+    if let Some(t) = &scene.toolbar {
+        for b in &t.buttons {
+            if let Some(clip) = intersection(b.rect, area) {
+                let objects = icon(b, t.dpi);
+                annotation::draw(&objects, out, pic, clip);
+            }
+        }
+    }
+}
+
+/// `c` at `alpha`/255 over the pixels of `r` inside `area` (a selected range of text).
+fn blend(out: &mut [u8], pic: Rect, area: Rect, r: Rect, c: [u8; 4], alpha: u32) {
+    let Some(r) = intersection(r, area) else {
+        return;
+    };
+    let stride = pic.width as usize * 4;
+    let x0 = (i64::from(r.x) - i64::from(pic.x)) as usize;
+    let y0 = (i64::from(r.y) - i64::from(pic.y)) as usize;
+    for y in y0..y0 + r.height as usize {
+        let s = y * stride + x0 * 4;
+        for p in out[s..s + r.width as usize * 4].as_chunks_mut::<4>().0 {
+            for k in 0..3 {
+                p[k] =
+                    ((u32::from(c[k]) * alpha + u32::from(p[k]) * (255 - alpha) + 127) / 255) as u8;
+            }
+        }
+    }
+}
+
+/// The vector icon of an icon button (original Noeul artwork, drawn with the annotation
+/// rasterizer): 16 × 16 logical pixels in the middle of the button.
+fn icon(b: &ButtonScene, dpi: u32) -> Vec<Object> {
+    use annotation::{P, Rgba, Shape};
+    let k = dpi as f32 / 96.0;
+    let (cx, cy) = (
+        b.rect.x as f32 + b.rect.width as f32 / 2.0,
+        b.rect.y as f32 + b.rect.height as f32 / 2.0,
+    );
+    let pt = |x: f32, y: f32| P::new(cx + (x - 8.0) * k, cy + (y - 8.0) * k);
+    let [r, g, bl] = if b.active {
+        [color::ACCENT[2], color::ACCENT[1], color::ACCENT[0]]
+    } else if b.disabled {
+        color::TEXT_SECONDARY
+    } else {
+        color::TEXT_PRIMARY
+    };
+    let ink = Rgba {
+        r,
+        g,
+        b: bl,
+        a: if b.disabled { 120 } else { 255 },
+    };
+    let obj = |shape: Shape, level: u8, c: Rgba| Object {
+        id: 0,
+        shape,
+        color: c,
+        level,
+        dpi,
+    };
+    let line = |a: (f32, f32), z: (f32, f32)| obj(Shape::Line(pt(a.0, a.1), pt(z.0, z.1)), 0, ink);
+    let boxed = |l: f32, t: f32, rr: f32, bb: f32| {
+        annotation::Bounds::new(
+            (cx + (l - 8.0) * k).round(),
+            (cy + (t - 8.0) * k).round(),
+            (cx + (rr - 8.0) * k).round(),
+            (cy + (bb - 8.0) * k).round(),
+        )
+    };
+    match b.item {
+        ToolbarItem::Tool(Tool::Rectangle) => {
+            vec![obj(Shape::Rectangle(boxed(2.0, 3.0, 14.0, 13.0)), 0, ink)]
+        }
+        ToolbarItem::Tool(Tool::Ellipse) => {
+            vec![obj(Shape::Ellipse(boxed(1.0, 3.0, 15.0, 13.0)), 0, ink)]
+        }
+        ToolbarItem::Tool(Tool::Line) => vec![line((3.0, 13.0), (13.0, 3.0))],
+        ToolbarItem::Tool(Tool::Arrow) => vec![
+            line((3.0, 13.0), (13.0, 3.0)),
+            line((13.0, 3.0), (7.5, 3.0)),
+            line((13.0, 3.0), (13.0, 8.5)),
+        ],
+        ToolbarItem::Tool(Tool::Pen) => vec![obj(
+            Shape::Pen(vec![
+                pt(2.0, 12.0),
+                pt(5.0, 6.0),
+                pt(8.0, 11.0),
+                pt(11.0, 5.0),
+                pt(14.0, 10.0),
+            ]),
+            0,
+            ink,
+        )],
+        ToolbarItem::Tool(Tool::Marker) => vec![obj(
+            Shape::Marker(vec![pt(3.0, 8.0), pt(13.0, 8.0)]),
+            0,
+            b.color,
+        )],
+        ToolbarItem::Tool(Tool::Text) => {
+            vec![line((3.0, 3.0), (13.0, 3.0)), line((8.0, 3.0), (8.0, 13.0))]
+        }
+        ToolbarItem::Width => vec![obj(
+            Shape::Line(pt(3.0, 8.0), pt(13.0, 8.0)),
+            b.level.min(4),
+            ink,
+        )],
+        ToolbarItem::Undo | ToolbarItem::Redo => {
+            let f = |x: f32| {
+                if b.item == ToolbarItem::Undo {
+                    x
+                } else {
+                    16.0 - x
+                }
+            };
+            vec![
+                obj(
+                    Shape::Pen(vec![
+                        pt(f(4.0), 6.0),
+                        pt(f(10.0), 6.0),
+                        pt(f(13.0), 9.0),
+                        pt(f(10.0), 12.0),
+                        pt(f(5.0), 12.0),
+                    ]),
+                    0,
+                    ink,
+                ),
+                line((f(4.0), 6.0), (f(7.0), 3.0)),
+                line((f(4.0), 6.0), (f(7.0), 9.0)),
+            ]
+        }
+        _ => Vec::new(),
     }
 }
 
@@ -3061,9 +3987,10 @@ mod tests {
             Phase::Selected,
             "the owner decides when it closes"
         );
-        // Keys wait while a button is held.
-        press(&mut o, Button::Left, 90, 90);
-        mv(&mut o, 95, 95);
+        // Keys wait while a button is held (a press outside the selection, the bar and the chip).
+        assert_eq!(o.zone((95, 1)), Zone::Outside);
+        press(&mut o, Button::Left, 95, 1);
+        mv(&mut o, 98, 5);
         assert_eq!(o.handle(Input::Action(Action::Pin)), Outcome::Stay);
     }
 
@@ -3217,11 +4144,11 @@ mod tests {
             crate::capture::CaptureBackend::capture(&syn, &ledger, Rect::new(0, 0, 400, 300))
                 .unwrap();
         let mut full = vec![0u8; 400 * 300 * 4];
-        compose(&frozen, &b, b.picture, &mut full);
+        compose(&frozen, None, &b, b.picture, &mut full);
         let mut inc = vec![0u8; 400 * 300 * 4];
-        compose(&frozen, &a, a.picture, &mut inc);
+        compose(&frozen, None, &a, a.picture, &mut inc);
         for r in &d {
-            compose(&frozen, &b, *r, &mut inc);
+            compose(&frozen, None, &b, *r, &mut inc);
         }
         assert!(full == inc, "incremental composition equals a full one");
     }
@@ -3244,7 +4171,7 @@ mod tests {
         drag(&mut o, (-40, -10), (59, 59)); // 100×70 at (-40,-10)
         let scene = o.scene(&Approx);
         let mut out = vec![0u8; 300 * 200 * 4];
-        compose(&frozen, &scene, pic, &mut out);
+        compose(&frozen, None, &scene, pic, &mut out);
         let at = |x: i32, y: i32| {
             let i = (((y - pic.y) * 300 + (x - pic.x)) * 4) as usize;
             [out[i], out[i + 1], out[i + 2], out[i + 3]]
@@ -3255,8 +4182,8 @@ mod tests {
             "inside: the frozen pixel"
         );
         assert_eq!(
-            at(200, 150),
-            dim_pixel(Synthetic::pixel(200, 150)),
+            at(240, 30),
+            dim_pixel(Synthetic::pixel(240, 30)),
             "outside: dimmed"
         );
         assert_eq!(at(0, -11), color::ACCENT, "border one pixel outside");
@@ -3615,19 +4542,53 @@ mod tests {
 
     #[test]
     fn the_toolbar_sits_next_to_the_selection_and_never_over_the_chip() {
-        // Below the selection, right-aligned, 6 + 2 px away; 4 buttons in tab order.
+        // Below the selection, 6 + 2 px away, right-aligned unless the monitor's left edge stops it
+        // (616 logical pixels since Step 56); 15 buttons in tab order.
         let (o, s) = flow();
         let scene = o.scene(&Approx);
         let bar = scene.toolbar.clone().unwrap();
-        assert_eq!(bar.rect, Rect::new(260, 408, 240, 32));
-        assert_eq!(bar.rect.right(), s.right());
+        assert_eq!(bar.rect, Rect::new(0, 408, 616, 32));
+        assert_eq!(bar.rect.y, i32::try_from(s.bottom()).unwrap() + 8);
+        let items: Vec<&str> = bar.buttons.iter().map(|b| b.item.as_str()).collect();
+        assert_eq!(
+            items,
+            [
+                "pin",
+                "copy",
+                "save",
+                "rectangle",
+                "ellipse",
+                "line",
+                "arrow",
+                "pen",
+                "marker",
+                "text",
+                "color",
+                "width",
+                "undo",
+                "redo",
+                "cancel"
+            ]
+        );
         let labels: Vec<&str> = bar.buttons.iter().map(|b| b.label).collect();
-        assert_eq!(labels, ["Pin", "Copy", "Save", "Cancel"]);
+        assert_eq!(&labels[..3], ["Pin", "Copy", "Save"]);
+        assert_eq!(labels[14], "Cancel");
+        assert!(labels[3..14].iter().all(|l| l.is_empty()), "icon buttons");
         assert!(
             bar.buttons[0].primary && !bar.buttons[1].primary,
             "Pin is primary"
         );
-        assert_eq!(bar.buttons[1].rect, Rect::new(320, 412, 52, 24));
+        assert_eq!(bar.buttons[1].rect, Rect::new(60, 412, 52, 24));
+        assert_eq!(
+            bar.buttons[3].rect,
+            Rect::new(178, 412, 28, 24),
+            "the tools"
+        );
+        assert_eq!(bar.buttons[14].rect, Rect::new(548, 412, 64, 24));
+        assert!(
+            bar.buttons[12].disabled && bar.buttons[13].disabled,
+            "nothing to undo or redo yet"
+        );
         assert!(!bar.rect.intersects(&scene.chip.unwrap().rect));
         // No room below: above the selection, clear of the chip.
         let mut o = one(800, 600);
@@ -3642,7 +4603,7 @@ mod tests {
         o.handle(Input::Action(Action::Full));
         let scene = o.scene(&Approx);
         let bar = scene.toolbar.clone().unwrap();
-        assert_eq!(bar.rect, Rect::new(554, 562, 240, 32));
+        assert_eq!(bar.rect, Rect::new(178, 562, 616, 32));
         assert!(Rect::new(0, 0, 800, 600).contains(&bar.rect));
         assert!(!bar.rect.intersects(&scene.chip.unwrap().rect));
         // The bar covers part of the selection: that part is not interior. A double-click on
@@ -3675,17 +4636,37 @@ mod tests {
         );
         drag(&mut o, (100, 100), (699, 549));
         let bar = o.scene(&Approx).toolbar.unwrap();
-        assert_eq!((bar.rect.width, bar.rect.height), (360, 48));
+        assert_eq!((bar.rect.width, bar.rect.height), (924, 48));
         assert_eq!(bar.rect.y, 550 + 9 + 2);
-        assert_eq!(bar.buttons[3].rect.width, 96);
+        assert_eq!(bar.buttons[3].rect.width, 42, "a tool");
+        assert_eq!(bar.buttons[14].rect.width, 96, "Cancel");
+        // A monitor narrower than the bar: the buttons wrap into rows inside it (Step 56).
+        let mut o = one(300, 400);
+        drag(&mut o, (20, 20), (119, 99));
+        let bar = o.scene(&Approx).toolbar.unwrap();
+        assert!(
+            Rect::new(0, 0, 300, 400).contains(&bar.rect),
+            "{:?}",
+            bar.rect
+        );
+        assert!(bar.rect.height > 32 * 2, "rows: {:?}", bar.rect);
+        assert!(
+            bar.buttons.iter().all(|b| bar.rect.contains(&b.rect)),
+            "every button inside the bar"
+        );
+        for (i, a) in bar.buttons.iter().enumerate() {
+            for b in &bar.buttons[i + 1..] {
+                assert!(!a.rect.intersects(&b.rect), "{a:?} {b:?}");
+            }
+        }
     }
 
     #[test]
     fn toolbar_buttons_run_on_release_and_the_keyboard_follows_adr_0021() {
         let (mut o, s) = flow();
-        let copy = (346, 424);
-        let save = (402, 424);
-        let cancel = (460, 424);
+        let copy = (86, 424);
+        let save = (142, 424);
+        let cancel = (580, 424);
         assert_eq!(o.zone(copy), Zone::Toolbar(Some(1)));
         mv(&mut o, 600, 500);
         assert_eq!(o.cursor(), Cursor::Cross, "outside the selection");
@@ -3782,31 +4763,38 @@ mod tests {
         let (mut o, _) = flow();
         o.handle(Input::Nav(Nav::Next));
         o.handle(Input::Nav(Nav::Next)); // Copy has the focus
-        mv(&mut o, 402, 424); // the pointer over Save
+        mv(&mut o, 142, 424); // the pointer over Save
         let scene = o.scene(&Approx);
         let mut out = vec![0u8; 800 * 600 * 4];
-        compose(&frozen, &scene, scene.picture, &mut out);
+        compose(&frozen, None, &scene, scene.picture, &mut out);
         let at = |x: i32, y: i32| {
             let i = ((y * 800 + x) * 4) as usize;
             [out[i], out[i + 1], out[i + 2], out[i + 3]]
         };
-        assert_eq!(at(290, 424), color::ACCENT, "Pin: accent fill");
-        assert_eq!(at(346, 424), color::BG_OVERLAY, "Copy: flat");
-        assert_eq!(at(402, 424), color::BG_HOVER, "Save: under the pointer");
+        assert_eq!(at(30, 424), color::ACCENT, "Pin: accent fill");
+        assert_eq!(at(86, 424), color::BG_OVERLAY, "Copy: flat");
+        assert_eq!(at(142, 424), color::BG_HOVER, "Save: under the pointer");
         assert_eq!(
-            at(317, 410),
+            at(57, 410),
             color::FOCUS_RING,
             "Copy's ring, 1 px off its corner"
         );
-        assert_eq!(at(260, 408), color::BORDER_SUBTLE, "the bar's outline");
-        assert_eq!(at(261, 409), color::BG_OVERLAY);
+        assert_eq!(at(0, 408), color::BORDER_SUBTLE, "the bar's outline");
+        assert_eq!(at(1, 409), color::BG_OVERLAY);
+        // The tools' icons are drawn (original vector artwork): the rectangle tool's outline.
+        let rect_tool = Rect::new(178, 412, 28, 24);
+        let ink = (rect_tool.y..rect_tool.y + 24)
+            .flat_map(|y| (rect_tool.x..rect_tool.x + 28).map(move |x| (x, y)))
+            .filter(|(x, y)| at(*x, *y) != color::BG_OVERLAY)
+            .count();
+        assert!(ink > 30, "the icon's pixels: {ink}");
         // The toolbar is part of what the dirty strips cover.
         let before = o.scene(&Approx);
         o.handle(Input::Nav(Nav::Next));
         let after = o.scene(&Approx);
         let d = dirty(&before, &after);
         assert!(
-            d.iter().any(|r| r.contains(&Rect::new(373, 410, 1, 1))),
+            d.iter().any(|r| r.contains(&Rect::new(114, 410, 1, 1))),
             "{d:?}"
         );
     }
@@ -4319,7 +5307,7 @@ mod tests {
         // Composed: every cell is its source pixel, the centre cell is outlined, the crosshair
         // runs through the middle.
         let mut out = vec![0u8; 800 * 600 * 4];
-        compose(&frozen, &s, pic, &mut out);
+        compose(&frozen, None, &s, pic, &mut out);
         let at = |out: &[u8], x: i32, y: i32| {
             let i = ((y * 800 + x) * 4) as usize;
             [out[i], out[i + 1], out[i + 2], out[i + 3]]
@@ -4356,7 +5344,7 @@ mod tests {
         let mut s = o.scene(&Approx);
         s.sample(&frozen);
         let m = s.magnifier.clone().unwrap();
-        compose(&frozen, &s, pic, &mut out);
+        compose(&frozen, None, &s, pic, &mut out);
         assert_eq!(
             at(&out, m.grid.x + 2, m.grid.y + 2),
             color::HALO,

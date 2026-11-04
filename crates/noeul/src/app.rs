@@ -46,7 +46,18 @@
 //! [`OverlayEvent::Element`]; [`Shell::end_detection`] stops them when the overlay closes. Pointer
 //! keys move the real cursor through [`OverlayWindow::warp_pointer`]. The rectangles of
 //! successful captures stay in memory for `history.*` (never on disk, NOEUL-SEC-005).
+//!
+//! **Annotation** (Step 56, ADR 0038): the overlay model keeps the annotations as vector objects;
+//! after every input the core re-renders the changed pixels of the annotated selection (a layer
+//! over the frozen picture, [`crate::annotation::draw`]) and lets the window's typesetter lay out
+//! edited labels. Copy, save and quick save output the selection flattened with its annotations
+//! ([`crate::annotation::flatten`]); Pin hands the unchanged pixels and the objects to the new pin,
+//! which keeps them editable. `pin.annotate` (`Space`, the pin menu) opens the same overlay model
+//! over a pin's picture ([`overlay::Mode::PinEdit`]) in a layered window; Done or `Enter` commits the
+//! annotations (and a crop) to the pin, Cancel or `Escape` leaves the pin as it was. One overlay
+//! exists at a time: a capture or a pin edit.
 
+use crate::annotation::{self, Ime, Object, TextKey, Typesetter};
 use crate::capture::{CaptureBackend, DesktopState, check_region};
 use crate::detect::{DetectMode, ElementAnswer, ElementRequest, Snapshot};
 use crate::error::{Code, NoeulError, Result};
@@ -55,8 +66,9 @@ use crate::hotkeys::Manager;
 use crate::ipc;
 use crate::output;
 use crate::overlay::{
-    self, Action as OverlayAction, Cursor, GestureAction, Gestures, Input as OverlayInput, Measure,
-    Nav, Outcome as OverlayOutcome, Output, Overlay, Scene, SystemValues, Via,
+    self, Action as OverlayAction, AnnotateAction, Cursor, GestureAction, Gestures,
+    Input as OverlayInput, Measure, Nav, Outcome as OverlayOutcome, Output, Overlay, Scene,
+    SystemValues, Via,
 };
 use crate::paths::Paths;
 use crate::pins::{NewPin, PinError, PinId, PinWindows, Pins, Placement, Source};
@@ -98,10 +110,12 @@ pub trait Shell {
     /// Asks once before quitting with open pins (GUI only; the CLI uses `--yes`).
     fn confirm_quit(&mut self, pins: usize) -> bool;
     /// Creates the capture overlay's window over `picture` (the frozen picture's rectangle in
-    /// virtual-desktop device pixels), not shown yet.
+    /// virtual-desktop device pixels), not shown yet. `layered`: the pin editor's window, whose
+    /// transparent pixels show what is behind (Step 56).
     fn open_overlay(
         &mut self,
         picture: Rect,
+        layered: bool,
     ) -> std::result::Result<Box<dyn OverlayWindow>, String>;
     /// The user's pointer settings, read now (NOEUL-NFR-012).
     fn system_values(&self) -> SystemValues;
@@ -121,10 +135,14 @@ pub trait Shell {
 }
 
 /// The capture overlay's window (`win::overlay`; a fake in tests). It owns a back buffer of
-/// the picture's size and measures the labels' text.
-pub trait OverlayWindow: Measure {
-    /// Composes `dirty` of `scene` over `frozen` into the back buffer and repaints those parts.
-    fn present(&mut self, frozen: &Frame, scene: &Scene, dirty: &[Rect]);
+/// the picture's size, measures the labels' text and typesets annotation labels.
+pub trait OverlayWindow: Measure + Typesetter {
+    /// Composes `dirty` of `scene` over `frozen` (and the annotated selection `layer`) into the
+    /// back buffer and repaints those parts.
+    fn present(&mut self, frozen: &Frame, layer: Option<&Frame>, scene: &Scene, dirty: &[Rect]);
+    /// Switches the input method on for the window, with its candidate window at `caret`, while
+    /// an annotation label is edited, and off again with `None` (NOEUL-NFR-014).
+    fn set_ime(&mut self, caret: Option<Rect>);
     /// Shows the window, on top and taking keyboard focus when `activate`, and paints it
     /// completely before returning; `false` when it could not be shown.
     fn show(&mut self, activate: bool) -> bool;
@@ -139,7 +157,7 @@ pub trait OverlayWindow: Measure {
 }
 
 /// Something the overlay window reports.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OverlayEvent {
     /// A pointer or focus input, in virtual-desktop device pixels.
     Input(OverlayInput),
@@ -149,6 +167,13 @@ pub enum OverlayEvent {
     Key(Chord, Option<Chord>, bool),
     /// UI Automation's answer to an element request (Step 52).
     Element(ElementRequest, ElementAnswer),
+    /// A typed character (`WM_CHAR`), `true` when auto-repeated: text for a label being edited,
+    /// else matched against `char:` bindings (Step 56).
+    Char(char, bool),
+    /// An input-method event of the window (`WM_IME_*`, Step 56).
+    Ime(Ime),
+    /// The mouse wheel turned over the overlay (Step 56).
+    Wheel(i32),
 }
 
 /// One first-frame measurement (NOEUL-NFR-003): from the request (the hotkey press reaching
@@ -215,17 +240,65 @@ fn micros(d: Duration) -> u64 {
 }
 
 /// The open overlay: its capture session, model, window and the scene on screen.
+/// What an open overlay is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionKind {
+    Capture,
+    /// Editing this pin's annotations (Step 56).
+    PinEdit(PinId),
+}
+
 struct OverlaySession {
+    /// The capture session (0 for a pin edit).
     id: u64,
+    kind: SessionKind,
     model: Overlay,
     window: Box<dyn OverlayWindow>,
     scene: Scene,
+    /// The selection's pixels with the annotations drawn on them, while there are annotations
+    /// (what the overlay shows inside the selection; Step 56).
+    layer: Option<Frame>,
+    /// A pin edit's picture: the pin's pixels on a transparent canvas.
+    base: Option<Frame>,
+    /// Where the input method's candidate window was put last (`None`: it is off).
+    ime: Option<Rect>,
+}
+
+/// The annotation part of the overlay's status: the tool, counts and IDs, never text.
+fn annotation_json(m: &Overlay) -> Value {
+    let e = m.editor();
+    let mut kinds = serde_json::Map::new();
+    for t in annotation::Tool::ALL {
+        let n = e.objects().iter().filter(|o| o.shape.kind() == t).count();
+        kinds.insert(t.as_str().into(), json!(n));
+    }
+    json!({
+        "tool": e.tool().map(annotation::Tool::as_str),
+        "objects": e.objects().len(),
+        "kinds": kinds,
+        "selected": e.selected(),
+        "undo": e.doc().undo_steps(),
+        "redo": e.doc().redo_steps(),
+        "editing_text": e.editing_text(),
+        "composing": e.composing(),
+        "color": e.color().0,
+        "width": annotation::WIDTHS[usize::from(e.level()).min(annotation::WIDTHS.len() - 1)],
+    })
 }
 
 impl OverlaySession {
     fn to_json(&self) -> Value {
         json!({
             "session": self.id,
+            "mode": match self.kind {
+                SessionKind::Capture => "capture",
+                SessionKind::PinEdit(_) => "pin_edit",
+            },
+            "pin": match self.kind {
+                SessionKind::PinEdit(id) => Value::String(id.to_string()),
+                SessionKind::Capture => Value::Null,
+            },
+            "annotation": annotation_json(&self.model),
             "phase": self.model.phase().as_str(),
             "selection": self.model.selection().map(|r| r.to_json()),
             "picture": self.model.picture().to_json(),
@@ -253,6 +326,10 @@ impl OverlaySession {
                 "position": self.model.history().1,
             },
         })
+    }
+
+    fn is_capture(&self) -> bool {
+        self.kind == SessionKind::Capture
     }
 }
 
@@ -456,6 +533,8 @@ const MENU: &[Option<(&str, &str)>] = &[
     Some(("pin.save", "Save\u{2026}")),
     Some(("pin.quick-save", "Quick save")),
     None,
+    Some(("pin.annotate", "Annotate")),
+    None,
     Some(("pin.zoom-in", "Zoom in")),
     Some(("pin.zoom-out", "Zoom out")),
     Some(("pin.zoom-reset", "Zoom 100 %")),
@@ -653,12 +732,13 @@ impl<S: Shell> App<S> {
             "desktop": self.capture.desktop().to_json(),
             "capture_backend": self.capture.name(),
             "pins": {"open": self.pins.len(), "reopenable": self.pins.reopenable().map(|p| p.to_string()),
-                     "hidden": self.pins.hidden(), "off_screen": self.pins.off_screen(&self.capture.desktop())},
+                     "hidden": self.pins.hidden(), "off_screen": self.pins.off_screen(&self.capture.desktop()),
+                     "editor": self.overlay.as_ref().filter(|o| !o.is_capture()).map(OverlaySession::to_json)},
             "captures": {"started": started, "pinned": pinned, "copied": copied, "saved": saved,
                          "cancelled": cancelled, "open": self.captures.is_open(),
                          "ignored": self.captures.ignored(),
                          "history": self.captures.history().len(),
-                         "overlay": self.overlay.as_ref().map(OverlaySession::to_json),
+                         "overlay": self.overlay.as_ref().filter(|o| o.is_capture()).map(OverlaySession::to_json),
                          "first_frame": self.latency.to_json()},
             "memory": self.ledger.to_json(),
             "hotkeys": self.hotkeys.status_json(),
@@ -733,6 +813,7 @@ impl<S: Shell> App<S> {
             placement,
             focus: false,
             guard: None,
+            annotations: Vec::new(),
         };
         match self.pins.create(self.shell.pin_windows(), desktop, new) {
             Ok(id) => {
@@ -943,6 +1024,9 @@ impl<S: Shell> App<S> {
         self.quit = true;
         if let Some(mut ov) = self.overlay.take() {
             ov.window.destroy();
+            if let SessionKind::PinEdit(id) = ov.kind {
+                let _ = self.pins.set_editing(id, false);
+            }
         }
         self.overlay_menu = None;
         self.save_request = None;
@@ -954,9 +1038,14 @@ impl<S: Shell> App<S> {
     /// A Noeul action from a global hotkey, the tray, a pin's keys or its menu (by action ID).
     pub fn action(&mut self, action: &str, pin: Option<PinId>) {
         let found = |ok: bool, word: &'static str| if ok { word } else { "not_found" };
+        if let (Some(id), "pin.close" | "pin.destroy") = (pin, action) {
+            // A pin that goes away ends its edit (nothing is committed).
+            self.cancel_pin_edit_of(id);
+        }
         let result = match (action, pin) {
             ("capture.region", _) => self.capture_region_action(Origin::Hotkey, Instant::now()),
             ("paste.float", _) => self.paste_float(),
+            ("pin.annotate", Some(id)) => self.edit_pin(id),
             ("pin.close", Some(id)) => found(self.pins.close(id).is_ok(), "closed"),
             ("pin.destroy", Some(id)) => found(self.pins.destroy(id).is_ok(), "destroyed"),
             ("pin.copy", Some(id)) => self.copy_pin(id),
@@ -1047,6 +1136,7 @@ impl<S: Shell> App<S> {
             placement: Placement::At(px, py),
             focus: self.shell.interactive(),
             guard: None,
+            annotations: Vec::new(),
         };
         match self.pins.create(self.shell.pin_windows(), &desktop, new) {
             Ok(_) => "pinned",
@@ -1069,6 +1159,18 @@ impl<S: Shell> App<S> {
         trigger: Instant,
         dry_run: bool,
     ) -> Result<Value> {
+        if self.overlay.as_ref().is_some_and(|o| !o.is_capture()) {
+            // A pin is being edited: one overlay at a time (NOEUL-FR-013).
+            if !dry_run {
+                self.captures.note_ignored();
+            }
+            return Ok(
+                json!({"dry_run": dry_run, "opened": false, "reason": "already_open",
+                "session": null, "picture": self.overlay.as_ref().map(|o| o.model.picture().to_json()),
+                "monitors": self.overlay.as_ref().map_or(0, |o| o.model.monitors().len()),
+                "first_frame_us": null}),
+            );
+        }
         if let Some(open) = self.captures.open_id() {
             if !dry_run {
                 self.captures.note_ignored();
@@ -1104,7 +1206,7 @@ impl<S: Shell> App<S> {
             .captures
             .begin(origin, frame, desktop.monitors.clone())
             .map_err(session_error)?;
-        let mut window = match self.shell.open_overlay(picture) {
+        let mut window = match self.shell.open_overlay(picture, false) {
             Ok(w) => w,
             Err(why) => {
                 self.captures.cancel();
@@ -1136,7 +1238,7 @@ impl<S: Shell> App<S> {
         let mut scene = model.scene(&*window);
         if let Some(frozen) = self.captures.frozen() {
             scene.sample(frozen);
-            window.present(frozen, &scene, &[picture]);
+            window.present(frozen, None, &scene, &[picture]);
         }
         window.set_cursor(model.cursor());
         if !window.show(self.shell.interactive()) {
@@ -1158,9 +1260,13 @@ impl<S: Shell> App<S> {
         self.latency.push(sample);
         self.overlay = Some(OverlaySession {
             id,
+            kind: SessionKind::Capture,
             model,
             window,
             scene,
+            layer: None,
+            base: None,
+            ime: None,
         });
         self.last_action = Some(("capture.region".into(), "opened"));
         Ok(
@@ -1220,6 +1326,19 @@ impl<S: Shell> App<S> {
             return;
         }
         let input = match e {
+            OverlayEvent::Ime(ime) => {
+                let outcome = match self.overlay.as_mut() {
+                    Some(ov) => ov.model.ime(ime),
+                    None => return,
+                };
+                self.after_overlay_input();
+                return self.overlay_outcome(outcome);
+            }
+            OverlayEvent::Char(c, repeat) => match self.overlay_char(c, repeat) {
+                Some(i) => i,
+                None => return,
+            },
+            OverlayEvent::Wheel(delta) => OverlayInput::Wheel(delta),
             OverlayEvent::Input(i) => {
                 if matches!(i, OverlayInput::Press { .. }) {
                     // The user's double-click time, rectangle and drag threshold as they are now,
@@ -1271,6 +1390,15 @@ impl<S: Shell> App<S> {
     }
 
     fn overlay_outcome(&mut self, outcome: OverlayOutcome) {
+        if let Some(SessionKind::PinEdit(id)) = self.overlay.as_ref().map(|o| o.kind) {
+            return match outcome {
+                OverlayOutcome::Output(Output::Pin, rect, _) => self.commit_pin_edit(id, rect),
+                OverlayOutcome::Cancel => {
+                    self.cancel_overlay();
+                }
+                _ => self.redraw_overlay(),
+            };
+        }
         match outcome {
             OverlayOutcome::Stay => self.redraw_overlay(),
             OverlayOutcome::Cancel => {
@@ -1295,16 +1423,34 @@ impl<S: Shell> App<S> {
         code: Option<&Chord>,
         repeat: bool,
     ) -> Option<OverlayInput> {
-        let focused = self
-            .overlay
-            .as_ref()
-            .is_some_and(|o| o.model.toolbar_focus().is_some());
+        let model = &self.overlay.as_ref()?.model;
+        if model.editing_text() {
+            // A label is edited: only its editing keys and Escape (which ends it) work; every
+            // other shortcut is suspended (UX spec §6, NOEUL-NFR-014).
+            return text_key_of(chord).map(OverlayInput::TextKey).or_else(|| {
+                (!repeat && is_escape(chord))
+                    .then_some(OverlayInput::Annotate(AnnotateAction::Done))
+            });
+        }
+        let focused = model.toolbar_focus().is_some();
         let nav = nav_of(chord);
         if focused
             && let Some(n) = nav
             && !(repeat && matches!(n, Nav::Activate | Nav::Escape))
         {
             return Some(OverlayInput::Nav(n));
+        }
+        // The annotate context is inside the overlay's: its keys win while a selection is
+        // confirmed; `annotate.done` only while there is something to end (Step 56).
+        if model.annotate_context()
+            && let Some(a) = self
+                .hotkeys
+                .annotate_action(chord, code, repeat)
+                .as_deref()
+                .and_then(AnnotateAction::from_id)
+            && (a != AnnotateAction::Done || model.annotation_active())
+        {
+            return Some(OverlayInput::Annotate(a));
         }
         if let Some(a) = self
             .hotkeys
@@ -1328,23 +1474,59 @@ impl<S: Shell> App<S> {
         }
     }
 
-    /// Redraws what changed since the last frame (nothing when nothing changed).
+    /// A typed character in the overlay: text for a label being edited, else a `char:` binding
+    /// of the annotate context (`[`, `]`; Step 56).
+    fn overlay_char(&self, c: char, repeat: bool) -> Option<OverlayInput> {
+        let model = &self.overlay.as_ref()?.model;
+        if model.editing_text() {
+            return Some(OverlayInput::Char(c));
+        }
+        if !model.annotate_context() {
+            return None;
+        }
+        let chord = crate::hotkeys::char_chord(c)?;
+        self.hotkeys
+            .annotate_action(&chord, None, repeat)
+            .as_deref()
+            .and_then(AnnotateAction::from_id)
+            .filter(|a| *a != AnnotateAction::Done)
+            .map(OverlayInput::Annotate)
+    }
+
+    /// Redraws what changed since the last frame (nothing when nothing changed): typesets the
+    /// labels, re-renders the annotated pixels that changed, and follows the label's input method.
     fn redraw_overlay(&mut self) {
         let Some(ov) = self.overlay.as_mut() else {
             return;
         };
+        ov.model.typeset(&*ov.window);
+        let frozen = match &ov.base {
+            Some(b) => Some(b),
+            None => self.captures.frozen(),
+        };
+        let changed = ov.model.take_annotation_dirty();
+        let mut extra = update_layer(&mut ov.layer, frozen, &ov.model, changed);
         let mut scene = ov.model.scene(&*ov.window);
-        let frozen = self.captures.frozen();
         if let Some(f) = frozen {
             scene.sample(f);
         }
-        let dirty = overlay::dirty(&ov.scene, &scene);
+        let mut dirty = overlay::dirty(&ov.scene, &scene);
+        for r in extra.drain(..) {
+            if !dirty.contains(&r) {
+                dirty.push(r);
+            }
+        }
         if !dirty.is_empty()
             && let Some(frozen) = frozen
         {
-            ov.window.present(frozen, &scene, &dirty);
+            ov.window.present(frozen, ov.layer.as_ref(), &scene, &dirty);
         }
         ov.window.set_cursor(ov.model.cursor());
+        let caret = ov.model.ime_caret();
+        if caret != ov.ime {
+            ov.window.set_ime(caret);
+            ov.ime = caret;
+        }
         ov.scene = scene;
     }
 
@@ -1354,6 +1536,12 @@ impl<S: Shell> App<S> {
             return false;
         };
         ov.window.destroy();
+        if let SessionKind::PinEdit(id) = ov.kind {
+            // The pin comes back exactly as it was (Step 56).
+            self.end_pin_edit(id);
+            self.last_action = Some(("pin.annotate".into(), "cancelled"));
+            return true;
+        }
         self.shell.end_detection();
         self.captures.cancel();
         self.overlay_menu = None;
@@ -1362,9 +1550,17 @@ impl<S: Shell> App<S> {
         true
     }
 
+    /// The annotations of the open capture overlay inside `rect`, in picture pixels.
+    fn overlay_annotations(&self, rect: Rect) -> Vec<Object> {
+        self.overlay
+            .as_ref()
+            .map(|o| annotation::inside(o.model.annotations(), rect))
+            .unwrap_or_default()
+    }
+
     /// The open session's selection set to `rect`, as a [`CaptureSelection`].
     fn overlay_selection(&mut self, rect: Rect) -> Option<(u64, CaptureSelection)> {
-        let id = self.overlay.as_ref()?.id;
+        let id = self.overlay.as_ref().filter(|o| o.is_capture())?.id;
         self.captures
             .select(id, rect)
             .and_then(|()| self.captures.selection(id))
@@ -1422,7 +1618,9 @@ impl<S: Shell> App<S> {
             );
         };
         let opts = PinOptions { focus: true, guard };
-        match self.pin_selection(sel, opts) {
+        // The pin keeps the unchanged pixels and the annotations as objects (Step 56).
+        let objects = annotation::translate_all(&self.overlay_annotations(rect), -rect.x, -rect.y);
+        match self.pin_selection_with(sel, opts, objects) {
             Ok(_) => self.finish_overlay(id, SessionOutcome::Pinned, "capture.pin", "pinned"),
             Err(_) => self.fail_overlay(
                 "capture.pin",
@@ -1444,7 +1642,10 @@ impl<S: Shell> App<S> {
                 "The selection could not be taken. Try again, or press Esc.",
             );
         };
-        let encoded = output::png(sel.frame()).map(|png| (png, output::dib_v5(sel.frame())));
+        let annotated = annotation::flatten(sel.frame(), &self.overlay_annotations(rect), rect);
+        let out = annotated.as_ref().unwrap_or(sel.frame());
+        let encoded = output::png(out).map(|png| (png, output::dib_v5(out)));
+        drop(annotated);
         drop(sel);
         let written = match encoded {
             Ok((png, dib)) => self.shell.clipboard_write(&png, &dib),
@@ -1481,7 +1682,12 @@ impl<S: Shell> App<S> {
     /// runtime for the save dialog. The overlay stays open behind it; nothing is written until
     /// the user chose a file ([`App::save_chosen`]).
     fn request_save(&mut self, rect: Rect) {
-        let Some(id) = self.overlay.as_ref().map(|o| o.id) else {
+        let Some(id) = self
+            .overlay
+            .as_ref()
+            .filter(|o| o.is_capture())
+            .map(|o| o.id)
+        else {
             return;
         };
         if self.captures.select(id, rect).is_err() {
@@ -1517,7 +1723,13 @@ impl<S: Shell> App<S> {
         if let Some(pin) = req.pin {
             return self.pin_saved(pin, path);
         }
-        if self.overlay.as_ref().map(|o| o.id) != Some(req.session) {
+        if self
+            .overlay
+            .as_ref()
+            .filter(|o| o.is_capture())
+            .map(|o| o.id)
+            != Some(req.session)
+        {
             return;
         }
         let Some(path) = path else {
@@ -1531,9 +1743,12 @@ impl<S: Shell> App<S> {
                 "The selection could not be taken. Try again, or press Esc.",
             );
         };
-        let written = output::png(sel.frame())
+        let annotated =
+            annotation::flatten(sel.frame(), &self.overlay_annotations(req.rect), req.rect);
+        let written = output::png(annotated.as_ref().unwrap_or(sel.frame()))
             .map_err(std::io::Error::other)
             .and_then(|bytes| output::write_file(&path, &bytes, true));
+        drop(annotated);
         drop(sel);
         match written {
             Ok(()) => {
@@ -1567,9 +1782,11 @@ impl<S: Shell> App<S> {
             );
         };
         let name = output::file_name(self.shell.local_time());
-        let written = output::png(sel.frame())
+        let annotated = annotation::flatten(sel.frame(), &self.overlay_annotations(rect), rect);
+        let written = output::png(annotated.as_ref().unwrap_or(sel.frame()))
             .map_err(std::io::Error::other)
             .and_then(|bytes| output::quick_save(&folder, &name, &bytes));
+        drop(annotated);
         drop(sel);
         match written {
             Ok(path) => {
@@ -1592,10 +1809,12 @@ impl<S: Shell> App<S> {
     /// `pin.copy` (`Ctrl+C`, the pin's menu): the pin's picture at 100 % on the clipboard as PNG
     /// and `CF_DIBV5`; a busy clipboard is reported in a notice (NOEUL-FR-030).
     fn copy_pin(&mut self, id: PinId) -> &'static str {
-        let Some(frame) = self.pins.picture(id) else {
+        let rendered = self.pins.rendered(id);
+        let Some(frame) = rendered.as_ref().or(self.pins.picture(id)) else {
             return "not_found";
         };
         let encoded = output::png(frame).map(|png| (png, output::dib_v5(frame)));
+        drop(rendered);
         let written = match encoded {
             Ok((png, dib)) => self.shell.clipboard_write(&png, &dib),
             Err(why) => Err(NoeulError::new(Code::Internal, why)),
@@ -1638,7 +1857,8 @@ impl<S: Shell> App<S> {
 
     /// The answer to a pin's save dialog (the pin may be gone by then).
     fn pin_saved(&mut self, id: PinId, path: Option<PathBuf>) {
-        let result = match (path, self.pins.picture(id)) {
+        let rendered = self.pins.rendered(id);
+        let result = match (path, rendered.as_ref().or(self.pins.picture(id))) {
             (None, _) => "cancelled",
             (Some(_), None) => "not_found",
             (Some(path), Some(frame)) => {
@@ -1670,13 +1890,15 @@ impl<S: Shell> App<S> {
             );
             return "no_folder";
         };
-        let Some(frame) = self.pins.picture(id) else {
+        let rendered = self.pins.rendered(id);
+        let Some(frame) = rendered.as_ref().or(self.pins.picture(id)) else {
             return "not_found";
         };
         let name = output::file_name(self.shell.local_time());
         let written = output::png(frame)
             .map_err(std::io::Error::other)
             .and_then(|bytes| output::quick_save(&folder, &name, &bytes));
+        drop(rendered);
         match written {
             Ok(path) => {
                 self.shell.notice(&format!("Saved to {}", path.display()));
@@ -1766,6 +1988,17 @@ impl<S: Shell> App<S> {
         sel: CaptureSelection,
         opts: PinOptions,
     ) -> std::result::Result<PinId, String> {
+        self.pin_selection_with(sel, opts, Vec::new())
+    }
+
+    /// [`App::pin_selection`] with annotations in image pixels, which the pin keeps editable
+    /// (Step 56).
+    pub fn pin_selection_with(
+        &mut self,
+        sel: CaptureSelection,
+        opts: PinOptions,
+        annotations: Vec<Object>,
+    ) -> std::result::Result<PinId, String> {
         let desktop = self.capture.desktop();
         let new = NewPin {
             frame: sel.into_frame(),
@@ -1773,6 +2006,7 @@ impl<S: Shell> App<S> {
             placement: Placement::Exact,
             focus: opts.focus && self.shell.interactive(),
             guard: opts.guard,
+            annotations,
         };
         self.pins
             .create(self.shell.pin_windows(), &desktop, new)
@@ -1780,6 +2014,135 @@ impl<S: Shell> App<S> {
                 drop(frame);
                 why
             })
+    }
+
+    /// `pin.annotate` (`Space`, the pin menu): opens the annotation editor over the pin's
+    /// picture at 100 % (Step 56, NOEUL-FR-080): a layered window as large as the pin and its
+    /// toolbar, the pin's annotations ready to edit; the pin's window hides meanwhile. While a
+    /// capture overlay or another edit is open nothing happens (one overlay at a time).
+    fn edit_pin(&mut self, id: PinId) -> &'static str {
+        if self.overlay.is_some() {
+            return "busy";
+        }
+        let desktop = self.capture.desktop();
+        if desktop.state != DesktopState::Available {
+            return "desktop_unavailable";
+        }
+        let Some(frame) = self.pins.picture(id) else {
+            return "not_found";
+        };
+        let pin = frame.rect();
+        let center = (
+            i32::try_from(i64::from(pin.x) + i64::from(pin.width / 2)).unwrap_or(pin.x),
+            i32::try_from(i64::from(pin.y) + i64::from(pin.height / 2)).unwrap_or(pin.y),
+        );
+        let m = desktop
+            .monitor_near(center.0, center.1)
+            .copied()
+            .unwrap_or(crate::capture::Monitor::new(pin, true));
+        let canvas = editor_canvas(pin, &m);
+        // The picture on a transparent canvas: the window shows what is behind the rest.
+        let mut pixels = vec![0u8; canvas.bgra_bytes() as usize];
+        let (cw, src) = (canvas.width as usize * 4, frame.pixels());
+        let (dx, dy) = (
+            (i64::from(pin.x) - i64::from(canvas.x)) as usize,
+            (i64::from(pin.y) - i64::from(canvas.y)) as usize,
+        );
+        let row = pin.width as usize * 4;
+        for r in 0..pin.height as usize {
+            let at = (dy + r) * cw + dx * 4;
+            pixels[at..at + row].copy_from_slice(&src[r * row..(r + 1) * row]);
+        }
+        let Ok(base) = Frame::new(&self.ledger, canvas, pixels) else {
+            return "failed";
+        };
+        let objects =
+            annotation::translate_all(self.pins.annotations(id).unwrap_or_default(), pin.x, pin.y);
+        let model = Overlay::for_pin(
+            canvas,
+            desktop.monitors,
+            self.shell.system_values(),
+            pin,
+            objects,
+        );
+        let mut window = match self.shell.open_overlay(canvas, true) {
+            Ok(w) => w,
+            Err(_) => {
+                self.shell
+                    .notice("The pin could not be opened for annotation.");
+                return "failed";
+            }
+        };
+        let scene = model.scene(&*window);
+        window.present(&base, None, &scene, &[canvas]);
+        window.set_cursor(model.cursor());
+        if !window.show(self.shell.interactive()) {
+            window.destroy();
+            return "failed";
+        }
+        let _ = self.pins.set_editing(id, true);
+        self.overlay = Some(OverlaySession {
+            id: 0,
+            kind: SessionKind::PinEdit(id),
+            model,
+            window,
+            scene,
+            layer: None,
+            base: Some(base),
+            ime: None,
+        });
+        // The pin's annotations are drawn into the layer right away.
+        self.redraw_overlay();
+        "editing"
+    }
+
+    /// Done or `Enter` in the pin editor: the annotations (and the crop to `keep`) go to the pin,
+    /// which shows them; the editor closes. A failure keeps the editor open with a banner.
+    fn commit_pin_edit(&mut self, id: PinId, keep: Rect) {
+        let objects = match self.overlay.as_ref() {
+            Some(ov) => ov.model.annotations().to_vec(),
+            None => return,
+        };
+        match self.pins.commit_edit(id, &objects, keep) {
+            Ok(()) => {
+                if let Some(mut ov) = self.overlay.take() {
+                    ov.window.destroy();
+                }
+                self.end_pin_edit(id);
+                self.last_action = Some(("pin.annotate".into(), "committed"));
+            }
+            Err(PinError::NotFound(_)) => {
+                self.cancel_overlay();
+            }
+            Err(_) => {
+                if let Some(ov) = self.overlay.as_mut() {
+                    ov.model.set_banner(Some(
+                        "The pin could not be updated. Try again, or press Esc.".to_string(),
+                    ));
+                }
+                self.redraw_overlay();
+                self.last_action = Some(("pin.annotate".into(), "failed"));
+            }
+        }
+    }
+
+    /// The pin edited before shows again and takes the keyboard back (the user's gesture).
+    fn end_pin_edit(&mut self, id: PinId) {
+        let _ = self.pins.set_editing(id, false);
+        if self.shell.interactive() {
+            self.pins.focus(id);
+        }
+    }
+
+    /// Cancels the edit of pin `id`, if it is being edited (it is closed or destroyed).
+    fn cancel_pin_edit_of(&mut self, id: PinId) {
+        if self
+            .overlay
+            .as_ref()
+            .is_some_and(|o| o.kind == SessionKind::PinEdit(id))
+        {
+            self.cancel_overlay();
+        }
     }
 
     /// Routes a pin window event.
@@ -1798,6 +2161,7 @@ impl<S: Shell> App<S> {
                 self.pins.moved(id, x, y);
             }
             PinEvent::Closed(id) => {
+                self.cancel_pin_edit_of(id);
                 let _ = self.pins.close(id);
             }
             PinEvent::Menu(id, at) => {
@@ -2036,6 +2400,92 @@ impl<S: Shell> App<S> {
     }
 }
 
+/// Keeps the annotated layer of an overlay in step with its model (Step 56): when there are
+/// annotations, `layer` holds the selection's pixels of `frozen` with the annotations drawn on
+/// them, re-rendered where `changed` says (or entirely when the selection moved). Returns the
+/// rectangles to repaint besides the scene's.
+fn update_layer(
+    layer: &mut Option<Frame>,
+    frozen: Option<&Frame>,
+    model: &Overlay,
+    changed: Option<Rect>,
+) -> Vec<Rect> {
+    let mut extra: Vec<Rect> = changed.into_iter().collect();
+    let objects = model.annotations();
+    match (model.selection(), frozen) {
+        (Some(sel), Some(f)) if !objects.is_empty() => {
+            if layer.as_ref().map(Frame::rect) != Some(sel) {
+                if let Some(old) = layer.take() {
+                    extra.push(old.rect());
+                }
+                *layer = annotation::flatten(f, objects, sel);
+                extra.push(sel);
+            } else if let (Some(l), Some(c)) = (layer.as_mut(), changed)
+                && let Some(area) = overlay::intersection(c, sel)
+            {
+                annotation::refresh(l, f, objects, area);
+            }
+        }
+        _ => {
+            if let Some(old) = layer.take() {
+                extra.push(old.rect());
+            }
+        }
+    }
+    extra
+}
+
+/// The pin editor's canvas for a pin at `pin` on monitor `m`: the pin, its toolbar and room for
+/// the size readout above it, inside the monitor (the pin itself may stick out of it).
+fn editor_canvas(pin: Rect, m: &crate::capture::Monitor) -> Rect {
+    let bar = overlay::toolbar_layout(&overlay::EDIT_TOOLBAR, pin, m, None).rect;
+    let band = i64::from(m.px(36));
+    let chip = Rect::new(
+        pin.x,
+        i32::try_from(i64::from(pin.y) - band).unwrap_or(pin.y),
+        pin.width.max(m.px(360)),
+        u32::try_from(band).unwrap_or(0),
+    );
+    let chip = overlay::intersection(chip, m.rect).unwrap_or(pin);
+    let (l, t) = (
+        i64::from(pin.x)
+            .min(i64::from(bar.x))
+            .min(i64::from(chip.x)),
+        i64::from(pin.y)
+            .min(i64::from(bar.y))
+            .min(i64::from(chip.y)),
+    );
+    let (r, b) = (
+        pin.right().max(bar.right()).max(chip.right()),
+        pin.bottom().max(bar.bottom()).max(chip.bottom()),
+    );
+    Rect::new(
+        i32::try_from(l).unwrap_or(pin.x),
+        i32::try_from(t).unwrap_or(pin.y),
+        u32::try_from(r - l).unwrap_or(pin.width),
+        u32::try_from(b - t).unwrap_or(pin.height),
+    )
+}
+
+/// The editing key of a label a chord means (`Backspace`, `Delete`, arrows, `Home`, `End`,
+/// `Enter` for a new line), without modifiers.
+fn text_key_of(c: &Chord) -> Option<TextKey> {
+    let is =
+        |name: &str| crate::hotkeys::chord_of(name, false, false, false).is_some_and(|k| k == *c);
+    [
+        ("Backspace", TextKey::Backspace),
+        ("Delete", TextKey::Delete),
+        ("Left", TextKey::Left),
+        ("Right", TextKey::Right),
+        ("Home", TextKey::Home),
+        ("End", TextKey::End),
+        ("Enter", TextKey::Newline),
+    ]
+    .into_iter()
+    .find(|(name, _)| is(name))
+    .map(|(_, k)| k)
+}
+
 fn is_escape(c: &Chord) -> bool {
     crate::hotkeys::chord_of("Escape", false, false, false).is_some_and(|e| e == *c)
 }
@@ -2109,6 +2559,10 @@ pub(crate) mod tests {
         pub scene: Option<Scene>,
         /// Where pointer keys asked the real pointer to go (Step 52).
         pub warps: Vec<(i32, i32)>,
+        /// The input method switched on (at a caret) and off (Step 56).
+        pub ime: Vec<Option<Rect>>,
+        /// Whether each window was layered (the pin editor, Step 56).
+        pub layered: Vec<bool>,
     }
 
     #[derive(Debug, Default, Clone)]
@@ -2131,14 +2585,26 @@ pub(crate) mod tests {
         }
     }
 
+    impl Typesetter for FakeOverlay {
+        fn typeset(&self, text: &str, size: u32) -> annotation::Glyphs {
+            annotation::BlockType.typeset(text, size)
+        }
+    }
+
     impl OverlayWindow for FakeOverlay {
-        fn present(&mut self, frozen: &Frame, scene: &Scene, dirty: &[Rect]) {
+        fn present(
+            &mut self,
+            frozen: &Frame,
+            layer: Option<&Frame>,
+            scene: &Scene,
+            dirty: &[Rect],
+        ) {
             let mut l = self.log.borrow_mut();
             if l.buffer.len() != frozen.pixels().len() {
                 l.buffer = vec![0; frozen.pixels().len()];
             }
             for r in dirty {
-                overlay::compose(frozen, scene, *r, &mut l.buffer);
+                overlay::compose(frozen, layer, scene, *r, &mut l.buffer);
             }
             l.presents += 1;
             l.dirty_rects += dirty.len();
@@ -2159,6 +2625,9 @@ pub(crate) mod tests {
         }
         fn warp_pointer(&mut self, at: (i32, i32)) {
             self.log.borrow_mut().warps.push(at);
+        }
+        fn set_ime(&mut self, caret: Option<Rect>) {
+            self.log.borrow_mut().ime.push(caret);
         }
         fn destroy(&mut self) {
             if !self.destroyed {
@@ -2276,12 +2745,14 @@ pub(crate) mod tests {
         fn open_overlay(
             &mut self,
             picture: Rect,
+            layered: bool,
         ) -> std::result::Result<Box<dyn OverlayWindow>, String> {
             if self.overlays.fail_open {
                 return Err("window creation failed (test)".into());
             }
             let mut l = self.overlays.log.borrow_mut();
             l.opened.push(picture);
+            l.layered.push(layered);
             l.alive += 1;
             Ok(Box::new(FakeOverlay {
                 log: Rc::clone(&self.overlays.log),
@@ -3254,6 +3725,8 @@ pub(crate) mod tests {
                 ("Copy\tCtrl+C", true),
                 ("Save\u{2026}\tCtrl+S", true),
                 ("Quick save\tCtrl+Shift+S", true),
+                ("", false),
+                ("Annotate\tSpace", true),
                 ("", false),
                 ("Zoom in\tPlus", true),
                 ("Zoom out\tMinus", true),

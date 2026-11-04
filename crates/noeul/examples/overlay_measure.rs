@@ -112,8 +112,12 @@ mod measure {
         fn confirm_quit(&mut self, _: usize) -> bool {
             false
         }
-        fn open_overlay(&mut self, picture: Rect) -> Result<Box<dyn OverlayWindow>, String> {
-            WinOverlay::create(picture, Placement::OFF_SCREEN_TEST)
+        fn open_overlay(
+            &mut self,
+            picture: Rect,
+            layered: bool,
+        ) -> Result<Box<dyn OverlayWindow>, String> {
+            WinOverlay::create(picture, Placement::OFF_SCREEN_TEST, layered)
                 .map(|w| Box::new(w) as Box<dyn OverlayWindow>)
         }
         fn system_values(&self) -> SystemValues {

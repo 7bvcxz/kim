@@ -303,13 +303,14 @@
         "capture_backend": { "description": "`synthetic` only in a debug build with the test hook NOEUL_DEV_SYNTHETIC_DESKTOP (ADR 0026).", "enum": ["gdi", "unsupported", "synthetic"] },
         "pins": {
           "type": "object",
-          "required": ["open", "reopenable", "hidden", "off_screen"],
+          "required": ["open", "reopenable", "hidden", "off_screen", "editor"],
           "additionalProperties": false,
           "properties": {
             "open": { "$ref": "#/$defs/u64" },
             "reopenable": { "oneOf": [{ "$ref": "#/$defs/pin_id" }, { "type": "null" }] },
             "hidden": { "description": "Open pins that are hidden (Step 53).", "$ref": "#/$defs/u64" },
-            "off_screen": { "description": "Open pins no monitor shows enough of to reach, e.g. after a monitor was removed (Step 53, NOEUL-FR-067).", "$ref": "#/$defs/u64" }
+            "off_screen": { "description": "Open pins no monitor shows enough of to reach, e.g. after a monitor was removed (Step 53, NOEUL-FR-067).", "$ref": "#/$defs/u64" },
+            "editor": { "description": "The annotation editor of a pin (`pin.annotate`, Step 56), while one is open.", "oneOf": [{ "$ref": "#/$defs/overlay_state" }, { "type": "null" }] }
           }
         },
         "captures": {
@@ -406,20 +407,54 @@
         "desktop": { "const": "available" }
       }
     },
+    "annotation_state": {
+      "description": "The overlay's annotations (Step 56, NOEUL-FR-080/081): the tool, counts, IDs and style only, never the text of a label, a point or a pixel (NOEUL-SEC-008).",
+      "type": "object",
+      "required": ["tool", "objects", "kinds", "selected", "undo", "redo", "editing_text", "composing", "color", "width"],
+      "additionalProperties": false,
+      "properties": {
+        "tool": { "oneOf": [{ "type": "null" }, { "enum": ["rectangle", "ellipse", "line", "arrow", "pen", "marker", "text"] }] },
+        "objects": { "$ref": "#/$defs/u64" },
+        "kinds": {
+          "description": "How many objects of each kind.",
+          "type": "object",
+          "required": ["rectangle", "ellipse", "line", "arrow", "pen", "marker", "text"],
+          "additionalProperties": false,
+          "properties": {
+            "rectangle": { "$ref": "#/$defs/u64" },
+            "ellipse": { "$ref": "#/$defs/u64" },
+            "line": { "$ref": "#/$defs/u64" },
+            "arrow": { "$ref": "#/$defs/u64" },
+            "pen": { "$ref": "#/$defs/u64" },
+            "marker": { "$ref": "#/$defs/u64" },
+            "text": { "$ref": "#/$defs/u64" }
+          }
+        },
+        "selected": { "description": "The selected object's ID.", "oneOf": [{ "$ref": "#/$defs/u64" }, { "type": "null" }] },
+        "undo": { "description": "Undo steps available.", "$ref": "#/$defs/u64" },
+        "redo": { "description": "Redo steps available.", "$ref": "#/$defs/u64" },
+        "editing_text": { "description": "A label is being edited (every other shortcut is suspended).", "type": "boolean" },
+        "composing": { "description": "An input-method composition is shown in the label.", "type": "boolean" },
+        "color": { "enum": ["red", "orange", "yellow", "green", "blue", "purple", "black", "white"] },
+        "width": { "description": "The line width in logical pixels.", "enum": [1, 2, 3, 4, 6, 8, 12] }
+      }
+    },
     "overlay_state": {
       "description": "The open capture overlay (Step 50, ADR 0026): geometry and state only, never pixels, colours, window titles or element names (NOEUL-SEC-007, NOEUL-SEC-008).",
       "type": "object",
-      "required": ["session", "phase", "selection", "picture", "monitors", "buffer_bytes", "help", "focus", "pointer", "detection", "magnifier", "history"],
+      "required": ["session", "mode", "pin", "phase", "selection", "picture", "monitors", "buffer_bytes", "help", "focus", "pointer", "detection", "magnifier", "history", "annotation"],
       "additionalProperties": false,
       "properties": {
-        "session": { "$ref": "#/$defs/u64" },
-        "phase": { "description": "`marking`: the first corner was set with `selection.mark` (Step 52).", "enum": ["hover", "pressed", "dragging", "selected", "moving", "resizing", "marking"] },
+        "session": { "description": "The capture session; 0 while a pin is edited.", "$ref": "#/$defs/u64" },
+        "mode": { "description": "`capture`: the region capture overlay; `pin_edit`: a pin's annotation editor (Step 56).", "enum": ["capture", "pin_edit"] },
+        "pin": { "description": "The pin being edited (`pin_edit`), else null.", "oneOf": [{ "$ref": "#/$defs/pin_id" }, { "type": "null" }] },
+        "phase": { "description": "`marking`: the first corner was set with `selection.mark` (Step 52). `annotating`: a drawing tool is active, a label is edited or a stroke is drawn (Step 56).", "enum": ["hover", "pressed", "dragging", "selected", "moving", "resizing", "marking", "annotating"] },
         "selection": { "oneOf": [{ "$ref": "#/$defs/rect" }, { "type": "null" }] },
         "picture": { "$ref": "#/$defs/rect" },
         "monitors": { "$ref": "#/$defs/u64" },
         "buffer_bytes": { "$ref": "#/$defs/u64" },
         "help": { "type": "boolean" },
-        "focus": { "description": "What has the keyboard focus (Step 51): the canvas or a toolbar button.", "enum": ["canvas", "pin", "copy", "save", "cancel"] },
+        "focus": { "description": "What has the keyboard focus (Step 51): the canvas or a toolbar button (the annotation buttons since Step 56).", "enum": ["canvas", "pin", "copy", "save", "rectangle", "ellipse", "line", "arrow", "pen", "marker", "text", "color", "width", "undo", "redo", "done", "cancel"] },
         "pointer": { "description": "Where the overlay's pointer is (Step 52; moved by the mouse or the pointer keys).", "$ref": "#/$defs/point" },
         "detection": {
           "description": "Hover detection (Step 52, NOEUL-FR-040, ADR 0035): rectangles only.",
@@ -459,6 +494,7 @@
             "shown": { "type": "boolean" }
           }
         },
+        "annotation": { "$ref": "#/$defs/annotation_state" },
         "history": {
           "description": "`history.previous`/`history.next` (Step 52): rectangles kept for this overlay and the one shown (0 = oldest).",
           "type": "object",
@@ -534,7 +570,7 @@
           "type": "array",
           "items": {
             "type": "object",
-            "required": ["id", "rect", "image", "zoom", "visible", "on_screen", "source", "created_at"],
+            "required": ["id", "rect", "image", "zoom", "visible", "on_screen", "source", "created_at", "annotations", "editing"],
             "additionalProperties": false,
             "properties": {
               "id": { "$ref": "#/$defs/pin_id" },
@@ -553,7 +589,9 @@
               "visible": { "description": "False while the pin is hidden (Step 53).", "type": "boolean" },
               "on_screen": { "description": "Whether a monitor shows enough of the pin to reach it; null while the desktop is not available (Step 53).", "type": ["boolean", "null"] },
               "source": { "enum": ["capture", "clipboard"] },
-              "created_at": { "$ref": "#/$defs/timestamp" }
+              "created_at": { "$ref": "#/$defs/timestamp" },
+              "annotations": { "description": "Annotations the pin carries as editable objects (Step 56).", "$ref": "#/$defs/u64" },
+              "editing": { "description": "Its annotations are being edited (its window is hidden meanwhile).", "type": "boolean" }
             }
           }
         },

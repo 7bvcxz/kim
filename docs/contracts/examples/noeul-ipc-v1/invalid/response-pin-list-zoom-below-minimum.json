@@ -19,7 +19,9 @@
         "visible": true,
         "on_screen": true,
         "source": "capture",
-        "created_at": "2026-11-04T10:16:01Z"
+        "created_at": "2026-11-04T10:16:01Z",
+        "annotations": 0,
+        "editing": false
       }
     ],
     "reopenable": null

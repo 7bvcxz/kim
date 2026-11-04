@@ -231,13 +231,15 @@ impl Shell for WinShell {
     fn open_overlay(
         &mut self,
         picture: Rect,
+        layered: bool,
     ) -> std::result::Result<Box<dyn OverlayWindow>, String> {
         let placement = if self.interactive {
             Placement::INTERACTIVE
         } else {
             Placement::OFF_SCREEN_TEST
         };
-        WinOverlay::create(picture, placement).map(|w| Box::new(w) as Box<dyn OverlayWindow>)
+        WinOverlay::create(picture, placement, layered)
+            .map(|w| Box::new(w) as Box<dyn OverlayWindow>)
     }
 
     fn system_values(&self) -> crate::overlay::SystemValues {

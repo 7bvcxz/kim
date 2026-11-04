@@ -63,6 +63,13 @@
     { "id": "annotate.eraser", "title": "Eraser tool", "context": "annotate", "defaults": [] },
     { "id": "annotate.redact", "title": "Solid redaction tool (irreversible on export)", "context": "annotate", "defaults": [] },
     { "id": "annotate.clear-all", "title": "Remove all annotations (can be undone)", "context": "annotate", "defaults": [] },
+    { "id": "annotate.delete", "title": "Delete the selected annotation", "context": "annotate", "defaults": ["Delete"] },
+    { "id": "annotate.select-next", "title": "Select the next annotation", "context": "annotate", "defaults": ["N"] },
+    { "id": "annotate.select-previous", "title": "Select the previous annotation", "context": "annotate", "defaults": ["Shift+N"] },
+    { "id": "annotate.bring-forward", "title": "Bring the selected annotation forward", "context": "annotate", "defaults": ["PageUp"] },
+    { "id": "annotate.send-backward", "title": "Send the selected annotation backward", "context": "annotate", "defaults": ["PageDown"] },
+    { "id": "annotate.bring-to-front", "title": "Bring the selected annotation to the front", "context": "annotate", "defaults": ["Shift+PageUp"] },
+    { "id": "annotate.send-to-back", "title": "Send the selected annotation to the back", "context": "annotate", "defaults": ["Shift+PageDown"] },
 
     { "id": "pin.close", "title": "Close the pin (can be reopened)", "context": "pin", "defaults": ["Escape", "Ctrl+W"] },
     { "id": "pin.destroy", "title": "Destroy the pin (cannot be reopened)", "context": "pin", "defaults": ["Shift+Escape"], "destructive": true },

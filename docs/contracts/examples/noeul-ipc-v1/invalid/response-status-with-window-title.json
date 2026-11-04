@@ -57,7 +57,8 @@
       "open": 1,
       "reopenable": null,
       "hidden": 0,
-      "off_screen": 0
+      "off_screen": 0,
+      "editor": null
     },
     "captures": {
       "started": 1,

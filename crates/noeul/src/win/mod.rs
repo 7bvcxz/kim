@@ -13,6 +13,7 @@ pub mod pipe;
 pub mod runtime;
 pub mod spawn;
 pub mod tray;
+pub mod typeset;
 
 use std::ffi::{OsStr, c_void};
 use std::io;

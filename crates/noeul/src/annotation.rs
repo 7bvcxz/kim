@@ -2341,6 +2341,31 @@ pub fn flatten(base: &Frame, objects: &[Object], area: Rect) -> Option<Frame> {
     Some(f)
 }
 
+/// Re-renders `area` of `layer` (a part of `base` with `objects` drawn on it, as [`flatten`]
+/// made it): the picture's pixels there again, then the objects over them. The overlay calls it
+/// with the pixels an edit changed.
+pub fn refresh(layer: &mut Frame, base: &Frame, objects: &[Object], area: Rect) {
+    let lr = layer.rect();
+    let Some(a) = crate::overlay::intersection(area, lr)
+        .and_then(|a| crate::overlay::intersection(a, base.rect()))
+    else {
+        return;
+    };
+    let br = base.rect();
+    let (ls, bs) = (lr.width as usize * 4, br.width as usize * 4);
+    let row = a.width as usize * 4;
+    let src = base.pixels();
+    let dst = layer.pixels_mut();
+    for y in a.y..a.y + a.height as i32 {
+        let li = (i64::from(y) - i64::from(lr.y)) as usize * ls
+            + (i64::from(a.x) - i64::from(lr.x)) as usize * 4;
+        let bi = (i64::from(y) - i64::from(br.y)) as usize * bs
+            + (i64::from(a.x) - i64::from(br.x)) as usize * 4;
+        dst[li..li + row].copy_from_slice(&src[bi..bi + row]);
+    }
+    draw(objects, layer.pixels_mut(), lr, a);
+}
+
 /// `objects` moved by `(dx, dy)`: from screen pixels to a pin's image and back.
 pub fn translate_all(objects: &[Object], dx: i32, dy: i32) -> Vec<Object> {
     objects.iter().map(|o| o.translated(dx, dy)).collect()

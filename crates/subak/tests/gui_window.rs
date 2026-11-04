@@ -1686,9 +1686,16 @@ fn search_finds_output_printed_while_no_window_was_attached_and_follows_new_outp
         d["find"]
     );
     assert_eq!(d["highlights"], 0);
-    // Korean text, as a literal.
+    // AltGr characters (Ctrl+Alt, `@` on a German layout) type into the field; a Ctrl chord
+    // that is not a shortcut types nothing.
     gui.key_with(0x08, true, false, false);
     gui.key_with(0x52, false, false, true);
+    let d = gui.cmd(&json!({"cmd": "key", "vk": 0x51, "ctrl": true, "alt": true, "char": "@"}));
+    assert_eq!(d["find"]["query"], "@", "{}", d["find"]);
+    let d = gui.cmd(&json!({"cmd": "key", "vk": 0x4B, "ctrl": true, "char": "k"}));
+    assert_eq!(d["find"]["query"], "@", "{}", d["find"]);
+    gui.key_with(0x08, false, false, false);
+    // Korean text, as a literal.
     let d = gui.typed("한글");
     assert!(
         d["find"]["matches"].as_u64().unwrap() >= 300,
@@ -1714,9 +1721,17 @@ fn search_finds_output_printed_while_no_window_was_attached_and_follows_new_outp
     let d = gui.key_with(0x46, true, true, false);
     assert_eq!(d["find"]["query"], "", "typing cleared the selection");
     gui.typed("late-hit");
+    // A selection made meanwhile is left alone by the refreshes.
+    let d = gui.cmd(&json!({"cmd": "select", "from": [0, 0], "to": [3, 0]}));
+    let mine = d["selection"].clone();
+    assert!(!mine.is_null());
     let d = gui.until("the late output found while the bar is open", |d| {
         d["find"]["matches"] == 5
     });
+    assert_eq!(
+        d["selection"], mine,
+        "output did not take the user's selection"
+    );
     assert!(d["find"]["status"].as_str().unwrap().ends_with("of 5"));
     assert!(has_line(&d, "late-hit 4"));
 }

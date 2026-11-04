@@ -1524,12 +1524,22 @@ impl App {
             fed = true;
         }
         if fed {
-            // Step 19: an open search follows the output without moving the view.
+            // Step 19: an open search follows the output without moving the view; the current
+            // match stays selected if it was, and a selection the user made is left alone.
             if let Some(f) = &mut self.find {
+                let was = f.current.map(|c| c.1);
+                let selected = was.is_some() && self.pane.selection_span() == was;
                 f.refresh(&self.pane, std::mem::take(&mut self.find_stale));
-                let cur = f.current.map(|c| c.1);
-                let keep = cur.is_some() && self.pane.selection_span() == cur;
-                self.show_match(cur.filter(|_| keep), false);
+                let (spans, index, cur) = (
+                    f.matches().to_vec(),
+                    f.current.map(|c| c.0),
+                    f.current.map(|c| c.1),
+                );
+                self.pane.set_highlights(spans, index);
+                if selected && let Some(span) = cur {
+                    self.pane.select_span(span);
+                }
+                self.rebuild_banner();
             }
             // Device reports the program asked for: this interactive view answers (ADR 0036).
             let replies = self.pane.take_replies();
@@ -1643,8 +1653,9 @@ impl App {
         // Keys that are neither the search field's nor a shortcut reach nothing while it is open
         // (characters still arrive as WM_CHAR, for the field), and neither do keys that mark
         // mode does not use (a character leaves it and types).
+        // (Ctrl+Alt is AltGr on many layouts: its characters still arrive for the field.)
         if self.find.is_some() || self.pane.marking() {
-            return keys::special_key(code).is_some() || m.ctrl || m.alt;
+            return keys::special_key(code).is_some() || m.ctrl != m.alt;
         }
         // 4. The program, or the state screen.
         match self.model.phase {
@@ -1835,7 +1846,9 @@ impl App {
             return;
         }
         if let Some(f) = &mut self.find {
-            if !alt && !held.ctrl && f.insert(c) {
+            // Plain and Shift characters, and AltGr's (Ctrl+Alt); not Ctrl or Alt chords.
+            let altgr = held.ctrl && held.alt;
+            if !alt && (!held.ctrl || altgr) && f.insert(c) {
                 self.find_changed();
             }
             return;
@@ -3234,10 +3247,11 @@ impl App {
                         repeat: cmd["repeat"] == true,
                     };
                     let handled = self.key_down(&p, m);
-                    // As TranslateMessage would: an unhandled key with a character types it.
+                    // As TranslateMessage would: an unhandled key with a character types it
+                    // (WM_SYSCHAR with Alt alone; AltGr, Ctrl+Alt, gives a WM_CHAR).
                     if !handled && let Some(c) = cmd["char"].as_str().and_then(|c| c.chars().next())
                     {
-                        self.type_char(c, m.alt, m);
+                        self.type_char(c, m.alt && !m.ctrl, m);
                     }
                 }
             }

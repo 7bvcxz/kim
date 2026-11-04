@@ -29,8 +29,9 @@ thread_local! {
     static PASSES: Cell<u64> = const { Cell::new(0) };
 }
 
-/// How many effect areas this thread has rendered so far (tests and the measurement example use
-/// it to prove nothing is processed while idle).
+/// How many times this thread has processed the picture for a mosaic, a blur or an eraser (a
+/// redaction's fill reads nothing) — tests and the measurement example use it to prove nothing is
+/// processed while idle.
 pub fn effect_passes() -> u64 {
     PASSES.with(Cell::get)
 }
@@ -179,7 +180,6 @@ pub(super) fn redact(c: &mut Canvas, o: &Object, area: &Area, clip: Rect) {
     let Some(r) = region(o, c.rect).and_then(|r| intersection(r, clip)) else {
         return;
     };
-    counted();
     let fill = [o.color.b, o.color.g, o.color.r, 255];
     let (x0, y0, x1, y1) = (i64::from(r.x), i64::from(r.y), r.right(), r.bottom());
     match area {

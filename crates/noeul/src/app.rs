@@ -5187,4 +5187,295 @@ pub(crate) mod tests {
         assert_eq!(a.pins.info(id).unwrap().image, (sel.width, sel.height));
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    // ----- Step 57: the privacy tools through the instance core (NOEUL-FR-082) -----
+
+    /// The solid redaction's default fill (the palette's black), as BGRA.
+    const FILL: [u8; 4] = [0x11, 0x11, 0x11, 0xFF];
+
+    /// The chunk types of a PNG, in order.
+    fn png_chunks(bytes: &[u8]) -> Vec<String> {
+        assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
+        let mut out = Vec::new();
+        let mut i = 8;
+        while i + 8 <= bytes.len() {
+            let len = u32::from_be_bytes(bytes[i..i + 4].try_into().unwrap()) as usize;
+            out.push(String::from_utf8_lossy(&bytes[i + 4..i + 8]).into_owned());
+            i += 12 + len;
+        }
+        assert_eq!(i, bytes.len(), "nothing after IEND");
+        out
+    }
+
+    /// Every pixel of `r` in an output covering `sel` is the fill: not one value of the picture
+    /// under the redaction survives.
+    fn all_filled(px: &[u8], sel: Rect, r: Rect) {
+        for y in r.y..r.y + r.height as i32 {
+            for x in r.x..r.x + r.width as i32 {
+                assert_eq!(px_of(px, sel, x, y), FILL, "({x}, {y}) under the redaction");
+            }
+        }
+    }
+
+    /// The pixels of a packed `CF_DIBV5` (bottom-up BGRA rows after the 124-byte header).
+    fn dib_bgra(dib: &[u8], w: u32, h: u32) -> Vec<u8> {
+        let rows = &dib[124..];
+        let stride = w as usize * 4;
+        let mut out = Vec::with_capacity(rows.len());
+        for row in (0..h as usize).rev() {
+            out.extend_from_slice(&rows[row * stride..row * stride + stride]);
+        }
+        out
+    }
+
+    #[test]
+    fn a_solid_redaction_is_shown_copied_and_saved_without_a_pixel_of_the_original() {
+        let (mut a, _syn, dir) = overlay_app("priv-out");
+        let q = dir.join("q");
+        set_config(
+            &mut a,
+            &[("capture.quick_save_folder", &q.display().to_string())],
+        );
+        a.action("capture.region", None);
+        drag(&mut a, (-600, 20), (-201, 219));
+        let sel = Rect::new(-600, 20, 400, 200);
+        choose(&mut a, annotation::Tool::Redact);
+        drag(&mut a, (-580, 100), (-500, 140));
+        let red = Rect::new(-580, 100, 81, 41);
+        // Mosaic and blur next to it, the mosaic over its corner (they read the redacted picture).
+        choose(&mut a, annotation::Tool::Mosaic);
+        drag(&mut a, (-520, 120), (-430, 200));
+        choose(&mut a, annotation::Tool::Blur);
+        drag(&mut a, (-400, 60), (-300, 150));
+        let st = checked_status(&a);
+        let ann = &st["captures"]["overlay"]["annotation"];
+        assert_eq!(
+            (
+                ann["kinds"]["redact"].as_u64(),
+                ann["kinds"]["mosaic"].as_u64()
+            ),
+            (Some(1), Some(1))
+        );
+        assert_eq!(
+            (ann["tool"].as_str(), ann["color"].as_str()),
+            (Some("blur"), Some("red"))
+        );
+        // The chip says that blur is weak protection.
+        let chip = a.overlay.as_ref().unwrap().scene.chip.clone().unwrap();
+        assert!(
+            chip.lines.iter().any(|l| l.contains("weak protection")),
+            "{:?}",
+            chip.lines
+        );
+        let pic = a.overlay.as_ref().unwrap().model.picture();
+        let shown = |x: i32, y: i32| !chip.rect.contains(&Rect::new(x, y, 1, 1));
+        let screen: Vec<[u8; 4]> = {
+            let log = a.shell.overlays.log.borrow();
+            // The mosaic covers the redaction's corner from (-520, 120) on; the rest is fill.
+            all_filled(&log.buffer, pic, Rect::new(-580, 100, 60, 20));
+            (sel.y..sel.y + 200)
+                .flat_map(|y| (sel.x..sel.x + 400).map(move |x| (x, y)))
+                .filter(|(x, y)| shown(*x, *y))
+                .map(|(x, y)| px_of(&log.buffer, pic, x, y))
+                .collect()
+        };
+        // Copy (the in-memory clipboard stand-in): PNG and CF_DIBV5 hold the fill and exactly
+        // what the overlay showed; the PNG has no chunk beyond IHDR, IDAT and IEND.
+        key(&mut a, "C", true, false);
+        assert!(!a.overlay_open());
+        let (png, dib) = a.shell.copies[0].clone();
+        let (w, h, px) = png_bgra(&png);
+        assert_eq!((w, h), (400, 200));
+        let exported: Vec<[u8; 4]> = (sel.y..sel.y + 200)
+            .flat_map(|y| (sel.x..sel.x + 400).map(move |x| (x, y)))
+            .filter(|(x, y)| shown(*x, *y))
+            .map(|(x, y)| px_of(&px, sel, x, y))
+            .collect();
+        assert!(exported == screen, "the copy is what the overlay showed");
+        all_filled(&px, sel, Rect::new(-580, 100, 60, 20));
+        // Where the mosaic lies over the redaction, nothing of the original either.
+        for y in 120..141 {
+            for x in -520..-499 {
+                assert_ne!(px_of(&px, sel, x, y), Synthetic::pixel(x, y), "({x}, {y})");
+            }
+        }
+        let mut chunks = png_chunks(&png);
+        chunks.dedup();
+        assert_eq!(chunks, ["IHDR", "IDAT", "IEND"], "no ancillary chunk");
+        all_filled(&dib_bgra(&dib, 400, 200), sel, Rect::new(-580, 100, 60, 20));
+        // Quick save: one file in the folder, no temporary file anywhere in the sandbox.
+        a.action("capture.region", None);
+        drag(&mut a, (-600, 20), (-201, 219));
+        choose(&mut a, annotation::Tool::Redact);
+        drag(&mut a, (-580, 100), (-500, 140));
+        key(&mut a, "S", true, true);
+        assert_eq!(a.status()["last_action"]["result"], "saved");
+        let files = files_under(&dir);
+        let pngs: Vec<&String> = files.iter().filter(|f| f.ends_with(".png")).collect();
+        assert_eq!(pngs.len(), 1, "{files:?}");
+        assert!(files.iter().all(|f| !f.ends_with(".tmp")), "{files:?}");
+        let bytes = std::fs::read(q.join(pngs[0])).unwrap();
+        let mut chunks = png_chunks(&bytes);
+        chunks.dedup();
+        assert_eq!(chunks, ["IHDR", "IDAT", "IEND"]);
+        let (_, _, px) = png_bgra(&bytes);
+        all_filled(&px, sel, red);
+        assert_eq!(
+            px_of(&px, sel, -581, 100),
+            Synthetic::pixel(-581, 100),
+            "next to it"
+        );
+        assert_eq!(
+            a.ledger.live().0,
+            0,
+            "the pictures under the redactions are freed"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_export_keeps_every_redaction_editable_and_leaves_no_file() {
+        let (mut a, _syn, dir) = overlay_app("priv-fail");
+        std::fs::create_dir_all(&dir).unwrap();
+        // The quick-save "folder" is a file: saving fails.
+        let blocked = dir.join("not-a-folder");
+        std::fs::write(&blocked, b"x").unwrap();
+        set_config(
+            &mut a,
+            &[("capture.quick_save_folder", &blocked.display().to_string())],
+        );
+        a.action("capture.region", None);
+        drag(&mut a, (-600, 20), (-201, 219));
+        let sel = Rect::new(-600, 20, 400, 200);
+        choose(&mut a, annotation::Tool::Redact);
+        drag(&mut a, (-580, 100), (-500, 140));
+        let objects = a.overlay.as_ref().unwrap().model.annotations().to_vec();
+        key(&mut a, "S", true, true);
+        assert_eq!(a.status()["last_action"]["result"], "failed");
+        assert!(a.overlay_open(), "the work is kept");
+        assert_eq!(
+            a.overlay.as_ref().unwrap().model.annotations(),
+            objects.as_slice()
+        );
+        // A busy clipboard: nothing copied, the work kept too.
+        a.shell.clipboard_busy = true;
+        key(&mut a, "C", true, false);
+        assert_eq!(a.status()["last_action"]["result"], "clipboard_unavailable");
+        assert!(a.shell.copies.is_empty() && a.overlay_open());
+        // Before an output only the user restores the original: undo, then redo.
+        key(&mut a, "Z", true, false);
+        assert_eq!(
+            checked_status(&a)["captures"]["overlay"]["annotation"]["kinds"]["redact"],
+            0
+        );
+        {
+            let pic = a.overlay.as_ref().unwrap().model.picture();
+            let log = a.shell.overlays.log.borrow();
+            assert_eq!(
+                px_of(&log.buffer, pic, -560, 120),
+                Synthetic::pixel(-560, 120)
+            );
+        }
+        key(&mut a, "Y", true, false);
+        assert_eq!(
+            a.overlay.as_ref().unwrap().model.annotations(),
+            objects.as_slice()
+        );
+        // Nothing was left behind by the failures; the retry outputs the redacted picture.
+        let files = files_under(&dir);
+        assert!(
+            files
+                .iter()
+                .all(|f| !f.ends_with(".png") && !f.ends_with(".tmp")),
+            "{files:?}"
+        );
+        a.shell.clipboard_busy = false;
+        key(&mut a, "C", true, false);
+        assert!(!a.overlay_open());
+        let (_, _, px) = png_bgra(&a.shell.copies[0].0);
+        all_filled(&px, sel, Rect::new(-580, 100, 81, 41));
+        assert_eq!(a.ledger.live().0, 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_pin_keeps_its_redactions_editable_and_every_output_of_it_is_redacted() {
+        let (mut a, _syn, dir) = overlay_app("priv-pin");
+        a.action("capture.region", None);
+        drag(&mut a, (-600, 20), (-201, 219));
+        let sel = Rect::new(-600, 20, 400, 200);
+        choose(&mut a, annotation::Tool::Redact);
+        drag(&mut a, (-580, 100), (-500, 140));
+        let red = Rect::new(-580, 100, 81, 41);
+        key(&mut a, "Enter", false, false);
+        let id = PinId(1);
+        // The pin's window and its copy show the fill; the picture under it is kept in memory,
+        // unchanged, so the user can still take the redaction away before an output.
+        let shown = a.pins.rendered(id).unwrap();
+        all_filled(shown.pixels(), shown.rect(), red);
+        drop(shown);
+        assert!(a.pins.picture(id).unwrap().pixels() == pattern(sel).as_slice());
+        a.action("pin.copy", Some(id));
+        let (_, _, px) = png_bgra(&a.shell.copies[0].0);
+        all_filled(&px, sel, red);
+        // In the pin editor: N selects it, Delete removes it, Escape cancels: still redacted.
+        a.action("pin.annotate", Some(id));
+        key(&mut a, "N", false, false);
+        key(&mut a, "Delete", false, false);
+        assert_eq!(
+            checked_status(&a)["pins"]["editor"]["annotation"]["kinds"]["redact"],
+            0
+        );
+        key(&mut a, "Escape", false, false);
+        assert!(!a.overlay_open());
+        assert_eq!(a.pins.annotations(id).unwrap().len(), 1);
+        let shown = a.pins.rendered(id).unwrap();
+        all_filled(shown.pixels(), shown.rect(), red);
+        drop(shown);
+        // Deleted and committed (Enter): the user's own choice brings the picture back.
+        a.action("pin.annotate", Some(id));
+        key(&mut a, "N", false, false);
+        key(&mut a, "Delete", false, false);
+        key(&mut a, "Enter", false, false);
+        assert!(a.pins.annotations(id).unwrap().is_empty());
+        a.action("pin.copy", Some(id));
+        let (_, _, px) = png_bgra(&a.shell.copies[1].0);
+        assert_eq!(px_of(&px, sel, -560, 120), Synthetic::pixel(-560, 120));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn privacy_effects_are_processed_only_when_an_edit_asks_never_while_idle() {
+        let (mut a, _syn, dir) = overlay_app("priv-idle");
+        a.action("capture.region", None);
+        drag(&mut a, (-600, 20), (-201, 219));
+        choose(&mut a, annotation::Tool::Blur);
+        let before = annotation::effect_passes();
+        drag(&mut a, (-580, 40), (-400, 180));
+        let drawn = annotation::effect_passes();
+        assert!(drawn > before, "drawing renders the blur (the preview)");
+        // Idle redraws, pointer moves over the canvas and status requests process nothing.
+        for i in 0..5 {
+            a.redraw_overlay();
+            ev(
+                &mut a,
+                OverlayInput::Move {
+                    x: -300 + i,
+                    y: 100,
+                    mods: Mods::NONE,
+                },
+            );
+            let _ = a.status();
+        }
+        assert_eq!(
+            annotation::effect_passes(),
+            drawn,
+            "no image processing while idle"
+        );
+        // A stronger blur of the selected object is one more render.
+        key(&mut a, "N", false, false);
+        a.overlay_event(OverlayEvent::Char(']', false));
+        assert!(annotation::effect_passes() > drawn);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

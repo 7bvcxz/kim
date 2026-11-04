@@ -1081,4 +1081,101 @@ mod tests {
         assert!(v.drag.0 >= 1 && v.drag.1 >= 1);
         assert!((100..=5000).contains(&v.double_click_ms), "{v:?}");
     }
+
+    /// Step 52 in the real (off-screen, never activated) window: the magnifier on the 150 %
+    /// monitor is drawn into the back buffer with exact pixels and GDI's readout; key messages
+    /// carry their physical position from the scan code (so the key at W's place is `code:KeyW`
+    /// whatever letter the layout gives it); and a pointer key never moves the user's cursor
+    /// under the test placement.
+    #[test]
+    fn the_real_window_draws_the_magnifier_reports_key_positions_and_keeps_the_cursor() {
+        use crate::overlay::{MAG_CELLS, Mods};
+        crate::win::per_monitor_dpi_awareness();
+        let syn = Synthetic::off_screen();
+        let desk = syn.desktop();
+        let picture = desk.virtual_rect.unwrap();
+        let ledger = Ledger::new();
+        let frozen = syn.capture(&ledger, picture).unwrap();
+        let mut win = WinOverlay::create(picture, Placement::OFF_SCREEN_TEST).unwrap();
+        let hwnd = win.hwnd();
+        let mut model = Overlay::new(
+            picture,
+            desk.monitors,
+            SystemValues::default(),
+            (picture.x + 200, picture.y + 100),
+            None,
+            None,
+        );
+        let at = (picture.x + 800, picture.y + 100); // on the 150 % monitor
+        model.handle(Input::Move {
+            x: at.0,
+            y: at.1,
+            mods: Mods::NONE,
+        });
+        let mut scene = model.scene(&win);
+        scene.sample(&frozen);
+        win.present(&frozen, &scene, &[picture]);
+        let m = scene.magnifier.clone().expect("the magnifier");
+        assert_eq!(m.cell, 12, "8 logical pixels at 150 %");
+        assert_eq!(
+            m.text.lines.len(),
+            4,
+            "position, logical position, HEX, RGB"
+        );
+        let buf = win.buffer();
+        let px = |x: i32, y: i32| {
+            let i = (((y - picture.y) as usize) * 1120 + (x - picture.x) as usize) * 4;
+            [buf[i], buf[i + 1], buf[i + 2]]
+        };
+        let c = m.centre();
+        let want = Synthetic::pixel(at.0, at.1);
+        assert_eq!(
+            px(c.x + 5, c.y + 5),
+            [want[0], want[1], want[2]],
+            "the pointer's pixel"
+        );
+        let corner = Synthetic::pixel(at.0 - (MAG_CELLS / 2) as i32, at.1 - (MAG_CELLS / 2) as i32);
+        assert_eq!(
+            px(m.grid.x + 3, m.grid.y + 3),
+            [corner[0], corner[1], corner[2]],
+            "the top-left cell"
+        );
+        // GDI drew the readout's text: the box has pixels other than its background.
+        let t = m.text.rect;
+        let bg = color::BG_OVERLAY;
+        let mut ink = 0;
+        for y in t.y..t.y + i32::try_from(t.height).unwrap() {
+            for x in t.x..t.x + i32::try_from(t.width).unwrap() {
+                if px(x, y) != [bg[0], bg[1], bg[2]] {
+                    ink += 1;
+                }
+            }
+        }
+        assert!(ink > 50, "the readout's text was drawn: {ink} pixels");
+        // Key positions from the scan code (bits 16–23 of lParam).
+        let _ = take_events();
+        // SAFETY: synchronous messages to our own window on this thread.
+        unsafe {
+            SendMessageW(hwnd, WM_KEYDOWN, 0x57, 0x11 << 16); // W at W's place (QWERTY)
+            SendMessageW(hwnd, WM_KEYDOWN, 0x5A, (0x11 << 16) | (1 << 30)); // Z there (AZERTY), repeat
+            SendMessageW(hwnd, WM_KEYDOWN, 0x20, 0x39 << 16); // Space: no `code:` name
+        }
+        let ev = take_events();
+        let code_w = chord_of("code:KeyW", false, false, false);
+        assert_eq!(
+            ev,
+            [
+                OverlayEvent::Key(chord_of("W", false, false, false).unwrap(), code_w, false),
+                OverlayEvent::Key(chord_of("Z", false, false, false).unwrap(), code_w, true),
+                OverlayEvent::Key(chord_of("Space", false, false, false).unwrap(), None, false),
+            ]
+        );
+        // The test placement never moves the user's cursor.
+        let before = cursor_pos();
+        win.warp_pointer((picture.x + 5, picture.y + 5));
+        assert_eq!(cursor_pos(), before, "the cursor did not move");
+        win.destroy();
+        drop(frozen);
+        assert_eq!(ledger.live(), (0, 0));
+    }
 }

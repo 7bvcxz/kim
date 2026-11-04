@@ -3855,4 +3855,604 @@ mod tests {
         assert_eq!(o.zone((-894, 200)), Zone::Interior);
         assert_eq!(double(&mut o, (-894, 200), (-894, 200), 0, 100), pinned(s));
     }
+
+    // ---- Step 52: smart selection and pixel precision (UX spec §4.8, ADR 0035) ----
+
+    use crate::detect::{Affinity, WindowFacts};
+
+    /// One 800×600 monitor with detection over these windows (topmost first).
+    fn detecting(facts: Vec<WindowFacts>) -> Overlay {
+        let pic = Rect::new(0, 0, 800, 600);
+        one(800, 600).with_detection(DetectMode::Window, Some(Snapshot::from_facts(facts, pic)))
+    }
+
+    /// A small window above a large one.
+    fn windows() -> Vec<WindowFacts> {
+        vec![
+            WindowFacts::plain(1, Rect::new(100, 100, 300, 200)),
+            WindowFacts::plain(2, Rect::new(0, 0, 800, 560)),
+        ]
+    }
+
+    fn act(o: &mut Overlay, a: Action) -> Outcome {
+        o.handle(Input::Action(a))
+    }
+
+    #[test]
+    fn detection_highlights_the_window_under_the_pointer_and_a_click_selects_it() {
+        // J2: hover the window (it is highlighted), click, double-click inside: a pin of it.
+        let mut o = detecting(windows());
+        mv(&mut o, 150, 150);
+        let w = Rect::new(100, 100, 300, 200);
+        assert_eq!(
+            o.detected(),
+            Some(Detected {
+                rect: w,
+                kind: DetectKind::Window,
+                protected: false
+            })
+        );
+        let s = o.scene(&Approx);
+        assert_eq!(
+            s.selection,
+            Some(w),
+            "shown undimmed, as a selection would be"
+        );
+        assert_eq!(s.accent, Some(grow(w, 1)));
+        assert!(
+            s.handles.is_empty() && s.toolbar.is_none(),
+            "not confirmed yet"
+        );
+        assert!(s.chip.unwrap().lines[0].starts_with("300 \u{d7} 200"));
+        assert_eq!(o.selection(), None);
+        // Elsewhere the window below.
+        mv(&mut o, 600, 500);
+        assert_eq!(
+            o.detected().map(|d| d.rect),
+            Some(Rect::new(0, 0, 800, 560))
+        );
+        mv(&mut o, 600, 590);
+        assert_eq!(o.detected(), None, "no window there");
+        // A click (no drag) selects the highlighted window; that press does not start a
+        // double-click.
+        mv(&mut o, 150, 150);
+        click(&mut o, 150, 150, 0);
+        assert_eq!((o.phase(), o.selection()), (Phase::Selected, Some(w)));
+        assert_eq!(o.detected(), None, "no detection next to a selection");
+        assert_eq!(
+            double(&mut o, (200, 200), (200, 200), 1_000, 100),
+            pinned(w)
+        );
+        // A drag still makes a region, whatever lies below.
+        let mut o = detecting(windows());
+        drag(&mut o, (150, 150), (250, 220));
+        assert_eq!(o.selection(), Some(Rect::new(150, 150, 101, 71)));
+        // Right-click outside clears the selection: detection comes back.
+        press(&mut o, Button::Right, 700, 500);
+        assert_eq!(o.phase(), Phase::Hover);
+        mv(&mut o, 120, 120);
+        assert_eq!(o.detected().map(|d| d.rect), Some(w));
+        // A pointer that never moved still detects at its opening position.
+        let mut o = detecting(windows());
+        o.pointer = (150, 150);
+        assert_eq!(o.detected().map(|d| d.rect), Some(w));
+    }
+
+    #[test]
+    fn protected_absent_and_undetectable_windows_fall_back_to_the_plain_region() {
+        let mut protected = WindowFacts::plain(3, Rect::new(300, 300, 200, 100));
+        protected.affinity = Affinity::Monitor;
+        let mut absent = WindowFacts::plain(4, Rect::new(50, 400, 200, 100));
+        absent.affinity = Affinity::Excluded;
+        let mut through = WindowFacts::plain(5, Rect::new(600, 400, 100, 100));
+        through.layered = true;
+        through.transparent = true;
+        let mut facts = vec![protected, absent, through];
+        facts.extend(windows());
+        let mut o = detecting(facts);
+        // A protected window: never highlighted, a note says why, a click selects nothing.
+        mv(&mut o, 350, 350);
+        assert!(o.detected().is_some_and(|d| d.protected));
+        let s = o.scene(&Approx);
+        assert_eq!(s.selection, None, "nothing undimmed");
+        let chip = s.chip.unwrap();
+        assert_eq!(chip.lines[1], PROTECTED_NOTE);
+        click(&mut o, 350, 350, 0);
+        assert_eq!((o.phase(), o.selection()), (Phase::Hover, None));
+        assert_eq!(act(&mut o, Action::Mark), Outcome::Stay);
+        assert_eq!(o.phase(), Phase::Marking, "Space marks a corner instead");
+        press(&mut o, Button::Right, 350, 350);
+        assert_eq!(o.phase(), Phase::Hover);
+        // The plain region still works over it (the picture holds black there).
+        drag(&mut o, (310, 310), (400, 380));
+        assert_eq!(o.selection(), Some(Rect::new(310, 310, 91, 71)));
+        // Excluded from capture and click-through windows are not there: the one below is.
+        let mut o = detecting({
+            let mut f = vec![absent, through];
+            f.extend(windows());
+            f
+        });
+        mv(&mut o, 60, 410);
+        assert_eq!(
+            o.detected().map(|d| d.rect),
+            Some(Rect::new(0, 0, 800, 560))
+        );
+        mv(&mut o, 650, 450);
+        assert_eq!(
+            o.detected().map(|d| d.rect),
+            Some(Rect::new(0, 0, 800, 560))
+        );
+        // No window list (the platform could not read it), or detection turned off with E:
+        // the plain region selection.
+        let mut none =
+            one(800, 600).with_detection(DetectMode::Window, Some(Snapshot::unavailable()));
+        mv(&mut none, 150, 150);
+        assert_eq!(none.detected(), None);
+        assert_eq!(none.detect_windows(), None);
+        click(&mut none, 150, 150, 0);
+        assert_eq!(none.selection(), None);
+        let mut o = detecting(windows());
+        act(&mut o, Action::DetectCycle);
+        assert_eq!(o.detect_mode(), DetectMode::Element);
+        act(&mut o, Action::DetectCycle);
+        assert_eq!(o.detect_mode(), DetectMode::Off);
+        mv(&mut o, 150, 150);
+        assert_eq!(o.detected(), None);
+        click(&mut o, 150, 150, 0);
+        assert_eq!(o.selection(), None, "off: a click selects nothing");
+        act(&mut o, Action::DetectCycle);
+        assert_eq!(
+            o.detected().map(|d| d.rect),
+            Some(Rect::new(100, 100, 300, 200))
+        );
+    }
+
+    #[test]
+    fn element_detection_asks_off_thread_and_falls_back_to_the_window() {
+        let mut o = detecting(windows());
+        act(&mut o, Action::DetectCycle);
+        o.pointer = (5, 5);
+        o.take_element_request();
+        mv(&mut o, 150, 150);
+        let req = o
+            .take_element_request()
+            .expect("a request for the window under the pointer");
+        assert_eq!(
+            (req.token, req.window, req.at),
+            (1, Rect::new(100, 100, 300, 200), (150, 150))
+        );
+        mv(&mut o, 150, 150);
+        assert_eq!(
+            o.take_element_request(),
+            None,
+            "the same point is not asked again"
+        );
+        // Until the answer comes, the window rectangle.
+        assert_eq!(o.detected().map(|d| d.kind), Some(DetectKind::Window));
+        let button = Rect::new(120, 130, 80, 30);
+        o.handle(Input::Element {
+            request: req,
+            answer: ElementAnswer::Found(button),
+        });
+        assert_eq!(
+            o.detected(),
+            Some(Detected {
+                rect: button,
+                kind: DetectKind::Element,
+                protected: false
+            })
+        );
+        click(&mut o, 150, 150, 0);
+        assert_eq!(o.selection(), Some(button), "a click selects the element");
+        // A newer request supersedes an old answer unless it still fits the pointer.
+        let mut o = detecting(windows());
+        act(&mut o, Action::DetectCycle);
+        mv(&mut o, 150, 150);
+        let first = o.take_element_request().unwrap();
+        mv(&mut o, 300, 250);
+        let second = o.take_element_request().unwrap();
+        assert!(second.seq > first.seq);
+        o.handle(Input::Element {
+            request: first,
+            answer: ElementAnswer::Found(button),
+        });
+        assert_eq!(
+            o.detected().map(|d| d.kind),
+            Some(DetectKind::Window),
+            "the old element does not hold the pointer any more"
+        );
+        o.handle(Input::Element {
+            request: second,
+            answer: ElementAnswer::WindowOnly,
+        });
+        assert_eq!(
+            o.detected().map(|d| d.rect),
+            Some(Rect::new(100, 100, 300, 200))
+        );
+        assert_eq!(o.detect_fallback(), None);
+        // An answer that does not fit the window: the window rectangle, reason reported.
+        mv(&mut o, 310, 250);
+        let third = o.take_element_request().unwrap();
+        o.handle(Input::Element {
+            request: third,
+            answer: ElementAnswer::Found(Rect::new(700, 500, 10, 10)),
+        });
+        assert_eq!(o.detect_fallback(), Some(Fallback::InvalidRect));
+        assert_eq!(o.detected().map(|d| d.kind), Some(DetectKind::Window));
+        // An elevated or unresponsive window is not asked again during this capture.
+        mv(&mut o, 320, 250);
+        let fourth = o.take_element_request().unwrap();
+        o.handle(Input::Element {
+            request: fourth,
+            answer: ElementAnswer::Failed(Fallback::Denied),
+        });
+        assert_eq!(o.detect_fallback(), Some(Fallback::Denied));
+        mv(&mut o, 330, 260);
+        assert_eq!(o.take_element_request(), None, "refused window");
+        assert_eq!(
+            o.detected().map(|d| d.rect),
+            Some(Rect::new(100, 100, 300, 200))
+        );
+        mv(&mut o, 600, 500);
+        assert!(
+            o.take_element_request().is_some_and(|r| r.token == 2),
+            "other windows are still asked"
+        );
+        // Protected windows are never asked.
+        let mut p = WindowFacts::plain(9, Rect::new(0, 0, 50, 50));
+        p.affinity = Affinity::Monitor;
+        let mut o = detecting(vec![p]);
+        act(&mut o, Action::DetectCycle);
+        mv(&mut o, 10, 10);
+        assert_eq!(o.take_element_request(), None);
+    }
+
+    #[test]
+    fn pointer_keys_move_one_pixel_accelerate_and_pause_detection() {
+        let mut o = detecting(windows());
+        mv(&mut o, 150, 150);
+        assert!(o.detected().is_some());
+        act(&mut o, Action::Pointer(Dir::Right));
+        assert_eq!(o.pointer(), (151, 150));
+        assert_eq!(o.take_warp(), Some((151, 150)), "the real pointer follows");
+        assert_eq!(o.take_warp(), None);
+        assert!(o.detect_suspended());
+        assert_eq!(o.detected(), None, "exact corners, not windows");
+        // The warped cursor reports the same position: still paused. A real move resumes.
+        mv(&mut o, 151, 150);
+        assert!(o.detect_suspended());
+        mv(&mut o, 152, 150);
+        assert!(!o.detect_suspended());
+        assert!(o.detected().is_some());
+        // Held: 1 for the press and nine repeats, then 2, 5 and 10 per repeat.
+        let mut o = one(800, 600);
+        mv(&mut o, 0, 300);
+        act(&mut o, Action::Pointer(Dir::Right));
+        for _ in 0..30 {
+            o.handle(Input::Repeat(Action::Pointer(Dir::Right)));
+        }
+        let want = 1 + 9 + 10 * 2 + 10 * 5 + 10;
+        assert_eq!(o.pointer(), (want, 300));
+        assert_eq!(
+            [accel(0), accel(9), accel(10), accel(20), accel(99)],
+            [1, 1, 2, 5, 10]
+        );
+        // Another key starts over at one pixel; the picture's edge stops the pointer.
+        act(&mut o, Action::Pointer(Dir::Up));
+        assert_eq!(o.pointer(), (want, 299));
+        for _ in 0..100 {
+            o.handle(Input::Repeat(Action::Pointer(Dir::Up)));
+        }
+        assert_eq!(o.pointer(), (want, 0), "clamped to the picture");
+        // During a drag the pointer keys move its end, pixel by pixel.
+        let mut o = one(800, 600);
+        press(&mut o, Button::Left, 100, 100);
+        mv(&mut o, 200, 150);
+        act(&mut o, Action::Pointer(Dir::Right));
+        act(&mut o, Action::Pointer(Dir::Down));
+        assert_eq!(o.live(), Some(Rect::new(100, 100, 102, 52)));
+        release(&mut o, 201, 151);
+        assert_eq!(o.selection(), Some(Rect::new(100, 100, 102, 52)));
+        // Arrow nudges and edge adjustments accelerate the same way.
+        let before = o.selection().unwrap();
+        act(&mut o, Action::Move(Dir::Right));
+        for _ in 0..10 {
+            o.handle(Input::Repeat(Action::Move(Dir::Right)));
+        }
+        assert_eq!(o.selection().unwrap().x, before.x + 1 + 9 + 2);
+        act(&mut o, Action::Grow(Dir::Down));
+        for _ in 0..12 {
+            o.handle(Input::Repeat(Action::Grow(Dir::Down)));
+        }
+        assert_eq!(o.selection().unwrap().height, before.height + 1 + 9 + 3 * 2);
+        act(&mut o, Action::Shrink(Dir::Up));
+        for _ in 0..12 {
+            o.handle(Input::Repeat(Action::Shrink(Dir::Up)));
+        }
+        assert_eq!(o.selection().unwrap().height, before.height);
+    }
+
+    #[test]
+    fn space_marks_two_corners_or_accepts_the_detection() {
+        // FLOW-18: W A S D to (100,100), Space, to (500,400), Space, Enter.
+        let mut o = one(800, 600);
+        mv(&mut o, 90, 95);
+        for _ in 0..10 {
+            act(&mut o, Action::Pointer(Dir::Right));
+        }
+        for _ in 0..5 {
+            act(&mut o, Action::Pointer(Dir::Down));
+        }
+        assert_eq!(o.pointer(), (100, 100));
+        act(&mut o, Action::Mark);
+        assert_eq!((o.phase(), o.selection()), (Phase::Marking, None));
+        mv(&mut o, 495, 397);
+        for _ in 0..5 {
+            act(&mut o, Action::Pointer(Dir::Right));
+        }
+        for _ in 0..3 {
+            act(&mut o, Action::Pointer(Dir::Down));
+        }
+        assert_eq!(
+            o.live(),
+            Some(Rect::new(100, 100, 401, 301)),
+            "the band follows"
+        );
+        assert_eq!(
+            act(&mut o, Action::Pin),
+            Outcome::Stay,
+            "nothing confirmed yet"
+        );
+        act(&mut o, Action::Mark);
+        let s = Rect::new(100, 100, 401, 301);
+        assert_eq!((o.phase(), o.selection()), (Phase::Selected, Some(s)));
+        assert_eq!(
+            act(&mut o, Action::Pin),
+            Outcome::Output(Output::Pin, s, Via::Key)
+        );
+        // From a selection, Space starts a new one; a right-click restores the old.
+        act(&mut o, Action::Mark);
+        assert_eq!(o.phase(), Phase::Marking);
+        press(&mut o, Button::Right, 600, 500);
+        assert_eq!((o.phase(), o.selection()), (Phase::Selected, Some(s)));
+        // A click sets the second corner of a marked one.
+        mv(&mut o, 10, 10);
+        act(&mut o, Action::Mark);
+        press(&mut o, Button::Left, 20, 30);
+        release(&mut o, 20, 30);
+        assert_eq!(o.selection(), Some(Rect::new(10, 10, 11, 21)));
+        // J2 by keyboard: Space over a highlighted window selects it.
+        let mut o = detecting(windows());
+        mv(&mut o, 150, 150);
+        act(&mut o, Action::Mark);
+        assert_eq!(o.selection(), Some(Rect::new(100, 100, 300, 200)));
+        // After the keyboard moved the pointer, Space marks a corner instead.
+        let mut o = detecting(windows());
+        mv(&mut o, 150, 150);
+        act(&mut o, Action::Pointer(Dir::Left));
+        act(&mut o, Action::Mark);
+        assert_eq!(o.phase(), Phase::Marking);
+    }
+
+    #[test]
+    fn moving_edges_snap_to_windows_and_monitors_unless_alt_or_the_keyboard() {
+        let target = || vec![WindowFacts::plain(1, Rect::new(200, 200, 300, 200))];
+        let mut o = detecting(target());
+        // The drag's right/bottom edges end 3 pixels short of the window's: they snap.
+        drag(&mut o, (210, 210), (496, 396));
+        assert_eq!(o.selection(), Some(Rect::new(210, 210, 290, 190)));
+        // Farther than 6 logical pixels: no snap (a right-click outside clears first).
+        press(&mut o, Button::Right, 790, 590);
+        drag(&mut o, (210, 210), (490, 390));
+        assert_eq!(o.selection(), Some(Rect::new(210, 210, 281, 181)));
+        // Dragging up and left, the left/top edges snap.
+        press(&mut o, Button::Right, 790, 590);
+        drag(&mut o, (450, 350), (203, 197));
+        assert_eq!(o.selection(), Some(Rect::new(200, 200, 251, 151)));
+        // With Alt held: exact.
+        press(&mut o, Button::Right, 790, 590);
+        press(&mut o, Button::Left, 100, 100);
+        o.handle(Input::Move {
+            x: 496,
+            y: 396,
+            mods: Mods::ALT,
+        });
+        release(&mut o, 496, 396);
+        assert_eq!(o.selection(), Some(Rect::new(100, 100, 397, 297)));
+        // Resizing by the right edge snaps to the monitor's edge (800).
+        let mut o = detecting(Vec::new());
+        drag(&mut o, (100, 100), (299, 299));
+        press(&mut o, Button::Left, 300, 200);
+        mv(&mut o, 500, 200);
+        mv(&mut o, 796, 200);
+        release(&mut o, 796, 200);
+        assert_eq!(o.selection(), Some(Rect::new(100, 100, 700, 200)));
+        // Pointer keys are exact: no snapping while the keyboard moved the pointer last.
+        let mut o = detecting(target());
+        mv(&mut o, 210, 210);
+        act(&mut o, Action::Pointer(Dir::Right));
+        act(&mut o, Action::Pointer(Dir::Left));
+        act(&mut o, Action::Mark);
+        mv(&mut o, 494, 396);
+        act(&mut o, Action::Pointer(Dir::Right));
+        act(&mut o, Action::Mark);
+        assert_eq!(o.selection(), Some(Rect::new(210, 210, 286, 187)));
+        // Detection off: no window edges.
+        let mut o = detecting(target());
+        act(&mut o, Action::DetectCycle);
+        act(&mut o, Action::DetectCycle);
+        drag(&mut o, (210, 210), (496, 396));
+        assert_eq!(o.selection(), Some(Rect::new(210, 210, 287, 187)));
+    }
+
+    fn frame_of(pic: Rect) -> (std::sync::Arc<Ledger>, Frame) {
+        let ledger = Ledger::new();
+        let syn = Synthetic::new(vec![Monitor::new(pic, true)]);
+        let f = crate::capture::CaptureBackend::capture(&syn, &ledger, pic).unwrap();
+        (ledger, f)
+    }
+
+    #[test]
+    fn the_magnifier_enlarges_exact_pixels_with_a_crosshair_and_reads_the_colour() {
+        let pic = Rect::new(0, 0, 800, 600);
+        let (_l, frozen) = frame_of(pic);
+        let mut o = one(800, 600).with_magnifier(true);
+        mv(&mut o, 50, 40);
+        let mut s = o.scene(&Approx);
+        s.sample(&frozen);
+        let m = s.magnifier.clone().expect("shown while selecting");
+        assert_eq!(m.cell, 8);
+        assert_eq!(m.grid.width, 8 * MAG_CELLS);
+        assert_eq!(
+            (m.rect.x, m.rect.y),
+            (70, 60),
+            "right of and below the pointer"
+        );
+        let p = Synthetic::pixel(50, 40);
+        assert_eq!(m.text.lines[0], "50, 40");
+        assert_eq!(
+            m.text.lines[1],
+            format!("#{:02X}{:02X}{:02X}", p[2], p[1], p[0])
+        );
+        assert_eq!(m.text.lines[2], format!("{}, {}, {}", p[2], p[1], p[0]));
+        assert_eq!(color_lines(&frozen, (5000, 5)), ["\u{2014}", "\u{2014}"]);
+        // Composed: every cell is its source pixel, the centre cell is outlined, the crosshair
+        // runs through the middle.
+        let mut out = vec![0u8; 800 * 600 * 4];
+        compose(&frozen, &s, pic, &mut out);
+        let at = |out: &[u8], x: i32, y: i32| {
+            let i = ((y * 800 + x) * 4) as usize;
+            [out[i], out[i + 1], out[i + 2], out[i + 3]]
+        };
+        let half = (MAG_CELLS / 2) as i32;
+        for (i, j) in [(0, 0), (3, 11), (14, 14), (6, 5)] {
+            let src = Synthetic::pixel(50 - half + i, 40 - half + j);
+            let cx = m.grid.x + i * 8 + 2;
+            let cy = m.grid.y + j * 8 + 2;
+            assert_eq!(at(&out, cx, cy), src, "cell ({i}, {j})");
+        }
+        let c = m.centre();
+        assert_eq!(
+            at(&out, c.x, c.y),
+            color::ACCENT,
+            "the centre cell's outline"
+        );
+        assert_eq!(
+            at(&out, c.x + 2, c.y + 2),
+            p,
+            "the pointer's pixel inside it"
+        );
+        assert_eq!(
+            at(&out, c.x + 4, m.grid.y + 1),
+            color::ACCENT,
+            "the crosshair"
+        );
+        // Near the bottom-right corner it moves left of and above the pointer.
+        mv(&mut o, 790, 590);
+        let m = o.scene(&Approx).magnifier.unwrap();
+        assert!(m.rect.right() <= 790 && m.rect.bottom() <= 590);
+        // At the picture's corner, cells outside it are dark.
+        mv(&mut o, 0, 0);
+        let mut s = o.scene(&Approx);
+        s.sample(&frozen);
+        let m = s.magnifier.clone().unwrap();
+        compose(&frozen, &s, pic, &mut out);
+        assert_eq!(
+            at(&out, m.grid.x + 2, m.grid.y + 2),
+            color::HALO,
+            "outside the picture"
+        );
+        // M hides and shows it; it hides while moving the selection and over its inside.
+        act(&mut o, Action::Magnifier);
+        assert!(o.scene(&Approx).magnifier.is_none());
+        act(&mut o, Action::Magnifier);
+        drag(&mut o, (100, 100), (399, 299));
+        mv(&mut o, 250, 200);
+        assert!(o.scene(&Approx).magnifier.is_none(), "inside the selection");
+        mv(&mut o, 600, 500);
+        assert!(o.scene(&Approx).magnifier.is_some(), "outside it");
+        mv(&mut o, 399, 299);
+        assert!(
+            o.scene(&Approx).magnifier.is_some(),
+            "on a handle: precise resizing"
+        );
+        // It is redrawn where it was and where it is now.
+        mv(&mut o, 600, 500);
+        let a = o.scene(&Approx);
+        mv(&mut o, 650, 450);
+        let b = o.scene(&Approx);
+        let d = dirty(&a, &b);
+        let covered = |r: Rect| d.iter().any(|x| x.contains(&r));
+        assert!(covered(a.magnifier.unwrap().rect) && covered(b.magnifier.unwrap().rect));
+    }
+
+    #[test]
+    fn the_magnifier_follows_the_monitor_scale_and_shows_logical_coordinates() {
+        // Mixed DPI: a 100 % monitor and a 150 % one to its right.
+        let mons = vec![
+            Monitor::new(Rect::new(0, 0, 800, 600), true),
+            Monitor::new(Rect::new(800, 0, 1200, 900), false).with_dpi(144),
+        ];
+        let mut o = Overlay::new(
+            Rect::new(0, 0, 2000, 900),
+            mons,
+            SystemValues::default(),
+            (0, 0),
+            None,
+            None,
+        );
+        mv(&mut o, 400, 300);
+        let m = o.scene(&Approx).magnifier.unwrap();
+        assert_eq!(
+            (m.cell, m.text.lines.len()),
+            (8, 3),
+            "100 %: no logical line"
+        );
+        mv(&mut o, 800 + 300, 450);
+        let m = o.scene(&Approx).magnifier.unwrap();
+        assert_eq!(m.cell, 12, "8 logical pixels at 150 %");
+        assert_eq!(m.text.lines[0], "1100, 450");
+        assert_eq!(
+            m.text.lines[1], "200, 300 at 150 %",
+            "logical, on that monitor"
+        );
+        assert_eq!(m.color, 2);
+        assert_eq!(m.text.dpi, 144);
+    }
+
+    #[test]
+    fn history_steps_through_earlier_rectangles_over_the_current_picture() {
+        let a = Rect::new(10, 10, 100, 100);
+        let b = Rect::new(20, 20, 50, 50);
+        let c = Rect::new(700, 500, 200, 200); // sticks out: clipped
+        let gone = Rect::new(5000, 5000, 10, 10); // off this picture: left out
+        let mut o = one(800, 600).with_history(&[a, b, b, gone, c]);
+        assert_eq!(o.history(), (3, None), "repeats and absent ones left out");
+        act(&mut o, Action::HistoryNext);
+        assert_eq!(o.selection(), None, "nothing newer than now");
+        act(&mut o, Action::HistoryPrevious);
+        assert_eq!(o.selection(), Some(Rect::new(700, 500, 100, 100)));
+        act(&mut o, Action::HistoryPrevious);
+        assert_eq!(o.selection(), Some(b));
+        act(&mut o, Action::HistoryPrevious);
+        act(&mut o, Action::HistoryPrevious);
+        assert_eq!(
+            (o.selection(), o.history()),
+            (Some(a), (3, Some(0))),
+            "stops at the oldest"
+        );
+        act(&mut o, Action::HistoryNext);
+        assert_eq!(o.selection(), Some(b));
+        assert_eq!(o.phase(), Phase::Selected);
+        // A new drag leaves the history; Previous starts again from the newest.
+        drag(&mut o, (300, 300), (350, 350));
+        assert_eq!(o.history().1, None);
+        act(&mut o, Action::HistoryPrevious);
+        assert_eq!(o.selection(), Some(Rect::new(700, 500, 100, 100)));
+        // Bounded.
+        let many: Vec<Rect> = (0..40).map(|i| Rect::new(i, 0, 5, 5)).collect();
+        let o = one(800, 600).with_history(&many);
+        assert_eq!(o.history().0, HISTORY);
+        assert_eq!(one(800, 600).history(), (0, None));
+    }
 }

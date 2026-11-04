@@ -4153,4 +4153,169 @@ pub(crate) mod tests {
             [Some(Duration::from_millis(900))]
         );
     }
+
+    // ---- Step 52: smart selection reaches the platform, the status and the history ----
+
+    fn overlay_status(a: &App<FakeShell>) -> Value {
+        let st = a.status();
+        let errors = crate::schema_errors("noeul-ipc-v1#status_result", &st);
+        assert!(errors.is_empty(), "{errors:?}\n{st:#}");
+        st["captures"]["overlay"].clone()
+    }
+
+    fn mouse(a: &mut App<FakeShell>, x: i32, y: i32) {
+        ev(
+            a,
+            OverlayInput::Move {
+                x,
+                y,
+                mods: Mods::NONE,
+            },
+        );
+    }
+
+    #[test]
+    fn smart_selection_reaches_the_platform_and_the_status() {
+        use crate::detect::{ElementAnswer, WindowFacts};
+        let (mut a, _syn, _dir) = overlay_app("ov-smart");
+        a.shell.facts = vec![
+            WindowFacts::plain(11, Rect::new(100, 100, 300, 200)),
+            WindowFacts::plain(12, Rect::new(-640, 0, 1600, 540)),
+        ];
+        a.action("capture.region", None);
+        assert_eq!(a.shell.snapshots, 1, "listed once, with the frozen picture");
+        mouse(&mut a, 150, 150);
+        let ov = overlay_status(&a);
+        assert_eq!(ov["detection"]["mode"], "window");
+        assert_eq!(ov["detection"]["windows"], 2);
+        assert_eq!(
+            ov["detection"]["target"],
+            json!({"kind": "window", "rect": {"x": 100, "y": 100, "width": 300, "height": 200}})
+        );
+        assert_eq!(ov["magnifier"], json!({"enabled": true, "shown": true}));
+        assert_eq!(ov["pointer"], json!({"x": 150, "y": 150}));
+        // E: element detection asks the platform, off the UI thread.
+        key(&mut a, "E", false, false);
+        mouse(&mut a, 160, 160);
+        let req = *a.shell.element_requests.last().expect("an element request");
+        assert_eq!((req.token, req.at), (11, (160, 160)));
+        let button = Rect::new(150, 150, 40, 20);
+        a.overlay_event(OverlayEvent::Element(req, ElementAnswer::Found(button)));
+        let ov = overlay_status(&a);
+        assert_eq!(ov["detection"]["mode"], "element");
+        assert_eq!(ov["detection"]["target"]["kind"], "element");
+        // A physical W moves the pointer up one pixel and the real cursor with it.
+        let w = crate::hotkeys::chord_of("W", false, false, false).unwrap();
+        let code = crate::hotkeys::physical_chord(0x11, false, false, false, false);
+        a.overlay_event(OverlayEvent::Key(w, code, false));
+        assert_eq!(a.shell.overlays.log.borrow().warps, [(160, 159)]);
+        let ov = overlay_status(&a);
+        assert_eq!(ov["pointer"], json!({"x": 160, "y": 159}));
+        assert_eq!(ov["detection"]["suspended"], true);
+        assert_eq!(ov["detection"]["target"], Value::Null);
+        // The logical W alone (no position) does nothing.
+        a.overlay_event(OverlayEvent::Key(w, None, false));
+        assert_eq!(a.shell.overlays.log.borrow().warps.len(), 1);
+        // The mouse again: the element is back; a click selects it, Enter pins it.
+        mouse(&mut a, 170, 165);
+        ev(
+            &mut a,
+            OverlayInput::Press {
+                button: Button::Left,
+                x: 170,
+                y: 165,
+                mods: Mods::NONE,
+                time_ms: 0,
+            },
+        );
+        ev(
+            &mut a,
+            OverlayInput::Release {
+                button: Button::Left,
+                x: 170,
+                y: 165,
+            },
+        );
+        assert_eq!(overlay_status(&a)["selection"], button.to_json());
+        key(&mut a, "Enter", false, false);
+        assert!(!a.overlay_open());
+        assert_eq!(a.shell.detection_ended, 1, "lookups stop with the overlay");
+        assert_eq!(a.status()["captures"]["history"], 1);
+        // The next capture steps back to it with Comma.
+        a.action("capture.region", None);
+        key(&mut a, "Comma", false, false);
+        let ov = overlay_status(&a);
+        assert_eq!(ov["selection"], button.to_json());
+        assert_eq!(ov["history"], json!({"count": 1, "position": 0}));
+        // M toggles the magnifier.
+        key(&mut a, "M", false, false);
+        assert_eq!(overlay_status(&a)["magnifier"]["enabled"], false);
+        a.request("capture.cancel", &json!({})).unwrap();
+        assert_eq!(a.shell.detection_ended, 2);
+        // Nothing of a window's text exists anywhere in the status (there is none to report).
+        assert!(!a.status().to_string().to_lowercase().contains("title"));
+    }
+
+    #[test]
+    fn detection_off_lists_no_windows_until_e_turns_it_on_and_the_magnifier_setting_applies() {
+        use crate::detect::WindowFacts;
+        let (mut a, _syn, _dir) = overlay_app("ov-smart-off");
+        a.shell.facts = vec![WindowFacts::plain(11, Rect::new(100, 100, 300, 200))];
+        set_config(
+            &mut a,
+            &[("capture.detection", "off"), ("capture.magnifier", "off")],
+        );
+        a.action("capture.region", None);
+        assert_eq!(a.shell.snapshots, 0, "off: no window is listed");
+        mouse(&mut a, 150, 150);
+        let ov = overlay_status(&a);
+        assert_eq!(
+            (
+                ov["detection"]["mode"].as_str(),
+                ov["detection"]["windows"].clone()
+            ),
+            (Some("off"), Value::Null)
+        );
+        assert_eq!(ov["magnifier"], json!({"enabled": false, "shown": false}));
+        key(&mut a, "E", false, false);
+        assert_eq!(a.shell.snapshots, 1, "listed when detection is turned on");
+        assert_eq!(overlay_status(&a)["detection"]["windows"], 1);
+        mouse(&mut a, 151, 150);
+        assert_eq!(overlay_status(&a)["detection"]["target"]["kind"], "window");
+        a.request("capture.cancel", &json!({})).unwrap();
+    }
+
+    /// FLOW-18 through the instance core: `W A S D` (physical keys) to one corner, `Space`,
+    /// to the other, `Space`, `Enter`: a pin of exactly that rectangle.
+    #[test]
+    fn keyboard_only_marking_pins_the_marked_rectangle() {
+        let (mut a, _syn, _dir) = overlay_app("ov-flow18");
+        a.action("capture.region", None);
+        mouse(&mut a, 95, 98);
+        let press_code = |a: &mut App<FakeShell>, name: &str, sc: u32, n: usize| {
+            let c = crate::hotkeys::chord_of(name, false, false, false).unwrap();
+            for _ in 0..n {
+                let code = crate::hotkeys::physical_chord(sc, false, false, false, false);
+                a.overlay_event(OverlayEvent::Key(c, code, false));
+            }
+        };
+        press_code(&mut a, "D", 0x20, 5);
+        press_code(&mut a, "S", 0x1F, 2);
+        assert_eq!(overlay_status(&a)["pointer"], json!({"x": 100, "y": 100}));
+        key(&mut a, "Space", false, false);
+        assert_eq!(overlay_status(&a)["phase"], "marking");
+        mouse(&mut a, 497, 402);
+        press_code(&mut a, "D", 0x20, 3);
+        press_code(&mut a, "W", 0x11, 2);
+        key(&mut a, "Space", false, false);
+        let want = Rect::new(100, 100, 401, 301);
+        assert_eq!(overlay_status(&a)["selection"], want.to_json());
+        key(&mut a, "Enter", false, false);
+        let created = a.shell.windows.log.borrow().created.clone();
+        assert_eq!(
+            created.last().unwrap().1,
+            want,
+            "the pin is the marked rectangle"
+        );
+    }
 }

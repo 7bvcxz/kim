@@ -747,6 +747,22 @@ pub fn rfc3339(t: std::time::SystemTime) -> String {
     )
 }
 
+/// Test support: checks `v` against one definition (`#/$defs/<def>`) of the IPC v1 schema, such
+/// as a method's result, which a whole response cannot be checked against (it does not name its
+/// method).
+#[cfg(test)]
+pub fn assert_ipc_def(def: &str, v: &Value) {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/contracts/schemas/ipc-v1.schema.json");
+    let schema: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    assert!(schema["$defs"][def].is_object(), "no definition `{def}`");
+    let wrapper = json!({"$defs": schema["$defs"], "$ref": format!("#/$defs/{def}")});
+    let errors = crate::jsonschema::Validator::new(&wrapper)
+        .validate(v)
+        .unwrap();
+    assert!(errors.is_empty(), "{def}: {errors:?}\n{v:#}");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -755,6 +771,29 @@ mod tests {
 
     /// A data stream id, as the Host gives its first pane.
     const STREAM: u32 = 1;
+
+    #[test]
+    fn result_examples_match_their_method_definitions() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/contracts/examples/ipc-v1");
+        for (file, def) in [
+            ("response-terminal-create.json", "result_terminal_create"),
+            ("response-terminal-list.json", "result_terminal_list"),
+            ("response-terminal-info.json", "result_terminal_info"),
+            ("response-terminal-stop.json", "result_terminal_end"),
+            ("response-terminal-kill.json", "result_terminal_end"),
+        ] {
+            let doc: Value =
+                serde_json::from_slice(&std::fs::read(dir.join(file)).unwrap()).unwrap();
+            assert_ipc_def(def, &doc["result"]);
+        }
+        // The busy refusal carries the same plan a dry run shows.
+        let busy: Value = serde_json::from_slice(
+            &std::fs::read(dir.join("response-terminal-busy.json")).unwrap(),
+        )
+        .unwrap();
+        assert_ipc_def("end_plan", &busy["error"]["details"]);
+    }
 
     fn read(mut r: &[u8]) -> io::Result<Option<Frame>> {
         read_frame(&mut r, None, |t| t + FRAME_TIMEOUT)

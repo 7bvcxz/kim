@@ -1,0 +1,1 @@
+{"type": "response", "id": 9, "ok": true, "result": {"affected": [{"terminal_id": "t-3fa9c0d21b7e", "pane_id": "p-9b0e7d6c5a41", "pid": 5678, "exit_code": 1, "processes_in_job": 1, "forced": true, "job_processes_left": 0}], "terminal": null, "removed": true, "terminal_id": "t-3fa9c0d21b7e", "name": "work"}}

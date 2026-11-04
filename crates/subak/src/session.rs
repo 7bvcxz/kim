@@ -1195,6 +1195,8 @@ mod tests {
             output_bytes: 10,
         };
         let j = terminal_json(&r.terminals[i], &live);
+        crate::proto::assert_ipc_def("terminal", &j);
+        crate::proto::assert_ipc_def("terminal_summary", &summary_json(&r.terminals[i], &live));
         assert_eq!(j["state"], "running");
         assert_eq!(j["busy"], true, "cmd with a child process");
         assert_eq!(j["windows"][0]["panes"][0]["pid"], 4242);
@@ -1215,6 +1217,7 @@ mod tests {
         )
         .unwrap();
         let j = terminal_json(&r.terminals[i], &live);
+        crate::proto::assert_ipc_def("terminal", &j);
         assert_eq!(j["state"], "stopped");
         assert_eq!(j["windows"][0]["panes"][0]["pid"], Value::Null);
         assert_eq!(j["busy"], false);

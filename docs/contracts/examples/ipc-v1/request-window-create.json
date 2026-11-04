@@ -1,0 +1,1 @@
+{"type": "request", "id": 12, "method": "window.create", "params": {"target": "work", "name": "logs", "select": false, "command": {"program": "cmd.exe", "args": ["/d"]}}}

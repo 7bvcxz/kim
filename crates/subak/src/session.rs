@@ -1300,6 +1300,133 @@ mod tests {
         assert_eq!(e.details["candidates"].as_array().unwrap().len(), 2);
     }
 
+    fn pane(id: &str) -> Pane {
+        Pane {
+            id: id.into(),
+            index: 0,
+            command: Command {
+                program: "cmd.exe".into(),
+                args: vec![],
+            },
+            command_line: None,
+            cwd: None,
+            executable: None,
+            env: EnvNames::default(),
+            size: (80, 24),
+            stream: 9,
+            pid: None,
+            history_limit: 0,
+        }
+    }
+
+    fn window(id: &str, index: usize) -> Window {
+        Window {
+            id: id.into(),
+            index,
+            name: "w".into(),
+            automatic_name: true,
+            panes: Vec::new(),
+            active_pane: 0,
+        }
+    }
+
+    /// Step 21 (ADR 0054): windows take the lowest free index and are kept in index order, panes
+    /// are renumbered when one goes, the selection moves to a neighbour, and the last pane of a
+    /// Terminal is never taken out.
+    #[test]
+    fn windows_and_panes_keep_indexes_selection_and_the_last_pane() {
+        let mut r = Registry::default();
+        let mut g = ids();
+        let i = r
+            .reserve(spec(Some("work")), "2026-11-04T01:02:03Z".into(), &mut g)
+            .unwrap();
+        let t = &mut r.terminals[i];
+        let first = t.windows[0].id.clone();
+        assert_eq!(t.free_window_index(), 1);
+        for (id, index) in [("w-0000000000a1", 1), ("w-0000000000a2", 2)] {
+            let wi = t.insert_window(window(id, index));
+            t.push_pane(wi, pane(&format!("p-0000000000{index}0")));
+        }
+        assert_eq!(t.active_window, 0, "inserting does not select");
+        let wi = t.window_pos("w-0000000000a1").unwrap();
+        t.push_pane(wi, pane("p-000000000011"));
+        t.push_pane(wi, pane("p-000000000012"));
+        let idx: Vec<usize> = t.windows[wi].panes.iter().map(|p| p.index).collect();
+        assert_eq!(idx, [0, 1, 2]);
+        assert_eq!(t.select_pane(wi, 2), (true, true));
+        assert_eq!(t.active_pane().id, "p-000000000012");
+        assert_eq!(t.select_pane(wi, 2), (false, false), "no change, no event");
+        // Taking out the middle pane renumbers; the active one keeps being active.
+        let rm = t.remove_pane("p-000000000011").unwrap();
+        assert!(!rm.window_removed && !rm.window_changed && !rm.pane_changed);
+        let idx: Vec<(&str, usize)> = t.windows[wi]
+            .panes
+            .iter()
+            .map(|p| (p.id.as_str(), p.index))
+            .collect();
+        assert_eq!(idx, [("p-000000000010", 0), ("p-000000000012", 1)]);
+        // Taking out the active pane selects its neighbour.
+        let rm = t.remove_pane("p-000000000012").unwrap();
+        assert!(rm.pane_changed && !rm.window_changed);
+        assert_eq!(t.active_pane().id, "p-000000000010");
+        // Taking out a window's last pane removes the window and selects a neighbour window.
+        let rm = t.remove_pane("p-000000000010").unwrap();
+        assert!(rm.window_removed && rm.window_changed);
+        assert_eq!(t.windows.len(), 2);
+        assert_eq!(t.windows[t.active_window].id, "w-0000000000a2");
+        // The freed index 1 is reused, in index order.
+        assert_eq!(t.free_window_index(), 1);
+        let pos = t.insert_window(window("w-0000000000a3", 1));
+        assert_eq!(pos, 1);
+        assert_eq!(
+            t.windows[t.active_window].id, "w-0000000000a2",
+            "still active"
+        );
+        t.push_pane(pos, pane("p-000000000030"));
+        // A pane of a window that is not shown: that window gets a new active pane, reported.
+        t.push_pane(pos, pane("p-000000000031"));
+        t.windows[pos].active_pane = 1;
+        let rm = t.remove_pane("p-000000000031").unwrap();
+        assert_eq!(rm.window_pane.as_deref(), Some("p-000000000030"));
+        assert!(!rm.window_changed && !rm.pane_changed);
+        // Down to one pane: it is never taken out.
+        t.remove_pane("p-000000000030").unwrap();
+        t.remove_pane("p-000000000020").unwrap();
+        assert_eq!(t.panes().count(), 1);
+        assert_eq!(t.windows[0].id, first);
+        let last = t.active_pane().id.clone();
+        assert!(t.remove_pane(&last).is_none());
+        assert_eq!(t.panes().count(), 1);
+        // Window names: the Terminal rules, and not only digits (an index).
+        assert_eq!(parse_window_name(" logs ").unwrap(), "logs");
+        assert_eq!(parse_window_name("빌드").unwrap(), "빌드");
+        for bad in [
+            "",
+            "1",
+            "042",
+            "a:b",
+            "a.b",
+            "-x",
+            "w-000000000001",
+            "tab\there",
+        ] {
+            assert_eq!(
+                parse_window_name(bad).unwrap_err().code,
+                ErrorCode::InvalidName,
+                "{bad:?}"
+            );
+        }
+        // The objects of several windows and panes are valid IPC v1.
+        let live = |_: &Pane| Live::default();
+        let t = &r.terminals[i];
+        crate::proto::assert_ipc_def("terminal", &terminal_json(t, &live));
+        let (mut c, mut b) = (0, false);
+        let w = window_json(t, &t.windows[0], &live, &mut c, &mut b);
+        crate::proto::assert_ipc_def("window", &w);
+        let p = pane_json(t, t.active_pane(), &Live::default());
+        crate::proto::assert_ipc_def("pane", &p);
+    }
+
     #[test]
     fn shells_busy_and_command_lines() {
         for s in [

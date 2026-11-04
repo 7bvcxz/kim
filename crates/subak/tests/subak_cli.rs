@@ -304,6 +304,15 @@ fn the_cli_schema_embeds_the_ipc_and_capabilities_definitions_unchanged() {
         "result_pane_capture",
         "result_pane_clear_history",
         "scrollback",
+        // Step 21.
+        "would_create_pane",
+        "selection",
+        "close_plan",
+        "result_window_create",
+        "result_topology",
+        "result_select",
+        "result_window_rename",
+        "result_close",
     ] {
         assert_eq!(cli["$defs"][name], ipc["$defs"][name], "$defs.{name}");
     }
@@ -348,6 +357,51 @@ fn the_cli_schema_embeds_the_ipc_and_capabilities_definitions_unchanged() {
 
 /// Every command's `--json` output on a live Host, validated and compared with golden files;
 /// exit codes equal `error.exit_code`; a secret never reaches stdout or stderr.
+/// Step 21 (ADR 0054): the window and pane commands answer one schema-valid document each, equal
+/// to their golden files after normalization, and print a table people can read.
+#[test]
+fn window_and_pane_commands_match_their_golden_files() {
+    let e = Ep::new("win");
+    let ep = e.ep.as_str();
+    let windows = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+    let (code, doc) = sub(
+        ep,
+        &["new", "work", "--cwd", &windows, "--", "cmd.exe", "/d"],
+    );
+    assert_eq!(code, 0, "{doc}");
+    let (code, doc) = sub(
+        ep,
+        &[
+            "window", "new", "work", "--name", "logs", "--cwd", &windows, "--", "cmd.exe", "/d",
+        ],
+    );
+    assert_eq!(code, 0, "{doc}");
+    golden("window-new", &doc, ep);
+    let (code, doc) = sub(ep, &["list-windows", "work"]);
+    assert_eq!((code, doc["command"].as_str()), (0, Some("window.ls")));
+    golden("window-ls", &doc, ep);
+    let out = human(ep, &["pane", "ls", "work"]);
+    let (stdout, stderr) = text(&out);
+    assert!(out.status.success() && stderr.is_empty(), "{stderr}");
+    assert!(
+        stdout.contains("PANE") && stdout.contains("1.0*"),
+        "{stdout}"
+    );
+    let (code, doc) = sub(ep, &["window", "kill", "work:logs", "--dry-run"]);
+    assert_eq!(code, 0, "{doc}");
+    golden("window-kill-dry-run", &doc, ep);
+    let (code, doc) = sub(ep, &["window", "kill", "work:logs", "--yes"]);
+    assert_eq!(code, 0, "{doc}");
+    let (code, doc) = sub(ep, &["window", "kill", "work:0", "--yes"]);
+    assert_eq!(
+        (code, doc["error"]["code"].as_str()),
+        (7, Some("invalid_state"))
+    );
+    golden("error-last-window", &doc, ep);
+    let (code, doc) = sub(ep, &["pane", "kill", "work"]);
+    assert_eq!((code, doc["error"]["code"].as_str()), (2, Some("usage")));
+}
+
 #[test]
 fn every_command_answers_one_schema_valid_document_with_stable_exit_codes() {
     let e = Ep::new("json");

@@ -1,0 +1,18 @@
+{
+  "command": "window.kill",
+  "error": {
+    "code": "invalid_state",
+    "details": [
+      "ipc error code: invalid_state",
+      "hint: to end the whole Terminal use `subak kill work`",
+      "reason: last_window",
+      "state: running",
+      "terminal_id: t-000000000001"
+    ],
+    "exit_code": 7,
+    "hint": "to end the whole Terminal use `subak kill work`",
+    "message": "the Host refused the request: this is the last running window of Terminal `work`; ending it would end the Terminal"
+  },
+  "ok": false,
+  "schema_version": 1
+}

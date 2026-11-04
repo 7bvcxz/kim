@@ -1360,6 +1360,61 @@ mod tests {
         assert_eq!(usage(&["info", "x", "--", "cmd.exe"]), "info");
     }
 
+    /// Step 21: the window and pane commands, their tmux aliases, options and arguments.
+    #[test]
+    fn window_and_pane_commands_parse_with_their_options_only() {
+        for (args, cmd) in [
+            (&["window", "new", "work"][..], Cmd::WindowNew),
+            (&["new-window", "work"], Cmd::WindowNew),
+            (&["window", "ls", "work"], Cmd::WindowLs),
+            (&["window", "list", "work"], Cmd::WindowLs),
+            (&["list-windows", "work"], Cmd::WindowLs),
+            (&["window", "select", "work:1"], Cmd::WindowSelect),
+            (&["select-window", "work:1"], Cmd::WindowSelect),
+            (&["window", "rename", "work:1", "logs"], Cmd::WindowRename),
+            (&["rename-window", "work:1", "logs"], Cmd::WindowRename),
+            (&["window", "kill", "work:1"], Cmd::WindowKill),
+            (&["kill-window", "work:1"], Cmd::WindowKill),
+            (&["pane", "new", "work:1"], Cmd::PaneNew),
+            (&["pane", "ls", "work"], Cmd::PaneLs),
+            (&["list-panes", "work"], Cmd::PaneLs),
+            (&["pane", "select", "work:1.0"], Cmd::PaneSelect),
+            (&["select-pane", "work:1.0"], Cmd::PaneSelect),
+            (&["pane", "kill", "work:1.0"], Cmd::PaneKill),
+            (&["kill-pane", "work:1.0"], Cmd::PaneKill),
+        ] {
+            assert_eq!(p(args).unwrap().0, cmd, "{args:?}");
+        }
+        let (cmd, a) = p(&[
+            "window",
+            "new",
+            "work",
+            "--name",
+            "logs",
+            "--no-select",
+            "--",
+            "ping",
+            "-t",
+            "x",
+        ])
+        .unwrap();
+        assert_eq!(cmd.name(), "window.new");
+        assert_eq!(a.name.as_deref(), Some("logs"));
+        assert!(a.no_select);
+        assert_eq!(a.command, ["ping", "-t", "x"]);
+        let (_, a) = p(&["pane", "new", "work", "--command-line", "cmd /c x"]).unwrap();
+        assert_eq!(a.command_line.as_deref(), Some("cmd /c x"));
+        let usage = |args: &[&str]| p(args).unwrap_err();
+        assert_eq!(usage(&["pane", "new", "work", "--name", "x"]).0, "pane.new");
+        assert_eq!(usage(&["window", "kill", "w", "--force"]).0, "window.kill");
+        assert_eq!(usage(&["window", "rename", "w"]).0, "window.rename");
+        assert_eq!(usage(&["window", "ls"]).0, "window.ls");
+        assert_eq!(usage(&["window", "split", "w"]).0, "window");
+        assert_eq!(usage(&["pane"]).0, "pane");
+        assert_eq!(usage(&["kill", "x", "--", "cmd"]).0, "kill");
+        assert_eq!(usage(&["window", "new", "w", "--name", ""]).0, "window.new");
+    }
+
     #[test]
     fn detach_takes_a_target_or_a_client() {
         let (cmd, a) = p(&["detach", "work", "--client", "7", "--dry-run"]).unwrap();

@@ -298,7 +298,7 @@
     "json_schema_version": 1,
     "schema": "kim.capabilities",
     "schema_version": 1,
-    "summary": "Pre-alpha: engine status, health and control of the running tray app, opt-in sign-in start, and the rule store (CRUD, validation, drafts, history, live reload); runs engine-control, remap and block rules (a low-level mouse hook only while a mouse-button rule exists)",
+    "summary": "Pre-alpha: engine status, health and control of the tray app, opt-in sign-in start, the rule store (CRUD, validation, drafts, history, live reload); runs engine-control, remap and block rules",
     "tool": "ddalgak",
     "version": "0.0.1"
   },

@@ -73,6 +73,8 @@ pub struct Sandbox {
     pub endpoint: String,
     /// The debug-build test hook (`NOEUL_DEV_SYNTHETIC_DESKTOP=1`) for every command.
     pub synthetic: bool,
+    /// Extra environment for every command (e.g. `NOEUL_DEV_DETECT_PIDS`, Step 52).
+    pub env: Vec<(String, String)>,
     children: Vec<Child>,
     pids: Vec<u32>,
 }
@@ -96,6 +98,7 @@ impl Sandbox {
             root,
             endpoint: format!("noeul-test-{id}"),
             synthetic: false,
+            env: Vec::new(),
             children: Vec::new(),
             pids: Vec::new(),
         };
@@ -199,6 +202,10 @@ impl Sandbox {
             c.env("NOEUL_DEV_SYNTHETIC_DESKTOP", "1");
         } else {
             c.env_remove("NOEUL_DEV_SYNTHETIC_DESKTOP");
+        }
+        c.env_remove("NOEUL_DEV_DETECT_PIDS");
+        for (k, v) in &self.env {
+            c.env(k, v);
         }
         #[cfg(windows)]
         {

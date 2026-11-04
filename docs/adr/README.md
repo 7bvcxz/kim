@@ -44,6 +44,7 @@ the requirements it serves. ADRs are immutable once **Accepted**; a later ADR ma
 | [0038](0038-noeul-annotation.md) | Noeul annotation: vector objects until export, one editor for captures and pins, GDI text with fallback | Accepted (Step 56; real-desktop and real-IME checks manual) |
 | [0039](0039-subak-window-plain-win32-client.md) | The Subak window: a plain Win32 IPC client of one Terminal (`subak-gui`), no GUI framework or GPU | Accepted (Step 16; visible-window checks pending the maintainer) |
 | [0040](0040-ddalgak-mouse-actions.md) | Ddalgak mouse actions: physical desktop pixels, normalized absolute moves, holds on the remap ledger | Accepted (Step 71; real pointer, monitors, DPI and games checks manual) |
+| [0043](0043-ddalgak-modes-layers-and-runtime-mode-state.md) | Ddalgak modes: layers over a parent, runtime mode state in the hook, never restored | Accepted (Step 72; real typing in applications and the real tray indicator checks manual) |
 
 "Accepted (validated in Step N)" means the decision is made, but the named Step must confirm it
 on real Windows; if validation fails, that Step writes a superseding ADR.

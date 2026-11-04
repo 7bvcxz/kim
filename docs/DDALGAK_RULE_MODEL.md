@@ -4,12 +4,15 @@ Status: **current** · Rules document **v1** · Step 65 (specification); the eng
 rule store, validation and rule commands since Step 67, remaps, blocks and mouse-button triggers
 since Step 68, `send_keys`, `type_text` and hotstrings since Step 69, `open_program` (with the
 additive `env` overrides) and `open_url` since Step 70, `mouse_move` (with the additive grid units
-and stepped holds), `mouse_scroll` and `mouse_click` since Step 71 (§14) · Decisions:
+and stepped holds), `mouse_scroll` and `mouse_click` since Step 71, `mode` steps with layers
+(the additive `parent`, `one_shot`, `timeout_ms`, `icon` and `settings.mode_indicator`) and the
+`mode` commands since Step 72 (§14) · Decisions:
 [ADR 0022](adr/0022-ddalgak-rule-model-and-safety.md), [ADR 0028](adr/0028-ddalgak-rule-store-validation-and-reload.md),
 [ADR 0031](adr/0031-ddalgak-remap-execution-and-mouse-hook.md),
 [ADR 0034](adr/0034-ddalgak-typing-runs-hotstrings-and-clipboard.md),
 [ADR 0037](adr/0037-ddalgak-program-and-website-launches.md),
-[ADR 0040](adr/0040-ddalgak-mouse-actions.md) · Schemas:
+[ADR 0040](adr/0040-ddalgak-mouse-actions.md),
+[ADR 0043](adr/0043-ddalgak-modes-layers-and-runtime-mode-state.md) · Schemas:
 [ddalgak-rules-v1](contracts/schemas/ddalgak-rules-v1.schema.json),
 [ddalgak-simulation-v1](contracts/schemas/ddalgak-simulation-v1.schema.json) · Requirements:
 `DDALGAK-FR-005…042`, `DDALGAK-SEC-001…013`
@@ -517,14 +520,32 @@ pressed (no click-lock toggle; Windows' own ClickLock is the accessible alternat
 | `previous` | — | Back to the mode that was active before the last change. |
 | `default` | — | Back to the profile's `default_mode`. |
 
-- Mode IDs must exist in the rule's profile (`unknown_mode`). Mode changes never inject input
-  and need no consent. Keys held when the mode changes stay with the rule that pressed them
-  until they are released.
-- **Outputs.** Preview `{ "from", "to", "until_release" }`; the mode indicator and
-  `ddalgak status` show the new mode.
-- The active mode is runtime state, not stored in `rules.json`. At engine start, after a pause,
-  a profile switch or an emergency off the profile's `default_mode` is active (Step 72 may add
-  an opt-in "restore last mode").
+- Mode IDs must exist in the rule's profile (`unknown_mode`; `rule add` names it,
+  `mode_not_found`). Mode changes never inject input and need no consent; they work over
+  elevated windows and step aside like every rule on the secure desktop, in a password field and
+  during an IME composition. A `mode` step is the rule's only step until Step 78.
+- **Behavior** (runs since Step 72, [ADR 0043](adr/0043-ddalgak-modes-layers-and-runtime-mode-state.md)).
+  A mode rule fired on press, on release, by auto-repeat or as a sequence changes the mode inside
+  the hook callback, so the very next key is decided in the new mode; on an `on: hold` trigger
+  the worker times it and the hook thread runs it. `hold` needs a single chord pressed without
+  repeat or pass-through (§3.3); up to four layers can be held at once (one per key; a fifth key
+  passes unchanged), they stack, and each ends with its own key-up. `set`, `toggle`, `cycle`,
+  `previous` and `default` *latch* a mode and end every held layer (a layer's later key-up
+  changes nothing). `toggle` of a held layer ends the layers; `previous` while a layer is held
+  ends the layers, otherwise it swaps with the mode before the last latched change.
+- **Keys held at a switch are released.** When the active mode changes, every key and button
+  Ddalgak holds is released (held remaps, held mouse buttons, moves while held), pending taps,
+  hold triggers and sequences end, and the user's trigger modifiers a remap had released are
+  pressed again if still held (`DDALGAK-SEC-005`). A key held across the switch keeps its up
+  consumed. (Step 65 said such keys stay with their rule; with layers that is a stuck key —
+  ADR 0043 §7.)
+- **Outputs.** Preview `{ "from", "to", "until_release" }` (`crates/ddalgak/src/modes.rs`
+  builds it, a test validates it against `preview_mode`); the tray indicator and `ddalgak
+  status` show the new mode with why and since when.
+- The active mode is runtime state, never stored in `rules.json` and **never restored**: at
+  engine start, after a pause (the safe reset), a profile switch or an emergency off the
+  profile's `default_mode` is active; a reload keeps the latched mode by ID when it still exists
+  (ADR 0043 §8).
 
 ### 5.11 `engine`: pause or turn off Ddalgak
 
@@ -627,9 +648,12 @@ approves the new target. `cargo xtask schema-check` recomputes every fingerprint
    unchanged (`skipped_*`).
 4. **Paused**: only engine-control rules remain.
 5. **Candidates**: enabled, valid rules of the active profile whose trigger matches, whose
-   `modes` include the active mode (or that have none), and whose `when` holds.
+   `modes` include the active mode or one of its parents (Step 72 layers, §7.3), or that have
+   none, and whose `when` holds.
 6. **Precedence** among candidates, first difference wins:
-   1. mode-scoped rules before rules without `modes`;
+   1. mode-scoped rules before rules without `modes`, and among mode-scoped rules the nearest in
+      the active mode's chain: the mode itself, then its parent, then the parent's parent (Step
+      72);
    2. rules with `when.apps` before rules without;
    3. rules with `when.window_title` before rules without;
    4. higher `priority`;
@@ -657,8 +681,33 @@ or stored (`DDALGAK-SEC-011`). Windows of elevated processes and the secure desk
 
 Exactly one mode of the active profile is active. Rules without `modes` work in every mode;
 mode-scoped rules beat them on the same trigger (§7.1). Keys without a matching rule reach the
-application in every mode. An option to swallow unbound typing keys in a mode is left to Step 72
-and needs a guaranteed way out of that mode.
+application in every mode.
+
+| Mode field | Rule |
+| --- | --- |
+| `id`, `title` | Required. The ID never changes (rules, mode steps and layers refer to it); `ddalgak mode rename` changes the title. |
+| `color`, `icon` | Optional: a chip (`#RRGGBB`) and a badge of 1–8 characters without spaces (`N`, `가`, `🎮`, Step 72), shown in the indicator, always with the title. |
+| `parent` | Step 72: the mode is a **layer** over this mode (policy `layer`). Without it the mode is **exclusive**: only its own rules and the rules without `modes` apply. A missing parent is `unknown_mode`, a chain back to the mode `mode_cycle`; the engine then drops that parent (never broader). |
+| `one_shot` | Step 72: after a switch to the mode (`set`, `toggle`, `cycle`), the up of the next key that is not a modifier returns to the mode before it. A sticky layer for one key, for people who cannot hold a key. |
+| `timeout_ms` | Step 72, 1000–3600000: after a switch to the mode, that long without a key press returns to the **default** mode (never while a layer is held). |
+
+**Layers** (Step 72, [ADR 0043](adr/0043-ddalgak-modes-layers-and-runtime-mode-state.md)). The
+active mode's *chain* is the mode, its parent, the parent's parent and so on. A key is decided by
+the rules of the nearest mode in the chain that has one, then by the rules without `modes`, then
+it reaches the application: in a `symbols` layer over `nav` over `base`, `H` is `symbols`'s rule if
+it has one, else `nav`'s, else `base`'s, else a rule for every mode. The default mode has no
+parent, `one_shot` or `timeout_ms` (`mode_invalid`; ignored): it is where every exit ends.
+
+**Persistence.** Mode definitions are part of `rules.json` (revision, lock, backup, history). The
+active mode is never stored or restored (§5.10). `settings.mode_indicator` (`auto` default: the
+tray names the mode only when the profile has more than one mode; `tray`; `off`) decides the tray
+indicator; `ddalgak status`, `ddalgak mode status` and the editor's header always show it.
+
+**Not in v1 of modes.** Swallowing every unbound typing key in a mode (left to Step 72 by Step 65)
+is not offered: a keyboard that types nothing until the user finds the way out is worse than
+`block` rules limited to the mode for the keys it should silence (ADR 0043 §10). Bare modifiers
+as `hold` layer keys and a dual-role layer key (tap for a key, hold for a layer) are not offered
+either.
 
 ### 7.4 Recursion guard
 
@@ -702,7 +751,9 @@ and needs a guaranteed way out of that mode.
 | `recursion_risk` | error | schema | `injected: accept` with an injecting step (§7.4). |
 | `step_invalid` | error | schema | A step's inputs break §5 (relative path, shell host, URL scheme, missing mode target, …). Since Step 70 also the launch checks the schema cannot express (§5.5, §5.6: a `:` after the drive, an override name given twice, a command line over Windows' limit, a URL with characters a browser's command line could misread), found when the rule is compiled; messages never quote the target. |
 | `duplicate_profile_id`, `duplicate_mode_id`, `duplicate_rule_id` | error | semantic | An ID appears twice. |
-| `unknown_profile`, `unknown_mode` | error | semantic | A reference to a profile or mode that does not exist. |
+| `unknown_profile`, `unknown_mode` | error | semantic | A reference to a profile or mode that does not exist (since Step 72 also a mode's `parent`). |
+| `mode_cycle` | error | semantic | Step 72: following a mode's `parent`s leads back to it; the mode works without a parent until fixed. |
+| `mode_invalid` | error | runtime | Step 72: the default mode has a `parent`, `one_shot` or `timeout_ms`; they are ignored. |
 | `output_is_trigger` | error | semantic | §7.4 3. |
 | `duplicate_trigger` | error | semantic | §7.1. The later rule is the subject. |
 | `consent_stale` | error | semantic | A launch fingerprint no longer matches (§6.2). |
@@ -831,7 +882,7 @@ the origin (`gui`, `cli`, `import`, `restore`).
 ## 13. CLI surface
 
 The command list Steps 67 and 81 implement under the CLI contract (`--json`, `--dry-run`,
-`--yes`, exit codes). The `rule` and `rules` rows are **implemented (Step 67)**; their `--json`
+`--yes`, exit codes). The `rule` and `rules` rows are **implemented (Step 67)**, the `mode` rows **(Step 72)**; their `--json`
 documents are [ddalgak-cli-v1](contracts/schemas/ddalgak-cli-v1.schema.json) and
 `ddalgak --help` is the reference. The other rows are planned; names may still be refined there,
 behavior may not get weaker.
@@ -846,7 +897,10 @@ behavior may not get weaker.
 | `ddalgak rules backup` · `rules reload` (asks the running app) · `rules draft apply` | write, `--dry-run` |
 | `ddalgak rules restore (--backup \| <snapshot>)` · `rules draft discard` | destructive: `--dry-run`, `--yes` |
 | `ddalgak profile list/show/add/rename/duplicate/delete/apply/history/restore/export/import` | read / write / destructive as named |
-| `ddalgak mode list/add/rename/delete/set` | read / write (`mode set` asks the running app) |
+| `ddalgak mode list` · `mode show <id>` (each `[--profile p] [--draft]`) | read; **implemented (Step 72)**: policy, chain, exits, rules, the rules that switch to the mode, layers, problems, the live mode |
+| `ddalgak mode add --title t [--id] [--icon] [--color] [--parent] [--one-shot] [--timeout-ms] [--default]` · `mode edit <id> … [--no-…]` · `mode rename <id> <title>` · `mode copy <id> [--id] [--title] [--without-rules]` | write, `--dry-run`, `--draft`, `--if-revision <n>`; **implemented (Step 72)** |
+| `ddalgak mode delete <id> [--delete-rules]` | destructive: `--dry-run`, `--yes`; refused for the default mode, a parent of a layer and a mode a rule switches to (`mode_in_use`); **implemented (Step 72)** |
+| `ddalgak mode set <id>` · `mode toggle <id>` · `mode reset` · `mode status` | write / read through the running app (`engine_off` while it is off; never starts it); **implemented (Step 72)** |
 | `ddalgak test --keys <keys> [--profile p] [--mode m] [--app exe] [--focus kind] --dry-run` | read: a `ddalgak.simulation` result; there is no headless live test |
 | `ddalgak explain <keys> [context flags]` | read: the decision and candidates only |
 | `ddalgak status` | read: engine state, active profile and mode, problems, recent activity |
@@ -867,18 +921,34 @@ as `hotkey_invalid`, `hotkey_reserved`, `usage`, `confirmation_required`, `busy`
 | `rules_from_newer_version` | 5 | The file was written by a newer Ddalgak; read-only. |
 | `rule_conflict` | 7 | `duplicate_trigger`, `duplicate_binding`, a taken ID, or the file changed since it was read (`revision`). |
 | `consent_required` | 7 | The change needs `--allow <permission>`; the rule was saved disabled or not at all. |
+| `mode_invalid` | 2 | Step 72: the mode change would add a parent cycle, an unknown parent or a default mode with a parent or an exit; nothing written. |
+| `mode_in_use` | 7 | Step 72: `mode delete` of the default mode, a parent of a layer, a mode a rule switches to, or a mode rules are limited to without `--delete-rules`. |
 
 ## 14. Machine-checked fixtures and verification status
 
 | Artifact | Pins down |
 | --- | --- |
-| [ddalgak-rules-v1](contracts/schemas/ddalgak-rules-v1.schema.json) + `contracts/examples/ddalgak-rules-v1/` | Fourteen valid documents (remaps and swaps, text, programs, websites, mouse, modes, engine control, profiles and conditions, an export, a future step type, since Step 68 mouse-button remaps, pass-through and a physical-position trigger in `11-remap-mouse-and-pass-through.json`, and since Step 69 hotstrings, variables and the insertion point in `12-hotstrings-and-snippets.json`, and since Step 70 environment overrides, activation and websites in order in `13-launch-options.json`, and since Step 71 a keyboard-mouse profile with gliding, grid and stepped moves, every button, holds, the wheel in four directions and points on the desktop, the primary monitor and the active window in `14-mouse-navigation.json`). Fifty-seven invalid ones (Step 71 added a continuous grid move, a grid unit without a grid, a move while held without a direction, both a speed and a repeat, a held button with repeat; Step 70 added `javascript:`, `ms-settings:` and custom-protocol URLs, `env` with an app ID and a bad variable name; Step 69 added a hotstring with keys, with a space, `immediate` with end characters, a hotstring remap, an unknown and a second-cursor template), including recursive remaps (`recursive-remap-accepts-injected`, `recursive-send-keys-accepts-injected`), a dual role that also passes the key through (`remap-tap-with-pass-through`), the primary button and a mouse button in a sequence as triggers, the emergency chord as trigger and output, reserved OS chords (`Win+L`, `Alt+Tab`, `Ctrl+Shift+Escape`, the Secure Attention Sequence), missing consent for programs, websites, injection and clipboard, shell hosts, `file:` URLs and newer versions. |
-| `contracts/examples/ddalgak-rules-v1/semantic-invalid/` | Thirteen schema-valid documents named `<code>--<what>.json`, each producing exactly that semantic error: `output_is_trigger` (the recursive remap `F13` → `F13`, and `send_keys` to its own trigger), duplicate IDs and triggers (since Step 69 also two hotstrings `btw`/`BTW`), unknown modes and profiles, a stale launch consent, a run over 60 s (delays, and since Step 69 slow typing). |
+| [ddalgak-rules-v1](contracts/schemas/ddalgak-rules-v1.schema.json) + `contracts/examples/ddalgak-rules-v1/` | Fifteen valid documents (since Step 72 a layered profile with a navigation layer, a symbols layer over it, an exclusive mode, a one-shot and a timed mode in `15-mode-layers.json`; remaps and swaps, text, programs, websites, mouse, modes, engine control, profiles and conditions, an export, a future step type, since Step 68 mouse-button remaps, pass-through and a physical-position trigger in `11-remap-mouse-and-pass-through.json`, and since Step 69 hotstrings, variables and the insertion point in `12-hotstrings-and-snippets.json`, and since Step 70 environment overrides, activation and websites in order in `13-launch-options.json`, and since Step 71 a keyboard-mouse profile with gliding, grid and stepped moves, every button, holds, the wheel in four directions and points on the desktop, the primary monitor and the active window in `14-mouse-navigation.json`). Fifty-nine invalid ones (Step 72 added a mode timeout below a second and a mode badge with a space; Step 71 added a continuous grid move, a grid unit without a grid, a move while held without a direction, both a speed and a repeat, a held button with repeat; Step 70 added `javascript:`, `ms-settings:` and custom-protocol URLs, `env` with an app ID and a bad variable name; Step 69 added a hotstring with keys, with a space, `immediate` with end characters, a hotstring remap, an unknown and a second-cursor template), including recursive remaps (`recursive-remap-accepts-injected`, `recursive-send-keys-accepts-injected`), a dual role that also passes the key through (`remap-tap-with-pass-through`), the primary button and a mouse button in a sequence as triggers, the emergency chord as trigger and output, reserved OS chords (`Win+L`, `Alt+Tab`, `Ctrl+Shift+Escape`, the Secure Attention Sequence), missing consent for programs, websites, injection and clipboard, shell hosts, `file:` URLs and newer versions. |
+| `contracts/examples/ddalgak-rules-v1/semantic-invalid/` | Fifteen schema-valid documents (Step 72 added `mode_cycle--layers-over-each-other` and `unknown_mode--layer-parent-missing`) named `<code>--<what>.json`, each producing exactly that semantic error: `output_is_trigger` (the recursive remap `F13` → `F13`, and `send_keys` to its own trigger), duplicate IDs and triggers (since Step 69 also two hotstrings `btw`/`BTW`), unknown modes and profiles, a stale launch consent, a run over 60 s (delays, and since Step 69 slow typing). |
 | [ddalgak-simulation-v1](contracts/schemas/ddalgak-simulation-v1.schema.json) + examples | Twenty-four playground results (Step 71 added a stepped grid move, checked against the code's own preview) named `<rules example>--<what>.json` and fourteen invalid ones (effects performed or input injected in `simulate`, live launches without confirmation, live input outside the playground, previews that echo text, paths, arguments or URL paths). |
 | [kim-hotkey-manifest-v1/ddalgak.json](contracts/examples/kim-hotkey-manifest-v1/ddalgak.json) | Ddalgak's final GUI actions: four global ones (matching the Kim catalog) and the `rules` and `playground` contexts. |
 
 **Step 66** implements the engine for engine-control rules ([DDALGAK_ENGINE](DDALGAK_ENGINE.md));
 every other step type is inactive with `step_unsupported` until its Step.
+
+**Step 72** runs `mode` steps (§5.10) and adds layers (`parent`), one-shot and timed modes, a mode
+badge and the indicator setting (§7.3), per-mode precedence along a layer's chain (§7.1), the
+`mode_cycle` and `mode_invalid` checks (§8) and the `mode` commands (§13)
+([ADR 0043](adr/0043-ddalgak-modes-layers-and-runtime-mode-state.md),
+[DDALGAK_ENGINE §15](DDALGAK_ENGINE.md)). The CLI writes them with the Step 67 syntax:
+`ddalgak mode add --id nav --title Navigation --parent base --icon N`,
+`ddalgak rule add --trigger CapsLock --action mode --op hold --target-mode nav`,
+`ddalgak rule add --trigger code:KeyH --mode nav --action remap --to Left --allow input-injection`,
+`ddalgak mode set nav`, `ddalgak mode reset`. The editor's Modes page, its Switch mode form, the
+indicator and the mode menu are `crates/ddalgak/src/mode_edit.rs` (`MODE_FIELDS`,
+`SWITCH_FIELDS`, `ModeDraft`) and `crates/ddalgak/src/modes.rs` (`Indicator`, `menu`), checked
+against this schema ([GUI_JOURNEYS J4, J6](DDALGAK_GUI_JOURNEYS.md)). Fixture
+`15-mode-layers.json` shows every policy and exit.
 
 **Step 71** runs `mouse_move` (§5.7), `mouse_scroll` (§5.8) and `mouse_click` (§5.9) and adds
 grid units and stepped holds ([ADR 0040](adr/0040-ddalgak-mouse-actions.md),
@@ -931,8 +1001,8 @@ compared with `xtask/src/ddalgak.rs` (`validate.rs`; every `semantic-invalid/` f
 exactly its code), the store (`store.rs`), the operations (`edit.rs`), the `rule`/`rules`
 commands, and the live reload in the running app ([DDALGAK_ENGINE §10](DDALGAK_ENGINE.md)).
 Migrations are a chain of pure `vN → vN+1` steps; v1 is the first version, so the shipped chain is
-empty and the mechanism is tested with a test chain. Import and export (§10) and profile and mode
-commands remain with Steps 72, 75 and 81.
+empty and the mechanism is tested with a test chain. Import and export (§10) and the profile
+commands remain with Steps 75 and 81 (the mode commands arrived in Step 72).
 
 **Not tested on Windows in Step 65.** Everything about real input (hook timing, `SendInput`,
 UIPI, password-field detection, IME, layouts, stuck keys, the emergency chord) is specified, not

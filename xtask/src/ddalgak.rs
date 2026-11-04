@@ -5,7 +5,8 @@
 //! (reserved triggers, outputs Ddalgak never produces, missing consent, the injected-input
 //! recursion guard). What needs the whole document is checked here:
 //!
-//! * unique profile, mode and rule IDs, and every mode or profile reference resolves;
+//! * unique profile, mode and rule IDs, and every mode or profile reference resolves (since
+//!   Step 72 also a layer's `parent`), and no mode's parents lead back to it (`mode_cycle`);
 //! * no rule re-sends its own trigger (`output_is_trigger`: the classic recursive remap);
 //! * no two enabled rules of a profile claim the same trigger with the same modes, conditions
 //!   and priority (`duplicate_trigger`);

@@ -2725,6 +2725,21 @@ fn modes_through_the_cli_and_the_real_test_host() {
     err(&["mode", "delete", "game"], "confirmation_required");
     err(&["mode", "show", "ghost"], "mode_not_found");
     err(
+        &[
+            "rule",
+            "add",
+            "--trigger",
+            "F19",
+            "--action",
+            "mode",
+            "--op",
+            "set",
+            "--target-mode",
+            "ghost",
+        ],
+        "mode_not_found",
+    );
+    err(
         &["mode", "add", "--title", "Bad", "--timeout-ms", "10"],
         "usage",
     );

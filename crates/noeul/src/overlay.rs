@@ -2473,4 +2473,568 @@ mod tests {
         assert_eq!(grow(a, 2), Rect::new(-2, -2, 14, 14));
         assert_eq!(grow(a, -1), Rect::new(1, 1, 8, 8));
     }
+
+    // ---- Step 51: the double-click gesture, the toolbar and the outputs (UX spec §4.3) ----
+
+    /// A press with modifiers at a message time.
+    fn press_at(o: &mut Overlay, b: Button, x: i32, y: i32, mods: Mods, t: u32) -> Outcome {
+        o.handle(Input::Press {
+            button: b,
+            x,
+            y,
+            mods,
+            time_ms: t,
+        })
+    }
+
+    /// A plain left click (press and release in place) at time `t`.
+    fn click(o: &mut Overlay, x: i32, y: i32, t: u32) -> (Outcome, Outcome) {
+        let p = press_at(o, Button::Left, x, y, Mods::NONE, t);
+        let r = release(o, x, y);
+        (p, r)
+    }
+
+    /// Two plain clicks `dt` ms apart, the second at `(x2, y2)`; the second press's outcome.
+    fn double(o: &mut Overlay, at: (i32, i32), second: (i32, i32), t: u32, dt: u32) -> Outcome {
+        click(o, at.0, at.1, t);
+        let out = press_at(
+            o,
+            Button::Left,
+            second.0,
+            second.1,
+            Mods::NONE,
+            t.wrapping_add(dt),
+        );
+        release(o, second.0, second.1);
+        out
+    }
+
+    /// FLOW-01's overlay: one 800×600 monitor at 100 %, selection (100,100)–(500,400) confirmed,
+    /// the scene drawn once (hit-testing follows what is drawn).
+    fn flow() -> (Overlay, Rect) {
+        let mut o = one(800, 600);
+        drag(&mut o, (100, 100), (499, 399));
+        o.scene(&Approx);
+        let s = o.selection().unwrap();
+        assert_eq!(s, Rect::new(100, 100, 400, 300));
+        (o, s)
+    }
+
+    fn pinned(s: Rect) -> Outcome {
+        Outcome::Output(Output::Pin, s, Via::DoubleClick)
+    }
+
+    #[test]
+    fn a_double_click_inside_fires_on_the_second_press_with_the_users_values() {
+        // FLOW-01: two presses 120 ms apart, no movement: the pin fires on the second press.
+        let (mut o, s) = flow();
+        click(&mut o, 300, 250, 1_000);
+        assert_eq!(o.phase(), Phase::Selected, "a single click does nothing");
+        assert_eq!(
+            press_at(&mut o, Button::Left, 300, 250, Mods::NONE, 1_120),
+            pinned(s)
+        );
+        assert_eq!(o.selection(), Some(s), "the owner closes the overlay");
+        // FLOW-02 / FLOW-03: T − 1 pins, T + 1 does not (T = 500 ms, Windows' default).
+        let (mut o, s) = flow();
+        assert_eq!(
+            double(&mut o, (300, 250), (300, 250), 5_000, 499),
+            pinned(s)
+        );
+        let (mut o, s) = flow();
+        assert_eq!(
+            double(&mut o, (300, 250), (300, 250), 5_000, 501),
+            Outcome::Stay
+        );
+        assert_eq!(
+            (o.phase(), o.selection()),
+            (Phase::Selected, Some(s)),
+            "slow: nothing changed"
+        );
+        // …but that slow second click may be the first of a new double-click.
+        assert_eq!(
+            press_at(&mut o, Button::Left, 300, 250, Mods::NONE, 5_501 + 200),
+            pinned(s)
+        );
+        // FLOW-04: inside the 4×4 double-click rectangle (±2) pins, outside (3) does not.
+        let (mut o, s) = flow();
+        assert_eq!(double(&mut o, (300, 250), (302, 248), 0, 100), pinned(s));
+        let (mut o, _) = flow();
+        assert_eq!(
+            double(&mut o, (300, 250), (303, 250), 0, 100),
+            Outcome::Stay
+        );
+        // The message clock wraps around.
+        let (mut o, s) = flow();
+        assert_eq!(
+            double(&mut o, (300, 250), (300, 250), u32::MAX - 100, 201),
+            pinned(s)
+        );
+        // FLOW-36: the user slows the double-click speed to 900 ms while the overlay is open;
+        // the owner refreshes the values before each press.
+        let (mut o, s) = flow();
+        click(&mut o, 300, 250, 10_000);
+        o.set_system_values(SystemValues {
+            double_click_ms: 900,
+            double_click: (8, 8),
+            ..SystemValues::default()
+        });
+        assert_eq!(
+            press_at(&mut o, Button::Left, 304, 254, Mods::NONE, 10_800),
+            pinned(s),
+            "800 ms apart and 4 px away pin with the user's new values"
+        );
+    }
+
+    #[test]
+    fn presses_that_do_something_else_never_count() {
+        // FLOW-05: both outside; FLOW-06: one inside, one outside (both orders).
+        for (a, b) in [
+            ((600, 500), (600, 500)),
+            ((300, 250), (600, 500)),
+            ((600, 500), (300, 250)),
+        ] {
+            let (mut o, s) = flow();
+            assert_eq!(double(&mut o, a, b, 0, 100), Outcome::Stay, "{a:?} {b:?}");
+            assert_eq!(o.selection(), Some(s), "the selection stays");
+        }
+        // FLOW-07: on a corner handle, on the border band of the bottom edge.
+        for p in [(100, 100), (500, 400), (300, 402), (300, 398)] {
+            let (mut o, _) = flow();
+            assert!(matches!(o.zone(p), Zone::Edge(_)), "{p:?}");
+            assert_eq!(double(&mut o, p, p, 0, 100), Outcome::Stay, "{p:?}");
+        }
+        // FLOW-09: a move (press, 20 px, release) is not a click; the next two presses pin the
+        // moved rectangle.
+        let (mut o, _) = flow();
+        press_at(&mut o, Button::Left, 300, 250, Mods::NONE, 0);
+        mv(&mut o, 320, 260);
+        assert_eq!(o.phase(), Phase::Moving);
+        release(&mut o, 320, 260);
+        let moved = Rect::new(120, 110, 400, 300);
+        assert_eq!(o.selection(), Some(moved));
+        assert_eq!(
+            press_at(&mut o, Button::Left, 320, 260, Mods::NONE, 100),
+            Outcome::Stay,
+            "the release of the move is not a first click"
+        );
+        release(&mut o, 320, 260);
+        assert_eq!(
+            press_at(&mut o, Button::Left, 320, 260, Mods::NONE, 200),
+            pinned(moved)
+        );
+        // FLOW-10: a jitter within the drag threshold keeps the click and the selection.
+        let (mut o, s) = flow();
+        press_at(&mut o, Button::Left, 300, 250, Mods::NONE, 0);
+        mv(&mut o, 301, 251);
+        release(&mut o, 301, 251);
+        assert_eq!(o.selection(), Some(s));
+        assert_eq!(
+            press_at(&mut o, Button::Left, 300, 250, Mods::NONE, 150),
+            pinned(s)
+        );
+        // FLOW-11: resize by the right handle, then a double-click pins the resized rectangle.
+        let (mut o, _) = flow();
+        drag(&mut o, (500, 250), (560, 250));
+        let resized = Rect::new(100, 100, 460, 300);
+        assert_eq!(o.selection(), Some(resized));
+        o.scene(&Approx);
+        assert_eq!(
+            double(&mut o, (300, 250), (300, 250), 0, 100),
+            pinned(resized)
+        );
+        // FLOW-12: the press that started a drag is not a first click.
+        let mut o = one(800, 600);
+        press_at(&mut o, Button::Left, 100, 100, Mods::NONE, 0);
+        mv(&mut o, 300, 250);
+        release(&mut o, 300, 250);
+        o.scene(&Approx);
+        assert_eq!(
+            press_at(&mut o, Button::Left, 250, 200, Mods::NONE, 50),
+            Outcome::Stay
+        );
+        // FLOW-22: a modifier at either press.
+        for mods in [Mods::CTRL, Mods::SHIFT, Mods::ALT, Mods::WIN] {
+            let (mut o, _) = flow();
+            press_at(&mut o, Button::Left, 300, 250, mods, 0);
+            release(&mut o, 300, 250);
+            assert_eq!(
+                press_at(&mut o, Button::Left, 300, 250, Mods::NONE, 100),
+                Outcome::Stay,
+                "{mods:?} at P1"
+            );
+            let (mut o, _) = flow();
+            click(&mut o, 300, 250, 0);
+            assert_eq!(
+                press_at(&mut o, Button::Left, 300, 250, mods, 100),
+                Outcome::Stay,
+                "{mods:?} at P2"
+            );
+        }
+        // FLOW-23: a right-button double-click inside opens the menu and never pins.
+        let (mut o, _) = flow();
+        for t in [0, 100] {
+            assert_eq!(
+                press_at(&mut o, Button::Right, 300, 250, Mods::NONE, t),
+                Outcome::Menu(Some((300, 250)))
+            );
+        }
+        // A key between the clicks ends the wait for the second one.
+        let (mut o, s) = flow();
+        click(&mut o, 300, 250, 0);
+        o.handle(Input::Action(Action::Move(Dir::Right)));
+        o.handle(Input::Action(Action::Move(Dir::Left)));
+        assert_eq!(o.selection(), Some(s));
+        assert_eq!(
+            press_at(&mut o, Button::Left, 300, 250, Mods::NONE, 100),
+            Outcome::Stay
+        );
+        // FLOW-37: a 10×10 selection is interior everywhere.
+        let mut o = one(800, 600);
+        drag(&mut o, (200, 200), (209, 209));
+        o.scene(&Approx);
+        let s = o.selection().unwrap();
+        assert_eq!(double(&mut o, (209, 200), (209, 200), 0, 100), pinned(s));
+        // Rule 1: in Hover nothing pins.
+        let mut o = one(800, 600);
+        assert_eq!(double(&mut o, (50, 50), (50, 50), 0, 100), Outcome::Stay);
+        assert_eq!(o.selection(), None);
+    }
+
+    #[test]
+    fn the_gesture_settings_change_the_double_click_and_the_middle_click_only() {
+        let with = |double_click, middle_click| {
+            let (o, s) = flow();
+            (
+                o.with_gestures(Gestures {
+                    double_click,
+                    middle_click,
+                }),
+                s,
+            )
+        };
+        // FLOW-21: a middle-click inside pins, outside does nothing.
+        let (mut o, s) = flow();
+        assert_eq!(
+            press_at(&mut o, Button::Middle, 300, 250, Mods::NONE, 0),
+            Outcome::Output(Output::Pin, s, Via::MiddleClick)
+        );
+        assert_eq!(
+            press_at(&mut o, Button::Middle, 700, 500, Mods::NONE, 0),
+            Outcome::Stay
+        );
+        // FLOW-24: `copy` copies on the double-click; Enter still pins.
+        let (mut o, s) = with(GestureAction::Copy, GestureAction::Pin);
+        assert_eq!(
+            double(&mut o, (300, 250), (300, 250), 0, 100),
+            Outcome::Output(Output::Copy, s, Via::DoubleClick)
+        );
+        assert_eq!(
+            o.handle(Input::Action(Action::Pin)),
+            Outcome::Output(Output::Pin, s, Via::Key)
+        );
+        // `save` asks for the save dialog.
+        let (mut o, s) = with(GestureAction::Save, GestureAction::Pin);
+        assert_eq!(
+            double(&mut o, (300, 250), (300, 250), 0, 100),
+            Outcome::Output(Output::Save, s, Via::DoubleClick)
+        );
+        // FLOW-25: `none`: the second press is an ordinary press (it may start a move).
+        let (mut o, s) = with(GestureAction::None, GestureAction::None);
+        click(&mut o, 300, 250, 0);
+        assert_eq!(
+            press_at(&mut o, Button::Left, 300, 250, Mods::NONE, 100),
+            Outcome::Stay
+        );
+        assert_eq!(o.phase(), Phase::Pressed);
+        release(&mut o, 300, 250);
+        assert_eq!(
+            press_at(&mut o, Button::Middle, 300, 250, Mods::NONE, 0),
+            Outcome::Stay
+        );
+        assert_eq!(o.selection(), Some(s));
+        // The Snipaste-style preset: double-click copies, middle-click pins.
+        let (mut o, s) = with(GestureAction::Copy, GestureAction::Pin);
+        assert_eq!(
+            press_at(&mut o, Button::Middle, 300, 250, Mods::NONE, 0),
+            Outcome::Output(Output::Pin, s, Via::MiddleClick)
+        );
+        let (mut o, s) = with(GestureAction::Pin, GestureAction::Copy);
+        assert_eq!(
+            press_at(&mut o, Button::Middle, 300, 250, Mods::NONE, 0),
+            Outcome::Output(Output::Copy, s, Via::MiddleClick)
+        );
+        for id in ["pin", "copy", "save", "none"] {
+            assert_eq!(GestureAction::parse(id).unwrap().as_str(), id);
+        }
+        assert_eq!(GestureAction::parse("close"), None);
+    }
+
+    #[test]
+    fn the_keys_copy_save_and_quick_save() {
+        let (mut o, s) = flow();
+        for (a, out) in [
+            (Action::Copy, Output::Copy),
+            (Action::Save, Output::Save),
+            (Action::QuickSave, Output::QuickSave),
+            (Action::Pin, Output::Pin),
+        ] {
+            assert_eq!(
+                o.handle(Input::Action(a)),
+                Outcome::Output(out, s, Via::Key)
+            );
+            assert_eq!(Action::from_id(out.action_id()), Some(a));
+        }
+        let mut empty = one(100, 100);
+        assert_eq!(empty.handle(Input::Action(Action::Copy)), Outcome::Stay);
+        assert_eq!(
+            empty.handle(Input::MenuKey),
+            Outcome::Stay,
+            "no selection, no menu"
+        );
+        assert_eq!(o.handle(Input::MenuKey), Outcome::Menu(None));
+    }
+
+    #[test]
+    fn the_toolbar_sits_next_to_the_selection_and_never_over_the_chip() {
+        // Below the selection, right-aligned, 6 + 2 px away; 4 buttons in tab order.
+        let (o, s) = flow();
+        let scene = o.scene(&Approx);
+        let bar = scene.toolbar.clone().unwrap();
+        assert_eq!(bar.rect, Rect::new(260, 408, 240, 32));
+        assert_eq!(bar.rect.right(), s.right());
+        let labels: Vec<&str> = bar.buttons.iter().map(|b| b.label).collect();
+        assert_eq!(labels, ["Pin", "Copy", "Save", "Cancel"]);
+        assert!(
+            bar.buttons[0].primary && !bar.buttons[1].primary,
+            "Pin is primary"
+        );
+        assert_eq!(bar.buttons[1].rect, Rect::new(320, 412, 52, 24));
+        assert!(!bar.rect.intersects(&scene.chip.unwrap().rect));
+        // No room below: above the selection, clear of the chip.
+        let mut o = one(800, 600);
+        drag(&mut o, (100, 300), (499, 589));
+        let scene = o.scene(&Approx);
+        let bar = scene.toolbar.unwrap();
+        let chip = scene.chip.unwrap().rect;
+        assert!(bar.rect.bottom() <= 300, "above: {:?}", bar.rect);
+        assert!(!bar.rect.intersects(&chip), "{:?} {:?}", bar.rect, chip);
+        // Neither (FLOW-38): inside the bottom edge of a selection filling the monitor.
+        let mut o = one(800, 600);
+        o.handle(Input::Action(Action::Full));
+        let scene = o.scene(&Approx);
+        let bar = scene.toolbar.clone().unwrap();
+        assert_eq!(bar.rect, Rect::new(554, 562, 240, 32));
+        assert!(Rect::new(0, 0, 800, 600).contains(&bar.rect));
+        assert!(!bar.rect.intersects(&scene.chip.unwrap().rect));
+        // The bar covers part of the selection: that part is not interior. A double-click on
+        // the bar between buttons pins nothing; elsewhere inside it pins.
+        let gap = (bar.buttons[0].rect.right() as i32 + 1, bar.rect.y + 2);
+        assert_eq!(o.zone(gap), Zone::Toolbar(None));
+        assert_eq!(double(&mut o, gap, gap, 0, 100), Outcome::Stay);
+        o.scene(&Approx);
+        let full = Rect::new(0, 0, 800, 600);
+        assert_eq!(double(&mut o, (400, 300), (400, 300), 0, 100), pinned(full));
+        // The chip covering the selection (no room above) is not interior either.
+        let chip = o.scene(&Approx).chip.unwrap().rect;
+        assert!(full.contains(&chip));
+        assert_eq!(o.zone((chip.x + 3, chip.y + 3)), Zone::Chip);
+        let at = (chip.x + 3, chip.y + 3);
+        assert_eq!(double(&mut o, at, at, 0, 100), Outcome::Stay);
+        // Hidden while a drag, move or resize is in progress.
+        let (mut o, _) = flow();
+        press_at(&mut o, Button::Left, 300, 250, Mods::NONE, 0);
+        mv(&mut o, 340, 270);
+        assert!(o.scene(&Approx).toolbar.is_none());
+        // 150 %: every length scales, the selection stays in device pixels.
+        let mut o = Overlay::new(
+            Rect::new(0, 0, 1500, 1000),
+            vec![Monitor::new(Rect::new(0, 0, 1500, 1000), true).with_dpi(144)],
+            SystemValues::default(),
+            (0, 0),
+            None,
+            None,
+        );
+        drag(&mut o, (100, 100), (699, 549));
+        let bar = o.scene(&Approx).toolbar.unwrap();
+        assert_eq!((bar.rect.width, bar.rect.height), (360, 48));
+        assert_eq!(bar.rect.y, 550 + 9 + 2);
+        assert_eq!(bar.buttons[3].rect.width, 96);
+    }
+
+    #[test]
+    fn toolbar_buttons_run_on_release_and_the_keyboard_follows_adr_0021() {
+        let (mut o, s) = flow();
+        let copy = (346, 424);
+        let save = (402, 424);
+        let cancel = (460, 424);
+        assert_eq!(o.zone(copy), Zone::Toolbar(Some(1)));
+        mv(&mut o, 600, 500);
+        assert_eq!(o.cursor(), Cursor::Cross, "outside the selection");
+        mv(&mut o, copy.0, copy.1);
+        assert_eq!(o.cursor(), Cursor::Arrow);
+        assert!(o.scene(&Approx).toolbar.unwrap().buttons[1].hover);
+        // FLOW-08: a click on Copy copies (on release), never pins.
+        assert_eq!(
+            press_at(&mut o, Button::Left, copy.0, copy.1, Mods::NONE, 0),
+            Outcome::Stay
+        );
+        assert!(o.scene(&Approx).toolbar.unwrap().buttons[1].pressed);
+        assert_eq!(
+            release(&mut o, copy.0, copy.1),
+            Outcome::Output(Output::Copy, s, Via::Toolbar)
+        );
+        // Released elsewhere: nothing.
+        press_at(&mut o, Button::Left, copy.0, copy.1, Mods::NONE, 0);
+        assert_eq!(release(&mut o, 600, 500), Outcome::Stay);
+        assert_eq!(
+            o.selection(),
+            Some(s),
+            "a press on the bar never moves or replaces"
+        );
+        // Save, Shift+Save, Cancel.
+        assert_eq!(
+            click(&mut o, save.0, save.1, 0).1,
+            Outcome::Output(Output::Save, s, Via::Toolbar)
+        );
+        press_at(&mut o, Button::Left, save.0, save.1, Mods::SHIFT, 0);
+        assert_eq!(
+            release(&mut o, save.0, save.1),
+            Outcome::Output(Output::QuickSave, s, Via::Toolbar)
+        );
+        assert_eq!(click(&mut o, cancel.0, cancel.1, 0).1, Outcome::Cancel);
+        // A click on the bar is not a first click either.
+        click(&mut o, 262, 410, 0);
+        assert_eq!(
+            press_at(&mut o, Button::Left, 300, 250, Mods::NONE, 50),
+            Outcome::Stay
+        );
+        // FLOW-17: Tab moves to Pin, then Copy; Enter on Copy copies.
+        let (mut o, s) = flow();
+        assert_eq!(o.toolbar_focus(), None, "the canvas has the focus");
+        o.handle(Input::Nav(Nav::Next));
+        assert_eq!(o.toolbar_focus(), Some(ToolbarItem::Pin));
+        assert!(o.scene(&Approx).toolbar.unwrap().buttons[0].focus);
+        o.handle(Input::Nav(Nav::Next));
+        assert_eq!(o.toolbar_focus(), Some(ToolbarItem::Copy));
+        assert_eq!(
+            o.handle(Input::Nav(Nav::Activate)),
+            Outcome::Output(Output::Copy, s, Via::Key)
+        );
+        // Shift+Tab from the canvas reaches the last button; arrows wrap; Tab past the last
+        // returns to the canvas; Escape on a button cancels.
+        let (mut o, s) = flow();
+        o.handle(Input::Nav(Nav::Prev));
+        assert_eq!(o.toolbar_focus(), Some(ToolbarItem::Cancel));
+        o.handle(Input::Nav(Nav::Right));
+        assert_eq!(o.toolbar_focus(), Some(ToolbarItem::Pin));
+        o.handle(Input::Nav(Nav::Left));
+        assert_eq!(o.toolbar_focus(), Some(ToolbarItem::Cancel));
+        o.handle(Input::Nav(Nav::Next));
+        assert_eq!(o.toolbar_focus(), None);
+        o.handle(Input::Nav(Nav::Next));
+        assert_eq!(
+            o.handle(Input::Nav(Nav::Activate)),
+            Outcome::Output(Output::Pin, s, Via::Key)
+        );
+        assert_eq!(o.handle(Input::Nav(Nav::Escape)), Outcome::Cancel);
+        // A press in the canvas gives the focus back to it.
+        click(&mut o, 300, 250, 0);
+        assert_eq!(o.toolbar_focus(), None);
+        // Without a selection there is no toolbar.
+        let mut o = one(100, 100);
+        o.handle(Input::Nav(Nav::Next));
+        assert_eq!(o.toolbar_focus(), None);
+        assert!(o.scene(&Approx).toolbar.is_none());
+        // Right-click on the bar does nothing; outside clears the selection and the focus.
+        let (mut o, _) = flow();
+        o.handle(Input::Nav(Nav::Next));
+        assert_eq!(press(&mut o, Button::Right, copy.0, copy.1), Outcome::Stay);
+        press(&mut o, Button::Right, 700, 550);
+        assert_eq!((o.selection(), o.toolbar_focus()), (None, None));
+    }
+
+    #[test]
+    fn the_toolbar_is_composed_with_the_primary_pin_and_the_focus_ring() {
+        let ledger = Ledger::new();
+        let syn = Synthetic::new(vec![Monitor::new(Rect::new(0, 0, 800, 600), true)]);
+        let frozen =
+            crate::capture::CaptureBackend::capture(&syn, &ledger, Rect::new(0, 0, 800, 600))
+                .unwrap();
+        let (mut o, _) = flow();
+        o.handle(Input::Nav(Nav::Next));
+        o.handle(Input::Nav(Nav::Next)); // Copy has the focus
+        mv(&mut o, 402, 424); // the pointer over Save
+        let scene = o.scene(&Approx);
+        let mut out = vec![0u8; 800 * 600 * 4];
+        compose(&frozen, &scene, scene.picture, &mut out);
+        let at = |x: i32, y: i32| {
+            let i = ((y * 800 + x) * 4) as usize;
+            [out[i], out[i + 1], out[i + 2], out[i + 3]]
+        };
+        assert_eq!(at(290, 424), color::ACCENT, "Pin: accent fill");
+        assert_eq!(at(346, 424), color::BG_OVERLAY, "Copy: flat");
+        assert_eq!(at(402, 424), color::BG_HOVER, "Save: under the pointer");
+        assert_eq!(
+            at(317, 410),
+            color::FOCUS_RING,
+            "Copy's ring, 1 px off its corner"
+        );
+        assert_eq!(at(260, 408), color::BORDER_SUBTLE, "the bar's outline");
+        assert_eq!(at(261, 409), color::BG_OVERLAY);
+        // The toolbar is part of what the dirty strips cover.
+        let before = o.scene(&Approx);
+        o.handle(Input::Nav(Nav::Next));
+        let after = o.scene(&Approx);
+        let d = dirty(&before, &after);
+        assert!(
+            d.iter().any(|r| r.contains(&Rect::new(373, 410, 1, 1))),
+            "{d:?}"
+        );
+    }
+
+    #[test]
+    fn high_dpi_and_multi_monitor_double_clicks_pin_exact_device_pixels() {
+        // FLOW-31: two monitors side by side at the same scale, a selection across the seam.
+        let mons = vec![
+            Monitor::new(Rect::new(0, 0, 640, 480), true),
+            Monitor::new(Rect::new(640, 0, 640, 480), false),
+        ];
+        let mut o = Overlay::new(
+            Rect::new(0, 0, 1280, 480),
+            mons,
+            SystemValues::default(),
+            (0, 0),
+            None,
+            None,
+        );
+        drag(&mut o, (500, 100), (799, 299));
+        o.scene(&Approx);
+        let s = Rect::new(500, 100, 300, 200);
+        assert_eq!(double(&mut o, (640, 200), (640, 200), 0, 100), pinned(s));
+        // FLOW-32: one monitor at 150 %: a 600×450 device-pixel selection pins 600×450; the
+        // handle zones and the band are 14 and 5 device pixels.
+        let mut o = Overlay::new(
+            Rect::new(-1000, 0, 1500, 1000),
+            vec![Monitor::new(Rect::new(-1000, 0, 1500, 1000), true).with_dpi(144)],
+            SystemValues::default(),
+            (0, 0),
+            None,
+            None,
+        );
+        drag(&mut o, (-900, 100), (-301, 549));
+        let scene = o.scene(&Approx);
+        assert_eq!(scene.chip.unwrap().lines, ["600 \u{d7} 450  at -900, 100"]);
+        let s = Rect::new(-900, 100, 600, 450);
+        assert!(
+            matches!(o.zone((-895, 300)), Zone::Edge(_)),
+            "inside the 150 % band"
+        );
+        assert_eq!(
+            double(&mut o, (-895, 300), (-895, 300), 0, 100),
+            Outcome::Stay
+        );
+        assert_eq!(o.zone((-894, 200)), Zone::Interior);
+        assert_eq!(double(&mut o, (-894, 200), (-894, 200), 0, 100), pinned(s));
+    }
 }

@@ -2845,6 +2845,7 @@ pub(crate) mod tests {
             ("pin.reopen", json!({"dry_run": true})),
             ("pin.reopen", json!({})),
             ("hotkeys.reload", json!({})),
+            ("settings.reload", json!({})),
             ("status", json!({})),
             ("capture.region", json!({"dry_run": true})),
             ("capture.region", json!({})),
@@ -3363,6 +3364,469 @@ pub(crate) mod tests {
         assert!(
             a.shell.windows.log.borrow().focused.is_empty(),
             "no IPC request gave a pin focus"
+        );
+    }
+
+    // ---- Step 51: the outputs of the overlay (UX spec §4.3, window-free) ----
+
+    fn press_at(a: &mut App<FakeShell>, b: Button, x: i32, y: i32, mods: Mods, t: u32) {
+        ev(
+            a,
+            OverlayInput::Press {
+                button: b,
+                x,
+                y,
+                mods,
+                time_ms: t,
+            },
+        );
+    }
+
+    fn up(a: &mut App<FakeShell>, x: i32, y: i32) {
+        ev(
+            a,
+            OverlayInput::Release {
+                button: Button::Left,
+                x,
+                y,
+            },
+        );
+    }
+
+    /// Two plain clicks 120 ms apart at `(x, y)`.
+    fn double_click(a: &mut App<FakeShell>, x: i32, y: i32, t: u32) {
+        press_at(a, Button::Left, x, y, Mods::NONE, t);
+        up(a, x, y);
+        press_at(a, Button::Left, x, y, Mods::NONE, t + 120);
+        up(a, x, y);
+    }
+
+    /// The synthetic pattern of `r` as a frame-ordered BGRA buffer.
+    fn pattern(r: Rect) -> Vec<u8> {
+        let mut v = Vec::new();
+        for y in r.y..r.y + r.height as i32 {
+            for x in r.x..r.x + r.width as i32 {
+                v.extend_from_slice(&Synthetic::pixel(x, y));
+            }
+        }
+        v
+    }
+
+    /// The pixels of a PNG as BGRA (opaque RGB PNGs, as Noeul writes them for captures).
+    fn png_bgra(bytes: &[u8]) -> (u32, u32, Vec<u8>) {
+        let mut reader = png::Decoder::new(std::io::Cursor::new(bytes.to_vec()))
+            .read_info()
+            .unwrap();
+        let mut buf = vec![0; reader.output_buffer_size().unwrap()];
+        let info = reader.next_frame(&mut buf).unwrap();
+        assert_eq!(info.color_type, png::ColorType::Rgb, "opaque capture: RGB");
+        let mut out = Vec::new();
+        for p in buf[..info.buffer_size()].as_chunks::<3>().0 {
+            out.extend_from_slice(&[p[2], p[1], p[0], 255]);
+        }
+        (info.width, info.height, out)
+    }
+
+    fn set_config(a: &mut App<FakeShell>, values: &[(&str, &str)]) {
+        let path = a.paths.config_file();
+        let edited = settings::set(&path, values).unwrap();
+        settings::write(&path, &edited.text).unwrap();
+        a.reload_settings();
+        assert!(a.settings.problems.is_empty(), "{:?}", a.settings.problems);
+    }
+
+    #[test]
+    fn the_double_click_pins_exactly_the_selection_with_no_clipboard_or_file() {
+        // FLOW-01 and FLOW-28 on the 150 % primary monitor of the synthetic layout.
+        let (mut a, syn, dir) = overlay_app("dbl-pin");
+        a.action("capture.region", None);
+        drag(&mut a, (100, 100), (499, 399));
+        double_click(&mut a, 300, 250, 1_000);
+        assert!(!a.overlay_open(), "the overlay closed on the second press");
+        let log = a.shell.windows.log.borrow();
+        assert_eq!(
+            log.created,
+            [(PinId(1), Rect::new(100, 100, 400, 300), true)],
+            "same place and size, with focus"
+        );
+        assert_eq!(
+            log.guards,
+            [Some(Duration::from_millis(500))],
+            "the new pin ignores presses for one double-click time (rule 10)"
+        );
+        drop(log);
+        // The third and fourth presses of a quadruple click reach no overlay: one pin.
+        press_at(&mut a, Button::Left, 300, 250, Mods::NONE, 1_240);
+        up(&mut a, 300, 250);
+        press_at(&mut a, Button::Left, 300, 250, Mods::NONE, 1_360);
+        assert_eq!(a.pins.len(), 1);
+        assert_eq!(
+            a.shell.clipboard_writes + a.shell.clipboard_reads,
+            0,
+            "no clipboard"
+        );
+        assert_eq!(files_under(&dir), ["ui-state.json"], "no picture on disk");
+        assert_eq!(syn.captures(), 1, "the pin shows the frozen picture");
+        assert_eq!(a.ledger.live(), (1, 400 * 300 * 4));
+        let st = a.status();
+        assert_eq!(st["captures"]["pinned"], 1);
+        assert_eq!(st["captures"]["copied"], 0);
+        assert_eq!(
+            st["last_action"],
+            json!({"action": "capture.pin", "result": "pinned"})
+        );
+    }
+
+    #[test]
+    fn enter_the_toolbar_keys_and_copy_follow_the_focus_rule() {
+        let (mut a, _syn, _dir) = overlay_app("keys-copy");
+        a.action("capture.region", None);
+        drag(&mut a, (100, 100), (499, 399));
+        // FLOW-17: Tab → Pin, Tab → Copy, Enter copies (the focused button, not capture.pin).
+        key(&mut a, "Tab", false, false);
+        assert_eq!(a.status()["captures"]["overlay"]["focus"], "pin");
+        key(&mut a, "Tab", false, false);
+        assert_eq!(a.status()["captures"]["overlay"]["focus"], "copy");
+        key(&mut a, "Enter", false, false);
+        assert!(!a.overlay_open());
+        assert!(a.pins.is_empty(), "copy never pins");
+        // FLOW-19: PNG and CF_DIBV5 with exactly the frozen pixels.
+        let (png, dib) = a.shell.copies[0].clone();
+        let sel = Rect::new(100, 100, 400, 300);
+        let (w, h, px) = png_bgra(&png);
+        assert_eq!((w, h), (400, 300));
+        assert!(px == pattern(sel), "the PNG holds the frozen pixels");
+        let back = crate::dib::decode(&a.ledger, &dib).unwrap();
+        assert!(back.pixels() == pattern(sel).as_slice(), "so does the DIB");
+        drop(back);
+        let st = a.status();
+        assert_eq!(
+            (
+                st["captures"]["copied"].as_u64(),
+                st["captures"]["pinned"].as_u64()
+            ),
+            (Some(1), Some(0))
+        );
+        assert_eq!(a.ledger.live(), (0, 0), "nothing is kept after a copy");
+        // FLOW-16 with the toolbar: Shift+Tab reaches Cancel, Tab twice more reaches Pin.
+        a.action("capture.region", None);
+        key(&mut a, "R", false, false);
+        key(&mut a, "Tab", false, true);
+        assert_eq!(a.status()["captures"]["overlay"]["focus"], "cancel");
+        key(&mut a, "Tab", false, false);
+        assert_eq!(a.status()["captures"]["overlay"]["focus"], "canvas");
+        key(&mut a, "Tab", false, false);
+        key(&mut a, "Space", false, false);
+        let log = a.shell.windows.log.borrow();
+        assert_eq!(
+            log.created[0].1, sel,
+            "the Pin button pinned the last rectangle"
+        );
+        assert_eq!(log.guards, [None], "a key needs no guard");
+        drop(log);
+        // Ctrl+C and Escape on a focused button: copy / cancel.
+        a.action("capture.region", None);
+        key(&mut a, "R", false, false);
+        key(&mut a, "C", true, false);
+        assert_eq!(a.shell.copies.len(), 2);
+        a.action("capture.region", None);
+        key(&mut a, "R", false, false);
+        key(&mut a, "Tab", false, false);
+        key(&mut a, "Escape", false, false);
+        assert!(!a.overlay_open());
+        assert_eq!(a.status()["last_action"]["action"], "capture.cancel");
+    }
+
+    #[test]
+    fn a_busy_clipboard_never_affects_pin_and_a_failed_output_keeps_the_work() {
+        // FLOW-27: another program keeps the clipboard open.
+        let (mut a, _syn, _dir) = overlay_app("busy");
+        a.shell.clipboard_busy = true;
+        a.action("capture.region", None);
+        drag(&mut a, (100, 100), (299, 199));
+        key(&mut a, "C", true, false);
+        assert!(a.overlay_open(), "the copy failed; the work is kept");
+        assert_eq!(
+            a.status()["last_action"],
+            json!({"action": "capture.copy", "result": "clipboard_unavailable"})
+        );
+        let banner = a
+            .shell
+            .overlays
+            .log
+            .borrow()
+            .scene
+            .clone()
+            .unwrap()
+            .help
+            .unwrap();
+        assert!(
+            banner.lines[0].starts_with("The clipboard is in use"),
+            "{banner:?}"
+        );
+        double_click(&mut a, 200, 150, 0);
+        assert_eq!(a.pins.len(), 1, "the double-click pinned regardless");
+        assert_eq!(
+            a.shell.clipboard_writes, 1,
+            "only the copy attempt touched it"
+        );
+        // FLOW-26: pin creation fails; the overlay stays; Ctrl+C still copies.
+        a.shell.clipboard_busy = false;
+        *a.shell.windows.fail.borrow_mut() = true;
+        a.action("capture.region", None);
+        key(&mut a, "R", false, false);
+        double_click(&mut a, 200, 150, 5_000);
+        assert!(a.overlay_open());
+        let banner = a
+            .shell
+            .overlays
+            .log
+            .borrow()
+            .scene
+            .clone()
+            .unwrap()
+            .help
+            .unwrap();
+        assert!(banner.lines[0].starts_with("The pin could not be created"));
+        key(&mut a, "C", true, false);
+        assert!(!a.overlay_open());
+        assert_eq!(a.shell.copies.len(), 1);
+        assert_eq!(a.pins.len(), 1);
+    }
+
+    #[test]
+    fn save_writes_only_where_the_user_chose_and_quick_save_never_overwrites() {
+        let (mut a, _syn, dir) = overlay_app("save");
+        let shots = dir.join("shots");
+        let shots_text = shots.display().to_string();
+        // No folder set and none known (the test hook): quick save explains, keeps the work.
+        a.action("capture.region", None);
+        drag(&mut a, (100, 100), (299, 199));
+        key(&mut a, "S", true, true);
+        assert!(a.overlay_open());
+        assert_eq!(a.status()["last_action"]["result"], "no_folder");
+        // FLOW-20: Ctrl+Shift+S into the configured folder; a second one never overwrites.
+        set_config(&mut a, &[("capture.quick_save_folder", &shots_text)]);
+        key(&mut a, "S", true, true);
+        assert!(!a.overlay_open());
+        let first = shots.join("noeul-20261104-090507.png");
+        let (w, h, px) = png_bgra(&std::fs::read(&first).unwrap());
+        assert_eq!((w, h), (200, 100));
+        assert!(px == pattern(Rect::new(100, 100, 200, 100)));
+        assert_eq!(
+            a.shell.notices.last().unwrap(),
+            &format!("Saved to {}", first.display())
+        );
+        a.action("capture.region", None);
+        key(&mut a, "R", false, false);
+        key(&mut a, "S", true, true);
+        assert!(shots.join("noeul-20261104-090507-2.png").exists());
+        assert!(
+            std::fs::read(&first).unwrap().len() > 8,
+            "the first file stays"
+        );
+        // Ctrl+S: the save dialog is asked for; cancelling keeps the overlay; a chosen file is
+        // written and closes it.
+        a.action("capture.region", None);
+        key(&mut a, "R", false, false);
+        key(&mut a, "S", true, false);
+        let req = a
+            .take_save_request()
+            .expect("the runtime is asked for the dialog");
+        assert_eq!(req.name, "noeul-20261104-090507.png");
+        assert_eq!((req.folder.clone(), req.explicit), (Some(shots), true));
+        assert_eq!(req.rect, Rect::new(100, 100, 200, 100));
+        assert!(a.overlay_open(), "nothing is written before the user chose");
+        a.save_chosen(&req, None);
+        assert!(a.overlay_open());
+        assert_eq!(a.status()["last_action"]["result"], "cancelled");
+        key(&mut a, "S", true, false);
+        let req = a.take_save_request().unwrap();
+        let chosen = dir.join("chosen.png");
+        a.save_chosen(&req, Some(chosen.clone()));
+        assert!(!a.overlay_open());
+        assert!(png_bgra(&std::fs::read(&chosen).unwrap()).2 == pattern(req.rect));
+        // An answer for a session that has ended is ignored.
+        a.save_chosen(&req, Some(dir.join("late.png")));
+        assert!(!dir.join("late.png").exists());
+        let st = a.status();
+        assert_eq!(st["captures"]["saved"], 3);
+        assert_eq!(
+            a.shell.clipboard_writes, 0,
+            "saving never touches the clipboard"
+        );
+        // The default folder: the Pictures folder + Noeul.
+        set_config(&mut a, &[]);
+        a.settings.settings.quick_save_folder = None;
+        a.shell.pictures = Some(dir.join("Pictures"));
+        a.action("capture.region", None);
+        key(&mut a, "R", false, false);
+        key(&mut a, "S", true, true);
+        assert!(
+            dir.join("Pictures")
+                .join("Noeul")
+                .join("noeul-20261104-090507.png")
+                .exists()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn gesture_settings_and_the_snipaste_style_preset_reach_the_next_overlay() {
+        let (mut a, _syn, _dir) = overlay_app("gestures");
+        // FLOW-24: the double-click copies; Enter still pins.
+        set_config(&mut a, &[("gestures.double_click", "copy")]);
+        assert_eq!(a.status()["settings"]["gestures"]["double_click"], "copy");
+        a.action("capture.region", None);
+        drag(&mut a, (100, 100), (299, 199));
+        double_click(&mut a, 200, 150, 0);
+        assert_eq!((a.shell.copies.len(), a.pins.len()), (1, 0));
+        a.action("capture.region", None);
+        key(&mut a, "R", false, false);
+        key(&mut a, "Enter", false, false);
+        assert_eq!(a.pins.len(), 1);
+        // FLOW-25: `none` does nothing on a double-click.
+        set_config(&mut a, &[("gestures.double_click", "none")]);
+        a.action("capture.region", None);
+        key(&mut a, "R", false, false);
+        double_click(&mut a, 200, 150, 0);
+        assert!(a.overlay_open());
+        key(&mut a, "Escape", false, false);
+        // The Snipaste-style preset: config values plus its keys in hotkeys.json.
+        set_config(
+            &mut a,
+            &[
+                ("gestures.preset", "snipaste"),
+                ("gestures.double_click", "copy"),
+                ("gestures.middle_click", "pin"),
+            ],
+        );
+        std::fs::write(
+            a.paths.hotkeys_file(),
+            serde_json::to_vec(&json!({"schema": "kim.hotkeys", "schema_version": 1,
+                "tool": "noeul", "overrides": [
+                    {"action": "capture.pin", "bindings": ["Ctrl+T"]},
+                    {"action": "capture.copy", "bindings": ["Ctrl+C", "Enter"]}]}))
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(a.hotkeys().reload().is_none());
+        a.action("capture.region", None);
+        key(&mut a, "R", false, false);
+        key(&mut a, "Enter", false, false);
+        assert_eq!(a.shell.copies.len(), 2, "Enter copies with the preset");
+        a.action("capture.region", None);
+        key(&mut a, "R", false, false);
+        key(&mut a, "T", true, false);
+        assert_eq!(a.pins.len(), 2, "Ctrl+T pins with the preset");
+        a.action("capture.region", None);
+        key(&mut a, "R", false, false);
+        press_at(&mut a, Button::Middle, 200, 150, Mods::NONE, 0);
+        assert_eq!(a.pins.len(), 3, "the middle-click pins");
+        assert_eq!(a.status()["settings"]["gestures"]["preset"], "snipaste");
+    }
+
+    #[test]
+    fn rapid_repeated_captures_each_make_an_independent_pin() {
+        // FLOW-29 and FLOW-30: ten captures as fast as possible, F1 pressed again each time.
+        let (mut a, _syn, _dir) = overlay_app("rapid");
+        for i in 0..10 {
+            a.action("capture.region", None);
+            a.action("capture.region", None); // ignored: one overlay at a time
+            assert_eq!(a.shell.overlays.log.borrow().alive, 1);
+            let x = -600 + i * 60;
+            drag(&mut a, (x, 100), (x + 49, 139));
+            double_click(&mut a, x + 25, 120, i as u32 * 1_000);
+            assert!(!a.overlay_open(), "capture {i}");
+        }
+        assert_eq!(a.pins.len(), 10);
+        let created = a.shell.windows.log.borrow().created.clone();
+        let ids: std::collections::BTreeSet<_> = created.iter().map(|c| c.0).collect();
+        assert_eq!(ids.len(), 10, "distinct IDs");
+        for (i, c) in created.iter().enumerate() {
+            assert_eq!(
+                c.1,
+                Rect::new(-600 + i as i32 * 60, 100, 50, 40),
+                "no lost image"
+            );
+        }
+        let st = a.status();
+        assert_eq!(
+            (
+                st["captures"]["ignored"].as_u64(),
+                st["captures"]["pinned"].as_u64()
+            ),
+            (Some(10), Some(10))
+        );
+        assert_eq!(a.shell.overlays.log.borrow().opened.len(), 10);
+    }
+
+    #[test]
+    fn the_selection_menu_is_handed_to_the_runtime_or_recorded_under_the_hook() {
+        let (mut a, _syn, _dir) = overlay_app("menu");
+        a.action("capture.region", None);
+        drag(&mut a, (100, 100), (299, 199));
+        press_at(&mut a, Button::Right, 150, 150, Mods::NONE, 0);
+        let menu = a.take_overlay_menu().expect("a menu to show");
+        assert_eq!(menu.at, (150, 150));
+        let labels: Vec<&str> = menu.items.iter().map(|i| i.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            [
+                "Pin\tEnter",
+                "Copy\tCtrl+C",
+                "Save\u{2026}\tCtrl+S",
+                "Quick save\tCtrl+Shift+S",
+                "",
+                "Select monitor\tCtrl+A",
+                "Last rectangle\tR",
+                "",
+                "Cancel\tEscape",
+            ]
+        );
+        assert!(!menu.items[6].enabled, "no last rectangle yet");
+        a.overlay_menu_choice("capture.copy");
+        assert!(!a.overlay_open());
+        assert_eq!(a.shell.copies.len(), 1);
+        // The keyboard opens it at the selection's corner; Pin from the menu needs no guard.
+        a.action("capture.region", None);
+        key(&mut a, "R", false, false);
+        ev(&mut a, OverlayInput::MenuKey);
+        let menu = a.take_overlay_menu().unwrap();
+        assert_eq!(menu.at, (108, 108));
+        assert!(menu.items[6].enabled);
+        a.overlay_menu_choice("capture.pin");
+        assert_eq!(a.shell.windows.log.borrow().guards, [None]);
+        a.overlay_menu_choice("format.disk"); // not a menu entry: ignored
+        // Under the test hook a menu is never shown.
+        a.shell.interactive = Some(false);
+        a.action("capture.region", None);
+        key(&mut a, "R", false, false);
+        press_at(&mut a, Button::Right, 150, 150, Mods::NONE, 0);
+        assert!(a.take_overlay_menu().is_none());
+        assert_eq!(
+            a.status()["last_action"],
+            json!({"action": "capture.menu", "result": "not_shown"})
+        );
+    }
+
+    #[test]
+    fn the_users_double_click_speed_is_read_before_every_press() {
+        // FLOW-36: Windows' double-click time changes to 900 ms while the overlay is open.
+        let (mut a, _syn, _dir) = overlay_app("speed");
+        a.action("capture.region", None);
+        drag(&mut a, (100, 100), (299, 199));
+        a.shell.sys = Some(SystemValues {
+            double_click_ms: 900,
+            ..SystemValues::default()
+        });
+        press_at(&mut a, Button::Left, 200, 150, Mods::NONE, 0);
+        up(&mut a, 200, 150);
+        press_at(&mut a, Button::Left, 200, 150, Mods::NONE, 800);
+        assert_eq!(a.pins.len(), 1);
+        assert_eq!(
+            a.shell.windows.log.borrow().guards,
+            [Some(Duration::from_millis(900))]
         );
     }
 }

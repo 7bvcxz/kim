@@ -805,4 +805,180 @@ mod tests {
         assert_eq!(UiState::load(&f), UiState::default());
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn gestures_and_the_quick_save_folder_are_read_with_fallbacks() {
+        let l = parse(&p(), "");
+        assert_eq!(l.settings.gestures, Gestures::default(), "pin by default");
+        assert_eq!(l.settings.preset, Preset::Noeul);
+        assert_eq!(l.settings.quick_save_folder, None);
+        assert_eq!(l.to_json()["gestures"]["double_click"], "pin");
+        let folder = if cfg!(windows) {
+            "C:\\\\Shots"
+        } else {
+            "/shots"
+        };
+        let l = parse(
+            &p(),
+            &format!(
+                "[gestures]\ndouble_click = \"copy\"\nmiddle_click = \"none\"\npreset = \"snipaste\"\n[capture]\nquick_save_folder = \"{folder}\"\n"
+            ),
+        );
+        assert!(l.problems.is_empty(), "{:?}", l.problems);
+        assert_eq!(l.settings.gestures.double_click, GestureAction::Copy);
+        assert_eq!(l.settings.gestures.middle_click, GestureAction::None);
+        assert_eq!(l.settings.preset, Preset::Snipaste);
+        assert!(l.settings.quick_save_folder.unwrap().is_absolute());
+        // Invalid values fall back to their defaults, naming the key.
+        let l = parse(
+            &p(),
+            "[gestures]\ndouble_click = \"close\"\nmiddle_click = \"save\"\npreset = 3\n[capture]\nquick_save_folder = \"relative\\\\dir\"\n",
+        );
+        assert_eq!(l.settings, Settings::default());
+        let keys: Vec<&str> = [
+            "gestures.double_click",
+            "gestures.middle_click",
+            "gestures.preset",
+            "capture.quick_save_folder",
+        ]
+        .into_iter()
+        .filter(|k| l.problems.iter().any(|m| m.contains(k)))
+        .collect();
+        assert_eq!(keys.len(), 4, "{:?}", l.problems);
+        assert_eq!(Preset::Snipaste.title(), "Snipaste-style gestures");
+        assert_eq!(
+            Preset::Snipaste.gestures().double_click,
+            GestureAction::Copy
+        );
+        assert_eq!(
+            Preset::Snipaste.bindings()[0],
+            ("capture.pin", &["Ctrl+T"][..])
+        );
+    }
+
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("noeul-settings-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("config.toml")
+    }
+
+    #[test]
+    fn set_edits_keys_in_place_and_keeps_comments_and_unknown_keys() {
+        let f = scratch("set");
+        // A missing file: created with the schema version and the section.
+        let e = set(&f, &[("gestures.double_click", "copy")]).unwrap();
+        assert_eq!(
+            e.text,
+            "schema_version = 1\n\n[gestures]\ndouble_click = \"copy\"\n"
+        );
+        assert_eq!(
+            e.changes,
+            [Change {
+                key: "gestures.double_click".into(),
+                before: None,
+                after: Some("\"copy\"".into())
+            }]
+        );
+        assert!(!f.exists(), "set only computes; write writes");
+        let original = "# my settings\nschema_version = 1\n\n[general]\ntray_icon = false # no icon\nfuture = 1\n\n[gestures]\n# keep this comment\ndouble_click = \"none\"\n\n[later]\nx = \"y\"\n";
+        std::fs::write(&f, original).unwrap();
+        let e = set(
+            &f,
+            &[
+                ("gestures.double_click", "pin"),
+                ("gestures.middle_click", "copy"),
+                (
+                    "capture.quick_save_folder",
+                    if cfg!(windows) {
+                        "C:\\Users\\me\\Pictures\\Shots"
+                    } else {
+                        "/home/me/shots"
+                    },
+                ),
+            ],
+        )
+        .unwrap();
+        write(&f, &e.text).unwrap();
+        let text = std::fs::read_to_string(&f).unwrap();
+        for kept in [
+            "# my settings",
+            "tray_icon = false # no icon",
+            "future = 1",
+            "# keep this comment",
+            "[later]",
+            "x = \"y\"",
+        ] {
+            assert!(text.contains(kept), "{kept:?} kept in:\n{text}");
+        }
+        assert!(
+            text.contains("double_click = \"pin\"\nmiddle_click = \"copy\""),
+            "{text}"
+        );
+        let l = load(&f);
+        assert!(l.problems.is_empty(), "{:?}", l.problems);
+        assert_eq!(l.settings.gestures.middle_click, GestureAction::Copy);
+        assert!(!l.settings.tray_icon, "untouched keys keep their values");
+        if cfg!(windows) {
+            assert_eq!(
+                l.settings.quick_save_folder,
+                Some(PathBuf::from("C:\\Users\\me\\Pictures\\Shots")),
+                "backslashes survive the TOML string"
+            );
+        }
+        // Values are checked; unknown keys are refused.
+        for (k, v) in [
+            ("gestures.double_click", "close"),
+            ("gestures.middle_click", "save"),
+            ("general.tray_icon", "yes"),
+            ("capture.quick_save_folder", "relative"),
+            ("gestures.preset", "other"),
+        ] {
+            assert_eq!(set(&f, &[(k, v)]).unwrap_err().code, Code::Usage, "{k} {v}");
+        }
+        let e = set(&f, &[("gestures.colour", "red")]).unwrap_err();
+        assert_eq!(e.code, Code::Usage);
+        assert!(e.hint.unwrap().contains("gestures.double_click"));
+        // Reset of a section removes its keys only (defaults apply), comments stay.
+        let e = reset(&f, Some("gestures")).unwrap();
+        write(&f, &e.text).unwrap();
+        let l = load(&f);
+        assert_eq!(l.settings.gestures, Gestures::default());
+        assert!(!l.settings.tray_icon);
+        assert!(
+            std::fs::read_to_string(&f)
+                .unwrap()
+                .contains("# keep this comment")
+        );
+        assert_eq!(reset(&f, Some("pins")).unwrap_err().code, Code::Usage);
+        let e = reset(&f, None).unwrap();
+        write(&f, &e.text).unwrap();
+        assert_eq!(load(&f).settings, Settings::default());
+        assert!(
+            std::fs::read_to_string(&f).unwrap().contains("future = 1"),
+            "unknown keys stay"
+        );
+        let _ = std::fs::remove_dir_all(f.parent().unwrap());
+    }
+
+    #[test]
+    fn files_noeul_cannot_edit_safely_are_never_rewritten() {
+        let f = scratch("refuse");
+        for (text, code) in [
+            ("this is = = not toml", Code::ConfigInvalid),
+            ("schema_version = 2\n", Code::ConfigFromNewerVersion),
+            // The key in another form: a dotted key at the top and an inline table.
+            ("gestures.double_click = \"copy\"\n", Code::ConfigInvalid),
+            (
+                "gestures = { double_click = \"copy\" }\n",
+                Code::ConfigInvalid,
+            ),
+        ] {
+            std::fs::write(&f, text).unwrap();
+            let e = set(&f, &[("gestures.double_click", "pin")]).unwrap_err();
+            assert_eq!(e.code, code, "{text:?}: {}", e.message);
+            assert_eq!(std::fs::read_to_string(&f).unwrap(), text, "untouched");
+        }
+        let _ = std::fs::remove_dir_all(f.parent().unwrap());
+    }
 }

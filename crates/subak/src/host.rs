@@ -36,7 +36,7 @@ use crate::proto::{
     self, ClientKind, ErrorCode, FLAG_INPUT, FLAG_SNAPSHOT, Frame, IpcError, Refusal, Request, Ring,
 };
 use crate::pty::{self, EnvOverrides, Pty};
-use crate::session::{self, Command, EndCause, LastExit, Registry, Spec, Transition};
+use crate::session::{self, Command, EndCause, LastExit, Level, Registry, Spec, Transition};
 use crate::win::pipe::{self, Listener, Pipe};
 use crate::win::{self, EnvBlock, JobLimits};
 use serde_json::{Value, json};
@@ -469,6 +469,7 @@ pub fn serve(opts: &ServeOpts) -> Result<Value, CliError> {
         let spec = Spec {
             name: None,
             command: session::split_command_line(shell),
+            command_line: Some(shell.clone()),
             cwd: host.home.as_ref().map(|p| p.display().to_string()),
             env: pty::EnvNames::default(),
             size: DEFAULT_SIZE,
@@ -1296,6 +1297,7 @@ impl Host {
             "events.subscribe" => Reply::Now(self.subscribe(conn, p)),
             "pane.attach" => self.attach(conn, req),
             "pane.detach" => Reply::Now(self.detach(conn, p)),
+            "client.detach" => Reply::Now(self.detach_clients(conn, p)),
             "pane.resize" => Reply::Now(self.resize(conn, p)),
             "terminal.list" => Reply::Now(self.list(p)),
             "terminal.info" => Reply::Now(self.info(p)),
@@ -1359,11 +1361,14 @@ impl Host {
     fn status(&self) -> Value {
         let st = self.lock();
         let attached = st.conns.values().filter(|c| !c.attached.is_empty()).count();
-        let clients: Vec<Value> = st
-            .conns
-            .values()
-            .map(|c| {
+        let mut conns: Vec<(&u64, &Conn)> = st.conns.iter().collect();
+        conns.sort_unstable_by_key(|(id, _)| **id);
+        let clients: Vec<Value> = conns
+            .into_iter()
+            .map(|(id, c)| {
                 json!({
+                    // Step 12: the id `client.detach` (`subak detach --client`) takes.
+                    "id": id,
                     "pid": c.pid, "kind": c.kind.as_str(), "name": c.name, "version": c.version,
                     "attached": !c.attached.is_empty(),
                     "interactive": c.attached.values().any(|i| *i),
@@ -1695,6 +1700,107 @@ impl Host {
         Ok(json!({}))
     }
 
+    /// `client.detach` (Step 12, ADR 0027 §3): ends the attachments of clients — every client of
+    /// the panes `target` names, the client `client_id`, or that client's attachments to that
+    /// target — and nothing else: no process, Terminal or connection is touched. Each detached
+    /// connection subscribed to `panes` gets `pane.detached` in the same critical section that
+    /// removes the attachment, so it arrives before the output stops.
+    fn detach_clients(&self, conn: u64, p: &Value) -> Result<Value, IpcError> {
+        let client = match &p["client_id"] {
+            Value::Null => None,
+            v => Some(v.as_u64().filter(|c| *c > 0).ok_or_else(|| {
+                IpcError::param("client_id", "client_id must be a positive integer")
+            })?),
+        };
+        let target = optional_string(p, "target")?;
+        if target.is_none() && client.is_none() {
+            return Err(IpcError::param(
+                "target",
+                "name a target, a client_id, or both",
+            ));
+        }
+        let dry_run = flag(p, "dry_run")?;
+        let mut st = self.lock();
+        let (streams, terminal) = match target {
+            None => (None, Value::Null),
+            Some(t) => {
+                let r = st.reg.resolve(t)?;
+                let term = &st.reg.terminals[r.terminal];
+                let streams: Vec<u32> = match r.level {
+                    Level::Terminal => term.panes().map(|p| p.stream).collect(),
+                    Level::Window => term.windows[r.window]
+                        .panes
+                        .iter()
+                        .map(|p| p.stream)
+                        .collect(),
+                    Level::Pane => vec![term.windows[r.window].panes[r.pane].stream],
+                };
+                (
+                    Some(streams),
+                    json!({"id": term.id, "name": term.name.display}),
+                )
+            }
+        };
+        if let Some(c) = client
+            && !st.conns.contains_key(&c)
+        {
+            return Err(IpcError::new(
+                ErrorCode::TargetNotFound,
+                format!("no client {c} is connected to this Host"),
+            )
+            .details(json!({"client_id": c})));
+        }
+        let mut ids: Vec<u64> = st
+            .conns
+            .keys()
+            .copied()
+            .filter(|id| client.is_none_or(|c| c == *id))
+            .collect();
+        ids.sort_unstable();
+        let mut found: Vec<(u64, u32, Value)> = Vec::new();
+        for id in ids {
+            let c = &st.conns[&id];
+            for (&stream, &interactive) in &c.attached {
+                if streams.as_ref().is_some_and(|s| !s.contains(&stream)) {
+                    continue;
+                }
+                let Some((t, pane)) = st.reg.pane_of_stream(stream) else {
+                    continue;
+                };
+                found.push((
+                    id,
+                    stream,
+                    json!({
+                        "client": {"id": id, "pid": c.pid, "kind": c.kind.as_str(), "name": c.name},
+                        "stream_id": stream, "pane_id": pane.id, "terminal_id": t.id,
+                        "interactive": interactive,
+                    }),
+                ));
+            }
+        }
+        let entries: Vec<Value> = found.iter().map(|(_, _, e)| e.clone()).collect();
+        if dry_run {
+            return Ok(json!({"dry_run": true, "would_detach": entries, "terminal": terminal}));
+        }
+        let by = st.conns.get(&conn).map_or(
+            Value::Null,
+            |c| json!({"client_id": conn, "pid": c.pid, "kind": c.kind.as_str()}),
+        );
+        for (id, stream, e) in &found {
+            if let Some(c) = st.conns.get_mut(id) {
+                c.attached.remove(stream);
+                if c.topics.iter().any(|t| t == "panes") {
+                    c.event(
+                        "pane.detached",
+                        &json!({"pane_id": e["pane_id"], "terminal_id": e["terminal_id"],
+                                "stream_id": stream, "by": by}),
+                    );
+                }
+            }
+        }
+        Ok(json!({"detached": entries, "terminal": terminal}))
+    }
+
     fn resize(&self, conn: u64, params: &Value) -> Result<Value, IpcError> {
         let (c, r) = size_param(params, "cols")?
             .ok_or_else(|| IpcError::param("cols", "cols and rows are required"))?;
@@ -1802,7 +1908,29 @@ impl Host {
         let name = optional_string(p, "name")?
             .map(session::parse_name)
             .transpose()?;
+        // Step 12 (ADR 0027 §4): a verbatim command line, for programs such as `cmd.exe /c` that
+        // parse their command line themselves. Only its first word is resolved; `command` is its
+        // split, for display and the busy rule.
+        let raw_line = match optional_string(p, "command_line")? {
+            None => None,
+            Some(_) if !p["command"].is_null() => {
+                return Err(IpcError::param(
+                    "command_line",
+                    "give either command or command_line, not both",
+                ));
+            }
+            Some(l) if l.contains('\0') || session::split_command_line(l).program.is_empty() => {
+                return Err(IpcError::param(
+                    "command_line",
+                    "command_line must start with a program",
+                ));
+            }
+            Some(l) => Some(l.to_string()),
+        };
         let command = match &p["command"] {
+            Value::Null if raw_line.is_some() => {
+                session::split_command_line(raw_line.as_deref().unwrap_or_default())
+            }
             Value::Null => session::split_command_line(&default_shell()),
             Value::Object(c) => {
                 let program = c
@@ -1840,11 +1968,17 @@ impl Host {
                 ));
             }
         };
-        let line = win::launch::command_line(&command.program, &command.args);
+        let line = raw_line
+            .clone()
+            .unwrap_or_else(|| win::launch::command_line(&command.program, &command.args));
         if line.encode_utf16().count() >= MAX_COMMAND_LINE {
             return Err(IpcError::param(
-                "command",
-                "the command line is longer than 32767 characters",
+                if raw_line.is_some() {
+                    "command_line"
+                } else {
+                    "command"
+                },
+                "the command line is longer than 32766 characters",
             ));
         }
         let cwd = match optional_string(p, "cwd")? {
@@ -1877,7 +2011,7 @@ impl Host {
             let executable = pty::plan(&pty::Spec {
                 program: &command.program,
                 args: &command.args,
-                raw_line: None,
+                raw_line: raw_line.as_deref(),
                 cwd: &dir,
                 env: &env,
                 host_vars: &[],
@@ -1887,6 +2021,7 @@ impl Host {
             return Ok(json!({"dry_run": true, "would_create": {
                 "name": name,
                 "command": {"program": command.program, "args": session::redact_args(&command.args)},
+                "command_line": raw_line.as_deref().map(session::redact_line),
                 "executable": executable.display().to_string(),
                 "cwd": cwd,
                 "env": session::env_json(&env.names()),
@@ -1898,19 +2033,13 @@ impl Host {
         let spec = Spec {
             name,
             command,
+            command_line: raw_line.clone(),
             cwd,
             env: env.names(),
             size,
             remain_on_exit,
         };
-        self.create(
-            spec,
-            &Launch {
-                raw_line: None,
-                env,
-            },
-            keep,
-        )
+        self.create(spec, &Launch { raw_line, env }, keep)
     }
 
     fn rename(&self, p: &Value) -> Result<Value, IpcError> {

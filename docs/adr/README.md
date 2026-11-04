@@ -24,12 +24,14 @@ the requirements it serves. ADRs are immutable once **Accepted**; a later ADR ma
 | [0016](0016-conpty-host-validation.md) | ConPTY ownership and the detached Host, validated on Windows | Accepted |
 | [0017](0017-universal-customizable-hotkeys.md) | Universal customizable hotkeys without a shared hook or daemon | Accepted (implemented from Step 46) |
 | [0019](0019-secure-host-supervisor-and-ipc-v1.md) | Secure Host supervisor and IPC v1 | Accepted |
-| [0020](0020-terminal-session-lifecycle.md) | Terminal session lifecycle and the meaning of every end | Accepted |
+| [0020](0020-terminal-session-lifecycle.md) | Terminal session lifecycle and the meaning of every end | Accepted (CLI verbs top level since Step 12, see 0027) |
 | [0021](0021-noeul-product-definition.md) | Noeul product definition: double-click pins, privacy defaults and a clean-room boundary | Accepted (implemented from Step 49) |
 | [0022](0022-ddalgak-rule-model-and-safety.md) | Ddalgak: declarative rules, a tray-app engine and safety by construction | Accepted (implemented from Steps 66–83; process model refined by 0024) |
-| [0023](0023-noeul-app-foundation.md) | Noeul app foundation: plain Win32, GDI capture on demand, one instance per user session | Accepted (Step 49; overlay re-measured in Step 50, capture APIs in Step 58) |
+| [0023](0023-noeul-app-foundation.md) | Noeul app foundation: plain Win32, GDI capture on demand, one instance per user session | Accepted (Step 49; overlay measured in Step 50, see 0026; capture APIs in Step 58) |
 | [0024](0024-ddalgak-windows-input-apis-and-permissions.md) | Ddalgak engine: Windows input APIs, threads, IPC and permissions | Accepted (implemented in Step 66) |
-| [0025](0025-pane-programs-environment-and-backpressure.md) | Pane programs, their environment, and backpressure | Accepted |
+| [0025](0025-pane-programs-environment-and-backpressure.md) | Pane programs, their environment, and backpressure | Accepted (verbatim command lines added in Step 12, see 0027) |
+| [0026](0026-noeul-capture-overlay.md) | Noeul capture overlay: one GDI freeze, a back-buffered Win32 window, a selection handed to its output | Accepted (Step 50) |
+| [0027](0027-subak-cli-structure-and-headless-control.md) | Subak CLI structure, detach from outside, verbatim command lines and console restore | Accepted |
 
 "Accepted (validated in Step N)" means the decision is made, but the named Step must confirm it
 on real Windows; if validation fails, that Step writes a superseding ADR.

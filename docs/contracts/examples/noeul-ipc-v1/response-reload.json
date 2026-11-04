@@ -14,6 +14,12 @@
       "problem": null,
       "registrations": [
         {
+          "action": "capture.region",
+          "keys": "F1",
+          "status": "registered",
+          "message": null
+        },
+        {
           "action": "paste.float",
           "keys": "F3",
           "status": "taken",
@@ -44,13 +50,7 @@
           "message": "F3 is registered by another program"
         }
       ],
-      "planned": [
-        {
-          "action": "capture.region",
-          "default": "F1",
-          "step": 50
-        }
-      ]
+      "planned": []
     }
   }
 }

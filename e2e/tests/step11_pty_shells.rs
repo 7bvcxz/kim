@@ -4,7 +4,7 @@
 //! Scenario A (release `subak`): an agent runs Windows PowerShell and cmd side by side in named
 //! Terminals on its own endpoint, with environment overrides (one given inline, one copied from
 //! its own environment so the token is not on any command line). It types into both through
-//! `terminal attach` with piped input (Korean text included), sees the overrides and
+//! `attach` with piped input (Korean text included), sees the overrides and
 //! `SUBAK_PANE_ID` arrive but none of its own launcher variables, interrupts a running `ping`
 //! with Ctrl+C, and checks that no JSON document ever shows a value. `tasklist` (independent of
 //! subak) confirms each shell runs and ends.
@@ -130,7 +130,7 @@ impl Drop for Cleanup<'_> {
     }
 }
 
-/// `subak terminal attach` with piped stdin and output and no window.
+/// `subak attach` with piped stdin and output and no window.
 struct Client {
     child: Child,
     out: Arc<Mutex<Vec<u8>>>,
@@ -139,7 +139,7 @@ struct Client {
 impl Client {
     fn attach(exe: &Path, ep: &str, target: &str) -> Self {
         let mut child = Command::new(exe)
-            .args(["--endpoint", ep, "terminal", "attach", target])
+            .args(["--endpoint", ep, "attach", target])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -212,7 +212,6 @@ fn an_agent_runs_powershell_and_cmd_with_overrides_and_no_leaked_secrets() {
         &subak,
         &ep,
         &[
-            "terminal",
             "new",
             "ps",
             "--env",
@@ -248,7 +247,7 @@ fn an_agent_runs_powershell_and_cmd_with_overrides_and_no_leaked_secrets() {
     let (code, cmd) = json_env(
         &subak,
         &ep,
-        &["terminal", "new", "cmd", "--", "cmd.exe", "/d"],
+        &["new", "cmd", "--", "cmd.exe", "/d"],
         &launcher,
     );
     assert_eq!(code, 0, "{cmd}");
@@ -287,14 +286,14 @@ fn an_agent_runs_powershell_and_cmd_with_overrides_and_no_leaked_secrets() {
     // No document shows a value (json_env checks every one), and the launcher's HOME did not
     // become the pane's.
     for target in ["ps", "cmd"] {
-        let (code, doc) = json_env(&subak, &ep, &["terminal", "info", target], &[]);
+        let (code, doc) = json_env(&subak, &ep, &["info", target], &[]);
         assert_eq!(code, 0, "{doc}");
     }
-    let (code, _) = json_env(&subak, &ep, &["terminal", "list"], &[]);
+    let (code, _) = json_env(&subak, &ep, &["ls"], &[]);
     assert_eq!(code, 0);
 
     // Killing one Terminal ends its tree only.
-    let (code, doc) = json_env(&subak, &ep, &["terminal", "kill", "cmd", "--yes"], &[]);
+    let (code, doc) = json_env(&subak, &ep, &["kill", "cmd", "--yes"], &[]);
     assert_eq!(code, 0, "{doc}");
     assert!(wait_gone(cmd_pid, Duration::from_secs(15)));
     assert!(running(ps_pid), "PowerShell is untouched");
@@ -322,7 +321,7 @@ fn explicit_programs_report_exit_codes_and_failures_are_precise() {
     };
     let run = |args: &[&str]| json_env(&subak, &ep, args, &[]);
     // A dry run without a Host resolves the program and starts nothing.
-    let (code, doc) = run(&["terminal", "new", "--dry-run", "--", "cmd"]);
+    let (code, doc) = run(&["new", "--dry-run", "--", "cmd"]);
     assert_eq!(code, 0, "{doc}");
     assert_eq!(doc["data"]["would_start_host"], true);
     assert!(
@@ -334,7 +333,6 @@ fn explicit_programs_report_exit_codes_and_failures_are_precise() {
     );
     // An exit code is kept with --remain-on-exit.
     let (code, doc) = run(&[
-        "terminal",
         "new",
         "seven",
         "--remain-on-exit",
@@ -350,7 +348,7 @@ fn explicit_programs_report_exit_codes_and_failures_are_precise() {
         .push(doc["data"]["host"]["pid"].as_u64().unwrap());
     let until = Instant::now() + Duration::from_secs(30);
     let info = loop {
-        let (_, info) = run(&["terminal", "info", "seven"]);
+        let (_, info) = run(&["info", "seven"]);
         if info["data"]["terminal"]["state"] == "stopped" {
             break info;
         }
@@ -373,12 +371,12 @@ fn explicit_programs_report_exit_codes_and_failures_are_precise() {
         ),
         (vec!["--cwd", &missing_dir, "--", "cmd.exe"], "bad_cwd", ""),
     ];
-    let (code, _) = run(&["terminal", "new", "--dry-run", "--", "pwsh"]);
+    let (code, _) = run(&["new", "--dry-run", "--", "pwsh"]);
     if code != 0 {
         cases.push((vec!["--", "pwsh"], "not_found", "never installs"));
     }
     for (args, reason, hint) in &cases {
-        let mut a = vec!["terminal", "new"];
+        let mut a = vec!["new"];
         a.extend_from_slice(args);
         let (code, doc) = run(&a);
         assert_eq!(code, 1, "{a:?}: {doc}");
@@ -391,7 +389,7 @@ fn explicit_programs_report_exit_codes_and_failures_are_precise() {
             );
         }
     }
-    let (_, doc) = run(&["terminal", "list"]);
+    let (_, doc) = run(&["ls"]);
     let names: Vec<&str> = doc["data"]["terminals"]
         .as_array()
         .unwrap()

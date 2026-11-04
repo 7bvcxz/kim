@@ -1,0 +1,151 @@
+{
+  "type": "response",
+  "id": 1,
+  "result": {
+    "running": true,
+    "instance": {
+      "pid": 4242,
+      "version": "0.0.1",
+      "started_at": "2026-11-04T10:15:00Z",
+      "uptime_s": 61,
+      "endpoint": "\\\\.\\pipe\\mouv-noeul-S-1-5-21-1-2-3-1001-s1",
+      "session": 1
+    },
+    "desktop": {
+      "state": "available",
+      "virtual_rect": {
+        "x": -1920,
+        "y": 0,
+        "width": 4480,
+        "height": 1440
+      },
+      "monitors": [
+        {
+          "rect": {
+            "x": -1920,
+            "y": 0,
+            "width": 1920,
+            "height": 1080
+          },
+          "primary": false,
+          "dpi": 96
+        },
+        {
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "width": 2560,
+            "height": 1440
+          },
+          "primary": true,
+          "dpi": 144
+        }
+      ]
+    },
+    "capture_backend": "gdi",
+    "pins": {
+      "open": 1,
+      "reopenable": null
+    },
+    "captures": {
+      "started": 2,
+      "pinned": 1,
+      "cancelled": 0,
+      "open": true,
+      "ignored": 3,
+      "overlay": {
+        "session": 2,
+        "phase": "annotating",
+        "selection": {
+          "x": 100,
+          "y": 120,
+          "width": 640,
+          "height": 360
+        },
+        "picture": {
+          "x": -1920,
+          "y": 0,
+          "width": 4480,
+          "height": 1440
+        },
+        "monitors": 2,
+        "buffer_bytes": 25804800,
+        "help": false
+      },
+      "first_frame": {
+        "count": 2,
+        "last": {
+          "total_us": 61200,
+          "capture_us": 38400,
+          "render_us": 22800,
+          "width": 4480,
+          "height": 1440
+        },
+        "p50_us": 58800,
+        "p95_us": 61200
+      }
+    },
+    "memory": {
+      "frames": 2,
+      "bytes": 26284800,
+      "peak_bytes": 26284800
+    },
+    "hotkeys": {
+      "enabled": true,
+      "off_reason": null,
+      "config": {
+        "path": "C:\\Users\\me\\AppData\\Roaming\\mouv\\noeul\\hotkeys.json",
+        "state": "user"
+      },
+      "problem": null,
+      "registrations": [
+        {
+          "action": "paste.float",
+          "keys": "F3",
+          "status": "taken",
+          "message": "F3 is already registered by another program; Noeul did not take it"
+        }
+      ],
+      "conflicts": [
+        {
+          "code": "taken",
+          "severity": "warning",
+          "tool": "noeul",
+          "action": "paste.float",
+          "keys": "F3",
+          "scope": "global",
+          "source": "default",
+          "with": {
+            "kind": "program"
+          },
+          "offers": [
+            {
+              "kind": "rebind",
+              "keys": "Shift+F3"
+            },
+            {
+              "kind": "disable"
+            }
+          ],
+          "message": "F3 is registered by another program"
+        }
+      ],
+      "planned": []
+    },
+    "tray": {
+      "enabled": true,
+      "shown": true
+    },
+    "settings": {
+      "path": "C:\\Users\\me\\AppData\\Roaming\\mouv\\noeul\\config.toml",
+      "state": "default",
+      "tray_icon": true,
+      "keyboard_help": "first-run",
+      "problems": []
+    },
+    "last_action": {
+      "action": "capture",
+      "result": "pinned"
+    }
+  }
+}

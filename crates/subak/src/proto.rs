@@ -38,7 +38,7 @@ pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 /// Event topics a client can subscribe to.
 pub const TOPICS: [&str; 4] = ["terminals", "panes", "claude", "host"];
 /// Additive capabilities announced in `welcome.features`.
-pub const FEATURES: [&str; 6] = [
+pub const FEATURES: [&str; 8] = [
     "host.health",
     "host.stats",
     "events.subscribe",
@@ -46,6 +46,10 @@ pub const FEATURES: [&str; 6] = [
     "terminal.lifecycle",
     // Step 11: `terminal.create` `env`, panes report `executable` and `env` names.
     "terminal.environment",
+    // Step 12: `terminal.create` `command_line` (verbatim), panes report it redacted.
+    "terminal.command_line",
+    // Step 12: `client.detach`, the `pane.detached` event, client ids in `host.status`.
+    "client.detach",
 ];
 
 /// One decoded frame.
@@ -535,6 +539,8 @@ pub const METHODS: &[Method] = &[
     m("pane.attach", CG, true),
     m("pane.detach", CGM, true),
     m("pane.resize", CG, true),
+    // Step 12: detaching other clients changes what they see, so MCP needs the grant (Step 37).
+    m("client.detach", CG, true),
     m("terminal.list", CGM, true),
     m("terminal.info", CGM, true),
     m("terminal.create", CG, true),
@@ -1080,6 +1086,11 @@ mod tests {
             assert_eq!(code(Mcp, m), None, "mcp {m}");
             assert_eq!(code(Hook, m), Some(ErrorCode::Unauthorized), "hook {m}");
         }
+        // Step 12: detaching other clients is for cli/gui only.
+        assert_eq!(code(Cli, "client.detach"), None);
+        assert_eq!(code(Gui, "client.detach"), None);
+        assert_eq!(code(Mcp, "client.detach"), Some(ErrorCode::Unauthorized));
+        assert_eq!(code(Hook, "client.detach"), Some(ErrorCode::Unauthorized));
         // Later Steps' methods: refused by kind first, then reported as not implemented.
         assert_eq!(
             code(Cli, "terminal.restore"),

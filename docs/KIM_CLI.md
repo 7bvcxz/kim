@@ -116,9 +116,9 @@ kim install subak --json --no-input            # exit 7 already_installed is als
 ### 4.4 Make sure a tool can do what you need, then call it
 
 ```sh
-kim tools describe subak --require-version ">=0.3" --require-command terminal.list --json --no-input
+kim tools describe subak --require-version ">=0.3" --require-command ls --json --no-input
 # exit 0 → data.tool.entrypoint is the program to run:
-"<entrypoint>" terminal list --json --no-input   # (Subak's CLI arrives in Step 12)
+"<entrypoint>" ls --json --no-input   # Subak: docs/SUBAK_CLI.md
 ```
 
 Exit 5 with `tool_incompatible`, `capability_missing` or `capabilities_unavailable` means: do not

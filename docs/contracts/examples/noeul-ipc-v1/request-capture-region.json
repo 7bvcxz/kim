@@ -1,0 +1,8 @@
+{
+  "type": "request",
+  "id": 3,
+  "method": "capture.region",
+  "params": {
+    "dry_run": false
+  }
+}

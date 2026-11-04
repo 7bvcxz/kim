@@ -45,6 +45,17 @@ fn valid(name: &str, v: &Value) {
     assert!(errors.is_empty(), "violates {name}: {errors:?}\n{v:#}");
 }
 
+/// One action of a `hotkeys list` document.
+fn action(list: &Value, id: &str) -> Value {
+    list["data"]["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["id"] == id)
+        .cloned()
+        .unwrap_or_else(|| panic!("no action {id}"))
+}
+
 struct Noeul {
     sb: TempDir,
     endpoint: String,
@@ -57,12 +68,14 @@ impl Noeul {
         let cfg = sb.path().join("Roaming").join("mouv").join("noeul");
         std::fs::create_dir_all(&cfg).unwrap();
         std::fs::create_dir_all(sb.path().join("Local")).unwrap();
-        // Never the default F3: an obscure chord, written before anything starts.
+        // Never the default F1 or F3: an obscure chord, written before anything starts
+        // (`capture.region`, added in Step 50, is switched off here).
         std::fs::write(
             cfg.join("hotkeys.json"),
             serde_json::to_vec(
                 &json!({"schema": "kim.hotkeys", "schema_version": 1, "tool": "noeul",
-                "overrides": [{"action": "paste.float", "bindings": ["Ctrl+Alt+Shift+F22"]}]}),
+                "overrides": [{"action": "capture.region", "disabled": true},
+                              {"action": "paste.float", "bindings": ["Ctrl+Alt+Shift+F22"]}]}),
             )
             .unwrap(),
         )
@@ -147,9 +160,8 @@ fn a_headless_discovery_starts_and_writes_nothing() {
     );
     let (_, list) = n.json(&["hotkeys", "list"]);
     valid("hotkeys-cli-v1", &list);
-    assert_eq!(list["data"]["actions"][0]["id"], "paste.float");
     assert_eq!(
-        list["data"]["actions"][0]["bindings"][0]["registration"],
+        action(&list, "paste.float")["bindings"][0]["registration"],
         "not_running"
     );
     assert_eq!(
@@ -197,7 +209,7 @@ fn b_start_hand_over_rebind_and_quit() {
     assert_eq!(reg["keys"], "Ctrl+Alt+Shift+F21", "applied while running");
     let (_, list) = n.json(&["hotkeys", "list"]);
     assert_eq!(
-        list["data"]["actions"][0]["bindings"][0]["registration"],
+        action(&list, "paste.float")["bindings"][0]["registration"],
         reg["status"]
     );
 

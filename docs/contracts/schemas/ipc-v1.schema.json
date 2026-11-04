@@ -137,6 +137,7 @@
         {"$ref": "#/$defs/event_terminal_state_changed"},
         {"$ref": "#/$defs/event_terminal_removed"},
         {"$ref": "#/$defs/event_pane_exited"},
+        {"$ref": "#/$defs/event_pane_detached"},
         {"$ref": "#/$defs/event_host_stopping"},
         {"$ref": "#/$defs/event_other"}
       ]
@@ -157,6 +158,7 @@
               "terminal.state_changed",
               "terminal.removed",
               "pane.exited",
+              "pane.detached",
               "host.stopping"
             ]
           }
@@ -214,6 +216,16 @@
         "data": {"$ref": "#/$defs/data_pane_exited"}
       }
     },
+    "event_pane_detached": {
+      "type": "object",
+      "required": ["type", "seq", "event", "data"],
+      "properties": {
+        "type": {"const": "event"},
+        "seq": {"$ref": "#/$defs/u64"},
+        "event": {"const": "pane.detached"},
+        "data": {"$ref": "#/$defs/data_pane_detached"}
+      }
+    },
     "event_host_stopping": {
       "type": "object",
       "required": ["type", "seq", "event", "data"],
@@ -266,6 +278,26 @@
         "terminal_id": {"$ref": "#/$defs/terminal_id"},
         "pid": {"type": "integer", "minimum": 1},
         "exit_code": {"type": ["integer", "null"], "minimum": 0}
+      }
+    },
+    "data_pane_detached": {
+      "description": "Step 12: another client's client.detach ended this connection's attachment to the pane; nothing else changed. `by` names that client (null if it is gone).",
+      "type": "object",
+      "required": ["pane_id", "terminal_id", "stream_id", "by"],
+      "properties": {
+        "pane_id": {"$ref": "#/$defs/pane_id"},
+        "terminal_id": {"$ref": "#/$defs/terminal_id"},
+        "stream_id": {"type": "integer", "minimum": 1},
+        "by": {
+          "type": ["object", "null"],
+          "required": ["client_id", "pid", "kind"],
+          "additionalProperties": false,
+          "properties": {
+            "client_id": {"type": "integer", "minimum": 1},
+            "pid": {"type": ["integer", "null"], "minimum": 1},
+            "kind": {"enum": ["cli", "gui", "hook", "mcp"]}
+          }
+        }
       }
     },
     "data_host_stopping": {
@@ -335,6 +367,10 @@
         "index": {"type": "integer", "minimum": 0},
         "cwd": {"type": ["string", "null"]},
         "command": {"$ref": "#/$defs/command"},
+        "command_line": {
+          "description": "Step 12: the verbatim command line the pane was started with (terminal.create command_line, host serve --shell), with secret-looking words as ***; null when command was quoted word by word. Hosts before Step 12 omit it.",
+          "type": ["string", "null"]
+        },
         "executable": {
           "description": "The program file that runs (command.program resolved on the pane's PATH); null before it started.",
           "type": ["string", "null"]
@@ -537,6 +573,7 @@
               "properties": {
                 "name": {"$ref": "#/$defs/terminal_name"},
                 "command": {"$ref": "#/$defs/command"},
+                "command_line": {"type": ["string", "null"]},
                 "executable": {"type": "string", "minLength": 1},
                 "cwd": {"type": ["string", "null"]},
                 "env": {"$ref": "#/$defs/env_names"},
@@ -639,6 +676,65 @@
         },
         "replay_bytes": {"$ref": "#/$defs/u64"}
       }
+    },
+    "client_attachment": {
+      "description": "One attachment client.detach ends (or would end).",
+      "type": "object",
+      "required": ["client", "stream_id", "pane_id", "terminal_id", "interactive"],
+      "additionalProperties": false,
+      "properties": {
+        "client": {
+          "type": "object",
+          "required": ["id", "pid", "kind", "name"],
+          "additionalProperties": false,
+          "properties": {
+            "id": {"type": "integer", "minimum": 1},
+            "pid": {"type": ["integer", "null"], "minimum": 1},
+            "kind": {"enum": ["cli", "gui", "hook", "mcp"]},
+            "name": {"type": "string"}
+          }
+        },
+        "stream_id": {"type": "integer", "minimum": 1},
+        "pane_id": {"$ref": "#/$defs/pane_id"},
+        "terminal_id": {"$ref": "#/$defs/terminal_id"},
+        "interactive": {"type": "boolean"}
+      }
+    },
+    "detach_terminal": {
+      "description": "The Terminal a client.detach target resolved to, or null without a target.",
+      "anyOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "required": ["id", "name"],
+          "additionalProperties": false,
+          "properties": {"id": {"$ref": "#/$defs/terminal_id"}, "name": {"$ref": "#/$defs/terminal_name"}}
+        }
+      ]
+    },
+    "result_client_detach": {
+      "description": "Step 12: client.detach. Detaching never changes a process, a Terminal or a connection.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["detached", "terminal"],
+          "additionalProperties": false,
+          "properties": {
+            "detached": {"type": "array", "items": {"$ref": "#/$defs/client_attachment"}},
+            "terminal": {"$ref": "#/$defs/detach_terminal"}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["dry_run", "would_detach", "terminal"],
+          "additionalProperties": false,
+          "properties": {
+            "dry_run": {"const": true},
+            "would_detach": {"type": "array", "items": {"$ref": "#/$defs/client_attachment"}},
+            "terminal": {"$ref": "#/$defs/detach_terminal"}
+          }
+        }
+      ]
     }
   }
 }

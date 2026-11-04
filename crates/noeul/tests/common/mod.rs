@@ -1,11 +1,14 @@
 //! A sandbox that runs the real `noeul` binary in an isolated profile.
 //!
 //! Safety rules for this machine (the maintainer uses it): every sandbox has its own `APPDATA`,
-//! `LOCALAPPDATA` and pipe endpoint, so it never reaches a real Noeul; instances always run with
-//! `--no-tray`; and the profile's `hotkeys.json` is written **before** any instance starts,
-//! binding `paste.float` to an obscure chord (`Ctrl+Alt+Shift+F22` by default) or turning
-//! shortcuts off. `F1`, `F3` and other common keys are never registered. Every process a sandbox
-//! starts is ended when it drops.
+//! `LOCALAPPDATA`, `TEMP` and pipe endpoint, so it never reaches a real Noeul; instances always
+//! run with `--no-tray`; and the profile's `hotkeys.json` is written **before** any instance
+//! starts, binding every global action to an obscure `Ctrl+Alt+Shift+F2x` chord, disabling it, or
+//! turning shortcuts off. A guard ([`Sandbox::write_keys`]) computes what an instance would
+//! register from that file with Noeul's own planner and fails the test if anything else, such
+//! as the default `F1` or `F3`, would be registered. Overlay tests use the debug-build test hook
+//! ([`Sandbox::synthetic`]): the overlay shows a synthetic picture far off-screen, never takes
+//! focus and never reads the screen. Every process a sandbox starts is ended when it drops.
 #![allow(dead_code)]
 
 #[path = "../../../../xtask/src/jsonschema.rs"]
@@ -47,16 +50,27 @@ pub fn validate(name: &str, v: &Value) -> Vec<String> {
 /// How the profile's shortcuts are set up before an instance starts.
 #[derive(Debug, Clone, Copy)]
 pub enum Keys<'a> {
-    /// `paste.float` on this obscure chord.
+    /// `paste.float` on this obscure chord; `capture.region` disabled.
     Chord(&'a str),
+    /// `capture.region` and `paste.float` on these obscure chords.
+    Both { capture: &'a str, paste: &'a str },
     /// Every shortcut off in hotkeys.json (`"enabled": false`).
     Off,
+}
+
+/// The only chords a test may register: `Ctrl+Alt+Shift+F20` … `F24` (keys missing from
+/// ordinary keyboards; each Step's tests use their own).
+pub fn obscure(keys: &str) -> bool {
+    keys.strip_prefix("Ctrl+Alt+Shift+F2")
+        .is_some_and(|n| n.len() == 1 && n.as_bytes()[0].is_ascii_digit())
 }
 
 #[derive(Debug)]
 pub struct Sandbox {
     pub root: PathBuf,
     pub endpoint: String,
+    /// The debug-build test hook (`NOEUL_DEV_SYNTHETIC_DESKTOP=1`) for every command.
+    pub synthetic: bool,
     children: Vec<Child>,
     pids: Vec<u32>,
 }
@@ -75,9 +89,11 @@ impl Sandbox {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("Roaming").join("mouv").join("noeul")).unwrap();
         std::fs::create_dir_all(root.join("Local")).unwrap();
+        std::fs::create_dir_all(root.join("Temp")).unwrap();
         let sb = Sandbox {
             root,
             endpoint: format!("noeul-test-{id}"),
+            synthetic: false,
             children: Vec::new(),
             pids: Vec::new(),
         };
@@ -93,16 +109,40 @@ impl Sandbox {
             .join("hotkeys.json")
     }
 
-    /// Writes the safe `hotkeys.json` (never default keys).
+    /// A sandbox whose instances use the debug-build test hook: a synthetic desktop far
+    /// off-screen, overlay and pins that never take focus, no screen read.
+    pub fn synthetic(tag: &str, keys: Keys<'_>) -> Sandbox {
+        let mut sb = Sandbox::with_keys(tag, keys);
+        sb.synthetic = true;
+        sb
+    }
+
+    /// The sandbox's `TEMP` folder (it must stay empty: no temporary image files).
+    pub fn temp_dir(&self) -> PathBuf {
+        self.root.join("Temp")
+    }
+
+    /// Writes the safe `hotkeys.json`, then checks with Noeul's own planner that an instance
+    /// would register nothing but obscure chords (never `F1`, `F3` or another common key).
     pub fn write_keys(&self, keys: Keys<'_>) {
+        let schema = |overrides: Value| {
+            serde_json::json!({"schema": "kim.hotkeys", "schema_version": 1, "tool": "noeul",
+                "overrides": overrides})
+        };
         let doc = match keys {
             Keys::Chord(c) => {
-                assert!(
-                    c.contains("F2") && c.starts_with("Ctrl+Alt+Shift+"),
-                    "tests register only obscure Ctrl+Alt+Shift+F2x chords"
-                );
-                serde_json::json!({"schema": "kim.hotkeys", "schema_version": 1, "tool": "noeul",
-                    "overrides": [{"action": "paste.float", "bindings": [c]}]})
+                assert!(obscure(c), "tests register only obscure chords, not {c}");
+                schema(serde_json::json!([
+                    {"action": "capture.region", "disabled": true},
+                    {"action": "paste.float", "bindings": [c]},
+                ]))
+            }
+            Keys::Both { capture, paste } => {
+                assert!(obscure(capture) && obscure(paste), "obscure chords only");
+                schema(serde_json::json!([
+                    {"action": "capture.region", "bindings": [capture]},
+                    {"action": "paste.float", "bindings": [paste]},
+                ]))
             }
             Keys::Off => serde_json::json!({"schema": "kim.hotkeys", "schema_version": 1,
                 "tool": "noeul", "enabled": false}),
@@ -112,6 +152,26 @@ impl Sandbox {
             serde_json::to_vec_pretty(&doc).unwrap(),
         )
         .unwrap();
+        // The guard: what would an instance register from this profile?
+        let paths = noeul::paths::Paths::under(&self.root);
+        let (state, loaded) = noeul::hotkeys::load(&paths);
+        assert!(
+            !loaded.state.safe_mode(),
+            "the test's hotkeys.json must be valid: {:?}",
+            loaded.problems
+        );
+        let (wanted, _) = noeul::hotkeys::global_plan(&state);
+        for w in &wanted {
+            assert!(
+                obscure(&w.keys),
+                "a test would register {} for {}: only Ctrl+Alt+Shift+F2x chords are allowed",
+                w.keys,
+                w.action
+            );
+        }
+        if matches!(keys, Keys::Off) {
+            assert!(!state.enabled(), "shortcuts are off");
+        }
     }
 
     pub fn cmd(&self, args: &[&str]) -> Command {
@@ -121,9 +181,16 @@ impl Sandbox {
             .arg(&self.endpoint)
             .env("APPDATA", self.root.join("Roaming"))
             .env("LOCALAPPDATA", self.root.join("Local"))
+            .env("TEMP", self.temp_dir())
+            .env("TMP", self.temp_dir())
             .env_remove("KIM_NO_HOTKEYS")
             .env("KIM_NO_INPUT", "1")
             .stdin(Stdio::null());
+        if self.synthetic {
+            c.env("NOEUL_DEV_SYNTHETIC_DESKTOP", "1");
+        } else {
+            c.env_remove("NOEUL_DEV_SYNTHETIC_DESKTOP");
+        }
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;

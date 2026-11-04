@@ -1,0 +1,12 @@
+{
+  "command": "kill",
+  "error": {
+    "code": "confirmation_required",
+    "details": [],
+    "exit_code": 7,
+    "hint": "re-run with --yes, or with --dry-run to see what would end",
+    "message": "this ends 1 process(es), root pid 4242 (cmd.exe) of Terminal `build` at once and removes it"
+  },
+  "ok": false,
+  "schema_version": 1
+}

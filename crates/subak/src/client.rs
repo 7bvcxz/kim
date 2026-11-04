@@ -209,7 +209,7 @@ pub fn occupied(endpoint: &str) -> CliError {
             Code::HostAlreadyRunning,
             format!("a Host already serves `{}`", pipe::path(endpoint)),
         )
-        .hint("attach to it with `subak host attach`, or stop it with `subak host stop`");
+        .hint("attach with `subak attach`, or stop it with `subak host stop`");
         if let Some(pid) = pid {
             e = e.detail(format!("host pid: {pid}"));
         }
@@ -604,7 +604,7 @@ pub fn start(a: &Args, endpoint: &str) -> Result<Value, CliError> {
             format!("a Host already serves `{}`", pipe::path(endpoint)),
         )
         .detail(format!("host pid: {}", session.host_pid))
-        .hint("attach with `subak host attach`, or stop it with `subak host stop`"));
+        .hint("attach with `subak attach`, or stop it with `subak host stop`"));
     }
     Ok(json!({
         "started": true,
@@ -711,7 +711,7 @@ pub fn stop(a: &Args, endpoint: &str) -> Result<Value, CliError> {
                     ending.len()
                 ),
             )
-            .hint("stop or kill them first (`subak terminal stop|kill`), or pass --kill-terminals (with --yes when it cannot ask)");
+            .hint("stop or kill them first (`subak stop|kill`), or pass --kill-terminals (with --yes when it cannot ask)");
             for n in &names {
                 e = e.detail(format!("live Terminal: {n}"));
             }
@@ -750,23 +750,68 @@ pub fn stop(a: &Args, endpoint: &str) -> Result<Value, CliError> {
 
 /// How an attach ended.
 enum End {
+    /// By this client: `Ctrl+B d`, end of piped input, Ctrl+Break, or its output went away.
     Detached,
-    Ended { exit_code: Value, stopped: Value },
+    /// By another client's `client.detach` (`subak detach`); `by` names it.
+    DetachedBy(Value),
+    Ended {
+        exit_code: Value,
+        stopped: Value,
+    },
 }
 
-/// `host attach` (`target` = `None`: the Host's only running pane) and `terminal attach
-/// <target>`: stream the pane until detach (`Ctrl+B d`, or end of piped input), the pane's end
-/// or an explicit stop. Detaching never stops anything.
+/// Sends `pane.detach` for an attach and remembers its id, so the stream loop recognizes the
+/// answer. Shared by the input thread and the console control handler.
+#[derive(Clone)]
+struct Detacher {
+    pipe: Arc<Pipe>,
+    ids: Arc<AtomicU64>,
+    detach_id: Arc<AtomicU64>,
+    /// Serializes whole frames: the input thread and the console control handler both write.
+    writing: Arc<std::sync::Mutex<()>>,
+}
+
+impl Detacher {
+    /// Writes one whole frame.
+    fn write(&self, frame: &[u8]) -> io::Result<()> {
+        let _guard = self
+            .writing
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.pipe.write_all_bytes(frame)
+    }
+
+    fn request(&self, method: &str, params: &Value) -> bool {
+        let id = self.ids.fetch_add(1, Ordering::SeqCst);
+        if method == "pane.detach" {
+            self.detach_id.store(id, Ordering::SeqCst);
+        }
+        self.write(&proto::encode_control(&proto::request(id, method, params)))
+            .is_ok()
+    }
+
+    fn detach(&self) -> bool {
+        self.request("pane.detach", &json!({}))
+    }
+}
+
+/// `attach [<target>]` and `host attach` (`target` = `None`: the Host's only running pane):
+/// stream the pane until detach (`Ctrl+B d`, the end of piped input, Ctrl+Break, or another
+/// client's `subak detach`), the pane's end or the Host's stop. Detaching never stops anything,
+/// and every exit path the process survives puts its console back ([`console::restore`]).
 pub fn attach(a: &Args, endpoint: &str, target: Option<&str>) -> Result<Value, CliError> {
     let mut s = Session::open(endpoint, Duration::from_secs(2))?;
     let console_in = console::stdin_is_console();
-    let size = a.size.or_else(|| {
-        if console_in {
+    let console_out = console::stdout_is_console();
+    let interactive = !a.read_only;
+    let size = a.size.filter(|_| interactive).or_else(|| {
+        if console_in && interactive {
             console::window_size()
         } else {
             None
         }
     });
+    let size_json = size.map(|(c, r)| json!({"cols": c, "rows": r}));
     if a.dry_run {
         let st = s.request("host.status", &json!({}))?;
         let terminal = match target {
@@ -775,118 +820,175 @@ pub fn attach(a: &Args, endpoint: &str, target: Option<&str>) -> Result<Value, C
         };
         return Ok(json!({"dry_run": true, "would_attach": {
             "host": st["host"], "pane": st["pane"], "terminal": terminal,
-            "size": size.map(|(c, r)| json!({"cols": c, "rows": r})),
+            "size": size_json, "interactive": interactive,
+            "input": if a.read_only { "none" } else if console_in { "console" } else { "redirected" },
         }}));
     }
+    // Names for the notices; listed before attaching, because output follows the attach at once.
+    let names = s.request("terminal.list", &json!({"detail": "summary"}))?;
     s.request("events.subscribe", &json!({"topics": ["panes", "host"]}))?;
     let res = s.request(
         "pane.attach",
-        &json!({"target": target, "interactive": true,
-                "size": size.map(|(c, r)| json!({"cols": c, "rows": r}))}),
+        &json!({"target": target, "interactive": interactive, "size": size_json}),
     )?;
     let host_pid = s.host_pid;
     let pane_id = res["pane_id"].clone();
+    let name = names["terminals"]
+        .as_array()
+        .and_then(|l| l.iter().find(|t| t["id"] == res["terminal_id"]))
+        .map_or(Value::Null, |t| t["name"].clone());
     let stream = res["stream_id"]
         .as_u64()
         .and_then(|v| u32::try_from(v).ok())
         .ok_or_else(|| CliError::new(Code::ProtocolError, "pane.attach returned no stream id"))?;
     if !a.quiet {
+        let shown = name.as_str().unwrap_or("?");
+        let input = if a.read_only {
+            "; read-only: keys are not sent"
+        } else if console_in {
+            ""
+        } else {
+            "; input is not a console: its bytes are sent as they are, and its end detaches"
+        };
         eprintln!(
-            "[subak: attached to Host pid {host_pid}, shell pid {}; Ctrl+B d detaches]",
+            "[subak: attached to `{shown}` ({}) in Host pid {host_pid}, pid {}; Ctrl+B d detaches{input}]",
+            text(&res["terminal_id"]),
             res["pane"]["pid"]
         );
     }
-    let detach_id = Arc::new(AtomicU64::new(0));
-    let raw = (console_in || console::stdout_is_console()).then(console::RawMode::enable);
-    std::thread::spawn({
-        let pipe = Arc::clone(&s.pipe);
-        let ids = Arc::clone(&s.next_id);
-        let detach_id = Arc::clone(&detach_id);
-        let verbose = a.verbose;
-        move || input(&pipe, stream, console_in, size, &ids, &detach_id, verbose)
-    });
-    let mut stdout = io::stdout().lock();
-    let mut stopped = Value::Null;
-    // This client is the pane's terminal and does not grant win32-input-mode (see OutputFilter).
-    let mut filter = proto::OutputFilter::default();
-    let end = loop {
-        match proto::read_frame(&mut &*s.pipe, None, |t| t + proto::FRAME_TIMEOUT) {
-            Ok(Some(Frame::Data { bytes, .. })) => {
-                if stdout
-                    .write_all(&filter.feed(&bytes))
-                    .and_then(|()| stdout.flush())
-                    .is_err()
-                {
-                    // Our own output is gone (e.g. the reader of a pipe went away): detach.
-                    break End::Detached;
-                }
-            }
-            Ok(Some(Frame::Control(m))) => match m["type"].as_str() {
-                Some("event") if m["event"] == "pane.exited" && m["data"]["pane_id"] == pane_id => {
-                    break End::Ended {
-                        exit_code: m["data"]["exit_code"].clone(),
-                        stopped,
-                    };
-                }
-                Some("event") if m["event"] == "host.stopping" => {
-                    stopped = m["data"]["reason"].clone();
-                }
-                Some("response") if m["id"] == detach_id.load(Ordering::SeqCst) => {
-                    if a.verbose {
-                        eprint!("subak: detach acknowledged by the Host\r\n");
-                    }
-                    break End::Detached;
-                }
-                _ => {}
-            },
-            Ok(None) | Err(_) if !stopped.is_null() => {
-                break End::Ended {
-                    exit_code: Value::Null,
-                    stopped,
-                };
-            }
-            Ok(None) | Err(_) => {
-                drop(raw);
-                return Err(disconnected());
-            }
-        }
+    let detacher = Detacher {
+        pipe: Arc::clone(&s.pipe),
+        ids: Arc::clone(&s.next_id),
+        detach_id: Arc::new(AtomicU64::new(0)),
+        writing: Arc::new(std::sync::Mutex::new(())),
     };
+    let raw = (console_in || console_out).then(console::RawMode::enable);
+    // A panic anywhere still puts the console back; Ctrl+Break detaches cleanly.
+    let previous_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        console::restore();
+        previous_hook(info);
+    }));
+    console::handle_signals(Box::new({
+        let d = detacher.clone();
+        move || {
+            d.detach();
+        }
+    }));
+    // A read-only attach with redirected input reads nothing: it runs until it is detached
+    // (`subak detach`, Ctrl+Break), the pane ends or the Host stops.
+    if console_in || interactive {
+        std::thread::spawn({
+            let d = detacher.clone();
+            let verbose = a.verbose;
+            move || input(&d, stream, console_in, interactive, size, verbose)
+        });
+    }
+    let end = stream_output(&s, &pane_id, &detacher, a.verbose);
+    console::release_signals();
     drop(raw);
+    let _ = std::panic::take_hook(); // ours; the default hook is back
+    let end = end?;
     Ok(match end {
         End::Detached => json!({
-            "detached": true, "host": {"pid": host_pid}, "pane": res["pane"],
-            "terminal_id": res["terminal_id"],
+            "detached": true, "detached_by": null, "host": {"pid": host_pid}, "pane": res["pane"],
+            "terminal_id": res["terminal_id"], "name": name,
+        }),
+        End::DetachedBy(by) => json!({
+            "detached": true, "detached_by": by, "host": {"pid": host_pid}, "pane": res["pane"],
+            "terminal_id": res["terminal_id"], "name": name,
         }),
         End::Ended { exit_code, stopped } => json!({
             "detached": false, "host": {"pid": host_pid, "stopped": stopped},
-            "pane": res["pane"], "terminal_id": res["terminal_id"], "shell_exit_code": exit_code,
+            "pane": res["pane"], "terminal_id": res["terminal_id"], "name": name,
+            "shell_exit_code": exit_code,
         }),
     })
 }
 
-/// The input side of an attach (its own thread): keys or piped bytes → data frames.
+fn text(v: &Value) -> String {
+    v.as_str().map_or_else(|| v.to_string(), String::from)
+}
+
+/// The output side of an attach: pane data to stdout until the attach ends.
+fn stream_output(
+    s: &Session,
+    pane_id: &Value,
+    detacher: &Detacher,
+    verbose: bool,
+) -> Result<End, CliError> {
+    let mut stdout = io::stdout().lock();
+    let mut stopped = Value::Null;
+    // This client is the pane's terminal and does not grant win32-input-mode (see OutputFilter).
+    let mut filter = proto::OutputFilter::default();
+    // What the pane switches on in this terminal, so a detach can switch it off again.
+    let mut modes = console::ModeTracker::default();
+    loop {
+        match proto::read_frame(&mut &*s.pipe, None, |t| t + proto::FRAME_TIMEOUT) {
+            Ok(Some(Frame::Data { bytes, .. })) => {
+                let shown = filter.feed(&bytes);
+                modes.feed(&shown);
+                if stdout
+                    .write_all(&shown)
+                    .and_then(|()| stdout.flush())
+                    .is_err()
+                {
+                    // Our own output is gone (e.g. the reader of a pipe went away): detach.
+                    return Ok(End::Detached);
+                }
+            }
+            Ok(Some(Frame::Control(m))) => match m["type"].as_str() {
+                Some("event")
+                    if m["event"] == "pane.exited" && m["data"]["pane_id"] == *pane_id =>
+                {
+                    return Ok(End::Ended {
+                        exit_code: m["data"]["exit_code"].clone(),
+                        stopped,
+                    });
+                }
+                Some("event")
+                    if m["event"] == "pane.detached" && m["data"]["pane_id"] == *pane_id =>
+                {
+                    return Ok(End::DetachedBy(m["data"]["by"].clone()));
+                }
+                Some("event") if m["event"] == "host.stopping" => {
+                    stopped = m["data"]["reason"].clone();
+                }
+                Some("response") if m["id"] == detacher.detach_id.load(Ordering::SeqCst) => {
+                    if verbose {
+                        eprint!("subak: detach acknowledged by the Host\r\n");
+                    }
+                    return Ok(End::Detached);
+                }
+                _ => {}
+            },
+            Ok(None) | Err(_) if !stopped.is_null() => {
+                return Ok(End::Ended {
+                    exit_code: Value::Null,
+                    stopped,
+                });
+            }
+            Ok(None) | Err(_) => return Err(disconnected()),
+        }
+    }
+}
+
+/// The input side of an attach (its own thread): keys or piped bytes → data frames. A read-only
+/// attach reads console keys only to see the detach keys, and sends nothing else.
 fn input(
-    pipe: &Pipe,
+    d: &Detacher,
     stream: u32,
     console_in: bool,
+    interactive: bool,
     size: Option<(u16, u16)>,
-    ids: &AtomicU64,
-    detach_id: &AtomicU64,
     verbose: bool,
 ) {
     let mut keys = DetachKeys::default();
-    let request = |method: &str, params: Value| -> bool {
-        let id = ids.fetch_add(1, Ordering::SeqCst);
-        if method == "pane.detach" {
-            detach_id.store(id, Ordering::SeqCst);
-        }
-        send(pipe, &proto::request(id, method, &params)).is_ok()
-    };
     let mut forward = |bytes: &[u8]| -> Option<bool> {
         let (fwd, detach) = keys.feed(bytes);
-        if !fwd.is_empty() {
+        if !fwd.is_empty() && interactive {
             for chunk in fwd.chunks(32 * 1024) {
-                pipe.write_all_bytes(&proto::encode_data(stream, 0, FLAG_INPUT, chunk))
+                d.write(&proto::encode_data(stream, 0, FLAG_INPUT, chunk))
                     .ok()?;
             }
         }
@@ -899,7 +1001,7 @@ fn input(
             let Ok(events) =
                 console::read_input(&mut size, &mut high, Duration::from_millis(250), verbose)
             else {
-                request("pane.detach", json!({}));
+                d.detach();
                 return;
             };
             for ev in events {
@@ -910,15 +1012,17 @@ fn input(
                             if verbose {
                                 eprint!("subak: Ctrl+B d: detaching\r\n");
                             }
-                            request("pane.detach", json!({}));
+                            d.detach();
                             return;
                         }
                         None => return,
                     },
+                    // A viewer never resizes the pane (the Host refuses it).
+                    console::Input::Resize(..) if !interactive => {}
                     console::Input::Resize(c, r) => {
-                        if !request(
+                        if !d.request(
                             "pane.resize",
-                            json!({"cols": c, "rows": r, "stream_id": stream}),
+                            &json!({"cols": c, "rows": r, "stream_id": stream}),
                         ) {
                             return;
                         }
@@ -927,6 +1031,7 @@ fn input(
             }
         }
     }
+    let request = |method: &str, params: Value| d.request(method, &params);
     let mut stdin = io::stdin().lock();
     let mut buf = [0u8; 8192];
     let mut first = true;

@@ -105,7 +105,7 @@ impl Drop for Cleanup<'_> {
     }
 }
 
-/// `subak terminal attach` with piped stdin and output and no window.
+/// `subak attach` with piped stdin and output and no window.
 struct Client {
     child: Child,
     out: Arc<Mutex<Vec<u8>>>,
@@ -114,15 +114,7 @@ struct Client {
 impl Client {
     fn attach(exe: &Path, ep: &str, target: &str) -> Self {
         let mut child = Command::new(exe)
-            .args([
-                "terminal",
-                "attach",
-                target,
-                "--endpoint",
-                ep,
-                "--size",
-                "100x30",
-            ])
+            .args(["attach", target, "--endpoint", ep, "--size", "100x30"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -187,35 +179,35 @@ fn an_agent_manages_named_terminals_without_losing_running_work() {
     let run = |args: &[&str]| json(&subak, &ep, args, &sb);
 
     // No Host yet: nothing is listed and nothing is started to find out.
-    let (code, doc) = run(&["terminal", "list"]);
+    let (code, doc) = run(&["ls"]);
     assert_eq!(code, 0, "{doc}");
     assert_eq!(doc["data"]["terminals"].as_array().map(Vec::len), Some(0));
     // The first create starts the Host on demand.
-    let (code, build) = run(&["terminal", "new", "build"]);
+    let (code, build) = run(&["new", "build"]);
     assert_eq!(code, 0, "{build}");
     assert_eq!(build["data"]["host"]["started"], true);
     let host_pid = build["data"]["host"]["pid"].as_u64().unwrap();
     let build_pid = pane_pid(&build);
     guard.pids.extend([host_pid, build_pid]);
-    let (code, server) = run(&["terminal", "new", "서버"]);
+    let (code, server) = run(&["new", "서버"]);
     assert_eq!(code, 0, "{server}");
     let server_pid = pane_pid(&server);
     guard.pids.push(server_pid);
     assert_ne!(build_pid, server_pid, "each Terminal has its own process");
 
     // Names are unique ignoring case; a failed start leaves nothing.
-    let (code, doc) = run(&["terminal", "new", "BUILD"]);
+    let (code, doc) = run(&["new", "BUILD"]);
     assert_eq!(
         (code, doc["error"]["code"].as_str()),
         (7, Some("name_conflict"))
     );
-    let (code, doc) = run(&["terminal", "new", "--", r"C:\subak-e2e-missing\nothing.exe"]);
+    let (code, doc) = run(&["new", "--", r"C:\subak-e2e-missing\nothing.exe"]);
     assert_eq!(
         (code, doc["error"]["code"].as_str()),
         (1, Some("spawn_failed")),
         "{doc}"
     );
-    let (_, doc) = run(&["terminal", "list"]);
+    let (_, doc) = run(&["ls"]);
     let names: Vec<&str> = doc["data"]["terminals"]
         .as_array()
         .unwrap()
@@ -227,7 +219,7 @@ fn an_agent_manages_named_terminals_without_losing_running_work() {
         ["build", "서버"],
         "creation order, nothing half-created"
     );
-    let (code, doc) = run(&["terminal", "rename", "build", "Build-1"]);
+    let (code, doc) = run(&["rename", "build", "Build-1"]);
     assert_eq!(code, 0, "{doc}");
     assert_eq!(doc["data"]["terminal_id"], build["data"]["terminal_id"]);
 
@@ -240,24 +232,24 @@ fn an_agent_manages_named_terminals_without_losing_running_work() {
     assert!(running(build_pid), "detach stops nothing (tasklist)");
 
     // Destructive actions are explicit: refused without consent, then done as asked.
-    let (code, doc) = run(&["terminal", "stop", "build-1", "--no-input"]);
+    let (code, doc) = run(&["stop", "build-1", "--no-input"]);
     assert_eq!(
         (code, doc["error"]["code"].as_str()),
         (7, Some("confirmation_required"))
     );
-    let (code, doc) = run(&["terminal", "rm", "build-1", "--yes"]);
+    let (code, doc) = run(&["rm", "build-1", "--yes"]);
     assert_eq!(
         (code, doc["error"]["code"].as_str()),
         (7, Some("invalid_state")),
         "rm never ends a running Terminal"
     );
     assert!(running(build_pid));
-    let (code, doc) = run(&["terminal", "stop", "build-1", "--yes"]);
+    let (code, doc) = run(&["stop", "build-1", "--yes"]);
     assert_eq!(code, 0, "{doc}");
     assert_eq!(doc["data"]["terminal"]["state"], "stopped");
     assert!(wait_gone(build_pid, Duration::from_secs(15)));
     assert!(running(server_pid), "the other Terminal is untouched");
-    let (code, doc) = run(&["terminal", "rm", "build-1", "--yes"]);
+    let (code, doc) = run(&["rm", "build-1", "--yes"]);
     assert_eq!(code, 0, "{doc}");
     assert_eq!(doc["data"]["removed"], true);
 
@@ -268,7 +260,7 @@ fn an_agent_manages_named_terminals_without_losing_running_work() {
         (7, Some("terminals_running"))
     );
     assert!(running(server_pid) && running(host_pid));
-    let (code, doc) = run(&["terminal", "kill", "서버", "--yes"]);
+    let (code, doc) = run(&["kill", "서버", "--yes"]);
     assert_eq!(code, 0, "{doc}");
     assert!(wait_gone(server_pid, Duration::from_secs(15)));
     let (code, doc) = run(&["host", "stop"]);
@@ -301,7 +293,7 @@ fn six_agents_creating_one_name_at_once_get_exactly_one_terminal() {
     let agents: Vec<Child> = (0..6)
         .map(|_| {
             Command::new(&subak)
-                .args(["--json", "--endpoint", &ep, "terminal", "new", "shared"])
+                .args(["--json", "--endpoint", &ep, "new", "shared"])
                 .env("USERPROFILE", sb.path())
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
@@ -335,6 +327,6 @@ fn six_agents_creating_one_name_at_once_get_exactly_one_terminal() {
             .all(|(c, d)| *c == 7 && d["error"]["code"] == "name_conflict"),
         "{results:?}"
     );
-    let (_, doc) = json(&subak, &ep, &["terminal", "list"], &sb);
+    let (_, doc) = json(&subak, &ep, &["ls"], &sb);
     assert_eq!(doc["data"]["terminals"].as_array().map(Vec::len), Some(1));
 }

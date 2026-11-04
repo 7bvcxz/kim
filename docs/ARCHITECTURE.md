@@ -49,7 +49,7 @@ flowchart LR
 | Subak Host | `subak.exe host serve` | Owns Terminals/Windows/Panes, ConPTYs, jobs, VT state, history, state store, IPC server, metrics | SUBAK-FR-001…004, SUBAK-FR-016, SUBAK-FR-040 |
 | Subak GUI | `subak-gui.exe` (Steps 16–18) | Tabbed terminal window, floating icon/tray, session manager; pure client | SUBAK-FR-030…035 |
 | Subak MCP | later (Step 37) | Opt-in local MCP adapter over the same IPC | SUBAK-FR-062 |
-| Noeul | `noeul.exe` / `crates/noeul` (Step 49 foundation, [ADR 0023](adr/0023-noeul-app-foundation.md)) | Screenshot and floating-pin tool: one per-user instance (`noeul start`) owning pins, the optional tray icon and its global hotkeys; headless CLI that controls it over its own identity-checked pipe (Noeul IPC v1); plain Win32, GDI capture on request | NOEUL-FR-001…003, NOEUL-FR-110…114, NOEUL-SEC-001…012 |
+| Noeul | `noeul.exe` / `crates/noeul` (Step 49 foundation, [ADR 0023](adr/0023-noeul-app-foundation.md); Step 50 `F1` overlay, [ADR 0026](adr/0026-noeul-capture-overlay.md)) | Screenshot and floating-pin tool: one per-user instance (`noeul start`) owning pins, the optional tray icon, its global hotkeys and the region selection overlay (one frozen GDI picture, a back-buffered Win32 window, `Enter` pins); headless CLI that controls it over its own identity-checked pipe (Noeul IPC v1); plain Win32, GDI capture on request | NOEUL-FR-001…003, NOEUL-FR-010…014, NOEUL-FR-110…114, NOEUL-SEC-001…012 |
 
 ### 2.1 Host internals
 
@@ -119,7 +119,7 @@ with Step 30.
 | `starting` | Ids and name reserved, pane process being started | create | info, rename |
 | `running` | ≥ 1 pane process alive | create, start, restore | attach, input, rename, split, stop, kill |
 | `stopping` | Its processes are being ended | stop, kill, host stop, or its program exited | info, rename (a kill escalates a stop) |
-| `stopped` | Terminal kept, no live process (all exited with remain-on-exit, or `subak terminal stop`) | last process ends while kept; explicit stop | start (respawn panes; Step 30), rename, delete |
+| `stopped` | Terminal kept, no live process (all exited with remain-on-exit, or `subak stop`) | last process ends while kept; explicit stop | start (respawn panes; Step 30), rename, delete |
 | `restorable` | Loaded from state after a Host restart/reboot; old processes are gone | Host start with persisted Terminals | restore (dry-run or confirmed), rename, delete |
 | `failed` | Last start/restore failed; reason kept | spawn failure | retry, edit profile, delete |
 | `unknown` | State cannot be trusted (e.g. written by a newer Subak version) | Host start with unreadable/newer state | inspect, delete only with `--force` |
@@ -161,12 +161,12 @@ There is no `close` verb: every "close" in a UI is one of these rows.
 
 | Intent | CLI | GUI (Steps 16–18) | Processes | Stored Terminal |
 | --- | --- | --- | --- | --- |
-| Stop looking | `Ctrl+B d`, end of piped input, close the console window (`subak detach` in Step 12) | close window / quit / `Ctrl+B d` / crash | unaffected | unaffected |
-| Look again | `subak terminal attach <target>` | open tab / session manager | unaffected | unaffected |
+| Stop looking | `Ctrl+B d`, Ctrl+Break, end of piped input, close the console window; from elsewhere `subak detach <t>` / `--client <id>` | close window / quit / `Ctrl+B d` / crash | unaffected | unaffected |
+| Look again | `subak attach <target>` | open tab / session manager | unaffected | unaffected |
 | Hide one tab | — | the tab's × button, tab menu "Hide tab" | unaffected | unaffected |
-| End processes, keep Terminal | `subak terminal stop <t>` (graceful, then forced after 5 s; asks or `--yes`) | session manager "Stop" | ended | kept as `stopped` |
-| End Terminal (tmux kill-session) | `subak terminal kill <t>` (at once; asks or `--yes`) | `Ctrl+W` / "Close Terminal" (confirms when busy) | ended | removed |
-| Remove a dead Terminal record | `subak terminal rm <t>` (only `stopped`/`failed`, later `restorable`; `--force` also ends a running one) | session manager "Delete" | none running | removed |
+| End processes, keep Terminal | `subak stop <t>` (graceful, then forced after 5 s; asks or `--yes`) | session manager "Stop" | ended | kept as `stopped` |
+| End Terminal (tmux kill-session) | `subak kill <t>` (at once; asks or `--yes`) | `Ctrl+W` / "Close Terminal" (confirms when busy) | ended | removed |
+| Remove a dead Terminal record | `subak rm <t>` (only `stopped`/`failed`, later `restorable`; `--force` also ends a running one) | session manager "Delete" | none running | removed |
 | Kill pane / window | `subak kill <t:w.p>` (Step 21) | `Ctrl+B x` / `Ctrl+B &` (confirm) | that pane/window only | topology updated |
 
 "Graceful" = `ClosePseudoConsole` (processes receive `CTRL_CLOSE_EVENT`), wait up to 5 s,
@@ -250,14 +250,15 @@ one pane are the single trait `pty::Pty` ([PTY_PROCESSES §8](PTY_PROCESSES.md),
 | Hotkey contract v1 for every GUI tool (specification, schemas, conflict scenarios; [HOTKEY_CONTRACT](HOTKEY_CONTRACT.md)) | current (design) | 45 |
 | Shared hotkey library (`crates/kim-hotkeys`), `kim hotkeys` CLI, cross-tool conflict detection, Kim Manager shortcuts (`focus` backend), Windows `RegisterHotKey` backend ([HOTKEY_CONTRACT §17](HOTKEY_CONTRACT.md)) | implemented (binding editor of §11.2: planned) | 46 |
 | Catalog tool metadata (features, entry points, links, shortcut summaries, permissions), derived availability, permission disclosure in install plans; Noeul and Ddalgak listed as planned ([CATALOG_FORMAT §2.1](CATALOG_FORMAT.md)) | implemented (Noeul and Ddalgak themselves: planned, Steps 48–64 and 65–83) | 47 |
-| Noeul product definition: philosophy, `NOEUL-*` requirements and milestones N1–N7, Snipaste parity matrix, UX spec with the double-click-to-pin rules and tests, final hotkey manifest ([NOEUL_PHILOSOPHY](NOEUL_PHILOSOPHY.md), ADR 0021) | current (design); the `noeul` binary: planned, Steps 49–64 | 48 |
+| Noeul product definition: philosophy, `NOEUL-*` requirements and milestones N1–N7, Snipaste parity matrix, UX spec with the double-click-to-pin rules and tests, final hotkey manifest ([NOEUL_PHILOSOPHY](NOEUL_PHILOSOPHY.md), ADR 0021) | current (design); the `noeul` binary: foundation implemented in Step 49 (ADR 0023), `F1` selection overlay in Step 50 (ADR 0026); the rest planned, Steps 51–64 | 48 |
 | Ddalgak specification: philosophy, requirements, rule model and schemas (`ddalgak-rules-v1`, `ddalgak-simulation-v1`), GUI journeys, safety scope, AutoHotkey matrix, final hotkey manifest ([DDALGAK_RULE_MODEL](DDALGAK_RULE_MODEL.md), ADR 0022) | current (design; Ddalgak itself planned, Steps 66–83) | 65 |
 | Ddalgak engine: `ddalgak-gui.exe` tray app owning a `WH_KEYBOARD_LL` engine (event model, decision core, worker, lifecycle, emergency chord, held-key ledger, stepping aside), `RegisterHotKey` shortcuts, the headless `ddalgak` CLI over an identity-checked pipe, opt-in sign-in start; engine-control rules only ([DDALGAK_ENGINE](DDALGAK_ENGINE.md), ADR 0024) | implemented (Windows) | 66 |
 | ConPTY + detached Host proof: `subak host start\|status\|attach\|stop` prototype (one shell per Host, prototype pipe; [CONPTY_PROOF](CONPTY_PROOF.md), ADR 0016) | implemented (prototype) | 08 |
 | Host supervisor and IPC v1: identity-checked per-user pipe, version negotiation, authorization by client kind, start on demand under a start lock, idle exit, health, user logon environment ([IPC_PROTOCOL](contracts/IPC_PROTOCOL.md), ADR 0019) | implemented | 09 |
 | Terminal session lifecycle: named Terminals (Terminal → Window → Pane, one window and pane each), the state machine, names and targets, create/list/info/rename/stop/kill/remove over IPC and `subak terminal …`, `host stop --kill-terminals` ([SESSION_MODEL](SESSION_MODEL.md), ADR 0020) | implemented (no persistence before Step 29) | 10 |
-| PTY and shell process management: the platform-neutral `pty::Pty` interface (Windows ConPTY + job; `unsupported_platform` stub elsewhere), program resolution on the pane's `PATH` with scripts refused, MSVC-rule quoting, fresh logon environment per pane plus `--env`/`--unset-env` overrides and `SUBAK_PANE_ID`/`SUBAK_TERMINAL_ID` (values never shown), precise `spawn_failed` reasons, exit status, byte-bounded send queues ([PTY_PROCESSES](PTY_PROCESSES.md), ADR 0025) | implemented (Ctrl+Break, verbatim command lines and profiles: not yet) | 11 |
-| CLI, replay | planned | 12–14 |
+| PTY and shell process management: the platform-neutral `pty::Pty` interface (Windows ConPTY + job; `unsupported_platform` stub elsewhere), program resolution on the pane's `PATH` with scripts refused, MSVC-rule quoting, fresh logon environment per pane plus `--env`/`--unset-env` overrides and `SUBAK_PANE_ID`/`SUBAK_TERMINAL_ID` (values never shown), precise `spawn_failed` reasons, exit status, byte-bounded send queues ([PTY_PROCESSES](PTY_PROCESSES.md), ADR 0025) | implemented (Ctrl+Break to panes and profiles: not yet; verbatim command lines: Step 12) | 11 |
+| Subak CLI and headless control: tmux-familiar verbs `new`/`ls`/`info`/`status`/`attach`/`detach`/`rename`/`stop`/`kill`/`rm` (`terminal <verb>` deprecated alias), `subak-cli-v1` schema with golden files, `client.detach` and `pane.detached` over IPC, verbatim `--command-line`, `--no-start`, read-only attach, console restore on every exit path a client survives, Ctrl+Break detaches ([SUBAK_CLI](SUBAK_CLI.md), ADR 0027) | implemented (send-keys, capture and detach-key rebinding: later Steps) | 12 |
+| Replay, scrollback, Milestone A validation | planned | 13–14 |
 | GUI, tabs, floating icon | planned | 15–20 |
 | Windows/panes, layout, tmux engine | planned | 21–26 |
 | Claude integration, persistence, recovery | planned | 27–31 |

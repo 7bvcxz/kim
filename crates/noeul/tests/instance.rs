@@ -30,6 +30,17 @@ fn assert_valid(name: &str, v: &Value) {
     assert!(e.is_empty(), "violates {name}: {e:?}\n{v:#}");
 }
 
+/// `paste.float` in a `hotkeys list` document.
+fn paste_action(list: &Value) -> Value {
+    list["data"]["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["id"] == "paste.float")
+        .cloned()
+        .unwrap()
+}
+
 fn status(sb: &Sandbox) -> Value {
     let (code, doc) = sb.json(&["status"]);
     assert_eq!(code, 0, "{doc:#}");
@@ -379,7 +390,7 @@ fn hotkeys_register_report_taken_and_reload_without_stealing() {
     let (_, list) = sb.json(&["hotkeys", "list"]);
     assert_valid("hotkeys-cli-v1", &list);
     assert_eq!(
-        list["data"]["actions"][0]["bindings"][0]["registration"],
+        paste_action(&list)["bindings"][0]["registration"],
         "registered"
     );
 
@@ -422,7 +433,7 @@ fn hotkeys_register_report_taken_and_reload_without_stealing() {
         "{human}"
     );
     let (_, list) = sb.json(&["hotkeys", "list"]);
-    let b = &list["data"]["actions"][0]["bindings"][0];
+    let b = &paste_action(&list)["bindings"][0];
     assert_eq!(
         (b["registration"].as_str(), b["active"].as_bool()),
         (Some("taken"), Some(false))

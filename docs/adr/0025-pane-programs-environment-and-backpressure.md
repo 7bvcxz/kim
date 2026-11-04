@@ -82,3 +82,10 @@ platform-neutral PTY interface (`KIM-NFR-011`).
 
 `SUBAK-FR-001`, `SUBAK-FR-003`, `SUBAK-FR-011`, `SUBAK-FR-013`, `SUBAK-FR-016`, `SUBAK-FR-070`,
 `KIM-SEC-013`, `KIM-NFR-011`, `KIM-NFR-013`.
+
+## Notes
+
+- 2026-11-04 (Step 12): the verbatim command line left open in §3 and the Consequences is
+  `terminal.create` `command_line` / `subak new --command-line`
+  ([ADR 0027](0027-subak-cli-structure-and-headless-control.md) §4); only its first word is
+  resolved, so decisions 1 and 2 still hold.

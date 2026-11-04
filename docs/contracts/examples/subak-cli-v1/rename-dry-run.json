@@ -1,0 +1,14 @@
+{
+  "command": "rename",
+  "data": {
+    "dry_run": true,
+    "would_rename": {
+      "from": "work",
+      "terminal_id": "t-000000000001",
+      "to": "build"
+    }
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

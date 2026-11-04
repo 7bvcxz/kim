@@ -12,15 +12,17 @@
 //!   background (`KIM-SEC-020`). No hook, no polling, no keystroke is ever seen except a
 //!   registered chord (`KIM-SEC-022`). `--no-hotkeys`, `KIM_NO_HOTKEYS`, `"enabled": false` and
 //!   safe mode register nothing (§8.3, §12.4).
-//! - **Pin keys.** The `pin` context (and `app` bindings) are matched from the pin window's own
-//!   key messages ([`PinKeys`], backend `focus` semantics inside Noeul's windows).
+//! - **Context keys.** The `pin` and `capture-overlay` contexts (and `app` bindings) are matched
+//!   from the pin and overlay windows' own key messages ([`ContextKeys`], backend `focus`
+//!   semantics inside Noeul's windows). The overlay also always leaves on the reserved
+//!   navigation key `Escape` (`nav.cancel`, §3.5), even with its shortcuts off.
 //! - **Reload.** A running instance re-reads `hotkeys.json` when the file changes (a blocking
 //!   change notification, §8.3 5) and when `noeul hotkeys …` tells it to over IPC. A valid file is
 //!   applied at once; an invalid one is reported and the previous bindings stay.
 //!
-//! `capture.region` (`F1`) is not in this build: its selection overlay is Step 50, and the
-//! contract forbids registering an action that does nothing (NOEUL-FR-114). The same machinery
-//! registers it once Step 50 adds it to [`IMPLEMENTED`].
+//! `capture.region` (`F1`) is registered since Step 50, which added its selection overlay and the
+//! overlay keys it implements (ADR 0026); Step 49 left it out because the contract forbids
+//! registering an action that does nothing (NOEUL-FR-114).
 
 use crate::paths::Paths;
 use kim_hotkeys::check::{Conflict, Severity, ToolState, analyze};
@@ -40,7 +42,24 @@ pub const TOOL: &str = "noeul";
 
 /// The actions this build implements, in manifest order (NOEUL-FR-114).
 pub const IMPLEMENTED: &[&str] = &[
+    "capture.region",
     "paste.float",
+    "capture.pin",
+    "capture.cancel",
+    "selection.full",
+    "selection.last",
+    "selection.move-up",
+    "selection.move-down",
+    "selection.move-left",
+    "selection.move-right",
+    "selection.grow-up",
+    "selection.grow-down",
+    "selection.grow-left",
+    "selection.grow-right",
+    "selection.shrink-up",
+    "selection.shrink-down",
+    "selection.shrink-left",
+    "selection.shrink-right",
     "pin.close",
     "pin.move-up",
     "pin.move-down",
@@ -48,8 +67,14 @@ pub const IMPLEMENTED: &[&str] = &[
     "pin.move-right",
 ];
 
-/// Global actions of the final manifest that later Steps add, for `--help` and the docs.
-pub const PLANNED_GLOBAL: &[(&str, &str, u32)] = &[("capture.region", "F1", 50)];
+/// Global actions of the final manifest that later Steps add, for `--help` and the docs (none
+/// since Step 50 shipped `capture.region`).
+pub const PLANNED_GLOBAL: &[(&str, &str, u32)] = &[];
+
+/// The overlay's context (UX spec §6).
+pub const OVERLAY_CONTEXT: &str = "capture-overlay";
+/// The pins' context.
+pub const PIN_CONTEXT: &str = "pin";
 
 pub fn manifest() -> Manifest {
     Manifest::parse(MANIFEST_JSON.as_bytes()).expect("the compiled-in hotkey manifest is valid")
@@ -244,52 +269,57 @@ pub struct Registration {
     pub message: Option<String>,
 }
 
-/// The pin window's keys: `context:pin` and `app` bindings of implemented actions.
+/// The keys of one of Noeul's windows: the bindings of its context and the `app` bindings of
+/// implemented actions, matched from the window's own key messages.
 #[derive(Debug, Clone, Default)]
-pub struct PinKeys {
-    active: Vec<(String, Step, bool)>,
+pub struct ContextKeys {
+    /// `(action, first step, repeat, in the context)`.
+    active: Vec<(String, Step, bool, bool)>,
 }
 
-impl PinKeys {
-    pub fn from_state(state: &ToolState, off: bool) -> PinKeys {
+impl ContextKeys {
+    pub fn from_state(state: &ToolState, off: bool, context: &str) -> ContextKeys {
         if off {
-            return PinKeys::default();
+            return ContextKeys::default();
         }
-        let pin = Scope::Context("pin".into());
+        let ctx = Scope::Context(context.into());
         let active = analyze(std::slice::from_ref(state), &[])
             .active
             .into_iter()
             .filter(|b| {
-                (b.scope == pin || b.scope == Scope::App)
+                (b.scope == ctx || b.scope == Scope::App)
                     && IMPLEMENTED.contains(&b.action.as_str())
             })
             .filter_map(|b| {
-                let repeat = b.repeat;
+                let (repeat, inside) = (b.repeat, b.scope == ctx);
                 b.seq
                     .steps()
                     .first()
                     .cloned()
-                    .map(|s| (b.action, s, repeat))
+                    .map(|s| (b.action, s, repeat, inside))
             })
             .collect();
-        PinKeys { active }
+        ContextKeys { active }
     }
 
-    /// The action a key press in a focused pin runs. Context bindings come first (§9.1); an
-    /// auto-repeated press fires only bindings with `repeat: true` (§5.4).
+    /// The action a key press in the focused window runs. Context bindings come first (§9.1);
+    /// an auto-repeated press fires only bindings with `repeat: true` (§5.4).
     pub fn lookup(&self, pressed: &Chord, repeat: bool) -> Option<&str> {
         let step = Step::Chord(*pressed);
         let hit = |want_context: bool| {
             self.active
                 .iter()
-                .filter(|(a, _, _)| a.starts_with("pin.") == want_context)
-                .find(|(_, s, _)| steps_overlap(&step, s))
-                .filter(|(_, _, r)| *r || !repeat)
-                .map(|(a, _, _)| a.as_str())
+                .filter(|(_, _, _, inside)| *inside == want_context)
+                .find(|(_, s, _, _)| steps_overlap(&step, s))
+                .filter(|(_, _, r, _)| *r || !repeat)
+                .map(|(a, _, _, _)| a.as_str())
         };
         hit(true).or_else(|| hit(false))
     }
 }
+
+/// The pin window's keys (`context:pin`).
+pub type PinKeys = ContextKeys;
 
 /// The instance's shortcut state: the loaded layer, the global registrations and the pin keys.
 #[derive(Debug)]
@@ -304,7 +334,10 @@ pub struct Manager {
     conflicts: Vec<Conflict>,
     /// Why the file is not used (safe mode) or why the last reload was ignored.
     pub problem: Option<String>,
-    pin_keys: PinKeys,
+    pin_keys: ContextKeys,
+    overlay_keys: ContextKeys,
+    /// The effective keys of each active binding of an implemented action (`action`, `keys`).
+    keys: Vec<(String, String)>,
 }
 
 impl Manager {
@@ -327,7 +360,9 @@ impl Manager {
             registrations: Vec::new(),
             taken: Vec::new(),
             conflicts: Vec::new(),
-            pin_keys: PinKeys::default(),
+            pin_keys: ContextKeys::default(),
+            overlay_keys: ContextKeys::default(),
+            keys: Vec::new(),
         };
         if off.is_none() {
             match registrar() {
@@ -348,7 +383,19 @@ impl Manager {
     /// recorded and offered a remap; it is retried only by the next explicit apply (a reload).
     pub fn apply(&mut self) {
         let st = self.tool_state();
-        self.pin_keys = PinKeys::from_state(&st, self.off.is_some());
+        let off = self.off.is_some();
+        self.pin_keys = ContextKeys::from_state(&st, off, PIN_CONTEXT);
+        self.overlay_keys = ContextKeys::from_state(&st, off, OVERLAY_CONTEXT);
+        self.keys = if off {
+            Vec::new()
+        } else {
+            analyze(std::slice::from_ref(&st), &[])
+                .active
+                .into_iter()
+                .filter(|b| IMPLEMENTED.contains(&b.action.as_str()))
+                .map(|b| (b.action, b.keys))
+                .collect()
+        };
         let (wanted, unsupported) = if self.off.is_some() {
             (Vec::new(), Vec::new())
         } else {
@@ -441,6 +488,19 @@ impl Manager {
 
     pub fn pin_action(&self, chord: &Chord, repeat: bool) -> Option<String> {
         self.pin_keys.lookup(chord, repeat).map(str::to_string)
+    }
+
+    /// The overlay action of a key press in the capture overlay.
+    pub fn overlay_action(&self, chord: &Chord, repeat: bool) -> Option<String> {
+        self.overlay_keys.lookup(chord, repeat).map(str::to_string)
+    }
+
+    /// The first active keys of `action` (for the overlay's keyboard help), if it has any.
+    pub fn keys_for(&self, action: &str) -> Option<&str> {
+        self.keys
+            .iter()
+            .find(|(a, _)| a == action)
+            .map(|(_, k)| k.as_str())
     }
 
     /// The `registration` value of a global binding for `hotkeys list` (§10.2).
@@ -584,10 +644,14 @@ mod tests {
     #[test]
     fn global_plan_follows_the_layer() {
         let (w, u) = global_plan(&st(None));
-        assert_eq!(w.len(), 1);
+        let plan: Vec<(&str, &str)> = w
+            .iter()
+            .map(|w| (w.action.as_str(), w.keys.as_str()))
+            .collect();
         assert_eq!(
-            (w[0].action.as_str(), w[0].keys.as_str()),
-            ("paste.float", "F3")
+            plan,
+            [("capture.region", "F1"), ("paste.float", "F3")],
+            "F1 and F3 are the only global defaults (NOEUL-FR-100); planning registers nothing"
         );
         assert!(u.is_empty());
 
@@ -601,9 +665,14 @@ mod tests {
             )),
         );
         let (w, _) = global_plan(&st(Some(l.clone())));
-        assert_eq!(w[0].keys, "Ctrl+Alt+Shift+F22");
+        assert_eq!(w[1].keys, "Ctrl+Alt+Shift+F22");
 
         l.set_override(None, "paste.float", Some(Override::disabled("paste.float")));
+        l.set_override(
+            None,
+            "capture.region",
+            Some(Override::disabled("capture.region")),
+        );
         assert!(global_plan(&st(Some(l))).0.is_empty());
 
         let mut safe = st(None);
@@ -615,8 +684,53 @@ mod tests {
     }
 
     #[test]
+    fn overlay_keys_match_the_capture_overlay_context() {
+        let keys = ContextKeys::from_state(&st(None), false, OVERLAY_CONTEXT);
+        let c = |n: &str, ctrl, alt, shift| chord_of(n, ctrl, alt, shift).unwrap();
+        for (chord, repeat, want) in [
+            (c("Enter", false, false, false), false, Some("capture.pin")),
+            (
+                c("Escape", false, false, false),
+                false,
+                Some("capture.cancel"),
+            ),
+            (c("A", true, false, false), false, Some("selection.full")),
+            (c("R", false, false, false), false, Some("selection.last")),
+            (
+                c("Left", false, false, false),
+                true,
+                Some("selection.move-left"),
+            ),
+            (c("Up", true, false, false), true, Some("selection.grow-up")),
+            (
+                c("Down", false, false, true),
+                true,
+                Some("selection.shrink-down"),
+            ),
+            (c("Enter", false, false, false), true, None),
+            (c("C", true, false, false), false, None),
+            (c("Space", false, false, false), false, None),
+        ] {
+            assert_eq!(
+                keys.lookup(&chord, repeat),
+                want,
+                "{chord:?} repeat {repeat}"
+            );
+        }
+        assert!(
+            ContextKeys::from_state(&st(None), true, OVERLAY_CONTEXT)
+                .lookup(&c("Enter", false, false, false), false)
+                .is_none(),
+            "--no-hotkeys turns the overlay's keys off (Escape still leaves, nav.cancel)"
+        );
+        for id in crate::overlay::ACTION_IDS {
+            assert!(IMPLEMENTED.contains(id), "{id} is shipped");
+        }
+    }
+
+    #[test]
     fn pin_keys_match_context_bindings() {
-        let keys = PinKeys::from_state(&st(None), false);
+        let keys = PinKeys::from_state(&st(None), false, PIN_CONTEXT);
         let c = |n: &str, ctrl, alt, shift| chord_of(n, ctrl, alt, shift).unwrap();
         assert_eq!(
             keys.lookup(&c("Escape", false, false, false), false),
@@ -647,9 +761,14 @@ mod tests {
             "F3 is global, not app"
         );
         assert!(
-            PinKeys::from_state(&st(None), true)
+            PinKeys::from_state(&st(None), true, PIN_CONTEXT)
                 .lookup(&c("Escape", false, false, false), false)
                 .is_none()
+        );
+        assert_eq!(
+            keys.lookup(&c("Enter", false, false, false), false),
+            None,
+            "overlay keys do not leak into pins"
         );
     }
 
@@ -664,7 +783,12 @@ mod tests {
         assert_eq!(s["enabled"], false);
         assert_eq!(s["off_reason"], "--no-hotkeys");
         assert!(s["registrations"].as_array().unwrap().is_empty());
-        assert_eq!(s["planned"][0]["action"], "capture.region");
+        assert_eq!(
+            s["planned"],
+            json!([]),
+            "nothing global is planned any more"
+        );
+        assert_eq!(mgr.keys_for("capture.pin"), None, "no keys while off");
         assert!(
             mgr.pin_action(&chord_of("Escape", false, false, false).unwrap(), false)
                 .is_none()

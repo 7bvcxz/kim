@@ -1,13 +1,14 @@
 //! `subak` — Subak terminal CLI.
 //!
 //! Pre-alpha. Besides `capabilities` (docs/CLI_CONTRACT.md §9) it contains the **Host
-//! supervisor and IPC v1** (Step 09, ADR 0019, docs/contracts/IPC_PROTOCOL.md) and the **Terminal
-//! session lifecycle** (Step 10, ADR 0020, docs/SESSION_MODEL.md): a detached per-user Host owns
-//! any number of named Terminals, each with one window and one pane in its own pseudo console and
-//! job, and `subak terminal new|list|info|rename|attach|stop|kill|rm` manage them headlessly. The
-//! Host serves an identity-checked named pipe, starts on demand under a start lock, and exits
-//! after an idle grace period. There is no GUI, split, persistence or recovery yet. Nothing starts
-//! by itself, and no command opens a window. Step 12 extends this CLI under the same contract.
+//! supervisor and IPC v1** (Step 09, ADR 0019, docs/contracts/IPC_PROTOCOL.md), the **Terminal
+//! session lifecycle** (Step 10, ADR 0020, docs/SESSION_MODEL.md) and the **Subak CLI** (Step 12,
+//! ADR 0027, docs/SUBAK_CLI.md): a detached per-user Host owns any number of named Terminals, each
+//! with one window and one pane in its own pseudo console and job, and the tmux-familiar verbs
+//! `subak new|ls|info|status|attach|detach|rename|stop|kill|rm` manage them headlessly. The Host
+//! serves an identity-checked named pipe, starts on demand under a start lock, and exits after an
+//! idle grace period. There is no GUI, split, persistence or recovery yet. Nothing starts by
+//! itself, and no command opens a window.
 
 // Portable modules: compiled and unit-tested on every target, but until the Linux Host (M4,
 // ADR 0011) only the Windows Host and clients use most of them.
@@ -46,60 +47,87 @@ use std::io::Write;
 use std::process::ExitCode;
 
 const HELP: &str = "\
-subak — Subak persistent terminal (pre-alpha; Host, IPC v1 and the Terminal lifecycle)
+subak — Subak persistent terminal (pre-alpha; Host, IPC v1, the Terminal lifecycle and its CLI)
 
 USAGE:
     subak [--help | --version]
-    subak capabilities [--json]
-    subak terminal new    [<name>] [--cwd <dir>] [--env NAME[=VALUE]]... [--unset-env NAME]...
-                          [--size <cols>x<rows>] [--remain-on-exit] [--keep-on-failure]
-                          [--dry-run] [--json] [-- <program> [args...]]
-    subak terminal list   [--json]
-    subak terminal info   <target> [--json]
-    subak terminal rename <target> <new-name> [--dry-run] [--json]
-    subak terminal attach <target> [--size <cols>x<rows>] [--dry-run [--json]]
-    subak terminal stop   <target> [--yes] [--dry-run] [--json]
-    subak terminal kill   <target> [--yes] [--dry-run] [--json]
-    subak terminal rm     <target> [--force] [--yes] [--dry-run] [--json]
+    subak new     [<name>] [--cwd <dir>] [--env NAME[=VALUE]]... [--unset-env NAME]...
+                  [--size <cols>x<rows>] [--remain-on-exit] [--keep-on-failure] [--no-start]
+                  [--attach [--read-only]] [--dry-run] [--json]
+                  [-- <program> [args...] | --command-line <line>]
+    subak ls      [--json]                                   (also: subak list)
+    subak status  [--json]
+    subak info    <target> [--json]
+    subak attach  [<target>] [--size <cols>x<rows>] [--read-only] [--dry-run [--json]]
+    subak detach  [<target>] [--client <id>] [--dry-run] [--json]
+    subak rename  <target> <new-name> [--dry-run] [--json]
+    subak stop    <target> [--yes] [--dry-run] [--json]
+    subak kill    <target> [--yes] [--dry-run] [--json]
+    subak rm      <target> [--force] [--yes] [--dry-run] [--json]
     subak host start  [--shell <command> | --no-shell] [--idle-exit <secs>] [--dry-run] [--json]
     subak host status [--json]
     subak host health [--json]
-    subak host attach [--size <cols>x<rows>] [--dry-run [--json]]
+    subak host attach [--size <cols>x<rows>] [--read-only] [--dry-run [--json]]
     subak host stop   [--kill-terminals] [--yes] [--dry-run] [--json]
     subak host serve  [--shell <command> | --no-shell] [--idle-exit <secs>] [--dry-run] [--json]
-    (every command also takes --endpoint <name>)
+    subak capabilities [--json]
+    Every command also takes --endpoint <name>. `subak terminal new|list|info|rename|attach|
+    stop|kill|rm` is the deprecated Step 10 spelling of the same commands (a warning says so).
 
-TERMINALS (Windows only; docs/SESSION_MODEL.md):
+TERMINALS (Windows only; docs/SUBAK_CLI.md, docs/SESSION_MODEL.md):
     A Terminal is a named workspace in the Host with a stable id (t-...), one window and one pane
     (Steps 21-22 add more). Each pane runs in its own pseudo console and kill-on-close job, so
     Terminals never share processes. <target> is a Terminal name (exact; case is ignored) or id.
-    terminal new     Create a Terminal running <program> (default: %ComSpec%) in your profile
-                     folder or --cwd. Without a name it gets the lowest free number. Starts a
-                     Host if none runs. A name already in use (ignoring case) is refused with
-                     `name_conflict`, never suffixed. A program that cannot start leaves nothing
-                     behind, unless --keep-on-failure keeps it as `failed`.
-                     <program> and every argument are passed as separate words (quoted for
-                     Windows), never through a shell. A bare name is looked up on the pane's
-                     PATH (cmd, powershell, pwsh if you installed it; Subak installs nothing).
-                     Batch (.bat/.cmd) and PowerShell (.ps1) scripts are refused: name their
-                     interpreter (-- cmd.exe /d /c script.cmd). The pane gets your logon
-                     environment (not this terminal's), SUBAK_PANE_ID and SUBAK_TERMINAL_ID,
-                     and the --env/--unset-env overrides; their values are never shown.
-    terminal list    Every Terminal with its state, pid and clients. Starts nothing.
-    terminal info    One Terminal with its window and pane.
-    terminal rename  Rename a Terminal; its id never changes.
-    terminal attach  Connect this terminal to the Terminal's pane. Ctrl+B d detaches; detaching
-                     or closing this window never stops anything.
-    terminal stop    End its processes: close the pseudo console (programs get CTRL_CLOSE_EVENT),
-                     wait 5 s, then end whatever is left in its job. The Terminal is kept as
-                     `stopped`. Destructive: asks first, or needs --yes.
-    terminal kill    End its processes at once and remove the Terminal. Asks, or needs --yes.
-    terminal rm      Remove a Terminal that runs nothing (stopped or failed). --force also ends
-                     a running one (as kill). Asks, or needs --yes.
+    new      Create a Terminal running <program> (default: %ComSpec%) in your profile folder or
+             --cwd, detached (--attach attaches at once). Without a name it gets the lowest free
+             number. Starts a Host if none runs (--no-start fails with `host_not_running`
+             instead). A name already in use (ignoring case) is refused with `name_conflict`,
+             never suffixed. A program that cannot start leaves nothing behind, unless
+             --keep-on-failure keeps it as `failed`.
+             <program> and every argument are passed as separate words (quoted for Windows),
+             never through a shell. A bare name is looked up on the pane's PATH (cmd,
+             powershell, pwsh if you installed it; Subak installs nothing). Batch (.bat/.cmd)
+             and PowerShell (.ps1) scripts are refused: name their interpreter
+             (-- cmd.exe /d /c script.cmd). --command-line <line> passes one Windows command
+             line verbatim instead (only its first word is looked up), for programs that parse
+             their own command line, such as cmd.exe /c with inner quotes. The pane gets your
+             logon environment (not this terminal's), SUBAK_PANE_ID and SUBAK_TERMINAL_ID, and
+             the --env/--unset-env overrides; their values are never shown.
+    ls       Every Terminal with its state, pid and clients. Starts nothing.
+    status   The Host (or that none runs), every Terminal and every client. Starts nothing;
+             exits 0 also without a Host.
+    info     One Terminal with its window and pane; exit 3 (`target_not_found`) if none.
+    attach   Connect this terminal to a Terminal's pane (without <target>: the only running
+             one). Detaching or closing this window never stops anything (see ATTACH).
+    detach   Detach every client of <target>, or the client --client <id> (ids: `subak status`),
+             from another terminal or script. Inside a pane, no target means its own Terminal.
+             Processes and Terminals are never touched; detached clients exit with a notice.
+    rename   Rename a Terminal; its id never changes.
+    stop     End its processes: close the pseudo console (programs get CTRL_CLOSE_EVENT), wait
+             5 s, then end whatever is left in its job. The Terminal is kept as `stopped`.
+             Destructive: asks first, or needs --yes.
+    kill     End its processes at once and remove the Terminal. Asks, or needs --yes.
+    rm       Remove a Terminal that runs nothing (stopped or failed). --force also ends a
+             running one (as kill). Asks, or needs --yes.
     There is no ambiguous `close`: detach looks away, stop ends processes and keeps the record,
     kill and rm remove it. A Terminal whose program exits by itself is removed, unless it was
     created with --remain-on-exit (then `stopped`). Until Step 29 nothing is saved: Terminals
     end with their Host, and stopped ones vanish when the Host exits.
+
+ATTACH (docs/SUBAK_CLI.md §5):
+    Ctrl+B d        Detach (Ctrl+B Ctrl+B sends one Ctrl+B to the program). Fixed in the CLI
+                    for now; it follows the Ctrl+B prefix of the hotkey contract.
+    Ctrl+C          Goes to the program as a key (it interrupts what runs there); it never ends
+                    this client.
+    Ctrl+Break      Detaches this client cleanly (it is not sent to the program).
+    Closing this window, or killing this client, is a detach too: the Terminal keeps running.
+    The console's modes and code page are put back on detach, at the program's end, on
+    Ctrl+Break, when the window closes and after a crash; modes the program left on in this
+    terminal (alternate screen, hidden cursor, mouse, bracketed paste) are switched off.
+    --read-only     Watch only: keys are not sent and the pane is never resized.
+    With redirected input the bytes are sent as they are and the end of input detaches; a
+    read-only attach reads no redirected input. With redirected output, nothing is restored or
+    switched off, because nothing was changed.
 
 HOST (Windows only; docs/contracts/IPC_PROTOCOL.md, docs/CONPTY_PROOF.md):
     host start    Start a detached per-user Host, unless one already serves the endpoint
@@ -108,14 +136,12 @@ HOST (Windows only; docs/contracts/IPC_PROTOCOL.md, docs/CONPTY_PROOF.md):
                   With --shell (default %ComSpec%) it starts with one Terminal running that
                   command line; --no-shell starts it with none. The Host runs while it owns a
                   live Terminal or has a client, then exits after the idle grace period.
-                  Closing this window or any client never ends it.
+                  Closing this window or any client never ends it. `subak new` starts one on
+                  demand, so this is rarely needed.
     host status   Host process id, protocol, job breakaway, environment, Terminals, clients.
     host health   Heartbeat: check that the endpoint is served by subak.exe of this user, do
                   the handshake and report the answer time. Exit 0 only when healthy.
-    host attach   Connect this terminal to the Host's only running pane (with several, use
-                  `terminal attach <target>`). Ctrl+B d detaches (Ctrl+B Ctrl+B sends Ctrl+B).
-                  With redirected input, the bytes are sent as typed and the end of input
-                  detaches.
+    host attach   Same as `subak attach` without a target.
     host stop     Stop the Host. With live Terminals it refuses (`terminals_running`) unless
                   --kill-terminals is given, and then asks first, or needs --yes.
     host serve    Run the Host in this process (what `host start` launches detached).
@@ -123,12 +149,13 @@ HOST (Windows only; docs/contracts/IPC_PROTOCOL.md, docs/CONPTY_PROOF.md):
     Every client checks, before sending anything, that the pipe is served by subak.exe of
     this user (`host_identity_mismatch` otherwise); the Host checks each client's token. A
     Host that does not answer is reported (`host_unresponsive`), never ended or replaced.
+    The Host listens only on that local, same-user named pipe: no network listener.
 
 OPTIONS:
     --endpoint <name>  Pipe name under \\\\.\\pipe\\ (default: mouv-subak-<user SID>-s<session>).
                        Use your own name for experiments; it never touches the default Host.
-    --shell <command>  Command line of the Host's first Terminal (start/serve).
-    --no-shell         Start a Host that owns no Terminal (start/serve).
+    --shell <command>  Command line of the Host's first Terminal (host start/serve).
+    --no-shell         Start a Host that owns no Terminal (host start/serve).
     --idle-exit <s>    Seconds the Host waits with no live Terminal and no client before it
                        exits (0..86400, default 10).
     --size <c>x<r>     Pseudo console size (new, attach; 2..1000 each).
@@ -136,14 +163,19 @@ OPTIONS:
     --env NAME=VALUE   Set a variable in a new Terminal (repeatable). --env NAME copies this
                        terminal's value, so a token never appears on a command line.
     --unset-env NAME   Remove a variable from a new Terminal's environment (repeatable).
+    --command-line <l> A verbatim command line for a new Terminal (instead of -- <program>).
     --remain-on-exit   Keep a new Terminal as `stopped` when its program exits by itself.
     --keep-on-failure  Keep a Terminal whose program could not start, as `failed`.
+    --no-start         new: never start a Host; fail with `host_not_running` instead.
+    --attach           new: attach to the new Terminal at once.
+    --read-only        attach: watch without sending keys.
+    --client <id>      detach: one client, by the id `subak status` lists.
     --force            rm: also end a running Terminal.
     --kill-terminals   host stop: end every live Terminal with the Host.
     --dry-run          Show what would happen; change nothing.
     -y, --yes          Confirm a destructive command without asking.
     --json             One JSON document on stdout (docs/CLI_CONTRACT.md §7).
-    --no-input         Never ask; fail with `confirmation_required` instead.
+    --no-input         Never ask; fail with `confirmation_required` instead (also KIM_NO_INPUT).
     -q, --quiet / -v, --verbose   Less / more diagnostics on stderr.
 
 Pre-alpha: no GUI, windows/panes splits, persistence or recovery yet (docs/PRODUCT_REQUIREMENTS.md).
@@ -165,6 +197,19 @@ fn main() -> ExitCode {
         Ok(p) => p,
         Err((name, e)) => return fail(&name, &e, json_flag),
     };
+    // ADR 0027: the Step 10 spelling still works, and says that it is deprecated.
+    let deprecation = args.alias.as_ref().map(|alias| {
+        format!(
+            "`subak {alias}` is deprecated; use `subak {}` (same options and output, ADR 0027)",
+            cmd.words()
+        )
+    });
+    if let Some(d) = &deprecation
+        && !args.json
+        && !args.quiet
+    {
+        eprintln!("subak: warning: {d}");
+    }
     let mut out = std::io::stdout().lock();
     match cmd {
         Cmd::Help => {
@@ -184,8 +229,9 @@ fn main() -> ExitCode {
             let _ = write!(
                 out,
                 "subak {} — pre-alpha (CLI contract v1, IPC protocol v1)\n\
-                 Commands: capabilities; terminal new|list|info|rename|attach|stop|kill|rm \
-                 (named Terminals in the Host); host start|status|health|attach|stop|serve.\n\
+                 Commands: new, ls, info, status, attach, detach, rename, stop, kill, rm \
+                 (named Terminals in the Host); host start|status|health|attach|stop|serve; \
+                 capabilities.\n\
                  No GUI, splits, persistence or recovery yet.\n",
                 env!("CARGO_PKG_VERSION")
             );
@@ -193,19 +239,20 @@ fn main() -> ExitCode {
         }
         _ => {
             drop(out);
-            match run_host(&cmd, &args) {
+            match run_host(cmd, &args) {
                 Ok(data) => {
-                    let warnings = host_warnings(&cmd, &data);
+                    let mut warnings = host_warnings(cmd, &data);
+                    warnings.extend(deprecation);
                     if args.json {
                         let mut out = std::io::stdout().lock();
                         let _ = writeln!(out, "{}", output::success(cmd.name(), &data, &warnings));
                     } else {
                         if !args.quiet {
-                            for w in &warnings {
+                            for w in host_warnings(cmd, &data) {
                                 eprintln!("subak: warning: {w}");
                             }
                         }
-                        human(&cmd, &data, &args);
+                        human(cmd, &data, &args);
                     }
                     ExitCode::SUCCESS
                 }
@@ -235,7 +282,7 @@ fn fail(command: &str, e: &CliError, json: bool) -> ExitCode {
 }
 
 #[cfg(windows)]
-fn run_host(cmd: &Cmd, a: &Args) -> Result<Value, CliError> {
+fn run_host(cmd: Cmd, a: &Args) -> Result<Value, CliError> {
     let endpoint = client::endpoint(a)?;
     if a.verbose {
         eprintln!("subak: endpoint {}", win::pipe::path(&endpoint));
@@ -253,18 +300,22 @@ fn run_host(cmd: &Cmd, a: &Args) -> Result<Value, CliError> {
         Cmd::HostHealth => client::health(&endpoint),
         Cmd::HostStop => client::stop(a, &endpoint),
         Cmd::HostAttach => client::attach(a, &endpoint, None),
-        Cmd::TerminalNew => terminal::new(a, &endpoint),
-        Cmd::TerminalList => terminal::list(&endpoint),
-        Cmd::TerminalInfo => terminal::info(a, &endpoint),
-        Cmd::TerminalRename => terminal::rename(a, &endpoint),
-        Cmd::TerminalAttach => terminal::attach(a, &endpoint),
-        Cmd::TerminalStop | Cmd::TerminalKill | Cmd::TerminalRm => terminal::end(a, &endpoint, cmd),
-        _ => Err(CliError::new(Code::Internal, "not a host command")),
+        Cmd::New => terminal::new(a, &endpoint),
+        Cmd::Ls => terminal::list(&endpoint),
+        Cmd::Status => terminal::status(&endpoint),
+        Cmd::Info => terminal::info(a, &endpoint),
+        Cmd::Rename => terminal::rename(a, &endpoint),
+        Cmd::Attach => terminal::attach(a, &endpoint),
+        Cmd::Detach => terminal::detach(a, &endpoint),
+        Cmd::Stop | Cmd::Kill | Cmd::Rm => terminal::end(a, &endpoint, cmd),
+        Cmd::Help | Cmd::Version | Cmd::Capabilities => {
+            Err(CliError::new(Code::Internal, "not a host command"))
+        }
     }
 }
 
 #[cfg(not(windows))]
-fn run_host(_cmd: &Cmd, _a: &Args) -> Result<Value, CliError> {
+fn run_host(_cmd: Cmd, _a: &Args) -> Result<Value, CliError> {
     // ADR 0011: no Linux implementation before M4; the interface compiles to this stub.
     Err(CliError::new(
         Code::UnsupportedPlatform,
@@ -274,7 +325,7 @@ fn run_host(_cmd: &Cmd, _a: &Args) -> Result<Value, CliError> {
 
 /// Risk R-03 (measured in Step 08, ADR 0016): a Host inside a job it could not leave dies when
 /// that job is closed with kill-on-close.
-fn host_warnings(cmd: &Cmd, d: &Value) -> Vec<String> {
+fn host_warnings(cmd: Cmd, d: &Value) -> Vec<String> {
     let mut w = Vec::new();
     if matches!(cmd, Cmd::HostStart | Cmd::HostStatus) && d["host"]["environment"] == "inherited" {
         w.push(
@@ -306,7 +357,7 @@ fn text(v: &Value) -> String {
     v.as_str().map_or_else(|| v.to_string(), String::from)
 }
 
-/// One `terminal list` row.
+/// One `ls` row.
 fn row(t: &Value) -> String {
     format!(
         "{:<14}  {:<20}  {:<8}  {:>7}  {:>7}  {}{}",
@@ -322,6 +373,22 @@ fn row(t: &Value) -> String {
         text(&t["program"]),
         if t["busy"] == true { " (busy)" } else { "" },
     )
+}
+
+/// The `ls` table (header and rows), or `None` for no Terminals.
+fn table(list: &[Value]) -> Option<String> {
+    if list.is_empty() {
+        return None;
+    }
+    let mut s = format!(
+        "{:<14}  {:<20}  {:<8}  {:>7}  {:>7}  PROGRAM\n",
+        "ID", "NAME", "STATE", "PID", "CLIENTS"
+    );
+    for t in list {
+        s.push_str(&row(t));
+        s.push('\n');
+    }
+    Some(s)
 }
 
 /// An exit status as shown to people: NTSTATUS-like values (≥ 0x80000000, e.g. `0xC000013A`
@@ -367,8 +434,64 @@ fn ended(report: &Value) -> String {
     )
 }
 
+/// One client of `host.status`, for `status`.
+fn client_row(c: &Value) -> String {
+    format!(
+        "  client {} pid {} ({} {} {}){}",
+        c["id"],
+        text(&c["pid"]),
+        text(&c["kind"]),
+        text(&c["name"]),
+        text(&c["version"]),
+        if c["attached"] == true {
+            format!(
+                ", attached{} to stream(s) {}",
+                if c["interactive"] == true {
+                    ""
+                } else {
+                    " read-only"
+                },
+                c["streams"]
+            )
+        } else {
+            String::new()
+        }
+    )
+}
+
+/// The notice an attach prints when it ends (stderr).
+fn attach_notice(d: &Value) -> String {
+    let name = text(&d["name"]);
+    if d["detached"] == true {
+        if d["detached_by"].is_object() {
+            format!(
+                "[subak: detached from `{name}` by another client (pid {}, {}); it keeps running in Host pid {}]",
+                text(&d["detached_by"]["pid"]),
+                text(&d["detached_by"]["kind"]),
+                d["host"]["pid"]
+            )
+        } else {
+            format!(
+                "[subak: detached; the shell keeps running in Host pid {} (Terminal `{name}`)]",
+                d["host"]["pid"]
+            )
+        }
+    } else if let Some(reason) = d["host"]["stopped"].as_str() {
+        format!(
+            "[subak: the program in `{name}` ended (exit code {}); the Host stopped ({reason})]",
+            exit_text(&d["shell_exit_code"]),
+        )
+    } else {
+        format!(
+            "[subak: the program in `{name}` ended (exit code {}); the Host keeps running until \
+             its idle grace period ends]",
+            exit_text(&d["shell_exit_code"]),
+        )
+    }
+}
+
 /// Human output on stdout (results) and stderr (notices).
-fn human(cmd: &Cmd, d: &Value, a: &Args) {
+fn human(cmd: Cmd, d: &Value, a: &Args) {
     let mut out = std::io::stdout().lock();
     if d["dry_run"] == true {
         let plan = d
@@ -416,11 +539,15 @@ fn human(cmd: &Cmd, d: &Value, a: &Args) {
                     d["pane"]["job_processes"],
                 )
             };
+            let clients: String = d["clients"]["list"]
+                .as_array()
+                .map(|l| l.iter().map(|c| format!("\n{}", client_row(c))).collect())
+                .unwrap_or_default();
             writeln!(
                 out,
                 "Host pid {} since {} (session {}, protocol {}, job breakaway: {}, in a job: {}, \
-                 idle exit after {} s)\nTerminals: {} live, {} in total (`subak terminal list`)\n\
-                 {pane}\nclients: {} connected, {} attached\nendpoint: {}",
+                 idle exit after {} s)\nTerminals: {} live, {} in total (`subak ls`)\n\
+                 {pane}\nclients: {} connected, {} attached{clients}\nendpoint: {}",
                 d["host"]["pid"],
                 d["host"]["started_at"].as_str().unwrap_or("?"),
                 d["host"]["session_id"],
@@ -472,34 +599,24 @@ fn human(cmd: &Cmd, d: &Value, a: &Args) {
             d["reason"].as_str().unwrap_or("?"),
             d["terminals"].as_array().map_or(0, Vec::len),
         ),
-        Cmd::HostAttach | Cmd::TerminalAttach => {
+        Cmd::HostAttach | Cmd::Attach => {
             if !a.quiet {
-                if d["detached"] == true {
-                    eprintln!(
-                        "[subak: detached; the shell keeps running in Host pid {}]",
-                        d["host"]["pid"]
-                    );
-                } else if let Some(reason) = d["host"]["stopped"].as_str() {
-                    eprintln!(
-                        "[subak: the shell ended (exit code {}); the Host stopped ({reason})]",
-                        exit_text(&d["shell_exit_code"]),
-                    );
-                } else {
-                    eprintln!(
-                        "[subak: the shell ended (exit code {}); the Host keeps running until \
-                         its idle grace period ends]",
-                        exit_text(&d["shell_exit_code"]),
-                    );
-                }
+                eprintln!("{}", attach_notice(d));
             }
             Ok(())
         }
-        Cmd::TerminalNew => {
+        Cmd::New if d["attach"].is_object() => {
+            if !a.quiet {
+                eprintln!("{}", attach_notice(&d["attach"]));
+            }
+            Ok(())
+        }
+        Cmd::New => {
             let t = &d["terminal"];
             let pane = &t["windows"][0]["panes"][0];
             writeln!(
                 out,
-                "Terminal `{}` ({}) created: pid {} ({}){}{}\nattach with: subak terminal attach {}",
+                "Terminal `{}` ({}) created: pid {} ({}){}{}\nattach with: subak attach {}",
                 text(&d["name"]),
                 text(&d["terminal_id"]),
                 pane["pid"],
@@ -517,37 +634,71 @@ fn human(cmd: &Cmd, d: &Value, a: &Args) {
                 text(&d["terminal_id"]),
             )
         }
-        Cmd::TerminalList => {
-            let list = d["terminals"].as_array().cloned().unwrap_or_default();
-            if list.is_empty() {
-                writeln!(
-                    out,
-                    "no Terminals{}",
-                    if d["host"].is_null() {
-                        " (no Host is running)"
-                    } else {
-                        ""
-                    }
-                )
-            } else {
-                let _ = writeln!(
-                    out,
-                    "{:<14}  {:<20}  {:<8}  {:>7}  {:>7}  PROGRAM",
-                    "ID", "NAME", "STATE", "PID", "CLIENTS"
-                );
-                for t in &list {
-                    let _ = writeln!(out, "{}", row(t));
+        Cmd::Ls => match table(d["terminals"].as_array().map_or(&[][..], Vec::as_slice)) {
+            None => writeln!(
+                out,
+                "no Terminals{}",
+                if d["host"].is_null() {
+                    " (no Host is running)"
+                } else {
+                    ""
                 }
-                Ok(())
+            ),
+            Some(t) => write!(out, "{t}"),
+        },
+        Cmd::Status if d["running"] != true => writeln!(
+            out,
+            "no Host is running on {}; no Terminals (`subak new` starts one)",
+            text(&d["endpoint"])
+        ),
+        Cmd::Status => {
+            let list = d["terminals"].as_array().map_or(&[][..], Vec::as_slice);
+            let live = list
+                .iter()
+                .filter(|t| {
+                    matches!(
+                        t["state"].as_str(),
+                        Some("starting" | "running" | "stopping")
+                    )
+                })
+                .count();
+            let attached: Vec<String> = d["clients"]["list"]
+                .as_array()
+                .map(|l| {
+                    l.iter()
+                        .filter(|c| c["attached"] == true)
+                        .map(client_row)
+                        .collect()
+                })
+                .unwrap_or_default();
+            let _ = writeln!(
+                out,
+                "Host pid {} (version {}, up {} s, idle exit after {} s) on {}\n\
+                 Terminals: {} ({live} live); clients: {} connected (this command included), {} attached",
+                d["host"]["pid"],
+                text(&d["host"]["version"]),
+                d["host"]["uptime_s"],
+                d["host"]["idle_exit_s"],
+                text(&d["endpoint"]),
+                list.len(),
+                d["clients"]["connected"],
+                d["clients"]["attached"],
+            );
+            if let Some(t) = table(list) {
+                let _ = write!(out, "{t}");
             }
+            for c in &attached {
+                let _ = writeln!(out, "{c}");
+            }
+            Ok(())
         }
-        Cmd::TerminalInfo => {
+        Cmd::Info => {
             let t = &d["terminal"];
             let w = &t["windows"][0];
             let p = &w["panes"][0];
             writeln!(
                 out,
-                "Terminal `{}` ({}) — {}{} since {}\nwindow {} `{}` ({}), pane {} ({}): {} {}\n\
+                "Terminal `{}` ({}) — {}{} since {}\nwindow {} `{}` ({}), pane {} ({}): {}\n\
                  executable {}\npid {}, {} process(es), {}x{}, {} client(s), cwd {}{}{}",
                 text(&t["name"]),
                 text(&t["id"]),
@@ -559,11 +710,19 @@ fn human(cmd: &Cmd, d: &Value, a: &Args) {
                 text(&w["id"]),
                 p["index"],
                 text(&p["id"]),
-                text(&p["command"]["program"]),
-                p["command"]["args"]
-                    .as_array()
-                    .map(|v| v.iter().map(text).collect::<Vec<_>>().join(" "))
-                    .unwrap_or_default(),
+                if p["command_line"].is_string() {
+                    format!("{} (verbatim)", text(&p["command_line"]))
+                } else {
+                    std::iter::once(text(&p["command"]["program"]))
+                        .chain(
+                            p["command"]["args"]
+                                .as_array()
+                                .map(|v| v.iter().map(text).collect::<Vec<_>>())
+                                .unwrap_or_default(),
+                        )
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                },
                 text(&p["executable"]),
                 text(&p["pid"]),
                 p["processes"],
@@ -588,20 +747,55 @@ fn human(cmd: &Cmd, d: &Value, a: &Args) {
                 },
             )
         }
-        Cmd::TerminalRename if d["changed"] == false => writeln!(
+        Cmd::Detach => {
+            let list = d["detached"].as_array().map_or(&[][..], Vec::as_slice);
+            let whom = if d["terminal"].is_object() {
+                format!(
+                    "`{}` ({})",
+                    text(&d["terminal"]["name"]),
+                    text(&d["terminal"]["id"])
+                )
+            } else {
+                format!("client {}", a.client.unwrap_or_default())
+            };
+            if list.is_empty() {
+                writeln!(out, "no client was attached to {whom}; nothing changed")
+            } else {
+                let rows: Vec<String> = list
+                    .iter()
+                    .map(|e| {
+                        format!(
+                            "client {} pid {} ({} {}) from {}",
+                            e["client"]["id"],
+                            text(&e["client"]["pid"]),
+                            text(&e["client"]["kind"]),
+                            text(&e["client"]["name"]),
+                            text(&e["terminal_id"]),
+                        )
+                    })
+                    .collect();
+                writeln!(
+                    out,
+                    "detached {} attachment(s) of {whom}: {}; nothing was stopped",
+                    list.len(),
+                    rows.join("; ")
+                )
+            }
+        }
+        Cmd::Rename if d["changed"] == false => writeln!(
             out,
             "Terminal {} is already named `{}`",
             text(&d["terminal_id"]),
             text(&d["name"]),
         ),
-        Cmd::TerminalRename => writeln!(
+        Cmd::Rename => writeln!(
             out,
             "Terminal {} renamed: `{}` -> `{}`",
             text(&d["terminal_id"]),
             text(&d["previous_name"]),
             text(&d["name"]),
         ),
-        Cmd::TerminalStop | Cmd::TerminalKill | Cmd::TerminalRm => {
+        Cmd::Stop | Cmd::Kill | Cmd::Rm => {
             let name = text(&d["name"]);
             let ended: Vec<String> = d["affected"]
                 .as_array()
@@ -622,6 +816,6 @@ fn human(cmd: &Cmd, d: &Value, a: &Args) {
                 )
             }
         }
-        _ => Ok(()),
+        Cmd::Help | Cmd::Version | Cmd::Capabilities => Ok(()),
     };
 }

@@ -4,10 +4,9 @@ Status: **current** · CLI contract **v1** · Step 07 · Decision: [ADR 0015](ad
 · Requirements: `KIM-FR-010`, `KIM-FR-011`, `KIM-FR-012`, `KIM-FR-020`, `KIM-NFR-014`,
 `KIM-SEC-013`
 
-Every Kim tool's command line follows this contract: `kim` today, `subak` (its `host` and
-`terminal` commands since Steps 09–10, the full CLI from Step 12), and
-every later tool. It is what agents and scripts may rely on. The `kim` command reference is
-[KIM_CLI.md](KIM_CLI.md); machine-readable schemas are in
+Every Kim tool's command line follows this contract: `kim`, `subak` (its whole CLI since
+Step 12, [SUBAK_CLI.md](SUBAK_CLI.md)), and every later tool. It is what agents and scripts may
+rely on. The `kim` command reference is [KIM_CLI.md](KIM_CLI.md); machine-readable schemas are in
 [contracts/schemas/](contracts/schemas/cli-envelope-v1.schema.json).
 
 Words: **MUST**/**MUST NOT** are requirements; **SHOULD** is a strong default that needs a
@@ -21,7 +20,8 @@ written reason to break.
   (`crates/kim/tests/cli_contract.rs`), checks streams, exit codes, prompts, permissions,
   partial downloads, offline mode and redaction (`cli_functional.rs`), and proves that headless
   commands start no process (`cli_headless.rs`). Subak is validated against the
-  same schemas (`crates/subak/tests/cli.rs`).
+  same envelope and capabilities schemas and against its own `subak-cli-v1`, with golden files
+  from real runs (`crates/subak/tests/cli.rs`, `crates/subak/tests/subak_cli.rs`).
 
 ## 2. Names and verbs
 
@@ -37,6 +37,12 @@ written reason to break.
 - The **command name** of an invocation is the dotted path of its words: `catalog.list`,
   `tools.describe`, `settings.set`, `update.check`. It appears in the JSON envelope (§7) and in
   the capabilities document (§9).
+- An **alias** (another spelling of the same command, such as `subak list` for `subak ls`, or a
+  deprecated spelling such as `subak terminal new`) reports the name of the command it stands
+  for, so each data shape has exactly one command name, and only canonical names appear in the
+  capabilities document. A deprecated spelling adds a warning (`warnings` in `--json`, one
+  stderr line otherwise) and is removed only by a breaking change (§8;
+  [ADR 0027](adr/0027-subak-cli-structure-and-headless-control.md)).
 
 ## 3. Help, version and discoverability
 
@@ -162,7 +168,9 @@ lifecycle). `subak` also uses `io`, `internal`, `permission_denied`, `usage`, `t
 | `terminals_running` | 7 | `host stop` would end live Terminals; it does so only with `--kill-terminals` (ADR 0003 §7). |
 
 **Noeul codes** (Step 49 foundation: the resident instance, Noeul IPC v1, region pins requested
-from the CLI, `F3` image paste; [ADR 0023](adr/0023-noeul-app-foundation.md),
+from the CLI, `F3` image paste; [ADR 0023](adr/0023-noeul-app-foundation.md). Step 50's
+`noeul capture --interactive`/`--cancel` and IPC `capture.region`/`capture.cancel` add no code:
+a request while an overlay is open succeeds with `opened: false` ([ADR 0026](adr/0026-noeul-capture-overlay.md));
 [NOEUL_REQUIREMENTS §7](NOEUL_REQUIREMENTS.md#7-planned-cli-error-codes)). `noeul` also uses
 `io`, `internal`, `permission_denied`, `usage`, `protocol_error`, `unsupported_platform`,
 `timeout`, `busy`, `confirmation_required`, `cancelled` and the `hotkeys` codes below with the
@@ -197,24 +205,32 @@ another meaning; `kim` implements them since Step 46:
 | `hotkey_conflict` | 7 | The change conflicts with another binding; nothing was changed. |
 
 Subak's IPC error codes ([IPC_PROTOCOL](contracts/IPC_PROTOCOL.md)) are a separate namespace;
-the CLI maps them onto the codes above (for example IPC `invalid_params` → `usage`). Step 12
-extends this table for Subak's real CLI. `host attach` and `terminal attach` are the commands
-whose stdout is not a document: they stream the terminal, so `--json` is accepted only with
-`--dry-run`. The `data` of `host status` is the IPC `host.status` result
-([IPC_PROTOCOL §4.1](contracts/IPC_PROTOCOL.md)); `host health`, `host start` and `host stop` add
-the fields listed there and in [CONPTY_PROOF.md](CONPTY_PROOF.md). The `data` of `terminal new`,
-`list`, `info`, `rename`, `stop`, `kill` and `rm` is the result of the IPC method they call
-(`terminal.create`, `.list`, `.info`, `.rename`, `.stop`, `.kill`, `.remove`; typed by the
-`result_*` definitions of `ipc-v1.schema.json`), plus `host` (`{pid, started}` for `new`, `{pid}`
-for `list`, `null` when no Host runs). Their meanings and consent rules are in
-[SESSION_MODEL §4](SESSION_MODEL.md): `stop`, `kill` and `rm` are `destructive` and ask, or need
-`--yes`; `host stop` with live Terminals also needs `--kill-terminals`. `new`, `info` and `rm` are
-tmux words outside §2's standard verbs, chosen to match the IPC methods (ADR 0020).
-`terminal new` (Step 11) runs `-- <program> [args…]` as separate words, never through a shell,
-with the program resolved on the pane's `PATH`; `--env NAME=VALUE`, `--env NAME` and
-`--unset-env NAME` (repeatable) adjust the pane's environment; `--dry-run` reports the resolved
-`executable` also without a Host ([PTY_PROCESSES](PTY_PROCESSES.md)). There is no
-published Subak CLI schema yet (Step 12); the envelopes are validated against `cli-envelope-v1`.
+the CLI maps them onto the codes above (for example IPC `invalid_params` → `usage`).
+
+**Subak's commands** (Step 12, [SUBAK_CLI.md](SUBAK_CLI.md),
+[ADR 0027](adr/0027-subak-cli-structure-and-headless-control.md)) are `new`, `ls` (alias `list`),
+`info`, `status`, `attach`, `detach`, `rename`, `stop`, `kill`, `rm`, `host start|status|health|
+attach|stop|serve` and `capabilities`; `subak terminal new|list|ls|info|rename|attach|stop|kill|rm`
+is their deprecated Step 10 spelling (an alias, §2). The `data` of every command is published as
+[subak-cli-v1](contracts/schemas/subak-cli-v1.schema.json), with golden files from real runs in
+`contracts/examples/subak-cli-v1/`; its Terminal, Window and Pane definitions are those of
+`ipc-v1`, copied verbatim. `new`, `ls`, `info`, `rename`, `stop`, `kill`, `rm` and `detach` answer
+the result of the IPC method they call (`terminal.create`, `.list`, `.info`, `.rename`, `.stop`,
+`.kill`, `.remove`, `client.detach`) plus `host` where useful (`{pid, started}` for `new`, `{pid}`
+for `ls` and `detach`, `null` when no Host runs); `status` combines `host.status` and
+`terminal.list` and reports `running: false` (exit 0) without a Host; the `host` commands answer
+the shapes of [IPC_PROTOCOL §4.1](contracts/IPC_PROTOCOL.md) and [CONPTY_PROOF.md](CONPTY_PROOF.md).
+`attach` and `host attach` (and `new --attach`) stream the terminal, so `--json` is accepted only
+with `--dry-run`. Meanings and consent are in [SESSION_MODEL §4](SESSION_MODEL.md): `stop`,
+`kill` and `rm` are `destructive` and ask, or need `--yes`; `host stop` with live Terminals also
+needs `--kill-terminals`; `detach` (effect `write`) never stops anything and never asks. `new`,
+`ls`, `info`, `rm`, `attach` and `detach` are tmux words outside §2's standard verbs, chosen for
+familiarity and to match the IPC methods (ADR 0020, ADR 0027). `new` runs `-- <program>
+[args…]` as separate words, never through a shell, with the program resolved on the pane's
+`PATH`, or one verbatim `--command-line` (only its first word resolved); `--env NAME=VALUE`,
+`--env NAME` and `--unset-env NAME` adjust the pane's environment; `--dry-run` reports the
+resolved `executable` also without a Host ([PTY_PROCESSES](PTY_PROCESSES.md)); only `new` starts
+a Host on demand, and `--no-start` forbids even that.
 
 **Ddalgak codes** (Step 66 engine commands, [DDALGAK_ENGINE §6](DDALGAK_ENGINE.md); Step 67 rule
 commands, [DDALGAK_RULE_MODEL §13](DDALGAK_RULE_MODEL.md)). `ddalgak` also uses `io`,
@@ -434,7 +450,7 @@ Secrets never appear in JSON output, human output, diagnostics or stored state (
   still used internally (e.g. to download), it is only never shown or stored.
 - Tools MUST NOT print environment variable values, request headers or file contents that may
   hold secrets; proxy URLs from `HTTPS_PROXY`/`HTTP_PROXY` are redacted like any other URL.
-- Subak's environment overrides (`subak terminal new --env NAME=VALUE`, `--env NAME`, IPC
+- Subak's environment overrides (`subak new --env NAME=VALUE`, `--env NAME`, IPC
   `terminal.create` `env`) are used once to start the pane and never stored, logged or shown:
   every output names the variables only (`env: {set, unset}`), and errors never echo a value.
   `--env NAME` copies the caller's own value, so a token need not appear on a command line

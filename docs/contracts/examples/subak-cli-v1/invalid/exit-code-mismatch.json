@@ -1,0 +1,12 @@
+{
+  "ok": false,
+  "command": "new",
+  "schema_version": 1,
+  "error": {
+    "code": "name_conflict",
+    "exit_code": 3,
+    "message": "name_conflict is a conflict (exit 7), never not-found (exit 3)",
+    "hint": null,
+    "details": []
+  }
+}

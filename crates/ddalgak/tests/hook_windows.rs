@@ -9,13 +9,23 @@
 //! only counts of its own events and the state of its own keys. On a locked workstation (no
 //! interactive input desktop) the injection part reports **skipped (locked)**.
 //!
+//! Step 68 adds a real-input smoke test of remaps and blocks
+//! (`real_remap_block_and_dual_role_with_obscure_keys`). Its hook consumes keys, but only the
+//! test's own obscure keys F15, F17 and F18 (every other event goes to `CallNextHookEx`), and it
+//! injects only F16, F19 and F20. Remaps never accept injected input in a rules file (schema
+//! `recursion_risk`); `SendInput` always marks input as injected, so the test builds its bindings
+//! directly with `injected: accept` to stand in for a physical key. Results are read from
+//! `GetAsyncKeyState` of those keys and the engine's own counters, never from a focused
+//! application. No mouse input is injected; mouse-button remaps are covered by the core tests.
+//!
 //! Requirements: `DDALGAK-NFR-001`, `DDALGAK-NFR-002`, `DDALGAK-SEC-004`, `DDALGAK-SEC-005`,
-//! `DDALGAK-FR-002`.
+//! `DDALGAK-FR-002`, `DDALGAK-FR-010`.
 #![cfg(windows)]
 
 use ddalgak::inject::{Injector, OutKey};
+use ddalgak::remap::Output;
 use ddalgak::stats::Stats;
-use ddalgak::table::{Action, Binding, EngineOp, Injected, On, Table};
+use ddalgak::table::{Action, Binding, EngineOp, Injected, On, RemapSpec, Table};
 use ddalgak::trigger::Trigger;
 use ddalgak::win::hook::{self, HookThread, STATE_RUNNING, Shared};
 use ddalgak::win::inject::{SendInputBackend, send_as_other_program};
@@ -31,6 +41,9 @@ const VK_F14: u16 = 0x7D;
 const VK_F15: u16 = 0x7E;
 const VK_F16: u16 = 0x7F;
 const VK_F17: u16 = 0x80;
+const VK_F18: u16 = 0x81;
+const VK_F19: u16 = 0x82;
+const VK_F20: u16 = 0x83;
 
 fn binding(rule: &str, keys: &str, injected: Injected, op: EngineOp) -> Binding {
     Binding {
@@ -55,6 +68,10 @@ struct Engine {
 }
 
 fn engine(bindings: Vec<Binding>, lifetime: Duration) -> Engine {
+    engine_with(bindings, lifetime, true)
+}
+
+fn engine_with(bindings: Vec<Binding>, lifetime: Duration, observe_only: bool) -> Engine {
     let stats = Arc::new(Stats::default());
     let shared = Shared::new(Arc::clone(&stats));
     let (tx, control) = channel();
@@ -81,7 +98,7 @@ fn engine(bindings: Vec<Binding>, lifetime: Duration) -> Engine {
         &shared,
         worker.queue(),
         hook::Options {
-            observe_only: true,
+            observe_only,
             max_lifetime: Some(lifetime),
         },
     )
@@ -314,5 +331,165 @@ fn injected(e: &mut Engine) {
     );
     assert!(p99 <= 1_000, "p99 callback time {p99} µs");
     verified.push("p99 callback time below 1 ms");
+    eprintln!("verified with real SendInput: {verified:?}");
+}
+
+/// A remap binding that other programs' input may trigger (test only: see the module comment).
+fn remap_binding(rule: &str, keys: &str, to: &str, tap: Option<&str>) -> Binding {
+    Binding {
+        rule: rule.into(),
+        trigger: Trigger::parse(keys).unwrap(),
+        on: On::Press,
+        repeat: false,
+        pass_through: false,
+        injected: Injected::Accept,
+        widen: true,
+        injects: true,
+        action: Action::Remap(RemapSpec {
+            to: Output::parse(to).unwrap(),
+            tap: tap.map(|t| Output::parse(t).unwrap()),
+            tap_ms: 200,
+        }),
+    }
+}
+
+fn send_other(vk: u16, up: bool) -> bool {
+    send_as_other_program(&[OutKey { vk, up }]) == 1
+}
+
+/// Waits until `cond` holds (at most `ms`).
+fn eventually(ms: u64, cond: impl Fn() -> bool) -> bool {
+    let until = Instant::now() + Duration::from_millis(ms);
+    while Instant::now() < until {
+        if cond() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    cond()
+}
+
+#[test]
+fn real_remap_block_and_dual_role_with_obscure_keys() {
+    if !ddalgak::win::input_desktop_available() {
+        eprintln!(
+            "skipped (locked): no interactive input desktop; remaps are covered by the core and \
+             worker unit tests"
+        );
+        return;
+    }
+    let mut block = binding("block-f17", "F17", Injected::Accept, EngineOp::Pause);
+    block.action = Action::Block;
+    block.widen = true;
+    let mut e = engine_with(
+        vec![
+            remap_binding("f15-f16", "F15", "F16", None),
+            block,
+            remap_binding("f18-dual", "F18", "F19", Some("F20")),
+        ],
+        Duration::from_secs(10),
+        false,
+    );
+    let s = Arc::clone(&e.stats);
+    let mut verified: Vec<&str> = Vec::new();
+    // 1. F15 acts as F16 for exactly as long as it is held; F15 itself never goes down.
+    let t = Instant::now();
+    inject_or_skip!(send_other(VK_F15, false), "F15 down", verified);
+    let pressed = eventually(1000, || key_down(VK_F16));
+    let latency = t.elapsed();
+    if !pressed && !ddalgak::win::input_desktop_available() {
+        eprintln!("skipped (locked during the run): verified before: {verified:?}");
+        return;
+    }
+    assert!(pressed, "F16 is held while F15 is");
+    assert!(!key_down(VK_F15), "the trigger was consumed");
+    eprintln!("remap output arrived {latency:?} after the trigger");
+    inject_or_skip!(send_other(VK_F15, false), "F15 repeat", verified);
+    std::thread::sleep(Duration::from_millis(50));
+    assert!(key_down(VK_F16), "a repeat keeps the target down");
+    inject_or_skip!(send_other(VK_F15, true), "F15 up", verified);
+    assert!(
+        eventually(1000, || !key_down(VK_F16)),
+        "F16 released with F15"
+    );
+    verified.push("remap F15 -> F16: target held with the trigger, released with it");
+    // 2. F17 is blocked: consumed down and up, never logically pressed.
+    let consumed0 = s.consumed.load(Ordering::Relaxed);
+    inject_or_skip!(send_other(VK_F17, false), "F17 down", verified);
+    std::thread::sleep(Duration::from_millis(30));
+    assert!(!key_down(VK_F17), "a blocked key never goes down");
+    inject_or_skip!(send_other(VK_F17, true), "F17 up", verified);
+    assert!(eventually(500, || s.consumed.load(Ordering::Relaxed) >= consumed0 + 2));
+    verified.push("block F17: down and up consumed");
+    // 3. The output is Ddalgak's own input: the hook passed F16 on without matching it.
+    assert!(
+        s.own_injected.load(Ordering::Relaxed) >= 3,
+        "F16 down, repeat, up seen as own"
+    );
+    // 4. Pausing (the core cancels and tells the worker to release everything) releases a held
+    //    target at once; the trigger's later up stays consumed and presses nothing again.
+    inject_or_skip!(send_other(VK_F15, false), "F15 down again", verified);
+    assert!(eventually(1000, || key_down(VK_F16)));
+    e.hook.as_ref().unwrap().cancel_pending();
+    assert!(
+        eventually(1000, || !key_down(VK_F16)),
+        "released by the pause path"
+    );
+    inject_or_skip!(send_other(VK_F15, true), "F15 up after the pause", verified);
+    std::thread::sleep(Duration::from_millis(50));
+    assert!(!key_down(VK_F16) && !key_down(VK_F15));
+    verified.push("pause path releases a held target");
+    // 5. A desktop switch, an unlock or an elevated window (key-state reset) releases too.
+    inject_or_skip!(send_other(VK_F15, false), "F15 down for a reset", verified);
+    assert!(eventually(1000, || key_down(VK_F16)));
+    e.shared.request_key_reset();
+    assert!(
+        eventually(1000, || !key_down(VK_F16)),
+        "released by the reset path"
+    );
+    inject_or_skip!(send_other(VK_F15, true), "F15 up after the reset", verified);
+    verified.push("key-state reset releases a held target");
+    // 6. Dual role F18: a quick tap sends F20 (seen as two own events), a hold past 200 ms
+    //    holds F19 (the hook thread's one-shot timer), released with F18.
+    let own0 = s.own_injected.load(Ordering::Relaxed);
+    inject_or_skip!(send_other(VK_F18, false), "F18 down (tap)", verified);
+    inject_or_skip!(send_other(VK_F18, true), "F18 up (tap)", verified);
+    assert!(
+        eventually(1000, || s.own_injected.load(Ordering::Relaxed) >= own0 + 2),
+        "the tap output F20 went down and up"
+    );
+    assert!(!key_down(VK_F20) && !key_down(VK_F19) && !key_down(VK_F18));
+    let t = Instant::now();
+    inject_or_skip!(send_other(VK_F18, false), "F18 down (hold)", verified);
+    assert!(
+        eventually(1500, || key_down(VK_F19)),
+        "the timer pressed F19"
+    );
+    let waited = t.elapsed();
+    assert!(
+        waited >= Duration::from_millis(150),
+        "not before the tap time: {waited:?}"
+    );
+    inject_or_skip!(send_other(VK_F18, true), "F18 up (hold)", verified);
+    assert!(
+        eventually(1000, || !key_down(VK_F19)),
+        "F19 released with F18"
+    );
+    eprintln!("dual role: F19 pressed {waited:?} after F18 went down (tap time 200 ms)");
+    verified.push("dual role F18: tap sends F20, hold presses F19 after the tap time");
+    let p99 = s.p99_us().unwrap_or(0);
+    eprintln!(
+        "remap smoke: callbacks {}, consumed {}, own events {}, max {} µs, p99 ≤ {} µs",
+        s.callbacks.load(Ordering::Relaxed),
+        s.consumed.load(Ordering::Relaxed),
+        s.own_injected.load(Ordering::Relaxed),
+        s.max_us.load(Ordering::Relaxed),
+        p99
+    );
+    e.hook.take().unwrap().stop();
+    drop(e.worker);
+    for vk in [VK_F15, VK_F16, VK_F17, VK_F18, VK_F19, VK_F20] {
+        assert!(!key_down(vk), "nothing is left pressed ({vk:#x})");
+    }
     eprintln!("verified with real SendInput: {verified:?}");
 }

@@ -6,7 +6,7 @@
   "cli_contract": 1,
   "json_schema_version": 1,
   "implementation": "implemented",
-  "summary": "Pre-alpha: per-user Host with IPC v1, named Terminals (new, ls, attach, detach, rename, stop, kill, rm, capture, history) and the window subak-gui; no tabs, splits or recovery yet",
+  "summary": "Pre-alpha: per-user Host with IPC v1, named Terminals (new, ls, attach, detach, rename, stop, kill, rm, capture, history), the tabbed window subak-gui and its hotkeys; no splits or recovery yet",
   "commands": [
     {
       "name": "capabilities",

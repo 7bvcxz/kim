@@ -73,7 +73,7 @@ fn help_is_honest_about_the_prototype_status() {
     let text = String::from_utf8_lossy(&out.stdout);
     assert!(text.contains("pre-alpha; Host, IPC v1, the Terminal lifecycle and its CLI"));
     assert!(text.contains("No command opens a window"));
-    assert!(text.contains("no tabs, windows/panes splits, persistence or recovery yet"));
+    assert!(text.contains("no windows/panes splits, persistence or recovery yet"));
     assert!(text.contains("The window is a separate program, `subak-gui`"));
     assert!(text.contains("no Windows service exists"));
     assert!(text.contains("There is no ambiguous `close`"));

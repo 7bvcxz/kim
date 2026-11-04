@@ -1,4 +1,4 @@
-//! The tab bar (Step 17, DESIGN_SYSTEM §3.5, docs/SUBAK_GUI.md §3): one tab per Terminal of the
+//! The tab bar (Step 17, DESIGN_SYSTEM §3.5, docs/SUBAK_GUI.md §2): one tab per Terminal of the
 //! Host that this window shows, in order, with its state, its name, a close `×` that **hides**
 //! the tab (a detach; the Terminal keeps running, ADR 0020 §7) and a `+` that creates a Terminal.
 //!

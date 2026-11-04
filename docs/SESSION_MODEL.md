@@ -128,10 +128,10 @@ command or IPC method: "close" in a UI is always one of the rows below.
 | Detach other clients (from another terminal or a script; Step 12) | `subak detach <terminal>`, `subak detach --client <id>` / `client.detach` | untouched | untouched | none (it ends nothing) |
 | A client disconnects or crashes; a console window running `subak attach` is closed | — | untouched | untouched | none |
 | Close a GUI window, quit the GUI, a GUI crash (Steps 16–18) | detach | untouched | untouched | none |
-| Close a GUI **tab** with its × or "Hide tab" (Steps 16–18) | detach of that tab's panes | untouched | untouched; still listed in the session manager | none |
+| Close a GUI **tab** with its ×, a middle click or "Hide tab" (Step 17) | detach of that tab's pane (`pane.detach`) | untouched | untouched; still listed by `subak ls` and (Step 18) the session manager | none |
 | **Stop**: end the processes, keep the Terminal | `subak stop` / `terminal.stop` | graceful, then a guarded force (below) | kept as `stopped` | CLI: ask or `--yes` while it runs. Host: `force` when busy |
-| **Kill**: end the Terminal | `subak kill` / `terminal.kill`; GUI `Ctrl+W` "Close Terminal" | ended at once (`TerminateJobObject`) | removed | CLI: ask or `--yes`, always. Host: `force` when busy |
-| **Remove** a Terminal that runs nothing | `subak rm` / `terminal.remove` | none (a running one is refused: `invalid_state`) | removed | CLI: ask or `--yes` (it deletes the record) |
+| **Kill**: end the Terminal | `subak kill` / `terminal.kill`; GUI `Ctrl+W` "Close Terminal" (Step 17) | ended at once (`TerminateJobObject`) | removed | CLI: ask or `--yes`, always. Host: `force` when busy. GUI: sends no `force` first; on `busy` it asks in the window (Cancel is the default) and only "End Terminal" sends `force`, by id |
+| **Remove** a Terminal that runs nothing | `subak rm` / `terminal.remove`; GUI `Ctrl+W` or "Remove Terminal" on a stopped or failed tab (Step 17) | none (a running one is refused: `invalid_state`) | removed | CLI: ask or `--yes` (it deletes the record). GUI: none (no process ends) |
 | Remove a running Terminal | `subak rm --force` / `terminal.remove` with `force` | as kill | removed | as kill |
 | Stop the Host | `subak host stop` / `host.stop` | every live Terminal ends as `host_stopped` | gone with the Host (until Step 29) | refused with live Terminals unless `--kill-terminals` (`terminals_running`), then ask or `--yes`; IPC `kill_terminals` |
 | The program exits by itself | — | already ended; leftovers in its job are ended | removed, or `stopped` with `remain_on_exit` | — |
@@ -221,7 +221,7 @@ ADR 0027; `subak terminal <verb>` is the deprecated Step 10 spelling) maps onto 
 - **Profiles** (`profile` of `terminal.create`, Step 33) are refused with `invalid_params`, never
   silently ignored. Environment overrides (`env`) exist since Step 11
   ([PTY_PROCESSES §3](PTY_PROCESSES.md)).
-- **More windows and panes** (Steps 21–22), the GUI's tabs and session manager (Steps 16–18), and
+- **More windows and panes** (Steps 21–22), the GUI's session manager (Step 18; tabs exist since Step 17), and
   `pane.send_keys` (Step 24; Step 12 writes input only through an attach). `pane.capture` exists
   since Step 13.
 - **Persisted history** (Steps 29+): opt-in and off by default when it comes

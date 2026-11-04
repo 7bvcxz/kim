@@ -1,50 +1,83 @@
 # The Subak window (`subak-gui`)
 
-Status: **current** (implemented, Step 16; the visible-window checks of §9 are pending the
-maintainer) · Decision: [ADR 0039](adr/0039-subak-window-plain-win32-client.md) · Builds on
+Status: **current** (implemented, Steps 16–17; the visible-window checks of §9 are pending the
+maintainer) · Decisions: [ADR 0039](adr/0039-subak-window-plain-win32-client.md),
+[ADR 0042](adr/0042-subak-window-tabs-and-safe-close.md) (tabs) · Builds on
 [TERMINAL_EMULATOR](TERMINAL_EMULATOR.md) (Step 15), [IPC_PROTOCOL](contracts/IPC_PROTOCOL.md),
-[SESSION_MODEL](SESSION_MODEL.md), [DESIGN_SYSTEM](DESIGN_SYSTEM.md) · Requirements:
-`SUBAK-FR-003`, `SUBAK-FR-015`, `SUBAK-FR-031`, `SUBAK-FR-037`, `SUBAK-FR-046`,
-`SUBAK-NFR-001`, `SUBAK-NFR-002`
+[SESSION_MODEL](SESSION_MODEL.md), [HOTKEY_CONTRACT](HOTKEY_CONTRACT.md),
+[DESIGN_SYSTEM](DESIGN_SYSTEM.md) · Requirements: `SUBAK-FR-003`, `SUBAK-FR-011`,
+`SUBAK-FR-013`, `SUBAK-FR-014`, `SUBAK-FR-015`, `SUBAK-FR-031`, `SUBAK-FR-033`, `SUBAK-FR-034`,
+`SUBAK-FR-037`, `SUBAK-FR-038`, `SUBAK-FR-046`, `SUBAK-NFR-001`, `SUBAK-NFR-002`
 
-`subak-gui.exe` is a small native window that shows **one Subak Terminal** live. It is a client
-of the per-user Host, like `subak attach`: the Terminal and its programs live in the Host, so
-closing the window — or the window crashing — never ends them. The Host and the `subak` CLI work
-without it. Tabs (Step 17), the floating icon and session manager (Step 18), search and clipboard
-UX (Step 19) and visual polish and settings (Step 20) come next.
+`subak-gui.exe` is a small native window that shows the Host's **Terminals as tabs** and the
+shown tab's pane live. It is a client of the per-user Host, like `subak attach`: the Terminals
+and their programs live in the Host, so closing the window, hiding a tab — or the window
+crashing — never ends them. The Host and the `subak` CLI work without it. The floating icon and
+session manager (Step 18), search and clipboard UX (Step 19) and visual polish and settings
+(Step 20) come next.
 
 ## 1. Starting it
 
 ```text
-subak-gui [<terminal>] [--endpoint <name>]
+subak-gui [<terminal>] [--endpoint <name>] [--no-hotkeys]
 subak-gui --help | --version
 ```
 
 | Situation | What the window does |
 | --- | --- |
-| `<terminal>` given (a name, case ignored, or a `t-` id) | Opens it. If it does not exist or does not run, says so and lists the running ones. |
-| No `<terminal>`, the Terminal shown last still runs | Reopens it (remembered by id, then by name, in `gui.json`). |
-| Exactly one Terminal runs | Opens it. |
-| Several run | Lists them: `↑`/`↓` (or a click) selects, `Enter` (or a double click) opens. |
-| None runs | "No Terminal is running in the Host" — the next Terminal any client creates (`subak new`) opens by itself. |
+| Always | Every Terminal of the Host is a tab (§2), in the Host's order. |
+| `<terminal>` given (a name, case ignored, or a `t-` id) | Shows its tab. If it does not exist or does not run, says so in a banner and shows the first running tab. |
+| No `<terminal>`, the Terminal shown last still runs | Shows it (remembered by id, then by name, in `gui.json`). |
+| Otherwise | Shows the first running tab (Step 16's chooser is replaced by the tabs). |
+| None exists | "No Terminal is open in this window": `Ctrl+T` (or `+`) starts one; the next Terminal any client creates (`subak new`) opens by itself. |
 | No Host runs | Starts one, as the CLI does (same start lock), **without a shell**: opening the window never starts a shell of its own. |
 | The endpoint is held by something that is not a Subak Host of this user, or no Host can start | An error screen with the stable code (`host_identity_mismatch`, `spawn_failed`, …), the message and `Enter` to retry. Nothing was sent to the impostor. |
 
-The window never creates, stops, kills or removes a Terminal in Step 16. To create one, use
-`subak new`; `Ctrl+T` and `Ctrl+W` arrive with tabs in Step 17.
+Opening the window never creates, stops, kills or removes a Terminal. Only the explicit actions
+of §2 do: `Ctrl+T` creates one, `Ctrl+W` ends or removes the shown one.
 
 `subak-gui.exe` must sit next to `subak.exe` (it starts that program on demand). `--endpoint`
-selects a private Host endpoint, as `subak --endpoint` does.
+selects a private Host endpoint, as `subak --endpoint` does. `--no-hotkeys` (or `KIM_NO_HOTKEYS`)
+starts the window with every shortcut off (§3).
 
-## 2. Closing, crashing, reconnecting
+## 2. Tabs, closing, crashing, reconnecting
+
+**The tab bar** (32 px, DESIGN_SYSTEM §3.5) lists the Host's Terminals — running, starting,
+stopping, stopped and failed ones — in the Host's order (creation order), except the ones hidden
+in this window. Each tab shows its state as a shape (`●` running, `◐` starting or stopping, `■`
+stopped, `▲` failed, `○` gone or unknown while disconnected), its name (cut with `…`) and a `×`.
+The shown tab is bold, filled like the pane below it and marked with a lilac line on top (reverse
+video in High Contrast). `+` after the last tab creates a Terminal; `‹`/`›` appear when the tabs
+do not fit (the shown tab always stays visible). Only the shown tab's pane is attached: switching
+detaches the old pane and attaches the new one, whose screen and history come back from the
+Host; a program that asked for focus reports is told it lost the focus first.
+
+**Other clients.** A Terminal created elsewhere (`subak new`) appears as a new tab at once but
+does not take over the window (keys never move to a Terminal you did not choose). Renames,
+stops and kills by any client update the tabs at once; a killed or exited shown Terminal keeps
+its last screen with a banner (Enter closes the tab).
+
+| Action | Keys and mouse | What it does to the Terminal |
+| --- | --- | --- |
+| **Next / previous tab** | `Ctrl+Tab` / `Ctrl+Shift+Tab` (wrapping), a click on a tab | Nothing: a detach of the old pane, an attach of the new one |
+| **New Terminal** | `Ctrl+T`, `+`, the tab menu | Creates one with the Host's defaults (your default shell in your profile folder) at the window's size and shows it |
+| **Rename** | `Ctrl+Shift+R`, a double click on the tab, the tab menu | The name becomes an edit field (Enter saves by id, Esc cancels; Korean through the IME works); a name in use or invalid is refused by the Host and the field stays with the reason |
+| **Hide tab** (view dismissal) | The tab's `×`, a middle click, the tab menu, `tab.hide` (no default key) | **Nothing**: a detach of this window. The Terminal keeps running, `subak ls` lists it, and the tab menu's "Show hidden: …" brings it back. Hiding lasts while this window runs. |
+| **Close Terminal** (end a live Terminal) | `Ctrl+W`, the tab menu | `terminal.kill` of the shown Terminal by its id. An idle shell ends at once. When the Host reports it **busy** (it runs more than an idle shell, e.g. a Claude session), the window asks: "End `x`? It runs … (n processes in its job); they will be ended. [ Cancel (Esc) ] End Terminal" — **Cancel is the default**: `Esc`, Enter on Cancel or a click on it ends nothing; `Tab`/arrows move to "End Terminal", Enter or a click ends exactly that Terminal. The question goes away if the Terminal ends or another tab is shown. Keys typed meanwhile reach no program. |
+| **Remove a stored Terminal** | `Ctrl+W` on a stopped or failed tab, "Remove Terminal" in the tab menu | `terminal.remove` without force: deletes the Host's record; nothing runs in it, so it does not ask. Restarting a stopped Terminal is Step 30. |
+| **Move a tab** | The tab menu, `tab.move-left`/`tab.move-right` (no default keys) | Nothing: the order is this window's |
+| **Tab menu** | A right click on a tab or the bar, the context-menu key (`Menu`) | A native menu with the actions above and "Show hidden: …" |
+
+The window's close button stays a detach of everything (below). A setting that makes `Ctrl+W`
+only hide the tab (ADR 0009) is `subak hotkeys set tab.hide Ctrl+W --replace`.
 
 | Event | Effect |
 | --- | --- |
-| Close button, Alt+F4, the window menu's Close | A **detach**: the Terminal keeps running (`subak ls`). |
+| Close button, Alt+F4, the window menu's Close | A **detach**: every Terminal keeps running (`subak ls`). |
 | The window's process ends (crash, Task Manager) | The Host drops the connection; nothing else changes. |
 | Another client detaches the window (`subak detach <terminal>`) | The last screen stays, with a banner "Detached by cli client (pid …); `x` keeps running. Enter: reattach". |
-| The program exits, or the Terminal is stopped or removed | The last screen stays, with a banner saying what happened and the exit code; `Enter` lists the running Terminals. |
-| The Host goes away (stopped, crashed) | The last screen stays, with a banner "Disconnected: …. Reconnecting to `x` (attempt n)…". The window retries after 0.5, 1, 2, 4, 8 s, then every 10 s, and **never starts a Host while reconnecting**. When a Host serves the endpoint again it reattaches the same Terminal by id if it runs, else lists what runs and says the old one is gone. `Enter` retries at once. |
+| The program exits, or the Terminal is stopped or removed by another client | The last screen stays, with a banner saying what happened and the exit code; `Enter` closes the tab of a Terminal that is gone (a stopped one stays: `Ctrl+W` removes it). |
+| The Host goes away (stopped, crashed) | The last screen stays, with a banner "Disconnected: …. Reconnecting to `x` (attempt n)…"; the tabs show `○`. The window retries after 0.5, 1, 2, 4, 8 s, then every 10 s, and **never starts a Host while reconnecting**. When a Host serves the endpoint again it reattaches the same Terminal by id if it runs, else shows the first running tab and says the old one is gone. `Enter` retries at once. |
 
 A Host stops its Terminals' programs when it ends (ADR 0003), so a reconnect after a Host crash
 finds new Terminals at most; restoring them is Steps 29–31.
@@ -56,9 +89,32 @@ Keys go to the program, in the order of ADR 0009:
 1. **IME guard.** While an input method composes (Korean, Japanese, Chinese), keys belong to it.
    The composition is drawn inline at the cursor (underlined, on `bg.overlay`), the candidate
    list opens below the cursor, and only committed text is sent.
-2. *(The `Ctrl+B` prefix table is Step 23. Until then `Ctrl+B` goes to the program.)*
-3. **The window's shortcuts** (Windows Terminal's defaults; fixed until Step 17 makes them
-   rebindable with `subak hotkeys`):
+2. **The window's own fields.** While the busy confirmation (§2) is open, its keys answer it and
+   every other key is swallowed; while a tab is renamed, the field takes the keys. Nothing
+   reaches the program and no shortcut fires.
+3. *(The `Ctrl+B` prefix table is Step 23. Until then `Ctrl+B` goes to the program.)*
+4. **The shortcuts** — Subak's actions of the [hotkey contract](HOTKEY_CONTRACT.md) (§13.1): the
+   manifest shipped as `hotkeys.manifest.json`, layered with `%APPDATA%\mouv\subak\hotkeys.json`
+   (`subak hotkeys …`, [SUBAK_CLI §3.12](SUBAK_CLI.md)). The window re-reads the file when it gets
+   the focus; a broken or newer file means the defaults (safe mode) and a banner; `--no-hotkeys`
+   and `KIM_NO_HOTKEYS` turn every shortcut off. Sequences (`Ctrl+K Ctrl+N`), physical `code:`
+   and `char:` keys and the `release`/`hold` triggers work as the contract says; a pending
+   sequence shows a banner and `Esc`, a click or focus loss cancels it. A shortcut's key never
+   reaches the program, not even its auto-repeat (unless the binding has `repeat: true`).
+
+   | Action id | Default keys | Scope | What |
+   | --- | --- | --- | --- |
+   | `terminal.new` | `Ctrl+T` | app | New Terminal (§2) |
+   | `terminal.close` | `Ctrl+W` | app | Close Terminal: ends the shown one, asks when busy; removes a stored one (§2) |
+   | `tab.next` / `tab.previous` | `Ctrl+Tab` / `Ctrl+Shift+Tab` | app | Next / previous tab |
+   | `terminal.rename` | `Ctrl+Shift+R` (`Ctrl+B $` with Step 23) | app | Rename the shown Terminal |
+   | `tab.hide`, `tab.move-left`, `tab.move-right` | none | app | Hide the shown tab; move it |
+
+   `Ctrl+T` and `Ctrl+W` are keys programs use too (readline's transpose and delete-word): the
+   contract reports them as `shadows_terminal_input`. Until the `Ctrl+B` pass-through of
+   Step 23, a program gets them once you disable or rebind the action
+   (`subak hotkeys disable terminal.close`). The Step 16 keys below are actions of the
+   `terminal` context and are rebindable the same way:
 
    | Action id | Keys | What |
    | --- | --- | --- |
@@ -69,7 +125,7 @@ Keys go to the program, in the order of ADR 0009:
    | `scroll.line-up` / `scroll.line-down` | `Ctrl+Shift+Up` / `Down` | Scroll a line |
    | `scroll.top` / `scroll.bottom` | `Ctrl+Shift+Home` / `End` | Oldest line / live screen |
 
-4. **Everything else** goes to the program in the xterm encoding (TERMINAL_EMULATOR §4.1):
+5. **Everything else** goes to the program in the xterm encoding (TERMINAL_EMULATOR §4.1):
    characters as UTF-8 (Alt adds `ESC`; AltGr characters are text), `Ctrl+letter` as C0 controls,
    `Ctrl+Space` as NUL, `Ctrl+2`…`Ctrl+8` as the VT220 codes, cursor keys (`SS3` in application
    cursor mode), Home/End/Insert/Delete/PageUp/PageDown and F1–F12 with modifiers, `Shift+Tab`
@@ -81,7 +137,8 @@ The **mouse**: drag selects (double click: word, triple click: line, Alt+drag: b
 click clears the selection; right click copies a selection, or pastes when there is none; the
 wheel scrolls the history 3 lines per notch (or goes to the program when it tracks the mouse, or
 sends cursor keys on the alternate screen when the program asked for alternate scroll); Shift
-always selects, as in xterm. Over the list of Terminals a click selects and a double click opens.
+always selects, as in xterm. On the tab bar: a click shows a tab, a double click renames it, a
+middle click or its `×` hides it, a right click opens its menu, `+` creates a Terminal.
 
 **Focus**: the cursor is a filled block (or the program's shape) with focus and a hollow box
 without it; programs that asked for focus reports (mode 1004) get them. The cursor does not
@@ -100,13 +157,14 @@ blink (no idle timer; DESIGN_SYSTEM §4.5).
   ADR 0008); a resize to the pane's current size changes nothing. **Minimizing** never resizes the
   pane.
 - **High Contrast**: with Windows High Contrast on (and `theme: "auto"`), the terminal and the
-  screens use the system's window, text and highlight colours and no lilac; the chooser marks the
-  selection in reverse video. It follows changes while the window is open.
+  screens use the system's window, text and highlight colours and no lilac; the shown tab and the
+  focused confirmation button are in reverse video. It follows changes while the window is open.
 - **States are never blank and never colour-only** (DESIGN_SYSTEM §3.8): connecting ("Connecting
-  to the Subak Host…" and the endpoint), opening, empty, the chooser (the selected row has a `›`
-  and a lilac marker), the error screen (code, message, hint, "Press Enter to try again"), and
-  the banners of §2 (a one-line strip in the status colour at 12 % over `bg.raised`, a 3 px marker,
-  words that say what happened and what `Enter` does).
+  to the Subak Host…" and the endpoint), opening, empty, a stored Terminal ("`x` is stopped …
+  `Ctrl+W` removes it", naming the keys as bound), the error screen (code, message, hint, "Press
+  Enter to try again"), the banners of §2 (a one-line strip in the status colour at 12 % over
+  `bg.raised`, a 3 px marker, words that say what happened and what `Enter` does), and the busy
+  confirmation (danger colour, the focused button filled and in brackets).
 
 ## 5. Preferences: `%APPDATA%\mouv\subak\gui.json`
 
@@ -145,14 +203,15 @@ secrets). Schema: [subak-gui-v1](contracts/schemas/subak-gui-v1.schema.json), ex
 
 | Part | Where | Role |
 | --- | --- | --- |
-| Model | `crates/subak/src/gui/model.rs` | The Host conversation as a state machine without I/O: which Terminal to attach, phases, snapshots and resyncs, the pane's end, reconnects with backoff |
-| Screens | `gui/screens.rs` | VT text of the state screens and banners in the design tokens, and their High Contrast form |
+| Model | `crates/subak/src/gui/model.rs` | The Host conversation as a state machine without I/O: the tabs and which one to attach, create/kill/remove/rename by id, the busy answer, other clients' changes, phases, snapshots and resyncs, the pane's end, reconnects with backoff |
+| Screens | `gui/screens.rs` | VT text of the state screens, banners and the busy confirmation in the design tokens, and their High Contrast form |
+| Tabs | `gui/tabs.rs` | The tab bar: tab widths, scrolling, states as shapes, the rename field, clickable spans |
 | Layout | `gui/layout.rs` | DPI scale, grid ↔ client area, saved placements on monitors |
-| Keys | `gui/keys.rs` | The shortcut table (hotkey-contract syntax, via `kim-hotkeys`), key and character mapping |
+| Keys | `gui/keys.rs` | The shortcuts: Subak's manifest and `hotkeys.json` through `kim-hotkeys` (`crate::hotkeys`), logical/physical/character keys, sequences and triggers; key and character mapping |
 | Preferences | `gui/prefs.rs` | `gui.json` |
 | Composition | `gui/compose.rs` | The client area from its layers (also what test shots and goldens use) |
 | Network | `gui/net.rs` | A reader thread (connect or start, identity checks, frames in) and a writer thread (frames out) |
-| Window | `gui/window.rs` | Win32: paint, keyboard, IME, mouse, clipboard, DPI, High Contrast, test hooks |
+| Window | `gui/window.rs` | Win32: paint (tab bar strip, pane, banner, IME), keyboard dispatch, the confirmation and the rename field, the native tab menu, mouse, clipboard, DPI, High Contrast, test hooks |
 | Binary | `crates/subak/src/bin/subak-gui.rs` | GUI subsystem (no console window) |
 
 Data path: the reader queues frames and posts one message per batch; the window feeds them to the
@@ -163,7 +222,8 @@ reports. Synchronized output (mode 2026) holds the frame until the program ends 
 most 150 ms.
 
 Safety: the window is an IPC client of kind `gui` with the CLI's identity checks (same user,
-`subak.exe`, before anything is sent); it never kills, never starts a shell, never touches another
+`subak.exe`, before anything is sent); it ends a Terminal only on `Ctrl+W` or the menu, by id and
+with `force` only after the user's answer, never starts a shell by opening, never touches another
 user's Host, never opens links (OSC 8 hit-testing only; opening is Step 19), never honours OSC 52,
 and never writes the system clipboard except for an explicit copy.
 
@@ -174,7 +234,7 @@ This machine: Windows 10 Pro 22H2 19045, Intel Core i5-13600KF, 2026-11-04.
 | What | Result |
 | --- | --- |
 | Idle, release build (`--features test-hooks` for the off-screen flag), attached to a live cmd.exe Terminal, 30 s, no output (`step16_idle.ps1`, the Step 15 sampler's quantities) | **0.0 ms CPU, 3.95 MiB private, 11.3 MiB working set, 5 threads, 154 handles** |
-| Idle, debug build, same, 10 s (`tests/gui_window.rs::idle_window_costs_no_cpu_and_little_memory`) | 0.0 ms CPU, 4.06 MiB private, 12.6 MiB working set, 6 threads, 153 handles |
+| Idle, debug build, same, 10 s (`tests/gui_window.rs::idle_window_costs_no_cpu_and_little_memory`) | Step 16: 0.0 ms CPU, 4.06 MiB private, 12.6 MiB working set, 6 threads, 153 handles. **Step 17 (with the tab bar): 0.0 ms CPU, 4.38 MiB private, 13.5 MiB working set, 6 threads, 157 handles** |
 | Step 15 references (ADR 0036) | renderer + GDI window, no IPC: 3.40 MiB private, 1 thread; egui + glow: 107.0 MiB private, 12 threads |
 | Binary sizes (release, shipped features) | `subak-gui.exe` 917 KB; `subak.exe` 1.57 MB |
 | `subak.exe` carries no window or renderer | its import table names none of `CreateDIBSection`, `GetFontData`, `SetDIBitsToDevice`, `CreateWindowExW`, `ImmGetContext`, `gdi32` (checked with `grep -c -a` on the release binary); `subak-gui.exe` names all of them |
@@ -182,16 +242,19 @@ This machine: Windows 10 Pro 22H2 19045, Intel Core i5-13600KF, 2026-11-04.
 The threads beyond Step 15's one: the reader and writer (blocked in the kernel when idle), and
 the system's input-method threads.
 
-## 8. Known limits (Step 16)
+## 8. Known limits (Steps 16–17)
 
-- One Terminal per window; no tabs, `Ctrl+T`/`Ctrl+W`, session manager or floating icon
-  (Steps 17–18).
-- Shortcuts are fixed; `hotkeys.json` and `subak hotkeys` for Subak are Step 17. No `Ctrl+B`
-  prefix (Step 23).
+- One window; no session manager or floating icon (Step 18). Hidden tabs are forgotten when the
+  window closes; the tab order is the window's own and not saved.
+- No `Ctrl+B` prefix or pass-through (Step 23): a program gets `Ctrl+T`/`Ctrl+W` only once the
+  action is disabled or rebound. `AltGr` and `Win` chords are not matched by the window.
+- A background tab is not attached: its activity and Claude state are not shown (Steps 26–28).
 - No multi-line paste warning, search, link opening, copy-as-HTML (Step 19).
 - win32-input-mode is not granted: Ctrl+Break and key releases do not reach programs.
-- UI text uses the terminal font; the integrated tab bar, icons, settings UI and themes are
-  Steps 17 and 20. The taskbar shows the generic application icon.
+- UI text uses the terminal font; the tab bar is in the client area (the integrated title-bar tab
+  bar of DESIGN_SYSTEM §3.5 needs custom non-client drawing), icons, settings UI and themes are
+  Step 20. No hover states or tooltips on tabs yet. The taskbar shows the generic application
+  icon.
 - No UI Automation tree yet (screen readers do not read the terminal); planned with Step 20/39.
 - Colour emoji are monochrome; the cursor does not blink.
 - The banner covers the pane's first row while it is shown.
@@ -236,6 +299,29 @@ maintainer's. Build first: `cargo build --release -p subak` (both binaries land 
 14. Record the Windows build, scale(s), keyboard layout and pass/fail per step in the Step 16
     issue.
 
+**Tabs (Step 17).** With the same `%E%`:
+
+15. `subak.exe %E% new one`, `subak.exe %E% new two`, then `subak-gui.exe %E%`: two tabs; `one` is
+    shown, bold, with a lilac line on top joined to the pane.
+16. From a console: `subak.exe %E% new three` — a third tab appears, `one` stays shown;
+    `subak.exe %E% rename two 둘` — the tab reads `둘`; `subak.exe %E% kill three --yes` — the tab
+    goes.
+17. Press `Ctrl+Tab`, `Ctrl+Shift+Tab` (also hold `Ctrl+Tab`: it switches once, nothing reaches
+    the shell): the tabs switch; typed text goes to the shown tab only.
+18. `Ctrl+T`: a new tab running cmd.exe; `Ctrl+W` on it closes it without a question.
+19. `subak.exe %E% new busy -- ping -n 1000 127.0.0.1`, show it, `Ctrl+W`: the question names
+    `PING.EXE`; Enter (Cancel is focused) keeps it; `Ctrl+W`, `Tab`, Enter ends it; `one` still
+    runs.
+20. `Ctrl+Shift+R`, type `작업` with the Korean IME (composition drawn in the tab), Enter:
+    `subak.exe %E% ls` shows the new name. Double click a tab: the same field.
+21. Click a tab's `×`: the tab goes, `subak.exe %E% ls` still shows it running; right click the bar
+    → "Show hidden: …" brings it back. Press the `Menu` key: the shown tab's menu opens under it.
+22. `subak.exe %E% hotkeys disable terminal.close`, click into the window: `Ctrl+W` now deletes a
+    word in PowerShell (`subak.exe %E% new ps -- powershell`); `subak.exe %E% hotkeys reset
+    terminal.close`, click again: `Ctrl+W` closes again.
+23. Turn on a Contrast theme: the shown tab is in reverse video, states keep their shapes.
+24. Close the window with X: `subak.exe %E% ls` lists every Terminal running. Clean up as in 13.
+
 | Manual check | Result |
 | --- | --- |
 | Visible window, rendering, Korean (steps 1–2) | **pending — maintainer** |
@@ -245,12 +331,16 @@ maintainer's. Build first: `cargo build --release -p subak` (both binaries land 
 | Maximize/minimize and DPI across monitors (steps 7–8) | **pending — maintainer** |
 | High Contrast (step 9) | **pending — maintainer** |
 | Close, crash, detach, reconnect (steps 10–12) | automated off-screen (§10); visible run **pending — maintainer** |
+| Tabs, the tab keys, busy confirmation, rename, hide, other clients (steps 15–21, 24) | automated off-screen with the window's own messages (§10); visible run, real keyboard and the native menu **pending — maintainer** |
+| Korean IME in the rename field (step 20), a disabled `Ctrl+W` in a real program (step 22), High Contrast tabs (step 23) | **pending — maintainer** |
 
 ## 10. Tests
 
 | Test | What it checks |
 | --- | --- |
-| `crates/subak/tests/gui_window.rs` (Windows; the debug build's off-screen window driven by its own messages) | attach to a CLI-created Terminal: same pane pid, no second cmd.exe, one pane, a `gui` client, typed and Korean input reaching the shell (window and `subak capture`); close (WM_CLOSE) and crash (TerminateProcess) leave the Host and the pane with the same pids, a new window reopens the remembered Terminal with its screen; `subak detach` → banner → Enter reattaches; a stopped Host → disconnected banner, no Host started while retrying, a returning Host reconnected; empty, chooser and error (a pipe squatter) screens; paste, copy, wheel, cursor keys, IME composition and commit, focus; synthetic DPI 192/96, resize, minimize, zoom, `gui.json` persistence and its error rules; frames of the window's own content (`SUBAK_GUI_SHOTS=<dir>` keeps them as BMP); idle CPU and memory |
-| `crates/subak/src/gui/*.rs` unit tests | the model (attach decisions, snapshots, resyncs, ends, backoff), screens and banners (words, actions, High Contrast, tokens = `design/tokens.json`), layout with synthetic DPI 96–288 and monitor layouts, shortcut parsing and reserved keys, character mapping, preferences (sandbox config dir, unknown keys, invalid and newer files, the schema), golden frames |
-| `crates/subak/tests/golden/gui_*.txt` | golden frames (built-in rasterizer) of the connecting, empty, chooser and error screens at 100 % and 200 %, the banner over a pane, the inline IME composition; `SUBAK_BLESS=1` refreshes them |
+| `crates/subak/tests/gui_window.rs` (Windows; the debug build's off-screen window driven by its own messages) | attach to a CLI-created Terminal: same pane pid, no second cmd.exe, one pane, a `gui` client, typed and Korean input reaching the shell (window and `subak capture`); close (WM_CLOSE) and crash (TerminateProcess) leave the Host and the pane with the same pids, a new window reopens the remembered Terminal with its screen; `subak detach` → banner → Enter reattaches; a stopped Host → disconnected banner, no Host started while retrying, a returning Host reconnected; empty, two-tab and error (a pipe squatter) screens; paste, copy, wheel, cursor keys, IME composition and commit, focus; synthetic DPI 192/96, resize, minimize, zoom, `gui.json` persistence and its error rules; frames of the window's own content (`SUBAK_GUI_SHOTS=<dir>` keeps them as BMP); idle CPU and memory |
+| `crates/subak/tests/gui_window.rs` Step 17 tests (a stand-in program, this test binary run in a pane, plays the busy Claude session; never Claude Code) | `tabs_follow_the_headless_cli_and_ctrl_tab_switches_without_ending_anything` (CLI new/rename/stop/kill follow; `Ctrl+Tab`/`Ctrl+Shift+Tab` move the attachment; input to the shown tab only; `Ctrl+W` on a stored tab removes only the record); `ctrl_t_creates_and_ctrl_w_closes_asking_first_when_busy_never_hitting_another_terminal` (window-size create, idle shells closed at once, repeated create/close, the question for the busy stand-in: Esc, Enter on Cancel and a click on Cancel end nothing, keys typed meanwhile never reach it, consent ends only its id); `the_window_x_and_a_tab_x_only_detach_and_hidden_tabs_come_back` (a click on `×`, a middle click and `WM_CLOSE` are detaches, the Menu key's menu, "Show hidden"); `rename_in_place_and_keys_for_the_program_reach_it_once_a_shortcut_is_off` (Korean rename, `name_conflict` keeps the field, a disabled `Ctrl+T` reaches the program as 0x14 after a focus reload, `Ctrl+Tab` never does); `shortcuts_off_safe_mode_and_focus_transitions` (a broken `hotkeys.json`, a sequence cancelled by focus loss, input following the shown tab, `--no-hotkeys`) |
+| `crates/subak/src/gui/*.rs` unit tests | the model (no, one and many Terminals as tabs, cycling, a late attach answer, create, `Ctrl+W` by id with the busy answer and consent, hiding and unhiding, stored removal, other clients' create/rename/stop/kill, attach decisions, snapshots, resyncs, ends, backoff), the key matcher (the requested keys with exact modifiers, Step 16 keys, keys for programs, auto-repeat, rebinding and disabling, sequences, `code:`/`char:` keys, release and hold, side-specific modifiers, safe mode and reload, `--no-hotkeys`), the tab bar (no/one/many tabs, scrolling with the shown tab visible, the rename field), screens, banners and the confirmation (words, actions, the safe default, High Contrast, tokens = `design/tokens.json`), layout with synthetic DPI 96–288 and monitor layouts, character mapping, preferences, golden frames |
+| `crates/subak/tests/golden/gui_*.txt` | golden frames (built-in rasterizer) of the connecting, empty, stored-Terminal and error screens at 100 % and 200 %, the tab bar at 100 % and 200 %, the banner over a pane, the inline IME composition; `SUBAK_BLESS=1` refreshes them |
 | `e2e/tests/step16_subak_window.rs` (ignored; `cargo xtask e2e` only) | the release window against a release Host: attach without a new shell, input, close and crash keep the pane, reconnect |
+| `e2e/tests/step17_subak_tabs.rs` (ignored; `cargo xtask e2e` only) | tabs following CLI new/rename/kill, `Ctrl+Tab` switching with input to the shown tab only; `Ctrl+T`, `Ctrl+W` asking before ending a busy Terminal (Esc keeps it, consent ends only it), the window X only detaching |

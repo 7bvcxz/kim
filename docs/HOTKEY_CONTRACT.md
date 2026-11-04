@@ -1,7 +1,8 @@
 # Kim hotkey contract
 
 Status: **current** · Hotkey contract **v1** · Step 45 (specification) · Step 46: implemented by the
-shared `kim-hotkeys` library and by `kim` / Kim Manager (§17) ·
+shared `kim-hotkeys` library and by `kim` / Kim Manager (§17) · Step 17: by Subak's window and
+`subak hotkeys` (§13.1, §17) ·
 Decision: [ADR 0017](adr/0017-universal-customizable-hotkeys.md) · Requirements: `KIM-FR-040…046`,
 `KIM-NFR-020…022`, `KIM-SEC-020…023`, `SUBAK-FR-033`, `SUBAK-FR-034`, `KIM-NFR-012`
 
@@ -40,7 +41,7 @@ what Step 46 ran).
 | Tool | GUI shortcuts today | Contract status |
 | --- | --- | --- |
 | Kim Manager (`kim`) | Step 46: `catalog.refresh` `F5`, `help.show` `F1` (shortcut list), `tool.install`/`tool.update`/`tool.uninstall` unbound by default, plus the reserved navigation keys of §7.2. | **Conforms** since Step 46: compiled-in manifest (`crates/kim/src/hotkeys.manifest.json`), `kim hotkeys` commands, `focus` backend (§13.2, §17). The binding editor of §11.2 is not implemented yet. |
-| Subak (`subak`) | Not implemented yet. Defaults are specified: `Ctrl+T`, `Ctrl+W`, `Ctrl+Tab`, `Ctrl+Shift+Tab`, the `Ctrl+B` prefix table (`SUBAK-FR-033`), and `F1` / `Ctrl+B ?` help ([DESIGN_SYSTEM §4.1](DESIGN_SYSTEM.md)). | Steps 17 and 23 implement them on this contract; §13.1 maps ADR 0009 onto it. |
+| Subak (`subak`) | Step 17 (`subak-gui`, `app` scope): `terminal.new` `Ctrl+T`, `terminal.close` `Ctrl+W` (destructive: asks when the Host says busy), `tab.next` `Ctrl+Tab`, `tab.previous` `Ctrl+Shift+Tab`, `terminal.rename` `Ctrl+Shift+R`, `tab.hide`/`tab.move-left`/`tab.move-right` unbound; context `terminal` (passthrough): the Step 16 copy, paste, zoom and scroll keys. Specified for Step 23: the `Ctrl+B` prefix table (`SUBAK-FR-033`) and `F1` / `Ctrl+B ?` help ([DESIGN_SYSTEM §4.1](DESIGN_SYSTEM.md)). | **Conforms for the shipped subset** since Step 17: compiled-in manifest (`crates/subak/src/hotkeys.manifest.json`, the final manifest filtered to the implemented actions, without the leader until Step 23), `subak hotkeys` commands, `focus` matching in the window with reload on focus ([ADR 0042](adr/0042-subak-window-tabs-and-safe-close.md)). The prefix, its pass-through and `gui.show` are Steps 23 and 18. |
 | Noeul (`noeul`) | Step 49: `paste.float` `F3` (global), `pin.close` `Escape`/`Ctrl+W` and `pin.move-*` arrows (context `pin`). Step 50: `capture.region` `F1` (global) and, in context `capture-overlay`, `capture.pin` `Enter`, `capture.cancel` `Escape`, `selection.full` `Ctrl+A`, `selection.last` `R`, `selection.move-*`/`grow-*`/`shrink-*` (arrows, `Ctrl`/`Shift`+arrows) ([ADR 0026](adr/0026-noeul-capture-overlay.md)). Step 53, context `pin`: `pin.destroy` `Shift+Escape`, `pin.zoom-in` `Plus`/`NumpadAdd`, `pin.zoom-out` `Minus`/`NumpadSubtract`, `pin.zoom-reset` `0`/`Numpad0`, `pin.hide` `H`; `Escape` closes a focused pin as the reserved navigation key even when no binding uses it ([ADR 0029](adr/0029-noeul-pin-engine.md)). Step 51: `capture.copy` `Ctrl+C`, `capture.save` `Ctrl+S`, `capture.quick-save` `Ctrl+Shift+S` (context `capture-overlay`) and `pin.copy`, `pin.save`, `pin.quick-save` with the same keys (context `pin`); navigation keys yield to a focused toolbar button (ADR 0021 §5); the opt-in "Snipaste-style gestures" preset writes `capture.pin` `Ctrl+T` and `capture.copy` `Ctrl+C`, `Enter` as user overrides, shown by name in `noeul hotkeys list` and undone by `noeul config reset gestures` ([ADR 0032](adr/0032-noeul-double-click-pin-and-outputs.md)). Step 52, context `capture-overlay`: `selection.mark` `Space`, `pointer.move-*` `code:KeyW`/`code:KeyS`/`code:KeyA`/`code:KeyD` (physical keys matched from the key message's scan code; the logical chord is tried first at each precedence level), `detect.cycle` `E`, `magnifier.toggle` `M`, `history.previous` `Comma`, `history.next` `Period`; held `repeat` keys accelerate ([ADR 0035](adr/0035-noeul-smart-selection-and-precision.md)). | **Conforms for the shipped subset** since Step 49: compiled-in manifest (`crates/noeul/src/hotkeys.manifest.json`, the final manifest filtered to the implemented actions), `noeul hotkeys` commands, `register` backend with live `registered`/`taken` reporting and reload ([ADR 0023](adr/0023-noeul-app-foundation.md)). Listed in the Kim catalog with the final shortcut summary since Step 47. |
 | Ddalgak (`ddalgak`) | Planned (Steps 65+). An automation engine with its own rule model. | Steps 66, 73 and 81 follow §13.4. Listed in the Kim catalog with this shortcut summary since Step 47. |
 
@@ -800,6 +801,20 @@ action without a default; the user may bind it. The `[keys]` table of the draft 
 is superseded by `hotkeys.json` (§8.4). Floating icon and session manager actions (Step 18) are
 added as actions in the same way.
 
+**Step 17 (implemented).** The final manifest (`contracts/examples/kim-hotkey-manifest-v1/subak.json`)
+gains the window's Step 16 keys as actions of the `terminal` context (`clipboard.copy`,
+`clipboard.paste`, `view.zoom-*`, `scroll.*`), `tab.hide`, `tab.move-left` and `tab.move-right`
+(no default) and `Ctrl+Shift+R` for `terminal.rename` (beside `@prefix char:$`). Subak ships it
+filtered to the implemented actions and without the `prefix` leader and its `@prefix` bindings
+until Step 23 (a test keeps the two equal). `subak hotkeys …` implements §10 (`registration` is
+`not_applicable`: no global binding yet); the window matches like Kim Manager (logical, `code:`
+and `char:` keys, sequences, `press`/`release`/`hold`, the `terminal` context before `app`), runs
+its modal confirmation and rename field before the shortcuts, re-reads `hotkeys.json` when it
+gets the focus, and honours safe mode, `--no-hotkeys` and `KIM_NO_HOTKEYS`
+([SUBAK_GUI §3](SUBAK_GUI.md), [ADR 0042](adr/0042-subak-window-tabs-and-safe-close.md)). Until
+Step 23 a shadowed key such as `Ctrl+W` reaches the program only after the action is disabled or
+rebound.
+
 **Hand-off (Step 46 → Steps 17 and 23).** Step 46 did not change `crates/subak`. Subak's GUI
 Steps use the shared `kim-hotkeys` crate exactly as Kim does: ship the manifest
 (`docs/contracts/examples/kim-hotkey-manifest-v1/subak.json` is the starting point) as
@@ -873,7 +888,7 @@ library compiled into each tool: no process, no GUI dependency in headless binar
 
 | Area | Windows | Linux (M4, not claimed) | Verified by |
 | --- | --- | --- | --- |
-| `app`/`context` keys | winit/egui key events (logical key, physical scan code, text) | same toolkit | Step 46 (library and Kim Manager), Steps 17 and 23 (Subak) |
+| `app`/`context` keys | winit/egui key events (logical key, physical scan code, text); Subak: the window's own `WM_KEYDOWN`/`WM_KEYUP` before `TranslateMessage` (virtual key, scan code, `ToUnicode` without changing the dead-key state) | same toolkit | Step 46 (library and Kim Manager); **Step 17: Subak, off-screen with the window's own messages on Windows 10 19045** (real keyboard input **not tested**, SUBAK_GUI §9); Step 23 (the prefix) |
 | `global` (`register`) | `RegisterHotKey`/`UnregisterHotKey`, `MOD_NOREPEAT`. Step 46 registers on a dedicated thread's message queue (null window handle) instead of a message-only window: no window at all, same API and semantics | X11 `XGrabKey`; Wayland only through the desktop portal's global-shortcuts interface, where the compositor and the user decide | **Step 46: tested on Windows 10 19045** (register, `taken`, release on drop, lost registration; obscure chords only); Steps 64 and 83 (Linux) |
 | `hook` | `WH_KEYBOARD_LL` with `LLKHF_INJECTED` plus a `dwExtraInfo` marker to tell its own injected input apart (Step 66: `crates/ddalgak`, [DDALGAK_ENGINE](DDALGAK_ENGINE.md)) | to be designed | **Step 66: tested on Windows 10 19045** (observe-only hook, injected F13–F17, real app); emergency chord on physical keys: Step 73 |
 | IME after a leader | `VK_PROCESSKEY` + `ImmGetVirtualKey` | to be designed | Step 23 |
@@ -945,6 +960,7 @@ Both are kept on purpose, so the fixtures are checked by two independent impleme
 | Shared library | `crates/kim-hotkeys` (headless; listed in `cargo xtask deps-check`) | Key model and aliases (§5), manifest and user layer (§3.4, §8.2) keeping unknown fields, safe mode, atomic writes, backups and a migration chain (§8.3–§8.4; v1 is the first version, so the shipped chain is empty and the mechanism is tested with a test chain), reserved keys (§7), layering with profiles, conflicts, subjects, order and offers (§9), the override workflow and switches (§9.6, §12.4), `list`/`show` views (§10.2), `RegisterHotKey` backend (§4.2) |
 | `kim hotkeys …` | `crates/kim/src/hotkeys_cmd.rs`, `crates/kim/src/hotkeys.rs` | All commands of §10.1, including `export`/`import` and `--profile`; `check --all-tools` reads `hotkeys.manifest.json` of each installed version and its `hotkeys.json`, never starts a tool ([KIM_CLI §5](KIM_CLI.md#5-keyboard-shortcuts)) |
 | Kim Manager | `crates/kim-manager/src/shortcuts.rs` | `focus` backend from egui key events; re-reads `hotkeys.json` when the window regains focus instead of a `ReadDirectoryChangesW` watcher (an event, no polling; a focus-only tool has no global registration to release); `--no-hotkeys`, `KIM_NO_HOTKEYS` |
+| Subak (Step 17) | `crates/subak/src/hotkeys.rs`, `crates/subak/src/hotkeys_cmd.rs`, `crates/subak/src/gui/keys.rs` | The shipped subset of Subak's manifest; `subak hotkeys …` (§10); the window's matcher from its own key messages, the `terminal` context before `app`, re-reading `hotkeys.json` on focus like Kim Manager; `subak-gui --no-hotkeys`, `KIM_NO_HOTKEYS` |
 | Not implemented | — | The binding editor with keyboard capture (§11.2); `hook_overrides_global` (no tool has rules yet, Step 81); `char:`/named overlap beyond ASCII letters and digits (as in the reference checker) |
 
 **Privilege boundaries (documented, not tested).** The `register` backend cannot see the secure

@@ -57,7 +57,7 @@ first running one. A Host is started if none runs (it starts no shell); opening 
 creates or ends a Terminal. Closing the window, a tab's x, or this program ending in any way,
 only detaches: every Terminal keeps running in the Host (`subak ls`).
 
-TABS (docs/SUBAK_GUI.md §3):
+TABS (docs/SUBAK_GUI.md §2):
     Ctrl+T          New Terminal (the Host's default shell, in your profile folder).
     Ctrl+W          Close Terminal: ends it. When it runs more than an idle shell the window
                     asks first (the safe answer, Cancel, is the default). On a stopped Terminal

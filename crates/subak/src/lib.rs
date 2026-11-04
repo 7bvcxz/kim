@@ -13,7 +13,8 @@
 //! terminal with a bounded scrollback, so an attach reproduces the screen, and
 //! `subak capture|history|clear-history` read and clear it. Since Step 16 (ADR 0039,
 //! docs/SUBAK_GUI.md) `subak-gui` shows one Terminal in a native window as an IPC client; the
-//! Host and the CLI never need it. There are no tabs, splits, persistence or recovery yet.
+//! Host and the CLI never need it; since Step 17 (ADR 0042) it shows the Host's Terminals as
+//! tabs. There are no splits, persistence or recovery yet.
 //! Nothing starts by itself, and no `subak` command opens a window.
 
 // Portable modules: compiled and unit-tested on every target, but until the Linux Host (M4,
@@ -247,7 +248,7 @@ OPTIONS:
     -q, --quiet / -v, --verbose   Less / more diagnostics on stderr.
 
 The window is a separate program, `subak-gui` (docs/SUBAK_GUI.md); no command here starts it.
-Pre-alpha: no tabs, windows/panes splits, persistence or recovery yet (docs/PRODUCT_REQUIREMENTS.md);
+Pre-alpha: no windows/panes splits, persistence or recovery yet (docs/PRODUCT_REQUIREMENTS.md);
 history is never persisted.
 No command opens a window, installs anything or uses the network; no Windows service exists.
 ";
@@ -304,8 +305,8 @@ pub fn cli_main() -> ExitCode {
                  (named Terminals in the Host); capture, history, clear-history (scrollback); \
                  host start|status|health|attach|stop|serve; hotkeys list|show|set|disable|\
                  enable|reset|check|export|import (the window's shortcuts); capabilities.\n\
-                 The window is the separate program subak-gui; no tabs, splits, persistence\n\
-                 or recovery yet.\n",
+                 The window is the separate program subak-gui (Terminals as tabs); no splits,\n\
+                 persistence or recovery yet.\n",
                 env!("CARGO_PKG_VERSION")
             );
             ExitCode::SUCCESS

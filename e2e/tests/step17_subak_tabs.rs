@@ -1,4 +1,4 @@
-//! E2E — Step 17: the Subak window's tabs, the tab keys and safe close (docs/SUBAK_GUI.md §3,
+//! E2E — Step 17: the Subak window's tabs, the tab keys and safe close (docs/SUBAK_GUI.md §2,
 //! ADR 0042). `SUBAK-FR-011`, `SUBAK-FR-013`, `SUBAK-FR-014`, `SUBAK-FR-015`, `SUBAK-FR-031`,
 //! `SUBAK-FR-033`, `SUBAK-FR-034`.
 //!

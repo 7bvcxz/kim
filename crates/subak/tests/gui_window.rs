@@ -973,7 +973,7 @@ fn threads_of(pid: u32) -> usize {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Step 17: tabs, the tab keys, safe close (docs/SUBAK_GUI.md §3, ADR 0042). `SUBAK-FR-011`,
+// Step 17: tabs, the tab keys, safe close (docs/SUBAK_GUI.md §2, ADR 0042). `SUBAK-FR-011`,
 // `SUBAK-FR-013`, `SUBAK-FR-014`, `SUBAK-FR-015`, `SUBAK-FR-031`, `SUBAK-FR-033`,
 // `SUBAK-FR-034`.
 

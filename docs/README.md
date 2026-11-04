@@ -16,11 +16,11 @@ did.
 | [NOEUL_SNIPASTE_MATRIX.md](NOEUL_SNIPASTE_MATRIX.md) | current (inventory, Snipaste 2.11.3; 31 rows `partial` since Step 50) | Snipaste feature parity matrix with status, requirement, milestone and verification per row |
 | [NOEUL_UX_SPEC.md](NOEUL_UX_SPEC.md) | current (specification; the `F1` overlay implemented in Step 50, manual check in §4.5) | Noeul journeys and click paths, wireframes, the exact double-click-to-pin rules and their test cases, default shortcuts, session limits, privacy |
 | [DDALGAK_PHILOSOPHY.md](DDALGAK_PHILOSOPHY.md) | current (Step 65; engine core implemented in Step 66) | Ddalgak, the automation engine: one action, useful automation; novice-friendly GUI and headless CLI; safe by construction; honest about AutoHotkey |
-| [DDALGAK_REQUIREMENTS.md](DDALGAK_REQUIREMENTS.md) | current (Step 65) | `DDALGAK-*` requirements and milestones D1–D7 (Steps 65–83) |
-| [DDALGAK_RULE_MODEL.md](DDALGAK_RULE_MODEL.md) | current (rules document v1; Step 66 runs engine-control rules only) | Triggers, the seven core action types with inputs/outputs/errors/safety, modes, conditions, profiles, consent, precedence, validation, playground, outcomes and activity, versioning, CLI preview |
+| [DDALGAK_REQUIREMENTS.md](DDALGAK_REQUIREMENTS.md) | current (Step 65; D2 rows implemented in Steps 66–67) | `DDALGAK-*` requirements and milestones D1–D7 (Steps 65–83) |
+| [DDALGAK_RULE_MODEL.md](DDALGAK_RULE_MODEL.md) | current (rules document v1; store, validation and rule CLI implemented in Step 67; only engine-control rules run yet) | Triggers, the seven core action types with inputs/outputs/errors/safety, modes, conditions, profiles, consent, precedence, validation, playground, outcomes and activity, versioning, CLI preview |
 | [DDALGAK_GUI_JOURNEYS.md](DDALGAK_GUI_JOURNEYS.md) | current (design) | End-to-end GUI journeys and wireframes: create, capture, effects, playground, profiles, modes, rollback, search/edit/delete/duplicate/export, emergency |
 | [DDALGAK_SAFETY.md](DDALGAK_SAFETY.md) | current (Step 66 ran the engine checks it owns, §11) | Risks and scope: reserved shortcuts, elevated windows, engine lifecycle, layouts and IME, anti-cheat, hook security and emergency off, password fields and privacy, Linux, recursion and stuck keys, verification plan |
-| [DDALGAK_ENGINE.md](DDALGAK_ENGINE.md) | current (implemented, Step 66; Windows) | The engine as built: event model, decision pipeline, threads and lifecycle, own shortcuts, `ddalgak` CLI, measurements (idle CPU and wake-ups, decision cost), real-Windows verification status and manual checks |
+| [DDALGAK_ENGINE.md](DDALGAK_ENGINE.md) | current (implemented, Steps 66–67; Windows) | The engine as built: event model, decision pipeline, threads and lifecycle, own shortcuts, `ddalgak` CLI, measurements (idle CPU and wake-ups, decision cost), real-Windows verification status and manual checks |
 | [DDALGAK_AHK_MATRIX.md](DDALGAK_AHK_MATRIX.md) | current (inventory, matrix v1, AutoHotkey v2.0.31) | AutoHotkey v2 comparison with sources: supported, partial, planned, not intended |
 
 ## Architecture and compatibility
@@ -28,7 +28,7 @@ did.
 | Document | Status | Purpose |
 | --- | --- | --- |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | current | Components, Host internals, object model, lifecycles, close/kill semantics, restart behavior, telemetry |
-| [adr/README.md](adr/README.md) | current | Architecture decision records (ADR 0001–0027) |
+| [adr/README.md](adr/README.md) | current | Architecture decision records (ADR 0001–0028) |
 | [SESSION_MODEL.md](SESSION_MODEL.md) | current (implemented, Step 10; CLI verbs and `detach` from Step 12) | Terminal → Window → Pane model, the Terminal state machine, naming and target rules, what detach/stop/kill/rm/host stop do to processes, consent and the busy rule, concurrency guarantees, evidence |
 | [SUBAK_CLI.md](SUBAK_CLI.md) | current (implemented, Step 12) | Subak CLI reference: `new`, `ls`, `status`, `info`, `attach`, `detach`, `rename`, `stop`, `kill`, `rm`, `host …`; output, exit codes and consent; attach keys, Ctrl+C/Ctrl+Break and console restore with measurements; verbatim command lines for cmd.exe; agent and headless recipes; tmux mapping |
 | [PTY_PROCESSES.md](PTY_PROCESSES.md) | current (implemented, Step 11) | What runs in a pane: program resolution and quoting, PowerShell/cmd/pwsh, working directory, the three environment layers and secrets, size/Unicode/Ctrl+C, exit status, process-tree containment, backpressure and memory, the platform-neutral PTY interface, errors, evidence |

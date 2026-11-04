@@ -1,7 +1,8 @@
 # Ddalgak rule model
 
-Status: **current** · Rules document **v1** · Step 65 (specification; implemented from Steps 66–67
-on, see §14) · Decision: [ADR 0022](adr/0022-ddalgak-rule-model-and-safety.md) · Schemas:
+Status: **current** · Rules document **v1** · Step 65 (specification); the engine since Step 66, the
+rule store, validation and rule commands since Step 67 (§14) · Decisions:
+[ADR 0022](adr/0022-ddalgak-rule-model-and-safety.md), [ADR 0028](adr/0028-ddalgak-rule-store-validation-and-reload.md) · Schemas:
 [ddalgak-rules-v1](contracts/schemas/ddalgak-rules-v1.schema.json),
 [ddalgak-simulation-v1](contracts/schemas/ddalgak-simulation-v1.schema.json) · Requirements:
 `DDALGAK-FR-005…042`, `DDALGAK-SEC-001…013`
@@ -72,19 +73,29 @@ hotkey-contract actions stored in `hotkeys.json`
 | `settings.max_runs_per_second` | Per-rule rate limit, default 20, at most 100 (§7.4). |
 | `profiles[]` | 1–64 profiles, each with a `default_mode`, 1–32 `modes` and up to 1000 `rules`. |
 
-**Storage.** Paths come from the `Paths` interface ([ADR 0011](adr/0011-portability-boundary.md));
-Linux (D7) uses `$XDG_CONFIG_HOME/mouv/ddalgak/rules.json`. Writes are atomic (temporary file,
-flush, replace; [ADR 0006](adr/0006-state-and-configuration-storage.md)). Before every write the
-previous version goes to `rules.json.bak`; applied changes are also kept as snapshots in
-`history/` (§10). The folder is in the user's profile and inherits its per-user ACL
-(`DDALGAK-SEC-011`).
+**Storage** ([ADR 0028](adr/0028-ddalgak-rule-store-validation-and-reload.md)). Paths come from the
+`Paths` interface ([ADR 0011](adr/0011-portability-boundary.md)); Linux (D7) uses
+`$XDG_CONFIG_HOME/mouv/ddalgak/rules.json`. Writers take an exclusive OS lock on
+`rules.json.lock` (released by the OS when a writer dies), re-read the file and check the revision
+they started from. Writes are atomic (`rules.json.tmp`, flush, rename;
+[ADR 0006](adr/0006-state-and-configuration-storage.md)): a crash leaves the old or the new
+file, and a leftover temporary file is reported (`interrupted_save`) and replaced by the next
+save. Before every write the previous version goes to `rules.json.bak`; every applied change is
+also kept as a snapshot `history/<UTC time>-r<revision>.json` (§10, the last 50). An unsaved
+draft is `rules.draft.json`, a whole document whose `revision` is the saved revision it started
+from. A restore over an unusable file keeps that file as `rules.corrupt-<UTC time>.json`. The
+folder is in the user's profile and inherits its per-user ACL (`DDALGAK-SEC-011`).
 
-**Loading.** A missing file means one empty profile `default` with mode `base`. A file that
-fails JSON parsing or the schema is never loaded: the engine cannot be turned on with it, a
-running engine keeps its previous rules, the GUI and `ddalgak status` say why (`rules_invalid`),
-and the file is never rewritten automatically. A newer `schema_version` is read-only
-(`rules_from_newer_version`). A schema-valid file with semantic errors (§8) loads; the affected
-rules are inactive and listed with their codes.
+**Loading.** A missing file means one empty profile `default` with mode `base`. A file that is not
+JSON, is not a `ddalgak.rules` document, **fails the schema outside its rules** (the document,
+settings, profiles and modes, at most 1000 rules per profile), names a missing active profile or
+default mode, or has a rule without a valid `id` or a boolean `enabled` is never loaded: the
+engine cannot be turned on with it, a running engine keeps its previous rules, the GUI and
+`ddalgak status` say why (`rules_invalid`), and the file is never rewritten automatically. A
+newer `schema_version` is read-only (`rules_from_newer_version`). **Each rule is checked against
+the schema on its own** (ADR 0028): a rule that fails it is inactive with the code of the part
+that is wrong (§8) and kept exactly as written, and the other rules keep working
+(`DDALGAK-FR-006`). Semantic errors (§8) also make only the affected rules inactive.
 
 ## 3. Triggers
 
@@ -486,7 +497,7 @@ and needs a guaranteed way out of that mode.
 
 | Code | Severity | Found by | When |
 | --- | --- | --- | --- |
-| `rules_invalid` | error (file) | schema | The document fails the schema; nothing loads (§2). |
+| `rules_invalid` | error (file) | schema | The document fails the schema outside its rules, or cannot be read; nothing loads (§2). |
 | `trigger_reserved` | error | schema | A reserved trigger (§3.1). CLI exit: `hotkey_reserved` (2). |
 | `trigger_invalid` | error | schema | Not the trigger syntax. CLI exit: `hotkey_invalid` (2). |
 | `output_reserved` | error | schema | An output contains the Secure Attention Sequence or the emergency chord. |
@@ -499,13 +510,36 @@ and needs a guaranteed way out of that mode.
 | `duplicate_trigger` | error | semantic | §7.1. The later rule is the subject. |
 | `consent_stale` | error | semantic | A launch fingerprint no longer matches (§6.2). |
 | `run_too_long` | error | semantic | Delays of one run exceed 60 s. |
-| `step_unsupported`, `condition_unsupported`, `rule_unsupported` | info | runtime | Inactive in this version: an unknown step type, a condition not evaluated yet, or an unknown field inside the rule (§9). |
-| `altgr_collision`, `ime_toggle`, `os_shortcut`, `hook_overrides_global` | warning | semantic | §3.1. |
+| `rule_invalid` | error | schema | Any other field of the rule breaks the schema (title, priority, modes, consent record, …). |
+| `duplicate_binding` | error | runtime | The trigger equals one of Ddalgak's own bound GUI shortcuts in `hotkeys.json`; the shortcut wins (§7.5). |
+| `step_unsupported`, `condition_unsupported`, `rule_unsupported` | info | runtime | Inactive in this version: an unknown step type or one a later Step implements, a condition not evaluated yet, or an unknown field inside the rule (§9). |
+| `altgr_collision`, `ime_toggle`, `os_shortcut`, `hook_overrides_global` | warning | semantic | §3.1. `hook_overrides_global` needs the other Kim tools and is reported by `kim hotkeys check --all-tools` (Step 81). |
+| `trigger_shadowed` | warning | runtime | Another enabled rule with the same keys and conditions wins by precedence (§7.1) in every mode this rule works in, so it never fires (a lower `priority`, or `on: release` behind `on: press`). |
+| `sequence_prefix` | warning | runtime | A shorter trigger of another rule is the start of this sequence in a mode both work in; that rule fires first and this sequence never completes. |
+| `target_missing` | warning | runtime | An `open_program` path or working folder does not exist on this computer (checked by the CLI, never searched for; the run would end with `program_not_found`). |
+| `trigger_overridden` | info | runtime | In some modes a mode-scoped rule takes this rule's trigger first (intended layering, §7.3). |
+| `output_cycle` | info | runtime | The outputs of several rules lead back to the first; Ddalgak never matches its own input, so it is a swap, not a loop (§7.4). |
 
-Errors make the rule inactive; warnings and infos do not change behavior. Like hotkey conflicts,
-reports come with non-destructive offers (change the trigger, disable, keep for warnings) that
-are never applied automatically. The **semantic** rules are implemented for the fixtures by
-`xtask/src/ddalgak.rs`; Step 67 implements them in Ddalgak and must agree with the same files.
+Errors make the rule inactive; warnings and infos do not change behavior (the `*_unsupported`
+infos keep the rule inactive in this version). Every error and warning comes with non-destructive
+**offers** in the hotkey contract's style (HOTKEY_CONTRACT §9.5): up to two `rebind` suggestions
+for a single-chord trigger (the chord with `Shift`, `Ctrl+Shift` or `Alt+Shift` added, keeping
+only valid, unreserved chords without a warning that no enabled rule of the profile and no
+Ddalgak shortcut uses), `allow <permission>` for missing or stale consent, `disable`, and `keep`
+for warnings. Infos carry no offers. **An offer is never applied by itself.**
+
+**Who checks.** The schema rows are checked with the published schema itself, in two parts (§2,
+ADR 0028). The semantic rules are implemented for the fixtures by `xtask/src/ddalgak.rs` and in
+Ddalgak by a line-by-line port (`crates/ddalgak/src/validate.rs`) that its tests compare with the
+xtask original on every fixture and on generated mutations; a rule that fails the schema claims
+no trigger, so it never makes a valid rule a `duplicate_trigger`. The runtime rows need what only
+Ddalgak knows (its version, its shortcuts, the whole profile).
+
+**Changes never add errors.** `ddalgak rule …` (and later the editor) validates the document
+before and after a change and refuses one that introduces an error, with nothing written:
+`rule_conflict` for `duplicate_trigger`, `duplicate_binding` or a taken ID, `hotkey_invalid` and
+`hotkey_reserved` for triggers, `rule_invalid` for everything else. Problems that existed before
+do not block an unrelated change.
 
 ## 9. Forward compatibility, versions and migrations
 
@@ -594,17 +628,23 @@ With `activity.persist: true` they are also appended to a capped, rotated local 
 rules are audited by the history snapshots of §10, each recording the revision, the time and
 the origin (`gui`, `cli`, `import`, `restore`).
 
-## 13. CLI surface (preview)
+## 13. CLI surface
 
 The command list Steps 67 and 81 implement under the CLI contract (`--json`, `--dry-run`,
-`--yes`, exit codes). Names may still be refined there; behavior may not get weaker.
+`--yes`, exit codes). The `rule` and `rules` rows are **implemented (Step 67)**; their `--json`
+documents are [ddalgak-cli-v1](contracts/schemas/ddalgak-cli-v1.schema.json) and
+`ddalgak --help` is the reference. The other rows are planned; names may still be refined there,
+behavior may not get weaker.
 
 | Command | Effect |
 | --- | --- |
-| `ddalgak rule list [--profile p] [--mode m]` · `rule show <id>` · `rule check` | read |
-| `ddalgak rule add --trigger <keys> --action <type> [inputs] [--allow <permission>]…` · `rule edit <id> …` · `rule duplicate <id>` · `rule enable/disable <id>…` · `rule move <id> --before <id>` | write, `--dry-run` |
+| `ddalgak rule list [--profile p] [--mode m]` · `rule show <id>` · `rule check` (each `[--draft]`) | read |
+| `ddalgak rule add --trigger <keys> (--action <type> [inputs] \| --step <json>…) [--allow <permission>]…` · `rule edit <id> … [--patch <json>]` · `rule duplicate <id>` · `rule enable/disable <id>…` · `rule move <id> --before <id> \| --after <id> \| --to start\|end\|<n>` | write, `--dry-run`, `--draft`, `--if-revision <n>` |
 | `ddalgak rule delete <id>…` | destructive: `--dry-run`, `--yes` |
-| `ddalgak rule revoke <id> <permission>` | write |
+| `ddalgak rule revoke <id> <permission>` | write (the rule is disabled when it needs the permission) |
+| `ddalgak rules history` · `rules draft [show]` | read |
+| `ddalgak rules backup` · `rules reload` (asks the running app) · `rules draft apply` | write, `--dry-run` |
+| `ddalgak rules restore (--backup \| <snapshot>)` · `rules draft discard` | destructive: `--dry-run`, `--yes` |
 | `ddalgak profile list/show/add/rename/duplicate/delete/apply/history/restore/export/import` | read / write / destructive as named |
 | `ddalgak mode list/add/rename/delete/set` | read / write (`mode set` asks the running app) |
 | `ddalgak test --keys <keys> [--profile p] [--mode m] [--app exe] [--focus kind] --dry-run` | read: a `ddalgak.simulation` result; there is no headless live test |
@@ -613,18 +653,19 @@ The command list Steps 67 and 81 implement under the CLI contract (`--json`, `--
 | `ddalgak engine on/off` · `ddalgak pause` · `ddalgak resume` | write, through the running app's local IPC; `engine on` fails with `engine_not_running` (3) when the app is not running, and never starts it |
 | `ddalgak hotkeys …` · `ddalgak capabilities` | the hotkey and CLI contracts' commands |
 
-**Proposed error codes** (registered in [CLI_CONTRACT §6](CLI_CONTRACT.md) by the Step that
-implements them; existing codes such as `hotkey_invalid`, `hotkey_reserved`, `usage`,
-`confirmation_required` keep their meaning):
+**Error codes** (registered in [CLI_CONTRACT §6](CLI_CONTRACT.md) in Step 67; existing codes such
+as `hotkey_invalid`, `hotkey_reserved`, `usage`, `confirmation_required`, `busy` and
+`permission_denied` keep their meaning):
 
 | Code | Exit | Meaning |
 | --- | --- | --- |
 | `rule_not_found`, `profile_not_found`, `mode_not_found` | 3 | No such ID. |
+| `snapshot_not_found` | 3 | No such backup, history snapshot or draft. |
 | `engine_not_running` | 3 | The command needs the running app; the CLI never starts it. |
-| `rules_invalid` | 4 | `rules.json` is malformed or fails the schema. |
+| `rules_invalid` | 4 | `rules.json` is malformed or fails the schema outside its rules (§2). |
 | `rule_invalid` | 2 | The requested rule breaks the schema or a semantic rule; nothing written. |
 | `rules_from_newer_version` | 5 | The file was written by a newer Ddalgak; read-only. |
-| `rule_conflict` | 7 | `duplicate_trigger`, or the file changed since it was read (`revision`). |
+| `rule_conflict` | 7 | `duplicate_trigger`, `duplicate_binding`, a taken ID, or the file changed since it was read (`revision`). |
 | `consent_required` | 7 | The change needs `--allow <permission>`; the rule was saved disabled or not at all. |
 
 ## 14. Machine-checked fixtures and verification status
@@ -638,6 +679,17 @@ implements them; existing codes such as `hotkey_invalid`, `hotkey_reserved`, `us
 
 **Step 66** implements the engine for engine-control rules ([DDALGAK_ENGINE](DDALGAK_ENGINE.md));
 every other step type is inactive with `step_unsupported` until its Step.
+
+**Step 67** implements the rule store and its validation in Ddalgak (ADR 0028): the typed model
+(`crates/ddalgak/src/model.rs`, every fixture round-trips through it without loss), the schema
+applied per rule (`schema.rs`, which refuses every `invalid/` fixture with the expected code and
+gives the whole rule schema's verdict on every fixture and on mutations), the cross-references
+compared with `xtask/src/ddalgak.rs` (`validate.rs`; every `semantic-invalid/` fixture produces
+exactly its code), the store (`store.rs`), the operations (`edit.rs`), the `rule`/`rules`
+commands, and the live reload in the running app ([DDALGAK_ENGINE §10](DDALGAK_ENGINE.md)).
+Migrations are a chain of pure `vN → vN+1` steps; v1 is the first version, so the shipped chain is
+empty and the mechanism is tested with a test chain. Import and export (§10) and profile and mode
+commands remain with Steps 72, 75 and 81.
 
 **Not tested on Windows in Step 65.** Everything about real input (hook timing, `SendInput`,
 UIPI, password-field detection, IME, layouts, stuck keys, the emergency chord) is specified, not

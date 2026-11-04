@@ -1,9 +1,11 @@
 # Ddalgak Requirements
 
-Status: **current** (Step 65, specification; the engine rows of D2 are implemented since Step 66,
-see [DDALGAK_ENGINE](DDALGAK_ENGINE.md) §8 for what was verified) · Owner: mouv ·
-Derived from [DDALGAK_PHILOSOPHY](DDALGAK_PHILOSOPHY.md) · Decision:
-[ADR 0022](adr/0022-ddalgak-rule-model-and-safety.md)
+Status: **current** (Step 65, specification; the engine rows of D2 are implemented since Step 66
+and the rule-store rows `DDALGAK-FR-005…007`, `DDALGAK-FR-009` since Step 67, see
+[DDALGAK_ENGINE](DDALGAK_ENGINE.md) §8 and §10 for what was verified; the GUI half of
+`DDALGAK-FR-007` and undo arrive with the editor, Step 74) · Owner: mouv ·
+Derived from [DDALGAK_PHILOSOPHY](DDALGAK_PHILOSOPHY.md) · Decisions:
+[ADR 0022](adr/0022-ddalgak-rule-model-and-safety.md), [ADR 0028](adr/0028-ddalgak-rule-store-validation-and-reload.md)
 
 ## 0. How to read this document
 

@@ -32,6 +32,7 @@ the requirements it serves. ADRs are immutable once **Accepted**; a later ADR ma
 | [0025](0025-pane-programs-environment-and-backpressure.md) | Pane programs, their environment, and backpressure | Accepted (verbatim command lines added in Step 12, see 0027) |
 | [0026](0026-noeul-capture-overlay.md) | Noeul capture overlay: one GDI freeze, a back-buffered Win32 window, a selection handed to its output | Accepted (Step 50) |
 | [0027](0027-subak-cli-structure-and-headless-control.md) | Subak CLI structure, detach from outside, verbatim command lines and console restore | Accepted |
+| [0028](0028-ddalgak-rule-store-validation-and-reload.md) | Ddalgak rule store: run-time schema per rule, locked atomic writes, drafts and live reload | Accepted (Step 67) |
 
 "Accepted (validated in Step N)" means the decision is made, but the named Step must confirm it
 on real Windows; if validation fails, that Step writes a superseding ADR.

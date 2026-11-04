@@ -89,7 +89,10 @@ fn bless(name: &str, doc: &Value) {
         .to_string()
         .trim_end_matches(['\\', '/'])
         .to_string();
-    text = text.replace(&escaped(&temp), &escaped(r"C:\Users\you\AppData\Local\Temp"));
+    text = text.replace(
+        &escaped(&temp),
+        &escaped(r"C:\Users\you\AppData\Local\Temp"),
+    );
     let unique = regex::Regex::new(r"ddalgak-(cli|test)-([a-z]+)-[0-9]+-[0-9]+").unwrap();
     text = unique.replace_all(&text, "ddalgak-$1-$2").to_string();
     validate(&serde_json::from_str(&text).unwrap());

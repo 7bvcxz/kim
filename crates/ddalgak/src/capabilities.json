@@ -6,7 +6,7 @@
   "cli_contract": 1,
   "json_schema_version": 1,
   "implementation": "implemented",
-  "summary": "Pre-alpha engine: status, health and engine start/pause/resume/stop of the running tray app over a local pipe, and opt-in start at sign-in; runs engine-control rules only",
+  "summary": "Pre-alpha engine: status, health and engine start/pause/resume/stop of the running tray app over a local pipe, opt-in start at sign-in, and the rule store: rule CRUD, validation, drafts, history, backup, restore and live reload; runs engine-control rules only",
   "commands": [
     {
       "name": "capabilities",
@@ -116,6 +116,186 @@
       "network": false,
       "dry_run": true,
       "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "rule.list",
+      "usage": "ddalgak rule list [--profile <p>] [--mode <m>] [--draft] [--json]",
+      "summary": "Every rule with its trigger, state (active, disabled, inactive with a code, other mode or profile) and problem count; works without the app",
+      "effect": "read",
+      "network": false,
+      "dry_run": false,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "rule.show",
+      "usage": "ddalgak rule show <id> [--draft] [--json]",
+      "summary": "One rule as stored, with its state and problems",
+      "effect": "read",
+      "network": false,
+      "dry_run": false,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "rule.check",
+      "usage": "ddalgak rule check [--draft] [--json]",
+      "summary": "Validate rules.json (schema and DDALGAK_RULE_MODEL §8) and list problems with non-destructive offers",
+      "effect": "read",
+      "network": false,
+      "dry_run": false,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "rule.add",
+      "usage": "ddalgak rule add --trigger <keys> (--action <type> [inputs] | --step <json>...) [--allow <permission>]... [--endpoint <name>] [--dry-run] [--draft] [--if-revision <n>] [--json]",
+      "summary": "Add a rule with a new ID; refused with nothing written when it would add an error; saved disabled without the consent it needs",
+      "effect": "write",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "rule.edit",
+      "usage": "ddalgak rule edit <id> [fields] [--patch <json>] [--allow <permission>]... [--endpoint <name>] [--dry-run] [--draft] [--if-revision <n>] [--json]",
+      "summary": "Change a rule's fields (its ID never changes)",
+      "effect": "write",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "rule.delete",
+      "usage": "ddalgak rule delete <id>... [--yes] [--endpoint <name>] [--dry-run] [--draft] [--if-revision <n>] [--json]",
+      "summary": "Remove rules (asks, or needs --yes)",
+      "effect": "destructive",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": true,
+      "opens_window": false
+    },
+    {
+      "name": "rule.duplicate",
+      "usage": "ddalgak rule duplicate <id> [--id <new>] [--title <t>] [--trigger <keys>] [--endpoint <name>] [--dry-run] [--draft] [--if-revision <n>] [--json]",
+      "summary": "Copy a rule, disabled, with a new ID",
+      "effect": "write",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "rule.enable",
+      "usage": "ddalgak rule enable <id>... [--allow <permission>]... [--endpoint <name>] [--dry-run] [--draft] [--if-revision <n>] [--json]",
+      "summary": "Switch rules on (consent is checked)",
+      "effect": "write",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "rule.disable",
+      "usage": "ddalgak rule disable <id>... [--endpoint <name>] [--dry-run] [--draft] [--if-revision <n>] [--json]",
+      "summary": "Switch rules off; they are kept",
+      "effect": "write",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "rule.move",
+      "usage": "ddalgak rule move <id> (--before <id> | --after <id> | --to start|end|<n>) [--endpoint <name>] [--dry-run] [--draft] [--if-revision <n>] [--json]",
+      "summary": "Change a rule's place in its profile (the last precedence step)",
+      "effect": "write",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "rule.revoke",
+      "usage": "ddalgak rule revoke <id> <permission> [--endpoint <name>] [--dry-run] [--draft] [--if-revision <n>] [--json]",
+      "summary": "Withdraw a consent; the rule is disabled and kept",
+      "effect": "write",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "rules.history",
+      "usage": "ddalgak rules history [--json]",
+      "summary": "The backup and the last 50 snapshots of applied changes",
+      "effect": "read",
+      "network": false,
+      "dry_run": false,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "rules.backup",
+      "usage": "ddalgak rules backup [--dry-run] [--json]",
+      "summary": "Keep a snapshot of the saved rules now",
+      "effect": "write",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "rules.restore",
+      "usage": "ddalgak rules restore (--backup | <snapshot>) [--yes] [--dry-run] [--json]",
+      "summary": "Bring back rules.json.bak or a snapshot as a new revision (asks, or needs --yes); an unusable file is kept",
+      "effect": "destructive",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": true,
+      "opens_window": false
+    },
+    {
+      "name": "rules.reload",
+      "usage": "ddalgak rules reload [--endpoint <name>] [--dry-run] [--json]",
+      "summary": "Ask the running app to apply rules.json now; an invalid file keeps the active rules (never starts the app)",
+      "effect": "write",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "rules.draft",
+      "usage": "ddalgak rules draft [show] [--json]",
+      "summary": "The unsaved draft: its base revision and changes",
+      "effect": "read",
+      "network": false,
+      "dry_run": false,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "rules.draft.apply",
+      "usage": "ddalgak rules draft apply [--endpoint <name>] [--dry-run] [--json]",
+      "summary": "Save the draft as the next revision (refused when the saved rules changed since)",
+      "effect": "write",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "rules.draft.discard",
+      "usage": "ddalgak rules draft discard [--yes] [--dry-run] [--json]",
+      "summary": "Throw the draft away (asks, or needs --yes)",
+      "effect": "destructive",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": true,
       "opens_window": false
     }
   ]

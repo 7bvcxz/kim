@@ -25,8 +25,6 @@ mod pty;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod redact;
 #[cfg_attr(not(windows), allow(dead_code))]
-mod screen;
-#[cfg_attr(not(windows), allow(dead_code))]
 mod session;
 
 /// The schema validator of `cargo xtask schema-check`, so unit tests can check every IPC message
@@ -45,6 +43,9 @@ mod terminal;
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod win;
+
+/// The pane terminal model lives in `subak-term` (ADR 0030, ADR 0036), shared with client views.
+use subak_term::screen;
 
 use cli::{Args, Cmd};
 use output::{CliError, Code};

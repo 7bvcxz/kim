@@ -2876,7 +2876,16 @@ version = "0.0.1"
 dependencies = [
  "regex",
  "serde_json",
+ "subak-term",
  "unicode-normalization",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "subak-term"
+version = "0.0.1"
+dependencies = [
+ "serde_json",
  "windows-sys 0.61.2",
 ]
 

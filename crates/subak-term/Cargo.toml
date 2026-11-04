@@ -1,0 +1,43 @@
+[package]
+name = "subak-term"
+version = "0.0.1"
+description = "Subak terminal emulation core: the VT parser and screen model shared by the Host and its clients, the client view state and input encoding, and (feature `render`) the CPU cell-grid renderer"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = []
+# The CPU cell-grid renderer and the Windows GDI glyph rasterizer (ADR 0036). The Host builds
+# without it; the Subak GUI and the benchmark harness turn it on.
+render = ["dep:windows-sys"]
+
+[target."cfg(windows)".dependencies]
+# Glyph rasterization with the system's fonts through GDI (ADR 0036): fonts are shared by the
+# system font cache instead of being read into this process.
+windows-sys = { version = "0.61.2", optional = true, features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+] }
+
+[dev-dependencies]
+# The kim-dark terminal palette is checked against design/tokens.json (test-only).
+serde_json = "1.0.154"
+
+[target."cfg(windows)".dev-dependencies]
+# examples/term_bench.rs measures an idle off-screen window that presents rendered frames with
+# GDI, and samples processes' CPU time and memory.
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
+    "Win32_System_ProcessStatus",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+] }

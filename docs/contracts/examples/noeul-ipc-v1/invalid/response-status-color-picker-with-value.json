@@ -1,0 +1,267 @@
+{
+  "type": "response",
+  "id": 2,
+  "result": {
+    "running": true,
+    "instance": {
+      "pid": 4242,
+      "version": "0.0.1",
+      "started_at": "2026-11-04T10:15:00Z",
+      "uptime_s": 61,
+      "endpoint": "\\\\.\\pipe\\mouv-noeul-S-1-5-21-1-2-3-1001-s1",
+      "session": 1
+    },
+    "desktop": {
+      "state": "available",
+      "virtual_rect": {
+        "x": -1920,
+        "y": 0,
+        "width": 4480,
+        "height": 1440
+      },
+      "monitors": [
+        {
+          "rect": {
+            "x": -1920,
+            "y": 0,
+            "width": 1920,
+            "height": 1080
+          },
+          "primary": false,
+          "dpi": 96,
+          "work": {
+            "x": -1920,
+            "y": 0,
+            "width": 1920,
+            "height": 1080
+          },
+          "rotation": 0,
+          "hdr": null
+        },
+        {
+          "rect": {
+            "x": 0,
+            "y": 0,
+            "width": 2560,
+            "height": 1440
+          },
+          "primary": true,
+          "dpi": 144,
+          "work": {
+            "x": 0,
+            "y": 0,
+            "width": 2560,
+            "height": 1392
+          },
+          "rotation": 0,
+          "hdr": null
+        }
+      ]
+    },
+    "capture_backend": "gdi",
+    "pins": {
+      "open": 1,
+      "reopenable": null,
+      "hidden": 0,
+      "off_screen": 0,
+      "click_through": 0,
+      "thumbnails": 0,
+      "group": "default",
+      "groups": 1,
+      "editor": null
+    },
+    "captures": {
+      "started": 2,
+      "pinned": 1,
+      "copied": 0,
+      "saved": 0,
+      "colors": 0,
+      "cancelled": 0,
+      "open": true,
+      "ignored": 3,
+      "history": 1,
+      "overlay": {
+        "session": 2,
+        "mode": "capture",
+        "pin": null,
+        "phase": "hover",
+        "selection": null,
+        "picture": {
+          "x": -1920,
+          "y": 0,
+          "width": 4480,
+          "height": 1440
+        },
+        "monitors": 2,
+        "buffer_bytes": 25804800,
+        "help": false,
+        "focus": "canvas",
+        "pointer": {
+          "x": 412,
+          "y": 188
+        },
+        "detection": {
+          "mode": "element",
+          "windows": 7,
+          "target": {
+            "kind": "element",
+            "rect": {
+              "x": 380,
+              "y": 170,
+              "width": 96,
+              "height": 32
+            }
+          },
+          "protected": false,
+          "fallback": null,
+          "suspended": false
+        },
+        "magnifier": {
+          "enabled": true,
+          "shown": true
+        },
+        "color": {
+          "format": "hex",
+          "hex_case": "upper",
+          "alpha": false,
+          "value": "#3A6EA5"
+        },
+        "history": {
+          "count": 1,
+          "position": null
+        },
+        "annotation": {
+          "tool": null,
+          "objects": 0,
+          "kinds": {
+            "arrow": 0,
+            "blur": 0,
+            "ellipse": 0,
+            "eraser": 0,
+            "line": 0,
+            "marker": 0,
+            "mosaic": 0,
+            "pen": 0,
+            "rectangle": 0,
+            "redact": 0,
+            "text": 0
+          },
+          "selected": null,
+          "undo": 0,
+          "redo": 0,
+          "editing_text": false,
+          "composing": false,
+          "color": "red",
+          "width": 3
+        }
+      },
+      "first_frame": {
+        "count": 2,
+        "last": {
+          "total_us": 61200,
+          "capture_us": 38400,
+          "render_us": 22800,
+          "width": 4480,
+          "height": 1440
+        },
+        "p50_us": 58800,
+        "p95_us": 61200
+      }
+    },
+    "memory": {
+      "frames": 2,
+      "bytes": 26284800,
+      "peak_bytes": 26284800
+    },
+    "displays": {
+      "changes": 0,
+      "handled": 0,
+      "pending": false
+    },
+    "hotkeys": {
+      "enabled": true,
+      "off_reason": null,
+      "config": {
+        "path": "C:\\Users\\me\\AppData\\Roaming\\mouv\\noeul\\hotkeys.json",
+        "state": "user"
+      },
+      "problem": null,
+      "registrations": [
+        {
+          "action": "capture.region",
+          "keys": "F1",
+          "status": "registered",
+          "message": null
+        },
+        {
+          "action": "paste.float",
+          "keys": "F3",
+          "status": "taken",
+          "message": "F3 is already registered by another program; Noeul did not take it"
+        }
+      ],
+      "conflicts": [
+        {
+          "code": "taken",
+          "severity": "warning",
+          "tool": "noeul",
+          "action": "paste.float",
+          "keys": "F3",
+          "scope": "global",
+          "source": "default",
+          "with": {
+            "kind": "program"
+          },
+          "offers": [
+            {
+              "kind": "rebind",
+              "keys": "Shift+F3"
+            },
+            {
+              "kind": "disable"
+            }
+          ],
+          "message": "F3 is registered by another program"
+        }
+      ],
+      "planned": []
+    },
+    "tray": {
+      "enabled": true,
+      "shown": true
+    },
+    "settings": {
+      "path": "C:\\Users\\me\\AppData\\Roaming\\mouv\\noeul\\config.toml",
+      "state": "default",
+      "tray_icon": true,
+      "keyboard_help": "first-run",
+      "quick_save_folder": null,
+      "detection": "window",
+      "magnifier": "on",
+      "pointer": "off",
+      "pins": {
+        "border": "on",
+        "shadow": "on"
+      },
+      "paste": {
+        "paths": "on",
+        "file_cards": "off"
+      },
+      "color": {
+        "format": "hex",
+        "hex_case": "upper",
+        "alpha": "off"
+      },
+      "gestures": {
+        "double_click": "pin",
+        "middle_click": "pin",
+        "preset": "noeul"
+      },
+      "problems": []
+    },
+    "last_action": {
+      "action": "capture",
+      "result": "pinned"
+    }
+  }
+}

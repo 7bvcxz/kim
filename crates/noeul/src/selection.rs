@@ -186,6 +186,8 @@ pub struct Captures {
     copied: u64,
     saved: u64,
     ignored: u64,
+    /// Captures ended by copying a colour with the picker (Step 59).
+    colors: u64,
 }
 
 impl Captures {
@@ -344,6 +346,23 @@ impl Captures {
         let id = self.begin(origin, frame, Vec::new()).unwrap_or(0);
         let _ = self.select(id, rect);
         id
+    }
+
+    /// Ends the open session `id` after the colour picker copied a pixel's colour (Step 59): the
+    /// picture is freed and nothing joins the history (no rectangle was captured).
+    pub fn color_copied(&mut self, id: u64) -> bool {
+        if self.open.as_ref().is_some_and(|s| s.id == id) {
+            self.open = None;
+            self.colors += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// How many captures ended with a colour copied by the picker (Step 59).
+    pub fn colors(&self) -> u64 {
+        self.colors
     }
 
     /// Cancels the open session (any id); its picture is freed. `false` when none was open.

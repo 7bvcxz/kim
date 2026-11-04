@@ -16,7 +16,8 @@
 //!    local path to an image file (Explorer's "Copy as path", with or without quotes, or a
 //!    `file:///` URL); only drive-letter paths: network paths (`\\server\share`) and device paths
 //!    are never opened (NOEUL-NFR-008);
-//! 3. **Color** — text that is one color value ([`parse_color`]);
+//! 3. **Color** — text that is one color value ([`parse_color`]: HEX, `rgb()`, `hsl()` and
+//!    plain numbers);
 //! 4. **HTML** — the `HTML Format` (CF_HTML), rendered by Noeul's own sanitizer (`crate::html`);
 //! 5. **Text** — `CF_UNICODETEXT`;
 //! 6. **Files** — the names of copied non-image files, only with `[paste] file_cards = "on"`.
@@ -291,7 +292,9 @@ impl Rgba {
 }
 
 /// Text that is exactly one color value: `#RGB`, `#RGBA`, `#RRGGBB`, `#RRGGBBAA`, `rgb(…)` and
-/// `rgba(…)` (commas or spaces, integers 0–255 or percentages, an optional alpha 0–1 or %), or
+/// `rgba(…)` (commas or spaces, integers 0–255 or percentages, an optional alpha 0–1 or %),
+/// `hsl(…)` and `hsla(…)` (a hue in degrees, with or without `deg`, saturation and lightness in
+/// percent, an optional alpha; Step 59, so every text the colour picker copies comes back), or
 /// three integers 0–255 (`255, 128, 0`, `255 128 0`, `(255;128;0)`), or three numbers 0–1 of
 /// which at least one has a decimal point (`1.0, 0.5, 0`). Anything else is not a color.
 pub fn parse_color(text: &str) -> Option<Rgba> {
@@ -306,6 +309,11 @@ pub fn parse_color(text: &str) -> Option<Rgba> {
     for (prefix, alpha) in [("rgba(", true), ("rgb(", false)] {
         if let Some(inner) = lower.strip_prefix(prefix).and_then(|s| s.strip_suffix(')')) {
             return parse_css_rgb(inner, alpha);
+        }
+    }
+    for (prefix, alpha) in [("hsla(", true), ("hsl(", false)] {
+        if let Some(inner) = lower.strip_prefix(prefix).and_then(|s| s.strip_suffix(')')) {
+            return parse_css_hsl(inner, alpha);
         }
     }
     let inner = t
@@ -406,6 +414,53 @@ fn parse_css_rgb(inner: &str, comma_alpha: bool) -> Option<Rgba> {
         b: channel(rgb[2])?,
         a,
     })
+}
+
+/// An alpha of `hsla()`: a number 0–1 or a percentage.
+fn parse_alpha(p: &str) -> Option<u8> {
+    let f: f64 = match p.strip_suffix('%') {
+        Some(pc) => pc.parse::<f64>().ok()? / 100.0,
+        None => p.parse().ok()?,
+    };
+    if !f.is_finite() || !(0.0..=1.0).contains(&f) {
+        return None;
+    }
+    Some((f * 255.0).round() as u8)
+}
+
+/// The inside of `hsl(…)`/`hsla(…)`: `h, s%, l%[, a]` or `h s% l%[ / a]`; the hue in degrees
+/// (`deg` optional, any value: it wraps), saturation and lightness in percent 0–100 (Step 59).
+fn parse_css_hsl(inner: &str, comma_alpha: bool) -> Option<Rgba> {
+    let (main, slash_alpha) = match inner.split_once('/') {
+        Some((m, a)) => (m, Some(a.trim())),
+        None => (inner, None),
+    };
+    let parts: Vec<&str> = main
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|p| !p.is_empty())
+        .collect();
+    let (hsl, alpha) = match (parts.len(), slash_alpha) {
+        (3, a) => (&parts[..], a),
+        (4, None) if comma_alpha || inner.contains(',') => (&parts[..3], Some(parts[3])),
+        _ => return None,
+    };
+    let h: f64 = hsl[0]
+        .strip_suffix("deg")
+        .unwrap_or(hsl[0])
+        .parse()
+        .ok()
+        .filter(|f: &f64| f.is_finite())?;
+    let pct = |p: &str| -> Option<f64> {
+        let f: f64 = p.strip_suffix('%')?.parse().ok()?;
+        (f.is_finite() && (0.0..=100.0).contains(&f)).then_some(f / 100.0)
+    };
+    let (s, l) = (pct(hsl[1])?, pct(hsl[2])?);
+    let a = match alpha {
+        None => 255,
+        Some(p) => parse_alpha(p)?,
+    };
+    let (r, g, b) = crate::color::from_hsl(h, s, l);
+    Some(Rgba { r, g, b, a })
 }
 
 /// Whether `path` names a file Noeul decodes (by its extension; the bytes decide later).
@@ -718,6 +773,23 @@ impl Snapshot {
         }
         s
     }
+}
+
+/// What Noeul writes to the debug-build test hook's stand-in clipboard replaces what it held, as
+/// a write to the clipboard does (Step 59): every file in `dir` is removed, then one file per
+/// format is written as [`Snapshot::from_dir`] reads it (`CF_UNICODETEXT` as UTF-8), so a test can
+/// check the exact text Noeul copied and paste it back with `F3`. Only the hook calls this, and
+/// only with a folder a test named; nothing else in `dir` is touched.
+pub fn replace_stand_in(dir: &Path, formats: &[(Format, &[u8])]) -> std::io::Result<()> {
+    for e in std::fs::read_dir(dir)?.flatten() {
+        if e.file_type().is_ok_and(|t| t.is_file()) {
+            std::fs::remove_file(e.path())?;
+        }
+    }
+    for (f, bytes) in formats {
+        std::fs::write(dir.join(f.name()), bytes)?;
+    }
+    Ok(())
 }
 
 /// Whether the markers mark the content private: the two presence markers, or

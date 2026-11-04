@@ -105,6 +105,11 @@
           "enabled": false,
           "shown": false
         },
+        "color": {
+          "format": "hex",
+          "hex_case": "upper",
+          "alpha": false
+        },
         "history": {
           "count": 0,
           "position": null
@@ -141,6 +146,7 @@
       "pinned": 1,
       "copied": 0,
       "saved": 0,
+      "colors": 0,
       "cancelled": 0,
       "open": false,
       "ignored": 3,
@@ -237,6 +243,11 @@
       "paste": {
         "paths": "on",
         "file_cards": "off"
+      },
+      "color": {
+        "format": "hex",
+        "hex_case": "upper",
+        "alpha": "off"
       },
       "gestures": {
         "double_click": "pin",

@@ -406,7 +406,8 @@ enum ConfigCommand {
     /// Change one setting in config.toml (e.g. `gestures.double_click copy`, or
     /// `gestures.preset snipaste` for the opt-in Snipaste-style gestures)
     Set(config_cmd::SetArgs),
-    /// Reset settings to their defaults: one section (general, capture, gestures, pins) or all
+    /// Reset settings to their defaults: one section (general, capture, gestures, pins, paste,
+    /// color) or all
     Reset(config_cmd::ResetArgs),
 }
 

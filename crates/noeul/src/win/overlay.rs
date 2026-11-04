@@ -35,6 +35,10 @@
 //!   for the user. Labels are typeset with GDI and font fallback (`win::typeset`). The pin editor
 //!   uses a **layered** window (`UpdateLayeredWindow` with per-pixel alpha), so the canvas around
 //!   the pin is transparent and passes clicks to what is behind.
+//! - **Accessible name** (Step 59): the window's text is the overlay's accessible name
+//!   ([`crate::overlay::Overlay::accessible_name`]): the selection and, while the magnifier is
+//!   shown, its position, colour values and the format `C` copies. UI Automation reads it as the
+//!   window's Name, and `DefWindowProcW` announces each change; only what the overlay shows.
 
 use crate::annotation::{Glyphs, Ime, Typesetter};
 use crate::app::{OverlayEvent, OverlayWindow};
@@ -83,7 +87,9 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SYSKEYDOWN, WM_SYSKEYUP, WNDCLASSEXW,
     WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
-use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, SetCursorPos};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    GetForegroundWindow, SetCursorPos, SetWindowTextW,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     ULW_ALPHA, UpdateLayeredWindow, WM_CHAR, WM_IME_CHAR, WM_IME_COMPOSITION,
     WM_IME_ENDCOMPOSITION, WM_IME_SETCONTEXT, WM_IME_STARTCOMPOSITION, WM_MOUSEWHEEL,
@@ -826,7 +832,7 @@ impl WinOverlay {
             unsafe {
                 let prev = SelectObject(self.mem, f);
                 for (i, line) in label.lines.iter().enumerate() {
-                    let c = if i == 0 {
+                    let c = if label.strong(i) {
                         color::TEXT_PRIMARY
                     } else {
                         color::TEXT_SECONDARY
@@ -1092,6 +1098,16 @@ impl OverlayWindow for WinOverlay {
                 }
             }
         }
+    }
+
+    fn set_name(&mut self, name: &str) {
+        if !self.alive() {
+            return;
+        }
+        let text = wide(name);
+        // SAFETY: our own live window and a NUL-terminated string; `DefWindowProcW` stores the
+        // text and announces the name change to UI Automation clients (EVENT_OBJECT_NAMECHANGE).
+        unsafe { SetWindowTextW(self.hwnd, text.as_ptr()) };
     }
 
     fn warp_pointer(&mut self, at: (i32, i32)) {

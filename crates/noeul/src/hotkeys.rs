@@ -44,7 +44,9 @@
 //! `pin.copy-text` (`Ctrl+Shift+C`): a text, HTML, colour or file card's text to the clipboard.
 //! Step 58 added the global actions `capture.monitor` and `capture.window` (no default keys,
 //! HOTKEY_CONTRACT §7.5): the monitor under the pointer, or the active window, captured without
-//! the overlay and pinned in place.
+//! the overlay and pinned in place. Step 59 added the colour picker's keys in the overlay,
+//! `color.copy` (`C`) and `color.format-next` (`Shift+C`); while a label is edited they are
+//! suspended with every other overlay key, so `C` types a "c" (ADR 0053).
 
 use crate::paths::Paths;
 use kim_hotkeys::check::{Conflict, Severity, ToolState, analyze};
@@ -96,6 +98,8 @@ pub const IMPLEMENTED: &[&str] = &[
     "pointer.move-right",
     "detect.cycle",
     "magnifier.toggle",
+    "color.copy",
+    "color.format-next",
     "history.previous",
     "history.next",
     "annotate.done",

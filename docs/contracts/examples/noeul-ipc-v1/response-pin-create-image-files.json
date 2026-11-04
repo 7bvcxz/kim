@@ -1,0 +1,50 @@
+{
+  "type": "response",
+  "id": 16,
+  "result": {
+    "dry_run": false,
+    "source": "clipboard",
+    "pin": {
+      "id": "pin-7",
+      "rect": {
+        "x": 400,
+        "y": 300,
+        "width": 320,
+        "height": 200
+      },
+      "source": "clipboard",
+      "zoom": 100
+    },
+    "kind": "image_file",
+    "offered": [
+      "image_file",
+      "text"
+    ],
+    "pins": [
+      {
+        "id": "pin-7",
+        "rect": {
+          "x": 400,
+          "y": 300,
+          "width": 320,
+          "height": 200
+        },
+        "source": "clipboard",
+        "zoom": 100
+      },
+      {
+        "id": "pin-8",
+        "rect": {
+          "x": 424,
+          "y": 324,
+          "width": 64,
+          "height": 64
+        },
+        "source": "clipboard",
+        "zoom": 100
+      }
+    ],
+    "skipped": 1,
+    "failed": 0
+  }
+}

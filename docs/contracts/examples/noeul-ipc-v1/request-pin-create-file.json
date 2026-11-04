@@ -1,0 +1,13 @@
+{
+  "type": "request",
+  "id": 14,
+  "method": "pin.create",
+  "params": {
+    "source": "file",
+    "path": "C:\\Users\\me\\Pictures\\diagram.png",
+    "at": {
+      "x": 400,
+      "y": 300
+    }
+  }
+}

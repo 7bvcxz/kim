@@ -30,7 +30,8 @@
         "thumbnail": false,
         "click_through": false,
         "group": "default",
-        "animation": null
+        "animation": null,
+        "content": "image"
       },
       {
         "id": "pin-3",
@@ -62,7 +63,8 @@
         "animation": {
           "frames": 12,
           "shown": "first_frame"
-        }
+        },
+        "content": "text"
       },
       {
         "id": "pin-4",
@@ -91,7 +93,8 @@
         "thumbnail": true,
         "click_through": false,
         "group": "research",
-        "animation": null
+        "animation": null,
+        "content": "image"
       }
     ],
     "reopenable": "pin-2",

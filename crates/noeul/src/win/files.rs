@@ -8,6 +8,7 @@
 //! debug-build test hook answers without it, see `runtime`).
 
 use crate::app::SaveRequest;
+use crate::error::{Code, NoeulError};
 use crate::win::wide;
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
@@ -78,9 +79,111 @@ pub fn save_dialog(owner: Option<HWND>, req: &SaveRequest) -> Option<PathBuf> {
     (len > 0).then(|| PathBuf::from(OsString::from_wide(&file[..len])))
 }
 
+/// The bytes of a local image file for a pin (Step 55; NOEUL-FR-073, NOEUL-NFR-008), at most
+/// `max`. Only a drive-letter path on a local drive is opened: never a network drive (mapped or
+/// UNC), a cloud placeholder whose data is not on this PC (reading it would make the sync
+/// client download it: `FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS`, `…_RECALL_ON_OPEN`, `…_OFFLINE`),
+/// a link or junction (`FILE_ATTRIBUTE_REPARSE_POINT`, it may lead anywhere) or a folder. The
+/// messages never name the path (NOEUL-SEC-008).
+pub fn read_local_image(path: &std::path::Path, max: u64) -> Result<Vec<u8>, NoeulError> {
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_OFFLINE, FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS,
+        FILE_ATTRIBUTE_RECALL_ON_OPEN, FILE_ATTRIBUTE_REPARSE_POINT, GetDriveTypeW,
+        GetFileAttributesW, INVALID_FILE_ATTRIBUTES,
+    };
+    // `GetDriveTypeW`'s documented value for a remote (network) drive.
+    const DRIVE_REMOTE: u32 = 4;
+    let not_local = |why: &str| {
+        NoeulError::new(
+            Code::PermissionDenied,
+            format!("the file is not on this PC: {why}"),
+        )
+        .hint("Noeul pins local files only and never reads network or cloud locations")
+    };
+    if !crate::paste::is_local_path(path) {
+        return Err(not_local("not a local drive path"));
+    }
+    let s = path.as_os_str().to_string_lossy();
+    let root = wide(&s[..3]);
+    // SAFETY: a NUL-terminated root path such as `C:\`.
+    if unsafe { GetDriveTypeW(root.as_ptr()) } == DRIVE_REMOTE {
+        return Err(not_local("it is on a network drive"));
+    }
+    let w = wide(path.as_os_str());
+    // SAFETY: a NUL-terminated path; reading attributes opens no data stream.
+    let attrs = unsafe { GetFileAttributesW(w.as_ptr()) };
+    if attrs == INVALID_FILE_ATTRIBUTES {
+        return Err(NoeulError::new(
+            Code::NothingToPin,
+            "the file does not exist or cannot be read",
+        ));
+    }
+    if attrs & FILE_ATTRIBUTE_DIRECTORY != 0 {
+        return Err(NoeulError::new(
+            Code::NothingToPin,
+            "that is a folder, not an image file",
+        ));
+    }
+    if attrs
+        & (FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS
+            | FILE_ATTRIBUTE_RECALL_ON_OPEN
+            | FILE_ATTRIBUTE_OFFLINE)
+        != 0
+    {
+        return Err(not_local(
+            "it is a cloud placeholder; open it once to download it, then pin it",
+        ));
+    }
+    if attrs & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Err(not_local("it is a link, which may lead elsewhere"));
+    }
+    let meta = std::fs::metadata(path).map_err(|e| NoeulError::io("the image file", &e))?;
+    if meta.len() > max {
+        return Err(NoeulError::new(
+            Code::ImageInvalid,
+            format!("the image file is larger than {} MiB", max / (1024 * 1024)),
+        ));
+    }
+    std::fs::read(path).map_err(|e| NoeulError::io("the image file", &e))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Local files are read; network paths, folders and missing files are refused without a
+    /// path in the message.
+    #[test]
+    fn only_local_image_files_are_read() {
+        let dir = std::env::temp_dir().join(format!("noeul-files-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("a.png");
+        std::fs::write(&f, b"\x89PNG\r\n\x1a\nnot really").unwrap();
+        assert_eq!(read_local_image(&f, 1024).unwrap().len(), 18);
+        let e = read_local_image(&f, 4).unwrap_err();
+        assert_eq!(e.code, Code::ImageInvalid);
+        for p in [
+            r"\\127.0.0.1\c$\a.png",
+            r"\\?\UNC\host\share\a.png",
+            r"relative.png",
+        ] {
+            let e = read_local_image(std::path::Path::new(p), 1024).unwrap_err();
+            assert_eq!(e.code, Code::PermissionDenied, "{p}");
+            assert!(!e.message.contains(p), "no path in the message");
+        }
+        assert_eq!(
+            read_local_image(&dir, 1024).unwrap_err().code,
+            Code::NothingToPin,
+            "a folder"
+        );
+        assert_eq!(
+            read_local_image(&dir.join("missing.png"), 1024)
+                .unwrap_err()
+                .code,
+            Code::NothingToPin
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn the_pictures_folder_and_local_time_are_known() {

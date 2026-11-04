@@ -1,0 +1,11 @@
+{
+  "type": "response",
+  "id": 19,
+  "result": {
+    "dry_run": false,
+    "source": "clipboard",
+    "pin": null,
+    "kind": "text",
+    "text": "clipboard text must never appear in a result"
+  }
+}

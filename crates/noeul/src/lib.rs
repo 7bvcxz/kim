@@ -1,6 +1,7 @@
 //! Noeul (노을): a small native screenshot and floating-pin tool for Windows (pre-alpha:
 //! Step 49 foundation, Step 50 region selection overlay, Step 51 double-click to pin, Step 52
-//! smart selection and pixel precision, Step 53 floating pin engine, Step 56 annotation). See
+//! smart selection and pixel precision, Step 53 floating pin engine, Step 56 annotation, Step 55
+//! clipboard paste and rich sources). See
 //! docs/NOEUL_PHILOSOPHY.md, docs/NOEUL_REQUIREMENTS.md, docs/adr/0023-noeul-app-foundation.md,
 //! docs/adr/0026-noeul-capture-overlay.md, docs/adr/0029-noeul-pin-engine.md and
 //! docs/adr/0038-noeul-annotation.md.
@@ -20,6 +21,10 @@
 //! | [`zoom`] | Pin zoom levels, sizes, fitting and the premultiplying scaler |
 //! | [`transform`] | Pin transforms (Step 54): orientation, opacity, thumbnails, border resizing, and the window's outline, shadow and click-through badge |
 //! | [`gif`] | Recognising an animated GIF on the clipboard, so a pin never flattens one silently |
+//! | [`paste`] | What `F3` takes from the clipboard (Step 55): formats, priority, colours, copied paths, private content, the stand-in |
+//! | [`html`] | Noeul's own sanitizer for clipboard HTML (Step 55): text and basic formatting only, no script, no remote resource |
+//! | [`card`] | Text, HTML, colour and file-name cards (Step 55): document, layout, legible colours, pixels |
+//! | [`decode`] | Local image decoding (Step 55): PNG, JPEG, GIF, BMP, ICO, TIFF, TGA with limits, alpha, ICC to sRGB, multi-image counts |
 //! | [`annotation`] | Annotation (Step 56): editable vector objects, undo/redo, the editor (tools, text, IME), the rasterizer and the export |
 //! | [`settings`], [`paths`] | `config.toml` and the stable per-user folders |
 //! | [`hotkeys`] | The shipped manifest subset, global registration, pin keys |
@@ -31,6 +36,8 @@
 pub mod annotation;
 pub mod app;
 pub mod capture;
+pub mod card;
+pub mod decode;
 pub mod detect;
 pub mod dib;
 pub mod dpi;
@@ -38,9 +45,11 @@ pub mod error;
 pub mod frame;
 pub mod gif;
 pub mod hotkeys;
+pub mod html;
 pub mod ipc;
 pub mod output;
 pub mod overlay;
+pub mod paste;
 pub mod paths;
 pub mod pins;
 pub mod selection;

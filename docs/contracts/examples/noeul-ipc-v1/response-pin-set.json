@@ -37,7 +37,8 @@
         "thumbnail": false,
         "click_through": false,
         "group": "default",
-        "animation": null
+        "animation": null,
+        "content": "image"
       }
     ]
   }

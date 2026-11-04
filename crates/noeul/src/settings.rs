@@ -31,6 +31,13 @@
 //! - `[pins] shadow`: the soft pin shadow around every pin (also the band that resizes it),
 //!   `"on"` (default) or `"off"`. A running Noeul redraws its pins when either changes.
 //!
+//! Since Step 55 (NOEUL-FR-071, ADR 0047):
+//!
+//! - `[paste] paths`: the text of one copied local path to an image file pins that file,
+//!   `"on"` (default) or `"off"` (the text is pinned as text);
+//! - `[paste] file_cards`: copied files that are not images become a card of their names,
+//!   `"off"` (default) or `"on"`.
+//!
 //! The rules every setting follows:
 //!
 //! - a missing file means defaults;
@@ -163,6 +170,8 @@ pub struct Settings {
     pub magnifier: bool,
     /// The outline and shadow around pins (`[pins] border`, `[pins] shadow`; UX spec §10).
     pub pin_look: Look,
+    /// What a paste takes (`[paste] paths`, `[paste] file_cards`; Step 55).
+    pub paste: crate::paste::Options,
 }
 
 impl Default for Settings {
@@ -176,6 +185,7 @@ impl Default for Settings {
             detection: DetectMode::Window,
             magnifier: true,
             pin_look: Look::default(),
+            paste: crate::paste::Options::default(),
         }
     }
 }
@@ -223,6 +233,10 @@ impl Loaded {
             "pins": {
                 "border": if s.pin_look.border { "on" } else { "off" },
                 "shadow": if s.pin_look.shadow { "on" } else { "off" },
+            },
+            "paste": {
+                "paths": if s.paste.paths { "on" } else { "off" },
+                "file_cards": if s.paste.file_cards { "on" } else { "off" },
             },
             "gestures": {
                 "double_click": s.gestures.double_click.as_str(),
@@ -331,6 +345,18 @@ const KEYS: &[Key] = &[
         takes: "\"on\" or \"off\"",
         default: "\"on\"",
     },
+    Key {
+        section: "paste",
+        name: "paths",
+        takes: "\"on\" or \"off\"",
+        default: "\"on\"",
+    },
+    Key {
+        section: "paste",
+        name: "file_cards",
+        takes: "\"on\" or \"off\"",
+        default: "\"off\"",
+    },
 ];
 
 /// The dotted names of every key `noeul config set` accepts.
@@ -341,7 +367,7 @@ pub fn key_names() -> Vec<String> {
 }
 
 /// The sections that hold keys (`noeul config reset <section>`).
-pub const SECTIONS: &[&str] = &["general", "capture", "gestures", "pins"];
+pub const SECTIONS: &[&str] = &["general", "capture", "gestures", "pins", "paste"];
 
 /// Applies one value to `settings`; `Err` names what the key takes.
 fn apply(settings: &mut Settings, section: &str, name: &str, v: &toml::Value) -> Result<(), ()> {
@@ -389,6 +415,18 @@ fn apply(settings: &mut Settings, section: &str, name: &str, v: &toml::Value) ->
                 settings.pin_look.border = on;
             } else {
                 settings.pin_look.shadow = on;
+            }
+        }
+        ("paste", "paths" | "file_cards") => {
+            let on = match s {
+                Some("on") => true,
+                Some("off") => false,
+                _ => return Err(()),
+            };
+            if name == "paths" {
+                settings.paste.paths = on;
+            } else {
+                settings.paste.file_cards = on;
             }
         }
         _ => {}

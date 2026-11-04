@@ -43,12 +43,37 @@ fn status(sb: &Sandbox) -> Value {
     doc["data"].clone()
 }
 
-fn eventually(what: &str, mut f: impl FnMut() -> bool) {
-    let until = Instant::now() + Duration::from_secs(10);
+/// Polls `f` until it holds. Every poll is a separate `noeul status` process and the instance
+/// is one too, so on a loaded machine (a whole workspace's tests at once) a step can take
+/// seconds: the limit is generous, and a real failure still fails — with the instance's last
+/// status, so it says what the instance was doing instead of only what was awaited.
+fn eventually(sb: &Sandbox, what: &str, mut f: impl FnMut() -> bool) {
+    let until = Instant::now() + Duration::from_secs(60);
     while !f() {
-        assert!(Instant::now() < until, "timed out waiting for: {what}");
+        if Instant::now() >= until {
+            let (_, doc) = sb.json(&["status"]);
+            panic!(
+                "timed out waiting for: {what}\nlast status: {:#}",
+                doc["data"]
+            );
+        }
         std::thread::sleep(Duration::from_millis(20));
     }
+}
+
+/// Drags the selection (100,100)-(399,299) of the synthetic desktop and waits until it is
+/// confirmed with exactly that rectangle (a modifier read from the user's real keyboard would
+/// make it a square, for example, and move the toolbar the next click aims at).
+fn select(sb: &Sandbox, ov: HWND) {
+    drag(ov, (100, 100), (399, 299));
+    eventually(sb, "the selection is confirmed", || {
+        status(sb)["captures"]["overlay"]["phase"] == "selected"
+    });
+    assert_eq!(
+        status(sb)["captures"]["overlay"]["selection"],
+        Rect::new(X0 + 100, Y0 + 100, 300, 200).to_json(),
+        "the dragged rectangle, unchanged by any key the user holds elsewhere"
+    );
 }
 
 #[derive(Debug, Clone)]
@@ -239,11 +264,8 @@ fn shapes_drawn_in_the_overlay_are_saved_exactly() {
     let mut sb = sandbox("ann-save");
     let pid = sb.instance();
     let ov = open_overlay(&sb, pid);
-    drag(ov, (100, 100), (399, 299));
+    select(&sb, ov);
     let sel = Rect::new(X0 + 100, Y0 + 100, 300, 200);
-    eventually("the selection is confirmed", || {
-        status(&sb)["captures"]["overlay"]["phase"] == "selected"
-    });
     let (rx, ry) = button(
         &TOOLBAR,
         sel,
@@ -251,33 +273,35 @@ fn shapes_drawn_in_the_overlay_are_saved_exactly() {
         (X0, Y0),
     );
     click(ov, rx, ry);
-    eventually("the rectangle tool", || {
+    eventually(&sb, "the rectangle tool", || {
         let st = status(&sb);
         st["captures"]["overlay"]["phase"] == "annotating" && annotation(&st)["tool"] == "rectangle"
     });
     drag(ov, (150, 150), (250, 220));
     key(ov, 0x31); // `1`: the arrow tool
     drag(ov, (300, 150), (380, 260));
-    eventually("two objects", || annotation(&status(&sb))["objects"] == 2);
+    eventually(&sb, "two objects", || {
+        annotation(&status(&sb))["objects"] == 2
+    });
     let st = status(&sb);
     assert_eq!(annotation(&st)["kinds"]["rectangle"], 1);
     assert_eq!(annotation(&st)["kinds"]["arrow"], 1);
     assert_eq!(annotation(&st)["tool"], "arrow");
     key(ov, 0x55); // U: undo
-    eventually("undone", || annotation(&status(&sb))["objects"] == 1);
+    eventually(&sb, "undone", || annotation(&status(&sb))["objects"] == 1);
     key(ov, 0x59); // Y: redo
-    eventually("redone", || annotation(&status(&sb))["objects"] == 2);
+    eventually(&sb, "redone", || annotation(&status(&sb))["objects"] == 2);
     assert!(post(ov, WM_MOUSEWHEEL, 120 << 16, 0));
-    eventually("one level thicker", || {
+    eventually(&sb, "one level thicker", || {
         annotation(&status(&sb))["width"] == 4
     });
     key(ov, 0x1B); // Escape: leaves the tool, keeps the drawing
-    eventually("the tool is left", || {
+    eventually(&sb, "the tool is left", || {
         let st = status(&sb);
         st["captures"]["overlay"]["phase"] == "selected" && annotation(&st)["objects"] == 2
     });
     key(ov, 0x51); // Q: quick save
-    eventually("saved", || status(&sb)["captures"]["open"] == false);
+    eventually(&sb, "saved", || status(&sb)["captures"]["open"] == false);
     let files = shots(&sb);
     assert_eq!(files.len(), 1, "{files:?}");
     let img = png_bgra(&files[0]);
@@ -313,11 +337,8 @@ fn a_label_and_a_pin_edit_through_the_real_windows() {
     let mut sb = sandbox("ann-pin");
     let pid = sb.instance();
     let ov = open_overlay(&sb, pid);
-    drag(ov, (100, 100), (399, 299));
+    select(&sb, ov);
     let sel = Rect::new(X0 + 100, Y0 + 100, 300, 200);
-    eventually("the selection is confirmed", || {
-        status(&sb)["captures"]["overlay"]["phase"] == "selected"
-    });
     let (tx, ty) = button(
         &TOOLBAR,
         sel,
@@ -325,11 +346,11 @@ fn a_label_and_a_pin_edit_through_the_real_windows() {
         (X0, Y0),
     );
     click(ov, tx, ty);
-    eventually("the text tool", || {
+    eventually(&sb, "the text tool", || {
         annotation(&status(&sb))["tool"] == "text"
     });
     click(ov, 150, 150);
-    eventually("a label is edited", || {
+    eventually(&sb, "a label is edited", || {
         annotation(&status(&sb))["editing_text"] == true
     });
     // `E` is detect.cycle, but while typing it is a character; Korean arrives as the IME's
@@ -345,7 +366,7 @@ fn a_label_and_a_pin_edit_through_the_real_windows() {
     assert!(post(ov, WM_IME_CHAR, 0xAE00, 0));
     assert!(post(ov, WM_IME_ENDCOMPOSITION, 0, 0));
     key(ov, 0x1B); // Escape ends the label
-    eventually("the label is done", || {
+    eventually(&sb, "the label is done", || {
         annotation(&status(&sb))["editing_text"] == false
     });
     let st = status(&sb);
@@ -355,14 +376,16 @@ fn a_label_and_a_pin_edit_through_the_real_windows() {
     );
     assert_eq!(annotation(&st)["kinds"]["text"], 1);
     key(ov, 0x0D); // Enter pins with the label
-    eventually("pinned", || status(&sb)["pins"]["open"] == 1);
+    eventually(&sb, "pinned", || status(&sb)["pins"]["open"] == 1);
     let (code, doc) = sb.json(&["pin", "list"]);
     assert_eq!(code, 0);
     assert_eq!(doc["data"]["pins"][0]["annotations"], 1);
     let pin = of_class(pid, "NoeulPin")[0].hwnd;
     // Space on the pin: the editor opens over it, layered, off-screen, never activated.
     key(pin, 0x20);
-    eventually("the editor", || !status(&sb)["pins"]["editor"].is_null());
+    eventually(&sb, "the editor", || {
+        !status(&sb)["pins"]["editor"].is_null()
+    });
     let st = status(&sb);
     assert_eq!(st["pins"]["editor"]["mode"], "pin_edit");
     assert_eq!(st["pins"]["editor"]["pin"], "pin-1");
@@ -387,14 +410,14 @@ fn a_label_and_a_pin_edit_through_the_real_windows() {
         origin,
     );
     click(ed.hwnd, lx, ly);
-    eventually("the line tool", || {
+    eventually(&sb, "the line tool", || {
         annotation(&status(&sb))["tool"] == "line"
     });
     let c = |x: i32, y: i32| (X0 + x - origin.0, Y0 + y - origin.1);
     drag(ed.hwnd, c(120, 270), c(380, 270));
-    eventually("a line", || annotation(&status(&sb))["objects"] == 2);
+    eventually(&sb, "a line", || annotation(&status(&sb))["objects"] == 2);
     key(ed.hwnd, 0x0D); // Enter commits
-    eventually("committed", || status(&sb)["pins"]["editor"].is_null());
+    eventually(&sb, "committed", || status(&sb)["pins"]["editor"].is_null());
     assert_eq!(status(&sb)["last_action"]["result"], "committed");
     let (_, doc) = sb.json(&["pin", "list"]);
     assert_eq!(doc["data"]["pins"][0]["annotations"], 2);
@@ -402,21 +425,23 @@ fn a_label_and_a_pin_edit_through_the_real_windows() {
     assert!(visible(pin), "shown again");
     // A cancelled edit changes nothing.
     key(pin, 0x20);
-    eventually("the editor again", || {
+    eventually(&sb, "the editor again", || {
         !status(&sb)["pins"]["editor"].is_null()
     });
     let ed = of_class(pid, "NoeulOverlay")[0].hwnd;
     click(ed, lx, ly);
     drag(ed, c(120, 200), c(380, 200));
-    eventually("a third line", || annotation(&status(&sb))["objects"] == 3);
+    eventually(&sb, "a third line", || {
+        annotation(&status(&sb))["objects"] == 3
+    });
     key(ed, 0x1B); // leave the tool
     key(ed, 0x1B); // cancel
-    eventually("cancelled", || status(&sb)["pins"]["editor"].is_null());
+    eventually(&sb, "cancelled", || status(&sb)["pins"]["editor"].is_null());
     let (_, doc) = sb.json(&["pin", "list"]);
     assert_eq!(doc["data"]["pins"][0]["annotations"], 2, "lossless cancel");
     // The pin's quick save carries the committed annotations.
     key(pin, 0x51);
-    eventually("the pin was saved", || shots(&sb).len() == 1);
+    eventually(&sb, "the pin was saved", || shots(&sb).len() == 1);
     let img = png_bgra(&shots(&sb)[0]);
     assert_eq!((img.0, img.1), (300, 200));
     assert_eq!(px(&img, 150, 170), RED, "the committed line at y 270");
@@ -459,29 +484,26 @@ fn a_redaction_through_the_real_windows_is_saved_without_the_original() {
     let sel = Rect::new(X0 + 100, Y0 + 100, 300, 200);
     let tool = |t| button(&TOOLBAR, sel, ToolbarItem::Tool(t), (X0, Y0));
     let ov = open_overlay(&sb, pid);
-    drag(ov, (100, 100), (399, 299));
-    eventually("the selection is confirmed", || {
-        status(&sb)["captures"]["overlay"]["phase"] == "selected"
-    });
+    select(&sb, ov);
     let (x, y) = tool(noeul::annotation::Tool::Redact);
     click(ov, x, y);
-    eventually("the redaction tool", || {
+    eventually(&sb, "the redaction tool", || {
         let st = status(&sb);
         annotation(&st)["tool"] == "redact" && annotation(&st)["color"] == "black"
     });
     drag(ov, (150, 150), (250, 220));
     let (x, y) = tool(noeul::annotation::Tool::Blur);
     click(ov, x, y);
-    eventually("the blur tool", || {
+    eventually(&sb, "the blur tool", || {
         annotation(&status(&sb))["tool"] == "blur"
     });
     drag(ov, (280, 130), (380, 260));
-    eventually("a redaction and a blur", || {
+    eventually(&sb, "a redaction and a blur", || {
         let a = annotation(&status(&sb));
         a["kinds"]["redact"] == 1 && a["kinds"]["blur"] == 1
     });
     key(ov, 0x51); // Q: quick save
-    eventually("saved", || status(&sb)["captures"]["open"] == false);
+    eventually(&sb, "saved", || status(&sb)["captures"]["open"] == false);
     let files = shots(&sb);
     assert_eq!(files.len(), 1, "one file, no temporary one: {files:?}");
     assert_eq!(png_chunks(&files[0]), ["IHDR", "IDAT", "IEND"]);
@@ -507,24 +529,21 @@ fn a_redaction_through_the_real_windows_is_saved_without_the_original() {
     assert!(blurred > 1000, "the blur changed its pixels: {blurred}");
     // Into a pin: its quick save is redacted as well.
     let ov = open_overlay(&sb, pid);
-    drag(ov, (100, 100), (399, 299));
-    eventually("selected again", || {
-        status(&sb)["captures"]["overlay"]["phase"] == "selected"
-    });
+    select(&sb, ov);
     let (x, y) = tool(noeul::annotation::Tool::Redact);
     click(ov, x, y);
-    eventually("the redaction tool", || {
+    eventually(&sb, "the redaction tool", || {
         annotation(&status(&sb))["tool"] == "redact"
     });
     drag(ov, (150, 150), (250, 220));
-    eventually("a redaction", || {
+    eventually(&sb, "a redaction", || {
         annotation(&status(&sb))["kinds"]["redact"] == 1
     });
     key(ov, 0x0D); // Enter pins with the redaction
-    eventually("pinned", || status(&sb)["pins"]["open"] == 1);
+    eventually(&sb, "pinned", || status(&sb)["pins"]["open"] == 1);
     let pin = of_class(pid, "NoeulPin")[0].hwnd;
     key(pin, 0x51);
-    eventually("the pin was saved", || shots(&sb).len() == 2);
+    eventually(&sb, "the pin was saved", || shots(&sb).len() == 2);
     let second = shots(&sb)
         .into_iter()
         .find(|f| *f != files[0])

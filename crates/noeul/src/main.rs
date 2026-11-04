@@ -25,8 +25,14 @@ const AFTER_HELP: &str = "\
 While Noeul runs, F1 opens the region selection overlay: drag a rectangle, then double-click
 inside it to pin it at once (also Enter, the toolbar's Pin button or a middle-click). Ctrl+C or
 Copy copies it, Ctrl+S or Save saves it where you choose, Ctrl+Shift+S quick-saves it, Esc or
-right-click outside cancels; `noeul capture --interactive` opens the same overlay. F3 pins the
-clipboard image. The double-click can copy, save or do nothing instead
+right-click outside cancels; `noeul capture --interactive` opens the same overlay. F3 pins what
+the clipboard holds: an image, image files copied in Explorer (or one copied path), a colour value
+(#RGB, #RRGGBB, rgb(...), three numbers) as a swatch, HTML or text as a card (Noeul's own
+renderer: no script, nothing downloaded; images become placeholders); Ctrl+Shift+C copies a card's
+text back, and the pin's menu offers 'Pin clipboard as' the other kinds. Content marked private
+(password managers) is never pinned. Image files dropped on a pin are pinned too; `noeul pin
+<file>` and `noeul pin --clipboard [--as text]` do the same from scripts. The double-click can copy,
+save or do nothing instead
 (`noeul config set gestures.double_click copy`), and `noeul config set gestures.preset snipaste`
 switches to Snipaste-style gestures (double-click and Enter copy, Ctrl+T pins).
 Annotate before you pin, copy or save: the toolbar's rectangle, ellipse, line, arrow, pen,
@@ -45,7 +51,7 @@ list/hide/show/close/set` and `noeul pin group list/switch` reach them from scri
 memory only and do not survive a restart.
 Not in this build (labeled planned): animated GIF pins (a pin of an animated GIF shows its first
 frame and says so), settings window (61), capture to a file or the clipboard from the command
-line and `noeul pin <file>` (62).
+line (62).
 
 Exit codes: 0 ok · 1 failure (I/O, permission) · 2 usage · 3 not found (not running, no pin)
             4 integrity (protocol, identity) · 5 incompatible or unsupported platform
@@ -63,8 +69,9 @@ Exit codes: 0 ok · 1 failure (I/O, permission) · 2 usage · 3 not found (not r
     long_about = "Noeul pins pictures to the desktop as floating windows. This pre-alpha build \
         has the resident instance (`noeul start`), its optional tray icon, F1 to select a region \
         over a frozen picture of every monitor and pin it with a double-click inside it (or \
-        Enter), copy it or save it, F3 to pin the clipboard image, pins of a screen region or \
-        the clipboard requested from the command line, and the floating pin engine: \
+        Enter), copy it or save it, F3 to pin what the clipboard holds (an image, image files, \
+        a colour, HTML or text as a card), image files dropped on a pin, pins of a screen region, \
+        the clipboard or a file requested from the command line, and the floating pin engine: \
         always-on-top pins that move, zoom, resize, rotate, flip, fade, shrink to thumbnails, let \
         clicks through, hide, show, group and close independently, each with its own context \
         menu.\n\n\
@@ -115,8 +122,9 @@ enum Command {
     /// Ask the running instance to capture a region and pin it, or to open (or cancel) the
     /// region selection overlay as F1 does
     Capture(CaptureArgs),
-    /// Pins of the running instance: `noeul pin --clipboard` pins the clipboard image; the
-    /// subcommands list, hide, show, close, reopen and change pins, and switch groups
+    /// Pins of the running instance: `noeul pin --clipboard` pins what the clipboard holds (as
+    /// F3 does), `noeul pin <file>` an image file; the subcommands list, hide, show, close,
+    /// reopen and change pins, and switch groups
     Pin(PinArgs),
     /// Noeul's keyboard shortcuts: list, change, disable, reset, check conflicts (never
     /// registers a hotkey or opens a window)
@@ -194,24 +202,34 @@ pub struct PinArgs {
 }
 
 #[derive(Debug, Args)]
+#[command(group = clap::ArgGroup::new("source").args(["clipboard", "file"]))]
 pub struct PinCreateArgs {
-    /// Read the clipboard once and pin its image, as F3 does (without taking focus; inside the
-    /// work area of the monitor, zoomed out when larger)
+    /// An image file to pin (PNG, JPEG, GIF, BMP, ICO, TIFF or TGA on a local drive; never a
+    /// network path), read by the running Noeul
+    #[arg(value_name = "FILE", conflicts_with = "clipboard")]
+    pub file: Option<std::path::PathBuf>,
+    /// Read the clipboard once and pin what it holds, as F3 does — an image, image files, a
+    /// colour value, HTML or text (without taking focus; inside the work area of the monitor,
+    /// zoomed out when larger)
     #[arg(long)]
     pub clipboard: bool,
+    /// Pin the clipboard as this kind instead of the first one it offers: image, image_file,
+    /// color, html, text or files
+    #[arg(long = "as", value_name = "KIND", requires = "clipboard")]
+    pub as_kind: Option<String>,
     /// Where the picture's top-left corner goes: x,y in device pixels (default: the pointer)
     #[arg(
         long,
         value_name = "X,Y",
         allow_hyphen_values = true,
-        requires = "clipboard"
+        requires = "source"
     )]
     pub at: Option<String>,
     /// Start Noeul first when it is not running
-    #[arg(long, requires = "clipboard")]
+    #[arg(long, requires = "source")]
     pub start: bool,
-    /// Check the desktop; read nothing and pin nothing
-    #[arg(long, requires = "clipboard")]
+    /// Check the desktop (and the arguments); read nothing and pin nothing
+    #[arg(long, requires = "source")]
     pub dry_run: bool,
 }
 

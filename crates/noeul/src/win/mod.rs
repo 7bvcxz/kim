@@ -2,6 +2,7 @@
 //! why it is sound. The identity helpers and the named-pipe transport are adapted from Subak's
 //! (`crates/subak/src/win`, ADR 0005, ADR 0019); Noeul does not depend on the Subak crate.
 
+pub mod card;
 pub mod client;
 pub mod clipboard;
 pub mod detect;

@@ -40,7 +40,8 @@
 //! `pin.flip-horizontal`/`-vertical` (`3`/`4`), `pin.opacity-up`/`-down` (`Ctrl+Plus`/
 //! `Ctrl+Minus`), `pin.thumbnail` (`T`), `pin.click-through` (`Ctrl+Shift+T`) and `pin.group-new`
 //! (no default) — and the first global actions without defaults, `pins.clickable` and
-//! `pins.toggle-hidden` (the user binds them; HOTKEY_CONTRACT §7.5).
+//! `pins.toggle-hidden` (the user binds them; HOTKEY_CONTRACT §7.5). Step 55 added
+//! `pin.copy-text` (`Ctrl+Shift+C`): a text, HTML, colour or file card's text to the clipboard.
 
 use crate::paths::Paths;
 use kim_hotkeys::check::{Conflict, Severity, ToolState, analyze};
@@ -121,6 +122,7 @@ pub const IMPLEMENTED: &[&str] = &[
     "pin.copy",
     "pin.save",
     "pin.quick-save",
+    "pin.copy-text",
     "pin.zoom-in",
     "pin.zoom-out",
     "pin.zoom-reset",

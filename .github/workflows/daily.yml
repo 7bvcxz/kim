@@ -1,0 +1,43 @@
+name: Daily
+
+# Maintainer decision (2026-11-04, AGENTS.md §4 and §6): no CI runs on push. This one workflow
+# runs once a day (and on demand), so a failure sends at most one notification per day. The
+# merge gate before every push to main is `cargo xtask ci`, run locally on the merged result.
+# Windows only: no Linux build or test until the maintainer's Linux server phase (AGENTS.md §3).
+on:
+  schedule:
+    - cron: '0 18 * * *' # 03:00 Korea Standard Time
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: daily
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  e2e-windows:
+    name: Windows — e2e suite (real binaries)
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install pinned toolchain (rust-toolchain.toml)
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - name: e2e suite (once a day, AGENTS.md §4)
+        run: cargo xtask e2e --scheduled
+
+  dependency-policy:
+    name: Dependency policy — advisories, licenses, sources
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories licenses bans sources

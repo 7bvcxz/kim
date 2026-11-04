@@ -1,0 +1,14 @@
+{
+  "command": "config.set",
+  "error": {
+    "code": "config_from_newer_version",
+    "details": [
+      "config.toml line 1: config_version 2 was written by a newer Subak (this one reads 1); it is read-only and the default settings apply"
+    ],
+    "exit_code": 5,
+    "hint": "use the newer Subak to change settings, or import a file this one reads",
+    "message": "config.toml was written by a newer Subak and is read-only; nothing was changed"
+  },
+  "ok": false,
+  "schema_version": 1
+}

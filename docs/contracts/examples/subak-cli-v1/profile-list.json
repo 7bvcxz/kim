@@ -1,0 +1,47 @@
+{
+  "command": "profile.list",
+  "data": {
+    "default": "PowerShell",
+    "path": "C:\\Users\\me\\AppData\\Roaming\\mouv\\subak\\config.toml",
+    "profiles": [
+      {
+        "args": [
+          "-NoLogo",
+          "-NoProfile"
+        ],
+        "cwd": null,
+        "default": true,
+        "env": {
+          "RUST_BACKTRACE": "1"
+        },
+        "name": "PowerShell",
+        "program": "powershell.exe",
+        "secret_env": [],
+        "unset_env": []
+      },
+      {
+        "args": [
+          "/k"
+        ],
+        "cwd": null,
+        "default": false,
+        "env": {
+          "GITHUB_TOKEN": "***",
+          "MODE": "fast"
+        },
+        "name": "dev",
+        "program": "cmd.exe",
+        "secret_env": [
+          "GITHUB_TOKEN"
+        ],
+        "unset_env": []
+      }
+    ],
+    "state": "user"
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": [
+    "config.toml line 22: profile `dev`: it sets `GITHUB_TOKEN`, which looks secret; secrets do not belong in config.toml (shown as ***): let the program read them from your environment instead"
+  ]
+}

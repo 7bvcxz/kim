@@ -66,3 +66,14 @@ inherit by Windows default and cannot be meaningfully excluded). The Linux mappi
 
 `SUBAK-FR-040`, `SUBAK-FR-046`, `SUBAK-SEC-003`, `SUBAK-SEC-011`, `KIM-SEC-013`,
 `KIM-NFR-003`.
+
+## Notes
+
+- 2026-11-04 (Step 20): `config.toml` is implemented for the window's settings and the basic
+  shell profiles ([ADR 0051](0051-subak-settings-profiles-and-appearance.md),
+  [STATE_SCHEMA §2](../contracts/STATE_SCHEMA.md)). Rule 5's "format-preserving TOML edits" are
+  line edits checked by parsing the result again (only the edited keys may differ, else nothing
+  is written), as Noeul does; an invalid file is never rewritten by an edit, and only `reset
+  --all` or `import` replace it after a backup in `backups\` (the newest 5). The Host does not
+  read the file; the `[host]`, `[restore]`, `[scrollback]` and `[claude]` sections of the draft
+  remain planned for their Steps and are kept as unknown keys until then.

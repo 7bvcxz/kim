@@ -1,6 +1,8 @@
 # Subak state and configuration schemas v1 (draft)
 
-Status: **draft contract** · Step 03 · Implemented in Steps 10/29 (state) and 20 (config) ·
+Status: **draft contract** (`config.toml`'s `[appearance]`, `[terminal]` and `[[profiles]]`
+implemented in Step 20, [ADR 0051](../adr/0051-subak-settings-profiles-and-appearance.md)) ·
+Step 03 · Implemented in Steps 10/29 (state) and 20 (config) ·
 Decision: [ADR 0006](../adr/0006-state-and-configuration-storage.md)
 
 ## 1. `state.json` (schema `subak.state`, version 1)
@@ -46,7 +48,48 @@ identities.
 ## 2. `config.toml` (version 1)
 
 Human-edited; unknown keys preserved; invalid values fall back to defaults with an error that
-names the key and line (`SUBAK-FR-046`). Defaults shown:
+names the key and line (`SUBAK-FR-046`).
+
+**Implemented (Step 20)** — read by the window and the `subak config`, `profile` and `new`
+commands, never by the Host; data model [subak-config-v1](schemas/subak-config-v1.schema.json)
+(examples in `examples/subak-config-v1/`); rules, edits, backups and the user guide in
+[SUBAK_GUI §13](../SUBAK_GUI.md) and [SUBAK_CLI §3.13](../SUBAK_CLI.md):
+
+```toml
+config_version = 1            # a newer value: read-only, never rewritten
+
+[appearance]
+theme = "auto"                # auto | system | kim-dark | kim-light | high-contrast
+font_family = ""              # "" = the design system's chain; else tried first (≤ 31 chars)
+font_size = 13                # 8–36 logical px
+line_height = 1.2             # 1.0–2.0
+padding = 8                   # 0–16 logical px
+opacity = 100                 # 50–100 %
+motion = "system"             # system | reduced | full
+bold_is_bright = true
+
+[terminal]
+default_profile = ""          # a profile's name; "" = the Host's default shell
+copy_on_select = false
+smart_ctrl_c = false
+right_click = "copy-paste"    # copy-paste | menu | paste | none
+middle_click = "none"         # none | paste
+word_separators = "…"         # ≤ 128 characters; default: Windows Terminal's set
+
+[[profiles]]                  # ≤ 64; names unique ignoring case
+name = "PowerShell"           # 1–64 characters, required
+program = "powershell.exe"    # required; a path or a name on the pane's PATH
+args = ["-NoLogo"]            # ≤ 256 strings
+cwd = 'C:\src'                # absolute
+env = { RUST_BACKTRACE = "1" }   # set; never secrets (Subak refuses to write them)
+unset_env = ["HTTP_PROXY"]    # removed
+```
+
+A profile with any other field (`host`, `port`, … — SSH and other kinds are Step 33) is left
+out with a problem. Backups: `backups\config-<UTC>.toml` before `reset --all` and `import`,
+`backups\config-invalid-<UTC>.toml` before an invalid file is replaced, the newest 5 of each.
+
+**Planned** (the draft below; kept as unknown keys until their Steps implement them):
 
 ```toml
 config_version = 1
@@ -79,4 +122,6 @@ every Kim tool ([HOTKEY_CONTRACT §8](../HOTKEY_CONTRACT.md), ADR 0017). This dr
 Subak release read it: the prefix is the leader `prefix`, and terminal-first mode is a preset
 of disabled overrides (HOTKEY_CONTRACT §13.1).
 
-Profiles (`[[profiles]]`) arrive in Step 20/33 and are specified there.
+Profiles (`[[profiles]]`) are the basic local ones above (Step 20); SSH, serial and other kinds
+and per-profile appearance are Step 33. The draft `[gui]` keys were superseded: the floating icon
+and tray choices are in `float.json` (Step 18), and the `Ctrl+W` behaviour is a hotkey binding.

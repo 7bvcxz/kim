@@ -183,14 +183,28 @@ fn capabilities_are_honest_and_follow_the_contract() {
             "hotkeys.reset",
             "hotkeys.check",
             "hotkeys.export",
-            "hotkeys.import"
+            "hotkeys.import",
+            "config.show",
+            "config.check",
+            "config.set",
+            "config.reset",
+            "config.export",
+            "config.import",
+            "profile.list",
+            "profile.show"
         ],
         "only commands that really exist"
     );
     for c in data["commands"].as_array().unwrap() {
         let destructive = matches!(
             c["name"].as_str().unwrap(),
-            "stop" | "kill" | "rm" | "clear-history" | "host.stop" | "hotkeys.reset"
+            "stop"
+                | "kill"
+                | "rm"
+                | "clear-history"
+                | "host.stop"
+                | "hotkeys.reset"
+                | "config.reset"
         );
         assert_eq!(c["effect"] == "destructive", destructive, "{c}");
         assert_eq!(c["requires_yes"] == true, destructive, "{c}");

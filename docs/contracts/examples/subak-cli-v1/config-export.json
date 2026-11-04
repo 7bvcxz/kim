@@ -1,0 +1,14 @@
+{
+  "command": "config.export",
+  "data": {
+    "path": "C:\\Users\\me\\AppData\\Roaming\\mouv\\subak\\config.toml",
+    "redacted": 1,
+    "source": "file",
+    "text": "# hand-written settings\nconfig_version = 1\n\n[appearance]\ntheme = \"kim-light\"   # easier in daylight\nfont_size = 16\nfuture_knob = \"kept\"\n\n[terminal]\ndefault_profile = \"PowerShell\"\n\n[[profiles]]\nname = \"PowerShell\"\nprogram = \"powershell.exe\"\nargs = [\"-NoLogo\", \"-NoProfile\"]\nenv = { RUST_BACKTRACE = \"1\" }\n\n[[profiles]]\nname = \"dev\"\nprogram = \"cmd.exe\"\nargs = [\"/k\"]\nenv = { MODE = \"fast\", GITHUB_TOKEN = \"***\" }\n"
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": [
+    "1 secret-looking value(s) were replaced by ***; secrets do not belong in config.toml"
+  ]
+}

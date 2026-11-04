@@ -50,6 +50,11 @@ subak-term = { path = "../subak-term", features = ["render"] }
 # The key syntax of the Kim hotkey contract (docs/HOTKEY_CONTRACT.md): `subak-gui` declares its
 # window shortcuts in that syntax and checks them against the reserved keys (ADR 0039).
 kim-hotkeys = { version = "0.0.1", path = "../kim-hotkeys" }
+# Step 20 (ADR 0051): `config.toml`, the window's settings and the basic shell profiles, read
+# by the window and the `subak config`/`profile` commands (never by the Host). The same version
+# and features Noeul uses for its config.toml (already in the workspace lock); edits are line
+# edits checked by parsing again, so no TOML writer is needed.
+toml = { version = "1.1.8", default-features = false, features = ["parse", "serde"] }
 
 [target."cfg(windows)".dependencies]
 # The Host and its clients: pseudo console, job objects, named pipes and peer identity, detached
@@ -61,7 +66,9 @@ kim-hotkeys = { version = "0.0.1", path = "../kim-hotkeys" }
 # (UI_Controls) and `PrintWindow` for the test hook's picture of the manager (Storage_Xps).
 # Step 19 (ADR 0048): links open through the shell's "open" verb (UI_Shell, `ShellExecuteW`), the
 # clipboard's HTML Format is registered (DataExchange), and "Save output…" asks for a path in
-# the common save dialog (UI_Controls_Dialogs, `GetSaveFileNameW`).
+# the common save dialog (UI_Controls_Dialogs, `GetSaveFileNameW`). Step 20 (ADR 0051): Windows'
+# light or dark app mode for `theme = "system"` is one registry value (Registry, `RegGetValueW`,
+# read only).
 windows-sys = { version = "0.61.2", features = [
     "Win32_Foundation",
     "Win32_Graphics_Dwm",
@@ -80,6 +87,7 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_System_Ole",
     "Win32_System_Pipes",
     "Win32_System_ProcessStatus",
+    "Win32_System_Registry",
     "Win32_System_RemoteDesktop",
     "Win32_System_Threading",
     "Win32_UI_Accessibility",

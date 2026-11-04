@@ -105,6 +105,42 @@ fn env_param(a: &Args) -> Result<Value, CliError> {
     Ok(Value::Object(map))
 }
 
+/// `new` with a shell profile of `config.toml` applied (Step 20, ADR 0051 §3): the profile's
+/// program and arguments unless `-- <program>` or `--command-line` is given, its working
+/// directory unless `--cwd` is, and its environment overrides first, so an `--env` or
+/// `--unset-env` of the same variable wins. The Host receives explicit values only; it never
+/// reads profiles.
+fn with_profile(a: &Args, profile: Option<&crate::config::Profile>) -> Args {
+    let mut eff = a.clone();
+    let Some(p) = profile else {
+        return eff;
+    };
+    if a.command.is_empty() && a.command_line.is_none() {
+        eff.command = std::iter::once(p.program.clone())
+            .chain(p.args.iter().cloned())
+            .collect();
+    }
+    if a.cwd.is_none() {
+        eff.cwd.clone_from(&p.cwd);
+    }
+    let given = |n: &str| a.env.iter().any(|e| pty::same_var(e.name(), n));
+    let mut env: Vec<EnvArg> = p
+        .env
+        .iter()
+        .filter(|(n, _)| !given(n))
+        .map(|(n, v)| EnvArg::Set(n.clone(), v.clone()))
+        .collect();
+    env.extend(
+        p.unset_env
+            .iter()
+            .filter(|n| !given(n))
+            .map(|n| EnvArg::Unset(n.clone())),
+    );
+    env.extend(a.env.iter().cloned());
+    eff.env = env;
+    eff
+}
+
 /// A dry run without a Host: the same checks the Host would make (name, working directory,
 /// the program on the pane's PATH), on this machine, as this user, with nothing started.
 fn plan_without_host(a: &Args, params: &Value) -> Result<Value, CliError> {
@@ -174,6 +210,22 @@ fn plan_without_host(a: &Args, params: &Value) -> Result<Value, CliError> {
 /// `terminal new [<name>] [--cwd <dir>] [--env NAME[=VALUE]]… [--unset-env NAME]…
 /// [--size CxR] [--remain-on-exit] [--keep-on-failure] [-- <program> [args…]]`.
 pub fn new(a: &Args, endpoint: &str) -> Result<Value, CliError> {
+    // Step 20: a shell profile (`--profile`, or the default one) becomes explicit parameters.
+    let (profile, warnings) = crate::config_cmd::profile_for_new(a)?;
+    for w in warnings {
+        crate::warn_later(w);
+    }
+    let profile_name = profile.as_ref().map(|p| p.name.clone());
+    let eff = with_profile(a, profile.as_ref());
+    let a = &eff;
+    // `profile` is added only when a profile was used, so the result of a plain `new` stays the
+    // `terminal.create` result it always was (additive, CLI_CONTRACT §8).
+    let with_name = |mut v: Value| {
+        if let (Some(o), Some(p)) = (v.as_object_mut(), &profile_name) {
+            o.insert("profile".into(), json!(p));
+        }
+        v
+    };
     let command = match a.command.split_first() {
         Some((program, args)) => json!({"program": program, "args": args}),
         None => Value::Null,
@@ -196,12 +248,12 @@ pub fn new(a: &Args, endpoint: &str) -> Result<Value, CliError> {
             Some(mut s) => {
                 let mut plan = s.request("terminal.create", &p)?;
                 plan["would_start_host"] = json!(false);
-                Ok(plan)
+                Ok(with_name(plan))
             }
             // The error the real run would hit (CLI_CONTRACT §4.2).
             None if a.no_start => Err(no_start(endpoint)),
             // Without a Host there is no name to collide with; everything else is checked.
-            None => plan_without_host(a, &p),
+            None => plan_without_host(a, &p).map(with_name),
         };
     }
     let (mut session, started) = if a.no_start {
@@ -220,6 +272,7 @@ pub fn new(a: &Args, endpoint: &str) -> Result<Value, CliError> {
     };
     let mut created = session.request_within("terminal.create", &params, CREATE_TIMEOUT)?;
     created["host"] = json!({"pid": session.host_pid, "started": started.is_some()});
+    let created = with_name(created);
     if !a.attach {
         return Ok(created);
     }

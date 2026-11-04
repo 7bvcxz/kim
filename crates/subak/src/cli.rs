@@ -52,6 +52,15 @@ pub enum Cmd {
     HotkeysCheck,
     HotkeysExport,
     HotkeysImport,
+    // Step 20: settings and profiles (config.toml).
+    ConfigShow,
+    ConfigCheck,
+    ConfigSet,
+    ConfigReset,
+    ConfigExport,
+    ConfigImport,
+    ProfileList,
+    ProfileShow,
 }
 
 impl Cmd {
@@ -88,6 +97,14 @@ impl Cmd {
             Self::HotkeysCheck => "hotkeys.check",
             Self::HotkeysExport => "hotkeys.export",
             Self::HotkeysImport => "hotkeys.import",
+            Self::ConfigShow => "config.show",
+            Self::ConfigCheck => "config.check",
+            Self::ConfigSet => "config.set",
+            Self::ConfigReset => "config.reset",
+            Self::ConfigExport => "config.export",
+            Self::ConfigImport => "config.import",
+            Self::ProfileList => "profile.list",
+            Self::ProfileShow => "profile.show",
         }
     }
 
@@ -112,6 +129,22 @@ impl Cmd {
         )
     }
 
+    /// Whether the command is one of the `config` or `profile` groups (Step 20; portable, never
+    /// contacts a Host).
+    pub fn is_settings(&self) -> bool {
+        matches!(
+            self,
+            Self::ConfigShow
+                | Self::ConfigCheck
+                | Self::ConfigSet
+                | Self::ConfigReset
+                | Self::ConfigExport
+                | Self::ConfigImport
+                | Self::ProfileList
+                | Self::ProfileShow
+        )
+    }
+
     /// Whether the command streams a terminal instead of printing one document.
     pub fn streams(&self, a: &Args) -> bool {
         match self {
@@ -133,7 +166,10 @@ impl Cmd {
             Self::HotkeysShow => (&["action"], 1),
             Self::HotkeysSet => (&["action", "keys"], 2),
             Self::HotkeysDisable | Self::HotkeysReset => (&["action"], 0),
-            Self::HotkeysImport => (&["file"], 1),
+            Self::HotkeysImport | Self::ConfigImport => (&["file"], 1),
+            Self::ConfigSet => (&["key", "value"], 1),
+            Self::ConfigReset => (&["key or section"], 0),
+            Self::ProfileShow => (&["name"], 1),
             _ => (&[], 0),
         }
     }
@@ -182,6 +218,8 @@ impl Cmd {
                 "--attach",
                 "--read-only",
                 "--history-limit",
+                "--profile",
+                "--no-profile",
                 "--dry-run",
             ],
             Self::Detach => &["--endpoint", "--client", "--dry-run"],
@@ -217,6 +255,13 @@ impl Cmd {
             Self::HotkeysCheck => &["--all-tools", "--min-severity", "--profile"],
             Self::HotkeysExport => &[],
             Self::HotkeysImport => &["--dry-run"],
+            Self::ConfigShow
+            | Self::ConfigCheck
+            | Self::ConfigExport
+            | Self::ProfileList
+            | Self::ProfileShow => &[],
+            Self::ConfigSet | Self::ConfigImport => &["--dry-run"],
+            Self::ConfigReset => &["--all", "--yes", "--dry-run"],
         };
         allowed.contains(&opt)
     }
@@ -276,8 +321,11 @@ pub struct Args {
     pub alias: Option<String>,
     /// `hotkeys list|set|disable|enable --scope <scope>`.
     pub scope: Option<String>,
-    /// `hotkeys … --profile <name>`: a `profiles` overlay of the user layer.
+    /// `hotkeys … --profile <name>`: a `profiles` overlay of the user layer; `new --profile
+    /// <name>`: the shell profile of `config.toml` to start (Step 20).
     pub profile: Option<String>,
+    /// `new --no-profile`: the Host's default shell even when a default profile is set.
+    pub no_profile: bool,
     /// `hotkeys set --trigger press|release|hold`.
     pub trigger: Option<String>,
     /// `hotkeys set --hold-ms <ms>` (with `--trigger hold`).
@@ -493,6 +541,28 @@ fn check_hotkeys(cmd: Cmd, a: &Args) -> Result<(), CliError> {
     Ok(())
 }
 
+/// The `subak config <verb>` commands (Step 20).
+fn config_verb(word: &str) -> Option<Cmd> {
+    Some(match word {
+        "show" => Cmd::ConfigShow,
+        "check" => Cmd::ConfigCheck,
+        "set" => Cmd::ConfigSet,
+        "reset" => Cmd::ConfigReset,
+        "export" => Cmd::ConfigExport,
+        "import" => Cmd::ConfigImport,
+        _ => return None,
+    })
+}
+
+/// The `subak profile <verb>` commands (Step 20).
+fn profile_verb(word: &str) -> Option<Cmd> {
+    Some(match word {
+        "list" | "ls" => Cmd::ProfileList,
+        "show" => Cmd::ProfileShow,
+        _ => return None,
+    })
+}
+
 /// The verbs `subak terminal …` had in Steps 10–11; only these are deprecated aliases.
 const STEP10_VERBS: [&str; 9] = [
     "new", "list", "ls", "info", "rename", "attach", "stop", "kill", "rm",
@@ -692,6 +762,10 @@ pub fn parse(raw: &[String]) -> Result<(Cmd, Args), (String, CliError)> {
                 a.all = true;
                 opts.push("--all");
             }
+            "--no-profile" => {
+                a.no_profile = true;
+                opts.push("--no-profile");
+            }
             "--all-tools" => {
                 a.all_tools = true;
                 opts.push("--all-tools");
@@ -860,6 +934,36 @@ pub fn parse(raw: &[String]) -> Result<(Cmd, Args), (String, CliError)> {
                 ),
             ));
         }
+        ["config", sub, ..] if config_verb(sub).is_some() => {
+            (config_verb(sub).expect("checked above"), 2)
+        }
+        ["config", ..] => {
+            return Err((
+                "config".into(),
+                CliError::usage(if words.len() == 1 {
+                    "`subak config` needs a command".to_string()
+                } else {
+                    format!("unknown command `{}`", words.join(" "))
+                })
+                .hint(
+                    "config commands: show, check, set, reset, export, import (see `subak --help`)",
+                ),
+            ));
+        }
+        ["profile" | "profiles", sub, ..] if profile_verb(sub).is_some() => {
+            (profile_verb(sub).expect("checked above"), 2)
+        }
+        ["profile" | "profiles", ..] => {
+            return Err((
+                "profile".into(),
+                CliError::usage(if words.len() == 1 {
+                    "`subak profile` needs a command".to_string()
+                } else {
+                    format!("unknown command `{}`", words.join(" "))
+                })
+                .hint("profile commands: list, show (profiles are defined in config.toml; see `subak --help`)"),
+            ));
+        }
         ["terminal", verb, ..] if STEP10_VERBS.contains(verb) => {
             let cmd = terminal_verb(verb).expect("every Step 10 verb is a Terminal verb");
             a.alias = Some(format!("terminal {verb}"));
@@ -888,7 +992,7 @@ pub fn parse(raw: &[String]) -> Result<(Cmd, Args), (String, CliError)> {
             return Err((
                 "subak".into(),
                 CliError::usage(format!("unknown command `{}`", words.join(" "))).hint(
-                    "commands: new, ls, info, status, attach, detach, rename, stop, kill, rm, capture, history, clear-history, host, hotkeys, capabilities (see `subak --help`)",
+                    "commands: new, ls, info, status, attach, detach, rename, stop, kill, rm, capture, history, clear-history, host, hotkeys, config, profile, capabilities (see `subak --help`)",
                 ),
             ));
         }
@@ -947,6 +1051,9 @@ pub fn parse(raw: &[String]) -> Result<(Cmd, Args), (String, CliError)> {
             CliError::usage("give the program either after `--` or with --command-line, not both")
                 .hint("`-- <program> [args…]` quotes every word for Windows; --command-line passes one line verbatim (for cmd.exe /c)"),
         );
+    }
+    if cmd == Cmd::New && a.profile.is_some() && a.no_profile {
+        return fail(CliError::usage("--profile and --no-profile conflict"));
     }
     if cmd == Cmd::New && a.read_only && !a.attach {
         return fail(CliError::usage("--read-only needs --attach"));

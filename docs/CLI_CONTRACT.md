@@ -238,6 +238,17 @@ the result of the IPC method they call (`terminal.create`, `.list`, `.info`, `.r
 for `ls` and `detach`, `null` when no Host runs); `status` combines `host.status` and
 `terminal.list` and reports `running: false` (exit 0) without a Host; the `host` commands answer
 the shapes of [IPC_PROTOCOL §4.1](contracts/IPC_PROTOCOL.md) and [CONPTY_PROOF.md](CONPTY_PROOF.md).
+Since Step 21 ([ADR 0054](adr/0054-subak-internal-windows-and-panes.md)) the internal windows and
+panes add the command groups `subak window new|ls|select|rename|kill` and `subak pane
+new|ls|select|kill` (command names `window.new` … `pane.kill`; tmux's long names such as
+`new-window` and `kill-pane` are aliases, §2). Each answers the result of its IPC method
+(`window.create`, `window.list`, `window.select`, `window.rename`, `window.kill`, `pane.create`,
+`pane.list`, `pane.select`, `pane.kill`), typed in `subak-cli-v1`; `select`, `rename` and `new`
+take `--dry-run`, and `kill` is destructive (asks, or needs `--yes`). They add no error code: a
+target of the wrong level is `usage` (exit 2), another Terminal's window or pane under a Terminal
+is `target_not_found` (exit 3), the last running window or pane of a Terminal is `invalid_state`
+(exit 7, `details.reason` `last_window` or `last_pane`; `subak kill` ends a Terminal), and a
+busy pane without consent is `confirmation_required` (exit 7).
 `capture`, `history` and `clear-history` (Step 13, [SCROLLBACK.md](SCROLLBACK.md)) answer
 `pane.capture` (all pages joined, plus `name` and `requests`), its counters with the Terminal's
 `name` and `state`, and `pane.clear_history` plus `name`; `capture` redacts secret-looking

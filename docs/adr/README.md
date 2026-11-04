@@ -55,6 +55,7 @@ the requirements it serves. ADRs are immutable once **Accepted**; a later ADR ma
 | [0049](0049-ddalgak-editor-process-and-toolkit.md) | The Ddalgak rule editor: its own on-demand process, egui + glow, store writes and a confirmed reload | Accepted (Step 74; visible-window usability and the memory budget with rules pending, see the ADR) |
 | [0050](0050-noeul-displays-and-capture-backends.md) | Noeul displays and capture backends: GDI kept without a silent fallback, monitor and window targets with a logical mapping and honest warnings, the pointer drawn in, debounced display changes, gaps made black | Accepted (Step 58; physical multi-monitor, mixed-DPI, rotation and HDR checks pending the maintainer) |
 | [0051](0051-subak-settings-profiles-and-appearance.md) | Subak settings, shell profiles and appearance: config.toml edited in place, profiles resolved by clients, a light theme from the tokens, calm motion with no idle cost | Accepted (Step 20; the visible window, real High Contrast, light mode and animation settings pending the maintainer) |
+| [0054](0054-subak-internal-windows-and-panes.md) | Subak internal windows and panes: Host-owned topology and selection, two-level end claims, no window or pane command that ends a Terminal | Accepted (Step 21; the visible window pending the maintainer) |
 
 "Accepted (validated in Step N)" means the decision is made, but the named Step must confirm it
 on real Windows; if validation fails, that Step writes a superseding ADR.

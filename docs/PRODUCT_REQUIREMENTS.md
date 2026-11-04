@@ -136,6 +136,7 @@ specified in [HOTKEY_CONTRACT.md](HOTKEY_CONTRACT.md) ([ADR 0017](adr/0017-unive
 | SUBAK-FR-004 | Multiple clients (GUI, CLI, agents) can be attached at the same time and observe consistent state. | P1 | M2 | T |
 | SUBAK-FR-010 | Hierarchy Terminal → Window → Pane → process; every object has a stable, never-reused ID and an editable name; CLI and GUI use the same IDs. | P0 | M2 | T |
 | SUBAK-FR-016 | Pane processes run under Windows ConPTY; each pane's process tree is contained (e.g. Job Object) so ending a pane ends all its descendants. | P0 | M2 | T, M |
+| SUBAK-FR-017 | **Internal windows and panes.** A Terminal holds several internal windows (not GUI tabs), each with several panes whose processes run independently under the Host; windows and panes are created, listed, selected, renamed (windows) and ended through versioned IPC and equivalent CLI commands with tmux-style indexes and `<terminal>:<window>.<pane>` targets; the selection is the Host's, the same for every client; each command acts on exactly one level, so none ends a whole Terminal or reaches another Terminal's window or pane; ending a window or pane ends only its own processes ([SESSION_MODEL](SESSION_MODEL.md), ADR 0054). | P0 | M2 | T |
 
 ### 4.2 Terminal CRUD, attach and detach
 

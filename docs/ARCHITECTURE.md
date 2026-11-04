@@ -85,7 +85,7 @@ Terminal → internal Window → Pane → process tree ([SUBAK_PHILOSOPHY §2](S
 | Object | Identity | Owns | Invariants |
 | --- | --- | --- | --- |
 | Terminal | `t-…` + unique case-insensitive name | ≥ 1 Window; profile; restore policy | Exactly one Host owns it; appears as one GUI tab |
-| Window | `w-…` + index within Terminal + name | ≥ 1 Pane; layout tree; active pane | Belongs to exactly one Terminal |
+| Window | `w-…` + index within Terminal + name | ≥ 1 Pane; layout tree (one pane, the active one, until Step 22); active pane | Belongs to exactly one Terminal; the Terminal's active window and each window's active pane are Host state shared by every client (Step 21, ADR 0054) |
 | Pane | `p-…` + index within Window | one ConPTY, one Job, VT state, history ring | Belongs to exactly one Window; its process tree is in exactly its Job |
 
 An object is never shared between Terminals; moving a pane (`join-pane`, Step 24/25) re-parents
@@ -168,7 +168,7 @@ There is no `close` verb: every "close" in a UI is one of these rows.
 | End processes, keep Terminal | `subak stop <t>` (graceful, then forced after 5 s; asks or `--yes`) | session manager "Stop" | ended | kept as `stopped` |
 | End Terminal (tmux kill-session) | `subak kill <t>` (at once; asks or `--yes`) | `Ctrl+W` / "Close Terminal" (by id; asks when the Host says busy, Cancel is the default) | ended | removed |
 | Remove a dead Terminal record | `subak rm <t>` (only `stopped`/`failed`, later `restorable`; `--force` also ends a running one) | `Ctrl+W` or "Remove Terminal" on a stopped/failed tab; Terminal manager "Delete…" (Step 18; asks first) | none running | removed |
-| Kill pane / window | `subak kill <t:w.p>` (Step 21) | `Ctrl+B x` / `Ctrl+B &` (confirm) | that pane/window only | topology updated |
+| Kill pane / window | `subak pane kill <t:w.p>` / `subak window kill <t:w>` (Step 21; asks or `--yes`, by id; never the last running one) | `Ctrl+B x` / `Ctrl+B &` (confirm; Step 23) | that pane/window only | topology updated; the Terminal stays |
 
 "Graceful" = `ClosePseudoConsole` (processes receive `CTRL_CLOSE_EVENT`), wait up to 5 s,
 then `TerminateJobObject`. A kill terminates the job first. The IPC `force` flag is the client's
@@ -274,7 +274,8 @@ one pane are the single trait `pty::Pty` ([PTY_PROCESSES §8](PTY_PROCESSES.md),
 | Subak floating icon, tray and Terminal manager: `subak-gui --float` (optional, off unless started; layered tool icon with drag, snapping, a saved place per monitor and off-screen recovery; tray behind a trait; a manager of system controls with search, open in an existing or new window, new, rename, delete that always asks; a `manager` hotkey context; `float.json`; hidden tabs kept across window runs) ([SUBAK_GUI §11](SUBAK_GUI.md), ADR 0045) | implemented (off-screen tests; visible icon, real tray and drags pending the maintainer) | 18 |
 | Subak search, selection, clipboard, links and saving output in the window (search bar over the retained history with bounded regex and incremental refresh, mark mode, select all, copy with colours, paste questions, plain-text and one-line paste, validated links through the open verb, "Save output…" with the secret detector; the Host and CLI never call it) ([SUBAK_GUI §12](SUBAK_GUI.md), ADR 0048) | implemented (off-screen tests with recording fakes; the real clipboard, a browser and the save dialog pending the maintainer) | 19 |
 | GUI search, polish | planned | 19–20 |
-| Windows/panes, layout, tmux engine | planned | 21–26 |
+| Internal windows and panes: Terminal → Window → Pane with many of each, every pane its own ConPTY and job; tmux numbering and `<terminal>:<window>.<pane>` targets taking exactly one level; `window.*`, `pane.create\|list\|select\|kill` over IPC and `subak window\|pane …`; Host-owned selection followed by the GUI; two-level end claims so no window or pane command ends a Terminal ([SESSION_MODEL](SESSION_MODEL.md), ADR 0054) | implemented (splits, layouts and the prefix keys: Steps 22–23; persisted topology: Step 29) | 21 |
+| Layout, tmux engine | planned | 22–26 |
 | Claude integration, persistence, recovery | planned | 27–31 |
 | Profiles, SSH, extended features | planned | 32–36 |
 | MCP, interoperability, hardening, release | planned | 37–40 |

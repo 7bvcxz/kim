@@ -1,13 +1,14 @@
 # Subak CLI reference
 
 Status: **current** (implemented in Step 12; `capture`, `history`, `clear-history` and
-`new --history-limit` in Step 13; `hotkeys` in Step 17; Windows only, Linux with M4 — the
+`new --history-limit` in Step 13; `hotkeys` in Step 17; `window` and `pane` in Step 21; Windows only, Linux with M4 — the
 `hotkeys` commands are portable) · Decisions:
 [ADR 0027](adr/0027-subak-cli-structure-and-headless-control.md),
-[ADR 0030](adr/0030-host-terminal-model-scrollback-and-replay.md) · Contract:
+[ADR 0030](adr/0030-host-terminal-model-scrollback-and-replay.md),
+[ADR 0054](adr/0054-subak-internal-windows-and-panes.md) · Contract:
 [CLI_CONTRACT.md](CLI_CONTRACT.md) v1, schema
 [subak-cli-v1](contracts/schemas/subak-cli-v1.schema.json) · Requirements: `SUBAK-FR-002`,
-`SUBAK-FR-003`, `SUBAK-FR-004`, `SUBAK-FR-011`…`SUBAK-FR-015`, `SUBAK-FR-033`, `SUBAK-FR-034`,
+`SUBAK-FR-003`, `SUBAK-FR-004`, `SUBAK-FR-011`…`SUBAK-FR-015`, `SUBAK-FR-017`, `SUBAK-FR-033`, `SUBAK-FR-034`,
 `SUBAK-FR-060`, `SUBAK-SEC-010`, `KIM-FR-010`…`KIM-FR-012`, `KIM-FR-041`…`KIM-FR-046`,
 `KIM-SEC-013`, `KIM-SEC-023`
 
@@ -33,7 +34,7 @@ that only your user can open.
 | `subak new [<name>] [-- <program> [args…] \| --command-line <line>]` | write | Create a Terminal; starts a Host on demand |
 | `subak ls` (also `list`) | read | Every Terminal with state, pid and clients |
 | `subak status` | read | The Host (or that none runs), every Terminal, every client |
-| `subak info <target>` | read | One Terminal with its window and pane; exit 3 if none |
+| `subak info <target>` | read | One Terminal with its windows and panes; exit 3 if none |
 | `subak attach [<target>]` | write | Connect this terminal to a Terminal's pane |
 | `subak detach [<target>] [--client <id>]` | write | Detach clients from outside; stops nothing |
 | `subak rename <target> <new-name>` | write | Rename; the id never changes |
@@ -43,6 +44,7 @@ that only your user can open.
 | `subak capture [<target>]` (also `capture-pane`) | read | Lines of the screen and history the Host keeps; secrets shown as `***` |
 | `subak history [<target>]` | read | How much output the Host keeps (counters and limits, never content) |
 | `subak clear-history [<target>]` | destructive | Delete the kept history; the screen stays |
+| `subak window new\|ls\|select\|rename\|kill`, `subak pane new\|ls\|select\|kill` (also `new-window`, `list-windows`, `select-window`, `rename-window`, `kill-window`, `list-panes`, `select-pane`, `kill-pane`) | write / read / destructive | A Terminal's internal windows and panes ([§3.14](#314-windows-and-panes-subak-window--subak-pane-)) |
 | `subak host start\|status\|health\|attach\|stop\|serve` | — | The Host itself ([§3.11](#311-the-host-subak-host-)) |
 | `subak hotkeys list\|show\|set\|disable\|enable\|reset\|check\|export\|import` | read / write | The window's keyboard shortcuts ([§3.12](#312-keyboard-shortcuts-subak-hotkeys-)); never contacts a Host |
 | `subak config show\|check\|set\|reset\|export\|import`, `subak profile list\|show` | read / write | Settings and shell profiles in `config.toml` ([§3.13](#313-settings-and-shell-profiles-subak-config--subak-profile-)); never contacts a Host |
@@ -55,8 +57,9 @@ same output and command name, plus a warning (`warnings` in `--json`, one stderr
 Bare `subak` prints help; nothing starts implicitly.
 
 **Targets** are a Terminal name (exact, ignoring case and Unicode composition) or its id
-(`t-` + 12 hex digits). `attach` and `detach` also take `<terminal>:<window>[.<pane>]` and window
-or pane ids ([SESSION_MODEL §3](SESSION_MODEL.md)).
+(`t-` + 12 hex digits). `attach`, `detach`, `capture`, `history`, `clear-history` and the `window`
+and `pane` commands also take `<terminal>:<window>[.<pane>]` and window or pane ids
+([SESSION_MODEL §3](SESSION_MODEL.md)); each `window`/`pane` command takes exactly one level.
 
 **Endpoints.** Every command except `hotkeys`, `config` and `profile` takes `--endpoint <name>`; the default is your per-user,
 per-Windows-session pipe `\\.\pipe\mouv-subak-<SID>-s<session>`. Use your own name for
@@ -403,6 +406,43 @@ profile}` ([subak-cli-v1](contracts/schemas/subak-cli-v1.schema.json), golden fi
 `contracts/examples/subak-cli-v1/config-*.json`, `profile-list.json`, `error-config-*.json`,
 `error-profile-not-found.json`, `error-secret-in-config.json`).
 
+### 3.14 Windows and panes (`subak window …`, `subak pane …`)
+
+Step 21 ([ADR 0054](adr/0054-subak-internal-windows-and-panes.md),
+[SESSION_MODEL §1–§5](SESSION_MODEL.md)). A Terminal (a GUI tab) holds **internal windows**, each
+with **panes**; every pane runs its own process. Windows are numbered from 0 (a new one takes the
+lowest free index), panes from 0 within their window (renumbered when one goes). The active window
+and each window's active pane are the Host's, the same for every client; until Step 22 a window
+shows one pane, its active one.
+
+| Command | Effect | What it does |
+| --- | --- | --- |
+| `subak window new <terminal> [--name <name>] [--no-select] [--cwd …] [--env …] [--unset-env …] [--size …] [--history-limit …] [-- <program> [args…] \| --command-line <line>] [--dry-run]` | write | A new window with one pane running `<program>` (default `%ComSpec%`), in a running Terminal; named after the program unless `--name`; it becomes the active window unless `--no-select` (tmux `new-window [-d] [-n]`). Never starts a Host |
+| `subak pane new <terminal\|window> [same options, no --name]` | write | A new pane in a window (a Terminal target: its active window) |
+| `subak window ls <terminal>`, `subak pane ls <terminal\|window>` | read | The windows (index, name, id, panes, active pane), or every pane (`window.pane`, id, pid, state, program); `*` marks the active ones |
+| `subak window select <window> [--dry-run]`, `subak pane select <pane> [--dry-run]` | write | The active window, or a window's active pane (and that window), for every client; no process changes |
+| `subak window rename <window> <name> [--dry-run]` | write | A window's name; need not be unique, not only digits |
+| `subak window kill <window>`, `subak pane kill <pane>` `[--dry-run] [--yes]` | destructive | End that window's panes, or that pane, at once and remove it; every other pane keeps running. Asks (or needs `--yes`) and ends exactly the confirmed id. The last running window or pane of a Terminal is refused (`invalid_state`): `subak kill` ends a Terminal |
+
+```text
+> subak window new work --name build -- cargo.exe watch
+created window 1:build.0 (w-5d2e8a1c0b93 p-6e1f0a2b3c4d, pid 7124); it is now the active one
+> subak pane ls work
+Terminal `work` (t-3fa9c0d21b7e), running
+PANE      ID                  PID  STATE     PROGRAM
+0.0*      p-9b0e7d6c5a41     5680  running   C:\Windows\system32\cmd.exe
+1.0*      p-6e1f0a2b3c4d     7124  running   cargo.exe
+> subak window kill work:build --yes
+pid 7124 ended (exit code 1, forced); window w-5d2e8a1c0b93 removed; every other pane keeps running
+```
+
+Errors: a target of the wrong level (`window kill work`, `pane kill work:1`) is `usage` (exit 2);
+another Terminal's window or pane under `work:` is `target_not_found` (exit 3); a window or pane
+change in a Terminal that is not running is `invalid_state` (exit 7), as is the last running
+window or pane (`details.reason`); a busy pane without consent is `confirmation_required` (exit 7).
+A pane whose program exits leaves its window while others run; the exit of the last running pane
+ends the Terminal as before.
+
 ## 4. Typical sessions
 
 ```console
@@ -548,6 +588,12 @@ says what `--yes` would confirm. Nothing an agent runs this way opens a window o
 | `tmux kill-session -t work` | `subak kill work` |
 | `tmux capture-pane -p [-S -] [-e] [-J] -t work` | `subak capture work [--history] [--vt] [--join]` |
 | `tmux clear-history -t work` | `subak clear-history work --yes` |
+| `tmux new-window [-d] [-n logs] -t work` | `subak window new work [--no-select] [--name logs]` (also `subak new-window`) |
+| `tmux list-windows -t work`, `tmux list-panes -t work[:1]` | `subak window ls work`, `subak pane ls work[:1]` |
+| `tmux select-window -t work:1`, `tmux select-pane -t work:1.0` | `subak window select work:1`, `subak pane select work:1.0` |
+| `tmux rename-window -t work:1 logs` | `subak window rename work:1 logs` |
+| `tmux kill-window -t work:1`, `tmux kill-pane -t work:1.0` | `subak window kill work:1 --yes`, `subak pane kill work:1.0 --yes` (never the last one) |
+| `tmux split-window -t work:1` | Step 22; `subak pane new work:1` creates a pane without a split |
 | `set -g history-limit 5000` | `subak new work --history-limit 5000` (per Terminal) |
 | `tmux start` | `subak host start` (rarely needed) |
 
@@ -572,6 +618,7 @@ scenario `e2e/tests/step12_subak_cli.rs`):
 | `the_cli_schema_embeds_the_ipc_and_capabilities_definitions_unchanged` | `subak-cli-v1` shares the IPC and capabilities definitions verbatim |
 | `scrollback_replay.rs` (Step 13) | `capture`, `history`, `clear-history` and `--history-limit` against real panes; reattach coherence, concurrency, resize, eviction, resync, idle cost, redaction ([SCROLLBACK §8](SCROLLBACK.md)) |
 | `hotkeys_cli.rs` (Step 17) | every `subak hotkeys` command in a sandboxed profile, validated against `hotkeys-cli-v1`: the shipped defaults, dry runs that write nothing, refused reserved, invalid, unknown and conflicting changes that write nothing, `--replace`, switches, `reset --all` needing `--yes` and keeping a backup, safe mode for a broken and a newer file, export/import keeping unknown fields, `check --all-tools` reading a simulated Noeul install without starting it (also `e2e/tests/step17_subak_hotkeys.rs`) |
+| `windows_panes.rs` and `window_and_pane_commands_match_their_golden_files` (Step 21) | the `window` and `pane` commands on real Hosts, validated against `subak-cli-v1` and `ipc-v1`, golden files, levels, cross-Terminal targets, consent, the last window, races ([SESSION_MODEL §7](SESSION_MODEL.md)) |
 | `milestone_a.rs` (Step 14) | real `subak attach` clients killed, detached by `Ctrl+B d`, by the end of input and by `subak detach`, reattached to the same programs with their state; 60 cycles without leaks; a reattached client's output equals the Host's history and screen; clients exit 6 when the Host is killed ([MILESTONE_A_VALIDATION](MILESTONE_A_VALIDATION.md)) |
 
 ## 10. Not implemented yet
@@ -581,6 +628,8 @@ scenario `e2e/tests/step12_subak_cli.rs`):
 - Persisted history (Steps 29+, opt-in) and search in history (GUI, Steps 16–25).
 - Rebinding the console detach key (`Ctrl+B d` of `subak attach`; Step 23 makes the prefix a
   hotkey-contract leader), `new -A`, `attach -d`, format strings (`-F`,
-  Step 25), windows and panes (Steps 21–22).
+  Step 25), splits and layouts (Step 22), `last-window`, `next-window`, `previous-window`,
+  `kill-window -a` (later Steps). A `subak attach` stays on the pane it attached to when another
+  client selects another pane (the GUI follows the selection).
 - Persistence and recovery (Steps 29–30): Terminals end with their Host.
 - Linux (M4): every command answers `unsupported_platform`.

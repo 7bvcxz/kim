@@ -1,6 +1,6 @@
 # Subak session model
 
-Status: **current** (implemented in Step 10; Windows only) · Decisions:
+Status: **current** (implemented in Step 10, pane programs and environment in Step 11; Windows only) · Decisions:
 [ADR 0020](adr/0020-terminal-session-lifecycle.md), [ADR 0007](adr/0007-object-identity-and-naming.md),
 [ADR 0003](adr/0003-subak-host-process-model.md), [ADR 0004](adr/0004-pty-and-process-ownership.md),
 [ADR 0009](adr/0009-gui-clients-and-keyboard-dispatch.md) · Requirements: `SUBAK-FR-002`,
@@ -21,7 +21,7 @@ Panes, and each Pane runs one root process with its descendants:
 | --- | --- | --- | --- |
 | Terminal | `t-` + 12 lowercase hex | unique per Host (§3) | ≥ 1 Window; `remain_on_exit`; its lifecycle state |
 | Window | `w-` + 12 hex, index from 0 | automatic: the program's file name (`cmd`) | ≥ 1 Pane; layout; active pane |
-| Pane | `p-` + 12 hex, index from 0 | — | one pseudo console (ConPTY), one kill-on-close job, an output ring, a data stream id |
+| Pane | `p-` + 12 hex, index from 0 | — | one pseudo console (ConPTY), one kill-on-close job, an output ring, a data stream id; its program, environment and I-O: [PTY_PROCESSES](PTY_PROCESSES.md) |
 
 - **Until Steps 21–22 every Terminal has exactly one Window with exactly one Pane.** The model,
   the ids and the targets already have the three levels, so nothing changes for clients when
@@ -163,7 +163,9 @@ command or IPC method: "close" in a UI is always one of the rows below.
 ## 5. Discovery and IPC operations
 
 `terminal.list {detail: "summary" | "full"}`, `terminal.info {target}`, `terminal.create {name?,
-command?, cwd?, size?, remain_on_exit?, keep_on_failure?, dry_run?}`, `terminal.rename {target,
+command?, cwd?, env?, size?, remain_on_exit?, keep_on_failure?, dry_run?}` (`env` since Step 11;
+what runs in a pane and with which environment is in [PTY_PROCESSES.md](PTY_PROCESSES.md)),
+`terminal.rename {target,
 name, dry_run?}`, `terminal.stop | terminal.kill {target, force, dry_run}` and
 `terminal.remove {target, force?, dry_run}` are part of IPC v1 (an additive change; their shapes and
 results are in IPC_PROTOCOL §4.3 and typed in `ipc-v1.schema.json`). `cli` and `gui` clients may
@@ -180,7 +182,10 @@ call all of them; `mcp` clients may only list and inspect until Step 37; `hook` 
   Measured: 20 failed starts (missing program, program not on `PATH`, missing working directory, a
   file as working directory) left no Terminal, no `conhost.exe`, no child of the Host, and a
   handle count within 12 of where it started. `spawn_failed` carries `details.reason`
-  (`not_found`, `access_denied`, `bad_cwd`, `other`).
+  (`not_found`, `access_denied`, `bad_cwd`, `not_executable` since Step 11, `other`). Since
+  Step 11 the Host decides most failures before it creates a pseudo console at all, so they leave
+  not even the handle Windows 10's ConPTY keeps per pseudo console (30 failures of 10 kinds: Host
+  handles 81 → 83, [PTY_PROCESSES §9](PTY_PROCESSES.md)).
 - **A Host stop racing a create**: a pane that finishes starting after the stop began is ended at
   once and its Terminal removed (`reason: host_stopping`); nothing outlives the Host, because every
   pane job is kill-on-close.
@@ -197,8 +202,9 @@ ADR 0019 §5); `terminal list` without a Host lists nothing and starts nothing.
   its grace period, because stored Terminals are not live (ADR 0003 §4).
 - **Restore and respawn (Step 30).** A `stopped` Terminal cannot be started again yet; remove it
   and create a new one.
-- **Profiles and environment overrides** (`profile`, `env` of `terminal.create`; Steps 11 and 33)
-  are refused with `invalid_params`, never silently ignored.
+- **Profiles** (`profile` of `terminal.create`, Step 33) are refused with `invalid_params`, never
+  silently ignored. Environment overrides (`env`) exist since Step 11
+  ([PTY_PROCESSES §3](PTY_PROCESSES.md)).
 - **More windows and panes** (Steps 21–22), the GUI's tabs and session manager (Steps 16–18), and
   `pane.send_keys` / `pane.capture` (Steps 12–13).
 

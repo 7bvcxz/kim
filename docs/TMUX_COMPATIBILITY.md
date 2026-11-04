@@ -4,9 +4,10 @@ Status: **current** (inventory) · Reference: tmux 3.8 · Matrix version: 1 (202
 mouv · Tracks [SUBAK-FR-060](PRODUCT_REQUIREMENTS.md)
 
 > **Only the session basics are implemented, partially** (Step 10: named Terminals in the Host
-> and `subak terminal new|list|info|rename|attach|stop|kill|rm`). Eight rows are `partial` with
-> automated evidence; every other row is `planned`, `deferred` or `unsupported`. This document is
-> an inventory and a plan, not a compatibility claim.
+> and `subak terminal new|list|info|rename|attach|stop|kill|rm`; Step 11: pane programs and
+> environment). Four environment rows are `implemented` and eleven are `partial`, all with
+> automated evidence; every other row is `planned`, `deferred` or `unsupported`. This document
+> is an inventory and a plan, not a compatibility claim.
 
 ## 0. How to read this matrix
 
@@ -36,13 +37,14 @@ appears as one GUI tab. A Subak internal **Window** is a tmux **window**; it is 
 **Status values.** `planned` — intended, not built · `partial` — some documented behaviour has
 automated evidence · `implemented` — the whole row has automated evidence · `deferred` — not
 planned before Step 26; may be revisited · `unsupported` — will not be provided, by design.
-`implemented` is not used yet.
+`implemented` is used since Step 11, for four environment rows.
 
 **Target Steps.**
 
 | Step | Scope |
 | --- | --- |
 | 10 | Session/Terminal CRUD in the Host |
+| 11 | Pane programs and their environment ([PTY_PROCESSES](PTY_PROCESSES.md)) |
 | 12 | Subak CLI: `new`, `ls`, `info`, `attach`, `detach`, `rename`, `kill`, `host status` |
 | 13 | Scrollback and replay (`capture-pane`, `clear-history`) |
 | 21 | Internal Windows and Panes (create, list, select, rename, kill) |
@@ -220,7 +222,7 @@ Grouped by the manual page section that documents them. `set-window-option` and
 | Create or attach if it exists | `new-session -A` | Attach when the named Terminal exists (flag TBD) | planned | 12 | — |
 | Create without attaching | `new-session -d` | Detached creation (the CLI default) | planned | 12 | — |
 | Session and first window names | `new-session -s name -n name` | Terminal name and first Window name | planned | 12 | — |
-| Start directory, environment, size | `new-session -c`, `-e VAR=val`, `-x`, `-y` | Profile cwd and environment (SUBAK-FR-011); default size. *Partial:* `--cwd` and `--size`; `-e` (environment overrides) with Step 11 | partial | 10 | `crates/subak/tests/session_lifecycle.rs::names_are_unique_ignoring_case_and_composition_and_renames_keep_ids` (2026-11-04) |
+| Start directory, environment, size | `new-session -c`, `-e VAR=val`, `-x`, `-y` | Profile cwd and environment (SUBAK-FR-011); default size. *Partial:* `--cwd`, `--size` and `--env NAME=VALUE` / `--env NAME` / `--unset-env NAME` (Step 11, [PTY_PROCESSES §3](PTY_PROCESSES.md)); profiles with Step 33 | partial | 11 | `crates/subak/tests/session_lifecycle.rs::names_are_unique_ignoring_case_and_composition_and_renames_keep_ids`, `crates/subak/tests/pty_shells.rs::explicit_programs_get_their_arguments_exactly_and_report_exit_codes` (2026-11-04) |
 | Print the created object | `new-session -P -F format`, `new-window -P` | `--json` output (KIM-FR-010); `-F` formats in Step 25 | planned | 12 | — |
 | Command given as argv (no shell) | `new-window vi file`, `split-window cmd args` | Start the program directly without a shell | planned | 21 | — |
 | Session groups | `new-session -t target-session` | *Rationale:* grouped sessions share windows with independent current windows; linked windows (Step 25) come first | deferred | post-26 | — |
@@ -460,7 +462,7 @@ command (`send-keys -X <command>`) documented in tmux 3.8 is named in this table
 | Alert actions | `activity-action`, `bell-action`, `silence-action` | Same; GUI tab indicators | planned | 25 | — |
 | Paste detection by timing | `assume-paste-time` | *Rationale:* the GUI knows when the user pastes; no timing heuristic needed | unsupported | — | — |
 | First window index | `base-index` | Same | planned | 21 | — |
-| Shell and command for new panes | `default-shell`, `default-command` | Profile shell and command (SUBAK-FR-011) | planned | 10 | — |
+| Shell and command for new panes | `default-shell`, `default-command` | Profile shell and command (SUBAK-FR-011). *Partial:* the default is `%ComSpec%`; any program with its arguments via `terminal new -- <program> [args…]`, resolved on the pane's `PATH` (cmd, `powershell`, `pwsh` if installed) | partial | 11 | `crates/subak/tests/pty_shells.rs::powershell_and_cmd_run_interactively_in_independent_trees_under_the_host` (2026-11-04) |
 | Size of detached sessions | `default-size` | Same | planned | 10 | — |
 | Destroy a session with no clients | `destroy-unattached` | Opt-in option, off by default | planned | 25 | — |
 | Behaviour when the session is destroyed | `detach-on-destroy` | What the client shows next (GUI: close the tab or switch) | planned | 25 | — |
@@ -700,7 +702,7 @@ a family is scheduled in detail.
 | Mouse target | `{mouse}` `=` | Same | planned | 25 | — |
 | Best-guess resolution of unqualified targets | e.g. `-t 1` as pane, window or session | Same heuristics | planned | 24 | — |
 | IDs unique for the object's life | `$`, `@`, `%` IDs unique per server | Stronger: random IDs, never reused, kept across Host restarts and restore (SUBAK-FR-010, ADR 0007) | planned | 10 | — |
-| Pane ID in the pane environment | `TMUX_PANE` | Subak pane-ID variable (name TBD) | planned | 21 | — |
+| Pane ID in the pane environment | `TMUX_PANE` | `SUBAK_PANE_ID=p-…` and `SUBAK_TERMINAL_ID=t-…` in every pane (ADR 0010 §1); an override cannot change them | implemented | 11 | `crates/subak/tests/pty_shells.rs::explicit_programs_get_their_arguments_exactly_and_report_exit_codes` (2026-11-04) |
 
 ## 14. Mouse
 
@@ -718,14 +720,14 @@ a family is scheduled in detail.
 
 | tmux feature | tmux reference | Subak equivalent (planned) | Status | Target Step | Evidence |
 | --- | --- | --- | --- | --- | --- |
-| Global environment copied at server start | global environment | Host environment at start | planned | 25 | — |
-| Session environment | per-session environment | Per-Terminal environment from the profile (SUBAK-FR-011) | planned | 10 | — |
-| Merge for new processes | session overrides global | Same | planned | 25 | — |
+| Global environment copied at server start | global environment | *Differs on purpose:* every new pane gets the user's logon environment built fresh (`CreateEnvironmentBlock`), never the server's or a launcher's, so a variable set with `setx` reaches the next pane ([PTY_PROCESSES §3](PTY_PROCESSES.md)) | implemented | 11 | `crates/subak/tests/pty_shells.rs::each_new_pane_gets_a_fresh_logon_environment` (2026-11-04) (manual), `crates/subak/tests/pty_shells.rs::the_pane_environment_keeps_the_users_locations_and_secrets_never_leak` (2026-11-04) |
+| Session environment | per-session environment | Per-Terminal environment from the profile (SUBAK-FR-011). *Partial:* per-pane overrides given at creation (`env` of `terminal.create`; names shown, values never); profiles with Step 33 | partial | 11 | `crates/subak/tests/pty_shells.rs::the_pane_environment_keeps_the_users_locations_and_secrets_never_leak` (2026-11-04) |
+| Merge for new processes | session overrides global | Overrides (set or unset, case-insensitive names) on top of the logon environment, then the Host's `SUBAK_*` variables | implemented | 11 | `crates/subak/src/win/mod.rs::tests::overrides_replace_remove_and_add_case_insensitively` (2026-11-04) |
 | Refresh from the client on attach | `update-environment` (e.g. `DISPLAY`, `SSH_AUTH_SOCK`) | Same | planned | 25 | — |
 | Hidden variables | `set-environment -h`, `%hidden` | Hidden variables; variables marked secret are not persisted (SUBAK-SEC-011) | planned | 25 | — |
 | Set, unset, remove, format value | `set-environment -u`, `-r`, `-F`, `-g` | Same | planned | 25 | — |
 | Show in shell syntax | `show-environment -s` | Bourne syntax as in tmux; PowerShell syntax TBD | planned | 25 | — |
-| In-tmux marker variable | `TMUX` | Subak marker variable (name TBD); no socket path | planned | 10 | — |
+| In-tmux marker variable | `TMUX` | `SUBAK_PANE_ID` / `SUBAK_TERMINAL_ID` mark a Subak pane; no socket path | implemented | 11 | `crates/subak/tests/pty_shells.rs::explicit_programs_get_their_arguments_exactly_and_report_exit_codes` (2026-11-04) |
 | Terminal type in panes | `TERM` (`default-terminal`) | Same | planned | 25 | — |
 | vi keys from the editor | `VISUAL`, `EDITOR` | Same default for `mode-keys`/`status-keys` | planned | 24 | — |
 | Home directory | `HOME` | Windows user profile directory | planned | 10 | — |
@@ -782,7 +784,7 @@ a family is scheduled in detail.
 | Command aliases | `command-alias[N] name=value` | Same | planned | 25 | — |
 | Format arguments | `-F` on `display-message`, `list-*`, `new-*`, `set-option` | Same | planned | 25 | — |
 | Placeholders in prompts | `%%`, `%1`…`%9`, `%%%` | Same | planned | 24 | — |
-| Shell for commands | `/bin/sh -c` (or `default-shell`) | Profile shell (PowerShell, cmd, Git Bash, WSL); quoting differs | planned | 25 | — |
+| Shell for commands | `/bin/sh -c` (or `default-shell`) | Profile shell (PowerShell, cmd, Git Bash, WSL); quoting differs. *Differs:* `terminal new` runs the program with its arguments directly, never through a shell; scripts need their interpreter named (Step 11, [PTY_PROCESSES §2](PTY_PROCESSES.md)) | planned | 25 | — |
 
 ## 19. Control mode
 

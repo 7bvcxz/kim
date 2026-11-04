@@ -58,3 +58,10 @@ also offers `claude --resume <session-id>`.
 
 `SUBAK-FR-045`, `SUBAK-FR-050`, `SUBAK-FR-051`, `SUBAK-FR-052`, `SUBAK-FR-053`,
 `SUBAK-SEC-002`, `KIM-SEC-013`.
+
+## Notes
+
+- 2026-11-04 (Step 11): §1 is implemented: every pane starts with `SUBAK_PANE_ID` and
+  `SUBAK_TERMINAL_ID`, set last so no override can change them
+  ([ADR 0025](0025-pane-programs-environment-and-backpressure.md) §4; measured in a real
+  child process, [PTY_PROCESSES §3](../PTY_PROCESSES.md)).

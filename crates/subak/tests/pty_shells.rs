@@ -368,6 +368,28 @@ fn detail(err: &Value, key: &str) -> Option<String> {
         .find_map(|l| l.strip_prefix(&prefix).map(String::from))
 }
 
+/// Sends an idempotent PowerShell command until its output appears. After an interrupt, keys
+/// typed before PSReadLine reads again are discarded (seen on Windows Server 2025 even after the
+/// prompt was drawn), as in any console.
+fn ps_command(p: &mut Pane, line: &[u8], needle: &str) {
+    for attempt in 0..5 {
+        p.send(line);
+        let until = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < until {
+            if p.text().contains(needle) {
+                return;
+            }
+            match p.raw.next(Duration::from_millis(100)) {
+                Got::Data(b) => p.seen.extend(b),
+                Got::Eof => panic!("the Host closed the attach"),
+                _ => {}
+            }
+        }
+        eprintln!("PowerShell dropped typed input after Ctrl+C (attempt {attempt}); typing again");
+    }
+    panic!("`{needle}` not seen after 5 attempts:\n{}", p.text());
+}
+
 /// Waits for PowerShell's prompt after an interrupt: PowerShell discards keys typed while it
 /// stops a pipeline, so the next command is sent only once the prompt is back.
 fn ps_prompt(p: &mut Pane) {
@@ -972,16 +994,18 @@ fn ctrl_c_and_unicode_reach_programs_in_cmd_and_powershell() {
     p.send(b"\x03");
     ps_prompt(&mut p);
     let ps_ms = t1.elapsed().as_millis();
-    p.send(b"'after-' + 'ps-ctrl-c'\r");
-    p.expect_within("after-ps-ctrl-c", Duration::from_secs(15));
+    ps_command(&mut p, b"'after-' + 'ps-ctrl-c'\r", "after-ps-ctrl-c");
     assert!(!p.text().contains("not-interrupted"), "{}", p.text());
     p.send(b"ping.exe -n 60 127.0.0.1\r");
     p.expect("Reply from 127.0.0.1");
     p.clear();
     p.send(b"\x03");
     ps_prompt(&mut p);
-    p.send(b"'after-' + 'native-ctrl-c'\r");
-    p.expect_within("after-native-ctrl-c", Duration::from_secs(15));
+    ps_command(
+        &mut p,
+        b"'after-' + 'native-ctrl-c'\r",
+        "after-native-ctrl-c",
+    );
     assert!(
         children(p.pid, "ping.exe").is_empty(),
         "native ping was interrupted"

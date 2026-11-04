@@ -1,10 +1,13 @@
 # Subak IPC protocol v1
 
-Status: **implemented v1** (Step 09; Terminal methods added in Step 10 as an additive change;
-frozen: changes are additive or need major 2) · Designed in Step 03 · Decisions:
-[ADR 0005](../adr/0005-local-ipc.md), [ADR 0019](../adr/0019-secure-host-supervisor-and-ipc-v1.md),
-[ADR 0020](../adr/0020-terminal-session-lifecycle.md) · Session semantics:
-[SESSION_MODEL.md](../SESSION_MODEL.md)
+Status: **implemented v1** (Step 09; Terminal methods added in Step 10 and environment overrides
+in Step 11, as additive changes; frozen: changes are additive or need major 2) · Designed in
+Step 03 · Decisions: [ADR 0005](../adr/0005-local-ipc.md),
+[ADR 0019](../adr/0019-secure-host-supervisor-and-ipc-v1.md),
+[ADR 0020](../adr/0020-terminal-session-lifecycle.md),
+[ADR 0025](../adr/0025-pane-programs-environment-and-backpressure.md) · Session semantics:
+[SESSION_MODEL.md](../SESSION_MODEL.md) · Programs and environment:
+[PTY_PROCESSES.md](../PTY_PROCESSES.md)
 
 Machine-readable schema: [schemas/ipc-v1.schema.json](schemas/ipc-v1.schema.json). Valid and
 invalid example messages live in [examples/ipc-v1/](examples/ipc-v1/hello.json) and are checked by
@@ -47,7 +50,7 @@ flags are exactly `input`.
 | Any later frame | complete within 10 s of its first byte | `protocol_error`, close |
 | Idle connection | no limit; heartbeats are the client's choice (`host.health`) | — |
 | Connections | 64 at once (in handshake or established) | handshake error `busy`, close |
-| Send queue per connection | 4096 frames or 16 MiB | the lagging client is disconnected; the pane never waits |
+| Send queue per connection | 16 MiB, each queued frame counting its bytes plus 64 (Step 11; until Step 10 also at most 4096 frames) | the lagging client is disconnected; the pane never waits ([PTY_PROCESSES §7](../PTY_PROCESSES.md)) |
 
 A violation closes **that connection only**. The Host first sends a connection-level error
 `{"type":"error","error":{…}}` when it can. It never panics on input; a panic in a request
@@ -81,9 +84,11 @@ handler becomes `internal_error` and the Host continues (ADR 0019 §9).
    | `busy` | 64 connections are already open |
    | `host_stopping` | the Host is shutting down |
 
-`features` of the Step 10 Host: `host.health`, `host.stats`, `events.subscribe`,
-`identity.verified`, `terminal.lifecycle` (the Step 09 Host announced `prototype.single_pane`
-instead of `terminal.lifecycle`). Clients must ignore features they do not know.
+`features` of the Step 11 Host: `host.health`, `host.stats`, `events.subscribe`,
+`identity.verified`, `terminal.lifecycle`, `terminal.environment` (Step 11: `terminal.create`
+takes `env`, panes report `executable` and their override names). The Step 10 Host lacked
+`terminal.environment`; the Step 09 Host announced `prototype.single_pane` instead of
+`terminal.lifecycle`. Clients must ignore features they do not know.
 
 ## 3. Requests, responses, events
 
@@ -119,7 +124,7 @@ Host does not implement yet answers `unknown_request`, as does any name not in t
 | `events.subscribe` | `{topics: [...]}` from `terminals`, `panes`, `claude`, `host` (replaces earlier topics) | `{topics}` | cli, gui, mcp | **09** |
 | `terminal.list` | `{detail: "summary" \| "full"}` | `{terminals: [Terminal]}` (§4.3) | cli, gui, mcp | **10** |
 | `terminal.info` | `{target}` | `{terminal: Terminal}` | cli, gui, mcp | **10** |
-| `terminal.create` | `{name?, profile?, command?, cwd?, env?, size?, remain_on_exit?, keep_on_failure?, dry_run?}` | `{terminal_id, window_id, pane_id, name, terminal}` or `{dry_run: true, would_create}` | cli, gui, mcp* | **10** |
+| `terminal.create` | `{name?, profile?, command?, cwd?, env?, size?, remain_on_exit?, keep_on_failure?, dry_run?}` | `{terminal_id, window_id, pane_id, name, terminal}` or `{dry_run: true, would_create}` | cli, gui, mcp* | **10**, **11** (`env`) |
 | `terminal.rename` | `{target, name, dry_run?}` | `{terminal_id, name, previous_name, changed}` or `{dry_run: true, would_rename}` | cli, gui, mcp* | **10** |
 | `terminal.stop` | `{target, force, dry_run}` | `{affected, terminal, removed, terminal_id, name}` or `{dry_run: true, would_stop}` | cli, gui, mcp* | **10** |
 | `terminal.kill` | `{target, force, dry_run}` | as `terminal.stop` (`would_kill`) | cli, gui, mcp* | **10** |
@@ -136,7 +141,7 @@ Host does not implement yet answers `unknown_request`, as does any name not in t
 | `claude.status` | `{target?}` | `{panes: [{pane_id, state, since, session_id?}]}` | cli, gui, mcp | 28 |
 
 `mcp*` = only once the user granted that capability to MCP clients (Step 37). Until then MCP
-clients may call only the unstarred methods. Bold Step = implemented by the Step 10 Host.
+clients may call only the unstarred methods. Bold Step = implemented by the Step 11 Host.
 
 **Panes and streams (Step 10).** A Host owns any number of Terminals, each with one window and one
 pane (docs/SESSION_MODEL.md). Each pane has its own data stream id, unique in the Host.
@@ -182,7 +187,8 @@ that Terminal exists, else `null`; use `terminal.list` for the others. Each clie
 
 ### 4.2 `host.stats` result
 
-Numbers only (ADR 0012): `host.{uptime_s, handle_count}`, `terminals` (live), `terminals_total`,
+Numbers only (ADR 0012): `host.{uptime_s, handle_count, memory: {working_set_bytes,
+private_bytes, peak_private_bytes}}` (memory since Step 11), `terminals` (live), `terminals_total`,
 `panes` (running), `clients`, `pane.{output_bytes_total, input_bytes_total}` (all panes, also
 ended ones), `sessions.{created_total, spawn_failures_total, removed_total}`, and
 `ipc.{connections_total,
@@ -197,8 +203,10 @@ the `terminal`, `window`, `pane` and `terminal_summary` definitions of the schem
 - **Terminal object** (`terminal.info`, `terminal.list` with `detail: "full"`, `terminal.create`,
   the `terminal.created` event): `{id, name, created_at, state, profile, remain_on_exit, busy,
   clients, active_window, windows: [{id, index, name, automatic_name, active_pane, layout,
-  panes: [{id, index, cwd, command: {program, args}, title, stream_id, pid, running, processes,
-  size, clients, output_bytes}]}], failure, last_exit}`. `state` is `starting`, `running`,
+  panes: [{id, index, cwd, command: {program, args}, executable, env: {set, unset}, title,
+  stream_id, pid, running, processes, size, clients, output_bytes}]}], failure, last_exit}`.
+  `executable` (Step 11) is the program file that runs (`null` until it started); `env` lists
+  the **names** of its environment overrides, never their values. `state` is `starting`, `running`,
   `stopping`, `stopped` or `failed`. `failure` is `{code: "spawn_failed", reason, message}` for a
   kept failed start; `last_exit` is `{pid, exit_code, forced, cause}` once its processes ended.
   Secret-looking arguments (`--token=…`, the value after `--password`) are shown as `***`. The
@@ -206,13 +214,23 @@ the `terminal`, `window`, `pane` and `terminal_summary` definitions of the schem
   windows, panes, pid, program}`. Terminals are listed in creation order.
 - **`terminal.create`**: `name` follows the naming rules (`invalid_name`, `name_conflict` with
   `details.existing`); without it the lowest free number is used. `command` is `{program, args}`
-  (default: the Host's `%ComSpec%`); `cwd` an absolute path (default: the user profile); `size`
-  `{cols, rows}` (default 120×30). `remain_on_exit` keeps the Terminal as `stopped` when its
-  program exits; `keep_on_failure` keeps a failed start as `failed`. A start that fails answers
-  `spawn_failed` with `details.{reason, program, kept, terminal_id}` and leaves no pseudo console,
-  job or (without `keep_on_failure`) record. `dry_run` validates the name, the working directory
-  and that the program can be found, and creates nothing. `profile` and `env` are part of v1 but
-  refused with `invalid_params` until Steps 33 and 11.
+  (default: the Host's `%ComSpec%`): `program` is a path (relative to `cwd`) or a bare name the
+  Host looks up on the pane's `PATH`; every argument is one word, quoted for Windows, never
+  passed through a shell; batch and PowerShell scripts are refused (`not_executable`).
+  `cwd` is an absolute path (default: the user profile). `env` (Step 11) is
+  `{NAME: "value" | null}`: a string sets a variable, `null` removes it, on top of the user's
+  fresh logon environment; `SUBAK_PANE_ID` and `SUBAK_TERMINAL_ID` are always set by the Host and
+  may not appear; at most 256 names (1–255 characters, no `=`), values up to 32 767 characters;
+  anything else is `invalid_params` with `details.field = "env"`. Values are never stored or
+  shown ([PTY_PROCESSES §3](../PTY_PROCESSES.md)). `size` `{cols, rows}` (default 120×30).
+  `remain_on_exit` keeps the Terminal as `stopped` when its program exits; `keep_on_failure`
+  keeps a failed start as `failed`. A start that fails answers `spawn_failed` with
+  `details.{reason, program, kept, terminal_id}`, plus `hint` and `os_error` when there are
+  some, and leaves no job or (without `keep_on_failure`) record; failures the Host can decide
+  before starting (§6 reasons except some `other`) do not even create a pseudo console. `dry_run`
+  makes the same checks (name, working directory, the program on the pane's `PATH`, scripts)
+  and creates nothing; `would_create` adds the resolved `executable` and the `env` names.
+  `profile` is part of v1 but refused with `invalid_params` until Step 33.
 - **`terminal.rename`**: a Terminal may change the case of its own name; another Terminal's name
   is `name_conflict`. The id, processes and attachments stay.
 - **`terminal.stop`** ends the processes gracefully, then forced (SESSION_MODEL §4), and keeps the
@@ -260,7 +278,7 @@ follows), `claude.state_changed`.
 | `invalid_name` | Name violates ADR 0007 rules |
 | `name_conflict` | Name already used (case-insensitive) |
 | `busy` | Destructive operation on a busy object without `force` (`host.stop` with live Terminals and no `kill_terminals`; stopping, killing or force-removing a busy running Terminal), the connection limit, or the Terminal limit (256) |
-| `spawn_failed` | Process could not start; `details.reason` (`not_found`, `access_denied`, `bad_cwd`, `other`) |
+| `spawn_failed` | Process could not start; `details.reason` (`not_found`, `access_denied`, `bad_cwd`, `not_executable` (Step 11: a script, or not a program Windows can start), `other`) |
 | `invalid_state` | Operation not allowed in the object's state (e.g. remove a `running` Terminal without `force`, attach to a `stopped` one, end a `starting` one) |
 | `state_from_newer_version` | Stored state was written by a newer Subak; read-only |
 | `unsupported_platform` | Feature not available on this OS |

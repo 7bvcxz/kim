@@ -83,7 +83,7 @@ impl Effect {
             Effect::OpenUrl => "◎",
             Effect::Mouse => "➚",
             Effect::Mode => "◧",
-            Effect::Engine => "⏻",
+            Effect::Engine => "Ⅱ",
             Effect::Block => "⊘",
         }
     }

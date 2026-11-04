@@ -3,8 +3,9 @@
 //! Started by the user (or by the opt-in sign-in entry with `--startup`). It shows a tray icon,
 //! keeps the engine `off` until the user turns it on (unless `engine_on_start: on` and the last
 //! run ended cleanly), registers Ddalgak's own global shortcuts and serves the local pipe that
-//! `ddalgak` talks to. One instance per user session. The rule editor arrives in Step 74; until
-//! then the app has no window, only its tray icon.
+//! `ddalgak` talks to. One instance per user session. The app itself has no window, only its tray
+//! icon: the rule editor is its own process, `ddalgak-editor.exe` beside this one, started from
+//! the tray menu (*Open rule editor*) or the `editor.open` shortcut (Step 74, ADR 0049).
 //!
 //! Options: `--startup` (started at sign-in), `--no-hotkeys` (or `KIM_NO_HOTKEYS`: every shortcut
 //! off and the engine off), `--help`, `--version`. Debug builds only (compiled out of release

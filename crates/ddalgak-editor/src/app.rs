@@ -627,7 +627,7 @@ impl EditorApp {
             Act::Duplicate(ids) => {
                 let n = ids.len();
                 let label = format!("Duplicated {n} rule(s)");
-                let ids2 = ids.clone();
+                let ids2 = ids;
                 let c = self.commit(label, "rule.duplicate", move |d| {
                     let mut all = Change::default();
                     for id in &ids2 {
@@ -654,6 +654,7 @@ impl EditorApp {
             Act::Delete(ids) => {
                 let n = ids.len();
                 let label = format!("{} {n} rule(s)", self.t("toast.deleted"));
+                let titles = self.titles(&ids);
                 let ids2 = ids.clone();
                 if self
                     .commit(label.clone(), "rule.delete", move |d| {
@@ -662,7 +663,7 @@ impl EditorApp {
                     .is_some()
                 {
                     self.toast = Some(Toast {
-                        text: format!("{label}: {}", self.titles(&ids).join(", ")),
+                        text: format!("{label}: {}", titles.join(", ")),
                         undo: true,
                     });
                     self.selected.retain(|s| !ids.contains(s));

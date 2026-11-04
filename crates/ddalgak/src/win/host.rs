@@ -843,6 +843,42 @@ impl Host {
         let _ = self.engine(req, &origin, false);
     }
 
+    /// Step 74 (ADR 0049): starts the rule editor, its own process beside this one; a running
+    /// editor brings its window forward instead. The debug test host never opens a window.
+    fn open_editor(&mut self) -> Result<Value, (String, String)> {
+        if !self.opts.tray {
+            return Err((
+                "editor_unavailable".into(),
+                "the test host opens no window".into(),
+            ));
+        }
+        let exe = std::env::current_exe()
+            .map(|p| crate::editor_path(&p))
+            .unwrap_or_else(|_| std::path::PathBuf::from(crate::EDITOR_EXE));
+        if !exe.is_file() {
+            return Err((
+                "editor_unavailable".into(),
+                format!(
+                    "the rule editor is not installed next to Ddalgak ({})",
+                    exe.display()
+                ),
+            ));
+        }
+        // A GUI-subsystem program: no console; nothing is inherited but null standard handles.
+        std::process::Command::new(&exe)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map(|c| json!({ "pid": c.id() }))
+            .map_err(|e| {
+                (
+                    "launch_failed".into(),
+                    format!("cannot start the rule editor: {e}"),
+                )
+            })
+    }
+
     fn hotkey(&mut self, id: i32) {
         let Some(action) = self
             .registered
@@ -852,6 +888,12 @@ impl Host {
         else {
             return;
         };
+        if action == "editor.open" {
+            if let Err((_, msg)) = self.open_editor() {
+                self.notify("Ddalgak", &msg);
+            }
+            return;
+        }
         let origin = Origin::Shortcut(if action == "engine.toggle" {
             "engine.toggle"
         } else {
@@ -882,6 +924,7 @@ impl Host {
             }
             (MenuCmd::Mode(id), _) => self.mode_cmd(ModeCmd::Set(id), false, ModeOrigin::Tray),
             (MenuCmd::ResetMode, _) => self.mode_cmd(ModeCmd::Reset, false, ModeOrigin::Tray),
+            (MenuCmd::OpenEditor, _) => self.open_editor(),
             (MenuCmd::ReleaseKeys, _) => {
                 let v = self.release(false);
                 let n = v["stale"]["released"].as_u64().unwrap_or(0)

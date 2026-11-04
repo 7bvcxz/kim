@@ -70,7 +70,7 @@
         {
           "action": "editor.open",
           "keys": "Ctrl+Alt+Shift+F15",
-          "registration": "unavailable"
+          "registration": "registered"
         }
       ],
       "off": false,

@@ -44,7 +44,7 @@ mod single {
         s.encode_utf16().chain(std::iter::once(0)).collect()
     }
 
-    /// The owner's handles (kept for the process lifetime).
+    /// The owner's handles: never closed by the editor, so they last as long as the process.
     pub struct Owner {
         _mutex: HANDLE,
         pub event: HANDLE,
@@ -227,7 +227,7 @@ fn run(
                 ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                 ctx.request_repaint();
             });
-            std::mem::forget(owner);
+            // The owner's handles stay open until the process ends (no Drop: closed by Windows).
             let app = EditorApp::new(Options {
                 paths,
                 engine: Arc::new(PipeEngine { endpoint }),

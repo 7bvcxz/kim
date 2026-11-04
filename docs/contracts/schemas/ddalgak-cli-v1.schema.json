@@ -539,7 +539,7 @@
               "action": { "enum": ["engine.toggle", "engine.pause", "editor.open"] },
               "keys": { "type": "string", "minLength": 1 },
               "registration": {
-                "description": "registered / taken (RegisterHotKey in the running app); not_running (no app); unavailable (the action has no feature yet: editor.open before Step 74); unsupported (needs more than RegisterHotKey, e.g. left/right modifiers); wanted (to be registered).",
+                "description": "registered / taken (RegisterHotKey in the running app); not_running (no app); unavailable (the action had no feature yet: editor.open before Step 74; kept for older apps); unsupported (needs more than RegisterHotKey, e.g. left/right modifiers); wanted (to be registered).",
                 "enum": ["registered", "taken", "not_running", "unavailable", "unsupported", "wanted"]
               }
             }

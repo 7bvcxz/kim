@@ -400,7 +400,9 @@ impl EditorApp {
                     for s in StateFilter::ALL {
                         ui.selectable_value(&mut self.filter.state, s, lang.t(s.key()));
                     }
-                });
+                })
+                .response
+                .accessible_name(lang.t("filter.state"));
             let (modes, apps) = self.doc().map(listing::filter_choices).unwrap_or_default();
             let profiles: Vec<(String, String)> = self
                 .doc()
@@ -426,7 +428,9 @@ impl EditorApp {
                         for (id, t) in &profiles {
                             ui.selectable_value(&mut self.filter.profile, Some(id.clone()), t);
                         }
-                    });
+                    })
+                    .response
+                    .accessible_name(lang.t("filter.profile"));
             }
             if modes.len() > 1 {
                 let cur = self
@@ -442,7 +446,9 @@ impl EditorApp {
                         for (id, t) in &modes {
                             ui.selectable_value(&mut self.filter.mode, Some(id.clone()), t);
                         }
-                    });
+                    })
+                    .response
+                    .accessible_name(lang.t("filter.mode"));
             }
             if !apps.is_empty() {
                 let cur = self.filter.app.clone().unwrap_or_else(|| any.to_string());
@@ -453,7 +459,9 @@ impl EditorApp {
                         for a in &apps {
                             ui.selectable_value(&mut self.filter.app, Some(a.clone()), a);
                         }
-                    });
+                    })
+                    .response
+                    .accessible_name(lang.t("filter.app"));
             }
             egui::ComboBox::from_id_salt("grouping")
                 .selected_text(format!(
@@ -465,7 +473,9 @@ impl EditorApp {
                     for g in Grouping::ALL {
                         ui.selectable_value(&mut self.grouping, g, lang.t(g.key()));
                     }
-                });
+                })
+                .response
+                .accessible_name(lang.t("group.label"));
             ui.checkbox(&mut self.filter.snippet_text, lang.t("list.snippet_search"));
         });
         if self.selected.len() > 1 {
@@ -614,10 +624,13 @@ impl EditorApp {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
                 let handle = ui
-                    .add(egui::Label::new(small("≡", c.text_muted)).sense(egui::Sense::drag()))
-                    .on_hover_text(lang.t("list.drag"));
-                let handle =
-                    handle.accessible_name(format!("{}: {}", lang.t("list.drag"), r.title));
+                    .add(
+                        egui::Button::new(small("≡", c.text_muted))
+                            .frame(false)
+                            .sense(egui::Sense::drag()),
+                    )
+                    .on_hover_text(lang.t("list.drag"))
+                    .accessible_name(format!("{}: {}", lang.t("list.drag"), r.title));
                 handle.dnd_set_drag_payload(DragRule {
                     id: r.id.clone(),
                     profile: r.profile.clone(),
@@ -712,11 +725,7 @@ impl EditorApp {
             return;
         }
         if self.selected.len() > 1 {
-            ui.label(format!(
-                "{} {}",
-                self.selected.len(),
-                lang.t("bulk.selected")
-            ));
+            ui.label(small(lang.t("bulk.hint"), c.text_muted));
             return;
         }
         let Some(id) = self.selected.first().cloned() else {
@@ -1128,7 +1137,7 @@ impl EditorApp {
         let mut d = doc.clone();
         match d.find_rule(&id) {
             Some((pi, ri)) => {
-                d.profiles[pi].rules[ri] = ddalgak::model::RuleEntry::Typed(Box::new(rule))
+                d.profiles[pi].rules[ri] = ddalgak::model::RuleEntry::Typed(Box::new(rule));
             }
             None => {
                 if let Some(pi) = d.profile_index(&f.profile) {
@@ -1256,7 +1265,12 @@ impl EditorApp {
                         }
                         if ui
                             .add(egui::Button::new(
-                                egui::RichText::new(lang.t("btn.delete")).color(c.danger),
+                                egui::RichText::new(format!(
+                                    "{} ({})",
+                                    lang.t("btn.delete"),
+                                    ids.len()
+                                ))
+                                .color(c.danger),
                             ))
                             .clicked()
                         {
@@ -1520,7 +1534,7 @@ impl EditorApp {
         if let Some(c) = self.commit(format!("Imported {n} rule(s)"), "rule.import", move |d| {
             transfer::apply_import(d, &p)
         }) {
-            self.selected = c.change.rules.clone();
+            self.selected = c.change.rules;
             self.dialog = None;
             self.filter = Filter::default();
         }
@@ -1582,6 +1596,7 @@ fn problems_for(ui: &mut egui::Ui, problems: &[ddalgak::text::FieldProblem], pre
 }
 
 /// A key field: the capture button and the "type instead" text.
+#[allow(clippy::too_many_arguments)]
 fn key_field(
     ui: &mut egui::Ui,
     lang: Lang,
@@ -1590,14 +1605,15 @@ fn key_field(
     capture: &mut Capture,
     target: &mut CaptureTarget,
     me: CaptureTarget,
+    heading: bool,
 ) {
     let c = Colors::get();
-    ui.label(egui::RichText::new(label).strong());
+    if heading {
+        ui.label(egui::RichText::new(label).strong());
+    }
     ui.horizontal_wrapped(|ui| {
         let recording = capture.active && *target == me;
-        let shown = if recording {
-            lang.t("form.capture").to_string()
-        } else if value.trim().is_empty() {
+        let shown = if recording || value.trim().is_empty() {
             lang.t("form.capture").to_string()
         } else {
             value.clone()
@@ -1645,7 +1661,8 @@ fn keys_stage(
 ) {
     let c = Colors::get();
     let t = &mut f.fields.trigger;
-    if f.fields.effect.is_none_or(Effect::allows_hotstring) {
+    let radio = f.fields.effect.is_none_or(Effect::allows_hotstring);
+    if radio {
         ui.horizontal(|ui| {
             ui.radio_value(&mut t.hotstring, false, lang.t("form.when_press"));
             ui.radio_value(&mut t.hotstring, true, lang.t("form.when_type"));
@@ -1654,13 +1671,13 @@ fn keys_stage(
         t.hotstring = false;
     }
     if t.hotstring {
-        ui.label(egui::RichText::new(lang.t("form.abbreviation")).strong());
+        let lbl = ui.label(egui::RichText::new(lang.t("form.abbreviation")).strong());
         ui.add(
             egui::TextEdit::singleline(&mut t.abbreviation)
                 .hint_text("btw")
                 .desired_width(160.0),
         )
-        .accessible_name(lang.t("form.abbreviation"));
+        .labelled_by(lbl.id);
         problems_for(ui, problems, &["trigger"]);
         return;
     }
@@ -1672,6 +1689,7 @@ fn keys_stage(
         capture,
         target,
         CaptureTarget::Trigger,
+        !radio,
     );
     ui.checkbox(&mut capture.add_step, lang.t("form.add_step"));
     ui.label(small(lang.t("form.capture_hint"), c.text_muted));
@@ -1798,6 +1816,7 @@ fn details_stage(
                 capture,
                 target,
                 CaptureTarget::RemapTo,
+                true,
             );
             key_field(
                 ui,
@@ -1807,6 +1826,7 @@ fn details_stage(
                 capture,
                 target,
                 CaptureTarget::RemapTap,
+                true,
             );
             if !fl.remap.tap.trim().is_empty() {
                 ui.add(
@@ -1845,6 +1865,7 @@ fn details_stage(
                 capture,
                 target,
                 CaptureTarget::SendKeys,
+                true,
             );
             ui.checkbox(&mut capture.add_step, lang.t("form.add_step"));
             ui.add(
@@ -1856,13 +1877,13 @@ fn details_stage(
             problems_for(ui, problems, &["steps[0]"]);
         }
         Effect::TypeText => {
-            ui.label(egui::RichText::new(lang.t("field.text")).strong());
+            let lbl = ui.label(egui::RichText::new(lang.t("field.text")).strong());
             ui.add(
                 egui::TextEdit::multiline(&mut fl.text.text)
                     .desired_rows(4)
                     .desired_width(f32::INFINITY),
             )
-            .accessible_name(lang.t("field.text"));
+            .labelled_by(lbl.id);
             ui.checkbox(&mut fl.text.variables, lang.t("field.variables"));
             ui.checkbox(&mut fl.text.paste, lang.t("field.paste"));
             ui.add(
@@ -1873,7 +1894,7 @@ fn details_stage(
             .accessible_name(lang.t("field.key_delay"));
             let preview = f.text_draft().preview(&form::local_now());
             ui.label(small(lang.t("form.as_typed"), c.text_muted));
-            let mut shown = preview.rendered.clone();
+            let mut shown = preview.rendered;
             ui.add(
                 egui::TextEdit::multiline(&mut shown)
                     .interactive(false)
@@ -1884,13 +1905,13 @@ fn details_stage(
             problems_for(ui, problems, &["steps[0]"]);
         }
         Effect::OpenProgram => {
-            ui.label(egui::RichText::new(lang.t("field.program")).strong());
+            let lbl = ui.label(egui::RichText::new(lang.t("field.program")).strong());
             ui.add(
                 egui::TextEdit::singleline(&mut fl.program.path)
                     .hint_text(r"C:\Windows\System32\notepad.exe")
                     .desired_width(f32::INFINITY),
             )
-            .accessible_name(lang.t("field.program"));
+            .labelled_by(lbl.id);
             ui.add(
                 egui::TextEdit::singleline(&mut fl.program.app_id)
                     .hint_text("Microsoft.WindowsCalculator_8wekyb3d8bbwe!App")
@@ -1943,13 +1964,13 @@ fn details_stage(
             problems_for(ui, problems, &["steps[0]"]);
         }
         Effect::OpenUrl => {
-            ui.label(egui::RichText::new(lang.t("field.url")).strong());
+            let lbl = ui.label(egui::RichText::new(lang.t("field.url")).strong());
             ui.add(
                 egui::TextEdit::singleline(&mut fl.url)
                     .hint_text("github.com")
                     .desired_width(f32::INFINITY),
             )
-            .accessible_name(lang.t("field.url"));
+            .labelled_by(lbl.id);
             match f.url_draft().normalized() {
                 Ok(u) if !f.fields.url.trim().is_empty() => {
                     ui.label(egui::RichText::new(format!("✓ {u}")).color(c.success));
@@ -1995,7 +2016,9 @@ fn details_stage(
                             for (id, t) in &modes {
                                 ui.selectable_value(&mut fl.mode.mode, id.clone(), t);
                             }
-                        });
+                        })
+                        .response
+                        .accessible_name(lang.t("field.mode"));
                 }
                 ModeOp::Cycle => {
                     ui.label(small(lang.t("field.cycle_modes"), c.text_muted));
@@ -2209,7 +2232,9 @@ fn mouse_form(
                     for (a, w) in anchors {
                         ui.selectable_value(&mut p.anchor, a, w);
                     }
-                });
+                })
+                .response
+                .accessible_name(lang.t("field.relative_to"));
         }
         MouseAction::Scroll { dir, notches } => {
             ui.horizontal(|ui| {

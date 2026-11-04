@@ -131,6 +131,11 @@ pub const LABELS: &[(&str, &str, &str)] = &[
     ("bulk.selected", "selected", "개 선택됨"),
     ("bulk.select_all", "Select all", "모두 선택"),
     ("bulk.clear", "Clear selection", "선택 해제"),
+    (
+        "bulk.hint",
+        "Several rules are selected: the actions for all of them are above the list.",
+        "여러 규칙이 선택됨: 모두에 대한 동작은 목록 위에 있습니다.",
+    ),
     ("badge.conflict", "conflict", "충돌"),
     ("badge.problem", "problem", "문제"),
     ("badge.warning", "warning", "경고"),
@@ -476,6 +481,119 @@ pub const LABELS: &[(&str, &str, &str)] = &[
     ("toast.deleted", "Deleted", "삭제됨"),
     ("toast.undone", "Undone", "실행 취소됨"),
     ("help.f1", "F1: shortcuts and help", "F1: 단축키와 도움말"),
+    (
+        "help.off",
+        "The rule list's shortcuts are off (--no-hotkeys or KIM_NO_HOTKEYS).",
+        "규칙 목록 단축키가 꺼져 있습니다 (--no-hotkeys 또는 KIM_NO_HOTKEYS).",
+    ),
+    (
+        "help.rebind",
+        "Change the rule list's shortcuts in hotkeys.json (HOTKEY_CONTRACT); the navigation keys are fixed.",
+        "규칙 목록 단축키는 hotkeys.json에서 바꿉니다 (HOTKEY_CONTRACT). 이동 키는 고정입니다.",
+    ),
+    (
+        "engine.start_hint",
+        "Start Ddalgak from the Start menu; the editor never starts it.",
+        "시작 메뉴에서 딸깍을 실행하세요. 편집기는 딸깍을 실행하지 않습니다.",
+    ),
+    (
+        "detail.select_hint",
+        "Select a rule, or press Ctrl+N for a new one.",
+        "규칙을 고르거나 Ctrl+N으로 새 규칙을 만드세요.",
+    ),
+    ("detail.state", "State", "상태"),
+    ("dialog.export_done", "Exported to", "내보낸 곳:"),
+    (
+        "dialog.import_adds",
+        "rules would be added, turned off, to",
+        "개 규칙이 꺼진 채로 추가될 프로필:",
+    ),
+    (
+        "dialog.import_opens",
+        "opens once you approve and enable it",
+        "승인하고 켜면 여는 대상",
+    ),
+    (
+        "dialog.import_injects",
+        "presses keys or types in other programs once you approve and enable it",
+        "승인하고 켜면 다른 프로그램에서 키를 누르거나 입력함",
+    ),
+    (
+        "dialog.import_renamed",
+        "ID taken, renamed:",
+        "ID가 이미 있어 이름 변경:",
+    ),
+    ("dialog.import_modes", "New modes", "새 모드"),
+    (
+        "field.at_point",
+        "Move to a point first",
+        "먼저 위치로 이동",
+    ),
+    ("field.columns", "Columns", "열"),
+    ("field.rows", "Rows", "행"),
+    (
+        "field.unit_grid",
+        "Count in grid cells instead of pixels",
+        "픽셀 대신 격자 칸으로 세기",
+    ),
+    ("field.new_mode", "New mode name", "새 모드 이름"),
+    (
+        "form.add_step",
+        "Add step: the next keys continue a sequence (up to four)",
+        "단계 추가: 다음 키가 순서를 이어감 (최대 네 개)",
+    ),
+    (
+        "form.as_typed",
+        "As it would be typed now (in this window only)",
+        "지금 입력될 내용 (이 창 안에서만)",
+    ),
+    (
+        "form.clamped",
+        "The point is beside every monitor; the pointer goes to the nearest edge.",
+        "위치가 모든 모니터 밖에 있어 포인터가 가장 가까운 가장자리로 갑니다.",
+    ),
+    ("form.command_line", "Command line", "명령줄"),
+    ("form.enabled", "Enabled", "켜짐"),
+    ("form.found", "found", "찾음"),
+    (
+        "form.not_found",
+        "not found or not a program on this PC",
+        "이 PC에 없거나 프로그램이 아님",
+    ),
+    (
+        "form.held_modifiers",
+        "Held modifiers combine:",
+        "누른 보조 키와 함께:",
+    ),
+    (
+        "form.ime",
+        "An input method is composing: switch to English input, or type the keys instead.",
+        "입력기가 조합 중입니다. 영문 입력으로 바꾸거나 키를 직접 입력하세요.",
+    ),
+    (
+        "form.plain_note",
+        "rules.json keeps the text in plain form: not for passwords.",
+        "rules.json에는 글자가 그대로 저장됩니다. 비밀번호에는 쓰지 마세요.",
+    ),
+    (
+        "form.program_note",
+        "Nothing opens here. Ddalgak opens it as you, never as administrator, after you allow it.",
+        "여기서는 아무것도 열리지 않습니다. 허용한 뒤에 관리자 권한 없이 사용자로 엽니다.",
+    ),
+    (
+        "form.screen_map",
+        "Screen map (simulated pointer; the real pointer never moves here)",
+        "화면 지도 (시뮬레이션 포인터, 실제 포인터는 움직이지 않음)",
+    ),
+    ("form.try_keys", "Use", "사용:"),
+    ("modes.add", "+ New mode", "+ 새 모드"),
+    ("modes.default", "default", "기본"),
+    ("modes.layer_over", "layer over", "위에 겹침:"),
+    (
+        "modes.note",
+        "Rename, colors, layers and deleting modes: `ddalgak mode …` for now.",
+        "모드 이름 변경, 색, 겹침, 삭제: 지금은 `ddalgak mode …`를 쓰세요.",
+    ),
 ];
 
 #[cfg(test)]
@@ -516,6 +634,40 @@ mod tests {
             assert_eq!(Lang::Ko.t(key), ko);
         }
         assert!(Lang::Ko.t("header.emergency").contains("긴급 끄기"));
+    }
+
+    /// Every literal key the window asks for (`.t("…")`) is in the table, so no label shows "?".
+    #[test]
+    fn every_key_the_window_uses_exists() {
+        let src = [include_str!("app.rs"), include_str!("app/view.rs")].concat();
+        let keys: BTreeSet<&str> = LABELS.iter().map(|(k, _, _)| *k).collect();
+        let mut missing = Vec::new();
+        for part in src.split(".t(").skip(1) {
+            let part = part.trim_start();
+            let Some(rest) = part.strip_prefix('"') else {
+                continue; // a computed key (`format!`), checked below
+            };
+            let key = &rest[..rest.find('"').unwrap_or(0)];
+            if !keys.contains(key) {
+                missing.push(key.to_string());
+            }
+        }
+        assert!(missing.is_empty(), "missing labels: {missing:?}");
+        // The computed keys: tiles, their examples, permissions.
+        for e in crate::form::Effect::TILES
+            .iter()
+            .chain([crate::form::Effect::Block].iter())
+        {
+            assert!(keys.contains(format!("tile.{}", e.key()).as_str()));
+            assert!(keys.contains(format!("tile.{}.example", e.key()).as_str()));
+        }
+        for p in ddalgak::model::Permission::ALL {
+            assert!(keys.contains(format!("perm.{}", p.as_str()).as_str()));
+            assert!(keys.contains(format!("perm.short.{}", p.as_str()).as_str()));
+        }
+        for w in ["normal", "maximized", "minimized"] {
+            assert!(keys.contains(format!("field.window.{w}").as_str()));
+        }
     }
 
     #[test]

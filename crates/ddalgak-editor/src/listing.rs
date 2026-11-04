@@ -408,6 +408,7 @@ mod tests {
     use ddalgak::validate::Context;
     use serde_json::json;
 
+    #[allow(clippy::needless_pass_by_value)]
     fn loaded(rules: serde_json::Value) -> store::Loaded {
         let doc = json!({
             "schema": "ddalgak.rules", "schema_version": 1, "hotkey_contract": 1, "revision": 4,

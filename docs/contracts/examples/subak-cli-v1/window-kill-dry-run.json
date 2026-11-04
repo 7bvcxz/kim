@@ -1,0 +1,28 @@
+{
+  "command": "window.kill",
+  "data": {
+    "dry_run": true,
+    "would_kill": {
+      "busy": false,
+      "name": "work",
+      "panes": [
+        {
+          "busy": false,
+          "index": 0,
+          "pane_id": "p-000000000001",
+          "pid": 4242,
+          "processes": 1,
+          "program": "cmd.exe"
+        }
+      ],
+      "processes": 1,
+      "removes_window": true,
+      "terminal_id": "t-000000000002",
+      "window_id": "w-000000000003",
+      "window_index": 1
+    }
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

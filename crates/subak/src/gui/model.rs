@@ -25,6 +25,13 @@
 //! - it only creates a Terminal on an explicit `terminal.new` (`Ctrl+T`, `+`), never by opening;
 //! - when the Host goes away it keeps the last screen, retries with a growing delay without
 //!   starting a Host, and reattaches to the same Terminal (by id) when a Host serves it again.
+//!
+//! **Internal windows and panes (Step 21, ADR 0054).** A tab is a Terminal; the window shows its
+//! active window's active pane, which is the Host's selection, the same for every client. When it
+//! changes (`window.selected`, `pane.selected`; `subak window select`, another client, or the
+//! shown pane's program ending while others run) the window detaches that pane and attaches the
+//! new active one; nothing ends. Which window and pane is shown is in the title
+//! ([`TermInfo::place`]). Keys to switch them are Step 23's prefix table.
 
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -43,6 +50,12 @@ pub struct TermInfo {
     pub program: String,
     /// The pane's history limit: the view keeps as many lines.
     pub history_limit: usize,
+    /// Step 21: the shown window and pane as `index:name.pane`, with the counts, when the
+    /// Terminal has more than one window or pane (`None` otherwise, so nothing changes for the
+    /// usual single-pane Terminal).
+    pub place: Option<String>,
+    /// Step 21: the id of the Terminal's active pane (its active window's active pane).
+    pub active_pane: Option<String>,
 }
 
 impl TermInfo {
@@ -61,7 +74,31 @@ impl TermInfo {
     }
 
     fn from_full(t: &Value) -> Option<Self> {
-        let pane = &t["windows"][0]["panes"][0];
+        let windows = t["windows"].as_array().map_or(&[][..], Vec::as_slice);
+        let window = windows
+            .iter()
+            .find(|w| w["id"] == t["active_window"])
+            .unwrap_or(&t["windows"][0]);
+        let pane = window["panes"]
+            .as_array()
+            .and_then(|ps| ps.iter().find(|p| p["id"] == window["active_pane"]))
+            .unwrap_or(&window["panes"][0]);
+        let panes: usize = windows
+            .iter()
+            .map(|w| w["panes"].as_array().map_or(0, Vec::len))
+            .sum();
+        let place = (windows.len() > 1 || panes > 1).then(|| {
+            format!(
+                "window {}:{} pane {} ({} window{}, {} pane{})",
+                window["index"],
+                window["name"].as_str().unwrap_or("?"),
+                pane["index"],
+                windows.len(),
+                if windows.len() == 1 { "" } else { "s" },
+                panes,
+                if panes == 1 { "" } else { "s" },
+            )
+        });
         let program = pane["executable"]
             .as_str()
             .or_else(|| pane["command"]["program"].as_str())
@@ -81,6 +118,8 @@ impl TermInfo {
                 .as_u64()
                 .and_then(|n| usize::try_from(n).ok())
                 .unwrap_or(2000),
+            place,
+            active_pane: pane["id"].as_str().map(String::from),
         })
     }
 }
@@ -329,6 +368,8 @@ impl Model {
             pid: None,
             program: String::new(),
             history_limit: 2000,
+            place: None,
+            active_pane: None,
         };
         self.show(t, &mut out);
         out.push(self.request("terminal.list", json!({"detail": "full"}), Pending::List));
@@ -839,6 +880,7 @@ impl Model {
                     .collect();
                 self.merge(&list);
                 self.decide(&mut out);
+                self.follow(&mut out);
                 out.push(Effect::Tabs);
             }
             Pending::Attach(known) => {
@@ -870,6 +912,8 @@ impl Model {
                         pid: None,
                         program: String::new(),
                         history_limit: 2000,
+                        place: None,
+                        active_pane: None,
                     });
                 term.id = tid.to_string();
                 if let Some(t) = self.tabs.iter().find(|t| t.id == tid) {
@@ -1017,6 +1061,54 @@ impl Model {
         out
     }
 
+    /// Step 21: shows the shown Terminal's active pane. When the Host's selection moved to another
+    /// pane (another window or pane was selected, or the shown pane's program ended while other
+    /// panes run), the old pane is detached and the active one attached; nothing ends.
+    fn follow(&mut self, out: &mut Vec<Effect>) {
+        let Some(shown) = self.terminal().map(|t| t.id.clone()) else {
+            return;
+        };
+        let Some(t) = self.tabs.iter().find(|x| x.id == shown).cloned() else {
+            return;
+        };
+        // The shown Terminal's place stays current (the title names the window and pane).
+        if let Phase::Attached { term, .. } | Phase::Ended { term, .. } | Phase::Attaching(term) =
+            &mut self.phase
+            && (term.place != t.place || term.active_pane != t.active_pane)
+        {
+            term.place.clone_from(&t.place);
+            term.active_pane.clone_from(&t.active_pane);
+            out.push(Effect::Phase);
+        }
+        if !t.running() {
+            return;
+        }
+        let Some(want) = t.active_pane.clone() else {
+            return;
+        };
+        match self.phase.clone() {
+            Phase::Attached {
+                pane_id, stream, ..
+            } if pane_id != want => {
+                out.push(self.request(
+                    "pane.detach",
+                    json!({"stream_id": stream}),
+                    Pending::Detach,
+                ));
+                out.push(self.attach(Some(t.clone()), &t.id));
+                self.set(Phase::Attaching(t), out);
+            }
+            Phase::Ended {
+                term,
+                why: EndReason::Exited(_),
+            } if term.id == t.id => {
+                out.push(self.attach(Some(t.clone()), &t.id));
+                self.set(Phase::Attaching(t), out);
+            }
+            _ => {}
+        }
+    }
+
     /// Takes a Terminal list as the truth for the tabs: known tabs keep their place, new ones
     /// are appended in the Host's order, missing ones go (but the shown one stays with its last
     /// screen, marked removed). Hidden ones stay hidden.
@@ -1094,6 +1186,8 @@ impl Model {
                     pid: None,
                     program: String::new(),
                     history_limit: 2000,
+                    place: None,
+                    active_pane: None,
                 });
                 if shown.stored() {
                     self.set(Phase::Stored(shown), out);
@@ -1342,6 +1436,23 @@ impl Model {
                 }
                 out.push(Effect::Tabs);
             }
+            // Step 21: a window or pane appeared, went, was renamed or selected: the list says
+            // what the tabs and the title show, and which pane to show (see `follow`).
+            "window.created" | "window.renamed" | "window.removed" | "window.selected"
+            | "pane.created" | "pane.removed" | "pane.selected" => {
+                if self
+                    .tabs
+                    .iter()
+                    .chain(self.hidden.iter())
+                    .any(|t| t.id == tid)
+                {
+                    out.push(self.request(
+                        "terminal.list",
+                        json!({"detail": "full"}),
+                        Pending::List,
+                    ));
+                }
+            }
             "host.stopping" => self.host_stopping = text(&d["reason"]),
             _ => {}
         }
@@ -1442,6 +1553,115 @@ mod tests {
             .and_then(|t| t.pid)
             .unwrap_or(1);
         respond(m, id, attach_result(pid, &tid, pid))
+    }
+
+    /// A Terminal with two internal windows (Step 21): `p-a` in window 0, `p-b` and `p-c` in
+    /// window 1; `active` is the active window's index.
+    fn multi(active: usize, b_or_c: &str) -> Value {
+        let pane = |id: &str, pid: u32| {
+            json!({"id": id, "index": 0, "pid": pid, "command": {"program": "cmd.exe", "args": []},
+                   "history": {"limit_lines": 2000}})
+        };
+        json!({
+            "id": "t-1", "name": "work", "state": "running",
+            "active_window": if active == 0 { "w-0" } else { "w-1" },
+            "windows": [
+                {"id": "w-0", "index": 0, "name": "cmd", "active_pane": "p-a", "panes": [pane("p-a", 10)]},
+                {"id": "w-1", "index": 1, "name": "build", "active_pane": b_or_c,
+                 "panes": [pane("p-b", 11), pane("p-c", 12)]},
+            ]
+        })
+    }
+
+    /// Step 21: the window shows the Terminal's active pane and follows the Host's selection
+    /// (detach the old pane, attach the new one; nothing ends), also when the shown pane's
+    /// program ends while others run; the title names the window and pane.
+    #[test]
+    fn the_window_follows_the_hosts_window_and_pane_selection() {
+        let mut m = Model::new(Want::Any, (80, 24));
+        let fx = connect_with(&mut m, json!([multi(1, "p-b")]));
+        let t = m.tabs()[0].clone();
+        assert_eq!(t.active_pane.as_deref(), Some("p-b"));
+        assert_eq!(
+            t.place.as_deref(),
+            Some("window 1:build pane 0 (2 windows, 3 panes)")
+        );
+        let (id, _, p) = sent(&fx)
+            .into_iter()
+            .find(|(_, method, _)| method == "pane.attach")
+            .unwrap();
+        assert_eq!(
+            p["target"], "t-1",
+            "a Terminal target: the Host gives its active pane"
+        );
+        let mut r = attach_result(11, "t-1", 11);
+        r["pane_id"] = json!("p-b");
+        respond(&mut m, id, r);
+        assert_eq!(m.phase.name(), "attached");
+        // Another client selects window 0: a list, then a detach of p-b and an attach.
+        let fx = event(
+            &mut m,
+            "window.selected",
+            json!({"terminal_id": "t-1", "window_id": "w-0", "pane_id": "p-a"}),
+        );
+        assert_eq!(methods(&fx), ["terminal.list"]);
+        let fx = respond(
+            &mut m,
+            id_of(&fx, "terminal.list"),
+            json!({"terminals": [multi(0, "p-b")]}),
+        );
+        assert_eq!(methods(&fx), ["pane.detach", "pane.attach"]);
+        for (_, method, _) in sent(&fx) {
+            assert!(!method.starts_with("terminal.") && !method.ends_with(".kill"));
+        }
+        let mut r = attach_result(10, "t-1", 10);
+        r["pane_id"] = json!("p-a");
+        respond(&mut m, id_of(&fx, "pane.attach"), r);
+        assert!(matches!(&m.phase, Phase::Attached { pane_id, .. } if pane_id == "p-a"));
+        // An event of another Terminal changes nothing here.
+        let fx = event(
+            &mut m,
+            "pane.selected",
+            json!({"terminal_id": "t-9", "window_id": "w-9", "pane_id": "p-9"}),
+        );
+        assert!(fx.is_empty(), "{fx:?}");
+        // The same selection again: a list, no reattach.
+        let fx = event(
+            &mut m,
+            "pane.created",
+            json!({"terminal_id": "t-1", "window_id": "w-1", "pane": {}}),
+        );
+        let fx = respond(
+            &mut m,
+            id_of(&fx, "terminal.list"),
+            json!({"terminals": [multi(0, "p-c")]}),
+        );
+        assert!(!methods(&fx).contains(&"pane.attach".to_string()));
+        // The shown pane's program ends while others run: the next active pane is shown.
+        event(
+            &mut m,
+            "pane.exited",
+            json!({"terminal_id": "t-1", "pane_id": "p-a", "exit_code": 0}),
+        );
+        assert_eq!(m.phase.name(), "ended");
+        let fx = event(
+            &mut m,
+            "pane.removed",
+            json!({"terminal_id": "t-1", "window_id": "w-0", "pane_id": "p-a", "reason": "exited"}),
+        );
+        let mut after = multi(1, "p-c");
+        after["windows"].as_array_mut().unwrap().remove(0);
+        let fx = respond(
+            &mut m,
+            id_of(&fx, "terminal.list"),
+            json!({"terminals": [after]}),
+        );
+        assert_eq!(methods(&fx), ["pane.attach"]);
+        assert_eq!(m.phase.name(), "attaching");
+        assert_eq!(
+            m.terminal().unwrap().place.as_deref(),
+            Some("window 1:build pane 0 (1 window, 2 panes)")
+        );
     }
 
     #[test]

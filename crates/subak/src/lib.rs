@@ -6,7 +6,7 @@
 //! supervisor and IPC v1** (Step 09, ADR 0019, docs/contracts/IPC_PROTOCOL.md), the **Terminal
 //! session lifecycle** (Step 10, ADR 0020, docs/SESSION_MODEL.md) and the **Subak CLI** (Step 12,
 //! ADR 0027, docs/SUBAK_CLI.md): a detached per-user Host owns any number of named Terminals, each
-//! with one window and one pane in its own pseudo console and job, and the tmux-familiar verbs
+//! with internal windows and panes (Step 21), each pane in its own pseudo console and job, and the tmux-familiar verbs
 //! `subak new|ls|info|status|attach|detach|rename|stop|kill|rm` manage them headlessly. The Host
 //! serves an identity-checked named pipe, starts on demand under a start lock, and exits after an
 //! idle grace period. Since Step 13 (ADR 0030, docs/SCROLLBACK.md) the Host models each pane's
@@ -92,6 +92,19 @@ USAGE:
                   [--no-redact] [--json]                     (also: subak capture-pane)
     subak history [<target>] [--json]
     subak clear-history [<target>] [--yes] [--dry-run] [--json]
+    subak window new <terminal> [--name <name>] [--no-select] [--cwd <dir>] [--env ...]
+                  [--size <cols>x<rows>] [--history-limit <lines>] [--dry-run] [--json]
+                  [-- <program> [args...] | --command-line <line>]   (also: subak new-window)
+    subak window ls <terminal> [--json]                      (also: subak list-windows)
+    subak window select <window> [--dry-run] [--json]        (also: subak select-window)
+    subak window rename <window> <name> [--dry-run] [--json] (also: subak rename-window)
+    subak window kill <window> [--yes] [--dry-run] [--json]  (also: subak kill-window)
+    subak pane new <terminal|window> [--no-select] [--cwd <dir>] [--env ...] [--size ...]
+                  [--history-limit <lines>] [--dry-run] [--json] [-- <program> [args...] |
+                  --command-line <line>]
+    subak pane ls <terminal|window> [--json]                 (also: subak list-panes)
+    subak pane select <pane> [--dry-run] [--json]            (also: subak select-pane)
+    subak pane kill <pane> [--yes] [--dry-run] [--json]      (also: subak kill-pane)
     subak host start  [--shell <command> | --no-shell] [--idle-exit <secs>] [--dry-run] [--json]
     subak host status [--json]
     subak host health [--json]
@@ -118,9 +131,11 @@ USAGE:
     stop|kill|rm` is the deprecated Step 10 spelling of the same commands (a warning says so).
 
 TERMINALS (Windows only; docs/SUBAK_CLI.md, docs/SESSION_MODEL.md):
-    A Terminal is a named workspace in the Host with a stable id (t-...), one window and one pane
-    (Steps 21-22 add more). Each pane runs in its own pseudo console and kill-on-close job, so
-    Terminals never share processes. <target> is a Terminal name (exact; case is ignored) or id.
+    A Terminal is a named workspace in the Host with a stable id (t-...) holding internal
+    windows (w-...), each with panes (p-...); a GUI tab is a Terminal, not a window. Each pane
+    runs in its own pseudo console and kill-on-close job, so panes never share processes.
+    <target> is a Terminal name (exact; case is ignored) or id; where a window or pane is meant,
+    <terminal>:<window>[.<pane>] (window: index, name or w- id; pane: index or p- id) or an id.
     new      Create a Terminal running <program> (default: %ComSpec%) in your profile folder or
              --cwd, detached (--attach attaches at once). Without a name it gets the lowest free
              number. Starts a Host if none runs (--no-start fails with `host_not_running`
@@ -139,7 +154,7 @@ TERMINALS (Windows only; docs/SUBAK_CLI.md, docs/SESSION_MODEL.md):
     ls       Every Terminal with its state, pid and clients. Starts nothing.
     status   The Host (or that none runs), every Terminal and every client. Starts nothing;
              exits 0 also without a Host.
-    info     One Terminal with its window and pane; exit 3 (`target_not_found`) if none.
+    info     One Terminal with its windows and panes; exit 3 (`target_not_found`) if none.
     attach   Connect this terminal to a Terminal's pane (without <target>: the only running
              one). Detaching or closing this window never stops anything (see ATTACH).
     detach   Detach every client of <target>, or the client --client <id> (ids: `subak status`),
@@ -156,6 +171,22 @@ TERMINALS (Windows only; docs/SUBAK_CLI.md, docs/SESSION_MODEL.md):
     kill and rm remove it. A Terminal whose program exits by itself is removed, unless it was
     created with --remain-on-exit (then `stopped`). Until Step 29 nothing is saved: Terminals
     end with their Host, and stopped ones vanish when the Host exits.
+
+WINDOWS AND PANES (docs/SESSION_MODEL.md §3, ADR 0054; splits and layouts are Step 22):
+    window new   A new internal window of a running Terminal, at the lowest free index, with
+             one pane running <program> (default: %ComSpec%); named after the program unless
+             --name. It becomes the active window for every client unless --no-select.
+    pane new     A new pane with its own process in a window (a Terminal target: its active
+             window). Until Step 22 a window shows one pane, its active one.
+    window ls, pane ls   The windows, or the panes with pids and programs; * marks the active.
+    window select, pane select   The active window or pane, the same for every client (the
+             window follows it); no process changes.
+    window rename   A window's name (need not be unique; not only digits).
+    window kill, pane kill   End that window's or pane's processes at once and remove it; asks,
+             or needs --yes; ends exactly the confirmed id; every other pane keeps running. The
+             last running window or pane of a Terminal is refused: `kill` ends a Terminal.
+    A pane whose program exits leaves its window (the window goes with its last pane); the
+    exit of a Terminal's last running pane ends the Terminal as before.
 
 SCROLLBACK (docs/SCROLLBACK.md):
     The Host keeps each pane's screen and the rows that scrolled off its top (its history), in
@@ -445,6 +476,15 @@ fn run_host(cmd: Cmd, a: &Args) -> Result<Value, CliError> {
         Cmd::Capture => terminal::capture(a, &endpoint),
         Cmd::History => terminal::history(a, &endpoint),
         Cmd::ClearHistory => terminal::clear_history(a, &endpoint),
+        Cmd::WindowNew => terminal::create_in(a, &endpoint, true),
+        Cmd::PaneNew => terminal::create_in(a, &endpoint, false),
+        Cmd::WindowLs => terminal::topology(a, &endpoint, false),
+        Cmd::PaneLs => terminal::topology(a, &endpoint, true),
+        Cmd::WindowSelect => terminal::select(a, &endpoint, false),
+        Cmd::PaneSelect => terminal::select(a, &endpoint, true),
+        Cmd::WindowRename => terminal::window_rename(a, &endpoint),
+        Cmd::WindowKill => terminal::close(a, &endpoint, true),
+        Cmd::PaneKill => terminal::close(a, &endpoint, false),
         // Help, version, capabilities and the portable `hotkeys` commands run elsewhere.
         _ => Err(CliError::new(Code::Internal, "not a host command")),
     }
@@ -537,6 +577,62 @@ fn table(list: &[Value]) -> Option<String> {
         s.push('\n');
     }
     Some(s)
+}
+
+/// The windows (and with `panes` every pane) of `window ls` / `pane ls`; `*` marks the active
+/// window and each window's active pane.
+fn topology_table(d: &Value, panes: bool) -> String {
+    let active = &d["active_window"];
+    let mut s = if panes {
+        format!(
+            "{:<8}  {:<14}  {:>7}  {:<8}  PROGRAM\n",
+            "PANE", "ID", "PID", "STATE"
+        )
+    } else {
+        format!(
+            "{:<4}  {:<20}  {:<14}  {:>5}  ACTIVE PANE\n",
+            "#", "NAME", "ID", "PANES"
+        )
+    };
+    for w in d["windows"].as_array().map_or(&[][..], Vec::as_slice) {
+        let mark = if w["id"] == *active { "*" } else { " " };
+        let ps = w["panes"].as_array().map_or(&[][..], Vec::as_slice);
+        if !panes {
+            s.push_str(&format!(
+                "{:<4}  {:<20}  {:<14}  {:>5}  {}\n",
+                format!("{}{mark}", w["index"]),
+                text(&w["name"]),
+                text(&w["id"]),
+                ps.len(),
+                text(&w["active_pane"]),
+            ));
+            continue;
+        }
+        for p in ps {
+            let pm = if p["id"] == w["active_pane"] {
+                "*"
+            } else {
+                " "
+            };
+            s.push_str(&format!(
+                "{:<8}  {:<14}  {:>7}  {:<8}  {}\n",
+                format!("{}.{}{pm}", w["index"], p["index"]),
+                text(&p["id"]),
+                if p["pid"].is_null() {
+                    "-".into()
+                } else {
+                    text(&p["pid"])
+                },
+                if p["running"] == true {
+                    "running"
+                } else {
+                    "ended"
+                },
+                text(&p["command"]["program"]),
+            ));
+        }
+    }
+    s.trim_end().to_string()
 }
 
 /// An exit status as shown to people: NTSTATUS-like values (≥ 0x80000000, e.g. `0xC000013A`
@@ -1041,6 +1137,83 @@ fn human(cmd: Cmd, d: &Value, a: &Args) {
             bytes_text(&d["cleared_bytes"]),
             text(&d["name"]),
         ),
+        Cmd::WindowNew | Cmd::PaneNew => {
+            let w = &d["window"];
+            let pane = w["panes"]
+                .as_array()
+                .and_then(|ps| ps.iter().find(|p| p["id"] == d["pane_id"]))
+                .cloned()
+                .unwrap_or(Value::Null);
+            writeln!(
+                out,
+                "{} {}:{}.{} ({} {}, pid {}){}",
+                if cmd == Cmd::WindowNew {
+                    "created window"
+                } else {
+                    "created pane"
+                },
+                w["index"],
+                text(&w["name"]),
+                pane["index"],
+                text(&d["window_id"]),
+                text(&d["pane_id"]),
+                text(&pane["pid"]),
+                if d["selected"] == true {
+                    "; it is now the active one"
+                } else {
+                    ""
+                },
+            )
+        }
+        Cmd::WindowLs | Cmd::PaneLs => {
+            let _ = writeln!(
+                out,
+                "Terminal `{}` ({}), {}",
+                text(&d["name"]),
+                text(&d["terminal_id"]),
+                text(&d["state"])
+            );
+            writeln!(out, "{}", topology_table(d, cmd == Cmd::PaneLs))
+        }
+        Cmd::WindowSelect | Cmd::PaneSelect => writeln!(
+            out,
+            "{} window {} pane {} of Terminal {}",
+            if d["changed"] == true {
+                "selected"
+            } else {
+                "already selected:"
+            },
+            text(&d["window_id"]),
+            text(&d["pane_id"]),
+            text(&d["terminal_id"]),
+        ),
+        Cmd::WindowRename => writeln!(
+            out,
+            "window {} renamed: `{}` -> `{}`",
+            text(&d["window_id"]),
+            text(&d["previous_name"]),
+            text(&d["name"]),
+        ),
+        Cmd::WindowKill | Cmd::PaneKill => {
+            let ended: Vec<String> = d["affected"]
+                .as_array()
+                .map(|v| v.iter().map(ended).collect())
+                .unwrap_or_default();
+            writeln!(
+                out,
+                "{}{}; every other pane keeps running",
+                if ended.is_empty() {
+                    "nothing was running".to_string()
+                } else {
+                    ended.join("; ")
+                },
+                if d["window_removed"] == true {
+                    format!("; window {} removed", text(&d["window_id"]))
+                } else {
+                    String::new()
+                },
+            )
+        }
         _ => Ok(()),
     };
 }

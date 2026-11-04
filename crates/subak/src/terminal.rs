@@ -496,6 +496,110 @@ pub fn clear_history(a: &Args, endpoint: &str) -> Result<Value, CliError> {
 }
 
 /// `rename <target> <new name>`.
+/// `window new <terminal>` and `pane new <terminal|window>` (Step 21, ADR 0054): a new internal
+/// window with one pane, or a new pane in a window, of a running Terminal. Never starts a Host
+/// (a window needs a Terminal), never ends anything.
+pub fn create_in(a: &Args, endpoint: &str, window: bool) -> Result<Value, CliError> {
+    let command = match a.command.split_first() {
+        Some((program, args)) => json!({"program": program, "args": args}),
+        None => Value::Null,
+    };
+    let params = json!({
+        "target": target(a),
+        "name": a.name,
+        "command": command,
+        "command_line": a.command_line,
+        "cwd": a.cwd,
+        "env": env_param(a)?,
+        "size": size_json(a),
+        "history_limit": a.history_limit,
+        "select": !a.no_select,
+        "dry_run": a.dry_run,
+    });
+    let method = if window {
+        "window.create"
+    } else {
+        "pane.create"
+    };
+    require(endpoint)?.request_within(method, &params, CREATE_TIMEOUT)
+}
+
+/// `window ls <terminal>` and `pane ls <terminal|window>`.
+pub fn topology(a: &Args, endpoint: &str, panes: bool) -> Result<Value, CliError> {
+    let method = if panes { "pane.list" } else { "window.list" };
+    require(endpoint)?.request(method, &json!({"target": target(a)}))
+}
+
+/// `window select <window>` and `pane select <pane>`: the active window or pane every client
+/// sees. No process changes.
+pub fn select(a: &Args, endpoint: &str, pane: bool) -> Result<Value, CliError> {
+    let method = if pane { "pane.select" } else { "window.select" };
+    require(endpoint)?.request(method, &json!({"target": target(a), "dry_run": a.dry_run}))
+}
+
+/// `window rename <window> <name>`.
+pub fn window_rename(a: &Args, endpoint: &str) -> Result<Value, CliError> {
+    let name = a.positional.get(1).map_or("", String::as_str);
+    require(endpoint)?.request(
+        "window.rename",
+        &json!({"target": target(a), "name": name, "dry_run": a.dry_run}),
+    )
+}
+
+/// `window kill <window>` and `pane kill <pane>`: shows the plan with `--dry-run`; otherwise
+/// asks (or needs `--yes`), then ends exactly the confirmed window or pane **by id**, so a
+/// renumbered index can never redirect it. The Host refuses the last running window or pane of
+/// a Terminal: `subak kill <terminal>` ends a Terminal.
+pub fn close(a: &Args, endpoint: &str, window: bool) -> Result<Value, CliError> {
+    let method = if window { "window.kill" } else { "pane.kill" };
+    let mut s = require(endpoint)?;
+    let plan = s.request(
+        method,
+        &json!({"target": target(a), "dry_run": true, "force": true}),
+    )?;
+    if a.dry_run {
+        return Ok(plan);
+    }
+    let p = &plan["would_kill"];
+    let panes = p["panes"].as_array().map_or(&[][..], Vec::as_slice);
+    let what = format!(
+        "{} pane(s) with {} process(es) ({})",
+        panes.len(),
+        p["processes"],
+        panes
+            .iter()
+            .map(|x| format!("pid {} {}", x["pid"], x["program"].as_str().unwrap_or("?")))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    let (kind, id) = if window {
+        ("window", p["window_id"].as_str().unwrap_or("?").to_string())
+    } else {
+        (
+            "pane",
+            panes
+                .first()
+                .and_then(|x| x["pane_id"].as_str())
+                .unwrap_or("?")
+                .to_string(),
+        )
+    };
+    let name = p["name"].as_str().unwrap_or("?");
+    confirm(
+        a,
+        &format!(
+            "End {what} of {kind} {id} in Terminal `{name}` now? Every other pane keeps running."
+        ),
+        &format!("this ends {what} of {kind} {id} in Terminal `{name}` at once"),
+        "re-run with --yes, or with --dry-run to see what would end",
+    )?;
+    s.request_within(
+        method,
+        &json!({"target": id, "force": true, "dry_run": false}),
+        client::STOP_TIMEOUT,
+    )
+}
+
 pub fn rename(a: &Args, endpoint: &str) -> Result<Value, CliError> {
     let name = a.positional.get(1).map_or("", String::as_str);
     require(endpoint)?.request(

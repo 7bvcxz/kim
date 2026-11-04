@@ -1,6 +1,6 @@
 # The Subak window (`subak-gui`)
 
-Status: **current** (implemented, Steps 16–20; the visible-window checks of §9, the
+Status: **current** (implemented, Steps 16–20; following internal windows and panes, Step 21; the visible-window checks of §9, the
 visible-icon and real-tray checks of §11.9, the real-clipboard, browser and dialog checks of
 §12.9 and the visible settings, theme and motion checks of §13.9 are pending the maintainer) ·
 Decisions:
@@ -94,6 +94,17 @@ only hide the tab (ADR 0009) is `subak hotkeys set tab.hide Ctrl+W --replace`.
 
 A Host stops its Terminals' programs when it ends (ADR 0003), so a reconnect after a Host crash
 finds new Terminals at most; restoring them is Steps 29–31.
+
+**Internal windows and panes (Step 21, [ADR 0054](adr/0054-subak-internal-windows-and-panes.md)).**
+A tab is a Terminal, never an internal window. When a Terminal has several internal windows or
+panes (`subak window new`, `subak pane new`), its tab shows the **active window's active pane** —
+the Host's selection, the same for every client — and the title names it, e.g. `work [window
+1:logs pane 1 (2 windows, 3 panes)] — Subak`. When the selection changes (`subak window select`,
+`subak pane select`, another client, or the shown pane's program ending while others run), the
+window detaches that pane and attaches the newly active one; nothing ends, and closing the window
+still only detaches every pane. This is deliberately minimal: there are no keys or menu items to
+switch windows or panes yet (the `Ctrl+B` prefix table, Step 23), no split view (Step 22), and the
+tab bar does not list windows (a status line, Step 25).
 
 ## 3. Keyboard, IME and mouse
 
@@ -373,6 +384,8 @@ maintainer's. Build first: `cargo build --release -p subak` (both binaries land 
 | `e2e/tests/step17_subak_tabs.rs` (ignored; `cargo xtask e2e` only) | tabs following CLI new/rename/kill, `Ctrl+Tab` switching with input to the shown tab only; `Ctrl+T`, `Ctrl+W` asking before ending a busy Terminal (Esc keeps it, consent ends only it), the window X only detaching |
 | Step 18 | the floating icon and Terminal manager: §11.10 |
 | Step 19 | search, selection, the clipboard, links and saving output: §12.10 |
+| `gui_window.rs::the_window_follows_internal_windows_and_panes_and_closing_ends_none` and the model test `the_window_follows_the_hosts_window_and_pane_selection` (Step 21) | the off-screen window shows the active pane of a Terminal with 2 windows and 3 panes, names it in the title, follows window and pane selections made by the CLI (detach and attach only), types into the shown pane only, follows a pane exit to the next active pane; closing the window keeps all 3 pane processes |
+| `crates/subak/src/gui/keystate.rs` unit test (Step 21) | the off-screen test window and floating UI read **no real key state**: a Shift, Ctrl or Alt held on the machine (by the user, or by another test's synthesized input) cannot turn a test's Menu key into `Ctrl+Menu`, as it did once in Step 20's merge gate. A real window still reads `GetKeyState` as before; under the test mode modifiers come only from what the test sends (the `key` command, `MK_SHIFT`/`MK_CONTROL` of a mouse message, the Alt context bit of a posted `WM_SYSKEYDOWN`/`WM_SYSCHAR`). Checked with modifiers set in the test thread's own key table (`SetKeyboardState`, which synthesizes no input) |
 
 ## 11. The floating icon, tray icon and Terminal manager (Step 18)
 

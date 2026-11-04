@@ -6,8 +6,12 @@
 //! consoles, jobs, threads, output rings) next to this model, keyed by pane id; this module decides
 //! names, ids, targets and which state follows which.
 //!
-//! Every Terminal has exactly one Window with exactly one Pane until Steps 21–22 add more; the
-//! model already has the three levels, so ids and targets do not change when they arrive.
+//! Since Step 21 (ADR 0054) a Terminal holds any number of internal Windows, each with any
+//! number of Panes, and each Pane runs its own process. Windows keep their index (the lowest free
+//! one is taken by a new window, as tmux does); pane indexes stay contiguous within their window
+//! (tmux renumbers them too). The active window of a Terminal and the active pane of each window
+//! are Host state, shared by every client. Until Step 22 adds splits, a window shows one pane: its
+//! active one.
 
 use crate::proto::{ErrorCode, IpcError};
 use crate::pty::EnvNames;
@@ -111,6 +115,22 @@ pub fn parse_name(raw: &str) -> Result<Name, IpcError> {
     }
     let key = name_key(&display);
     Ok(Name { display, key })
+}
+
+/// Validates a window name (Step 21): the Terminal name rules (ADR 0007: 1–64 visible characters,
+/// no `:` or `.`, no leading `-`, nothing id-shaped), and not only digits, which a target reads
+/// as an index. Window names need not be unique (tmux semantics); the case typed is kept.
+pub fn parse_window_name(raw: &str) -> Result<String, IpcError> {
+    let n = parse_name(raw).map_err(|mut e| {
+        e.message = e.message.replace("a Terminal name", "a window name");
+        e
+    })?;
+    if n.display.chars().all(|c| c.is_ascii_digit()) {
+        return Err(invalid_name(
+            "a window name must not be only digits (a target reads them as the window's index)",
+        ));
+    }
+    Ok(n.display)
 }
 
 /// The lifecycle state of a Terminal (docs/SESSION_MODEL.md §2).
@@ -403,6 +423,132 @@ impl Terminal {
     pub fn panes(&self) -> impl Iterator<Item = &Pane> {
         self.windows.iter().flat_map(|w| w.panes.iter())
     }
+
+    /// The pane with `pane_id`, wherever it is.
+    pub fn pane_mut(&mut self, pane_id: &str) -> Option<&mut Pane> {
+        self.windows
+            .iter_mut()
+            .flat_map(|w| w.panes.iter_mut())
+            .find(|p| p.id == pane_id)
+    }
+
+    /// The position of the window with `window_id`.
+    pub fn window_pos(&self, window_id: &str) -> Option<usize> {
+        self.windows.iter().position(|w| w.id == window_id)
+    }
+
+    /// The lowest window index no window uses (tmux `new-window` without `-t`).
+    pub fn free_window_index(&self) -> usize {
+        (0..)
+            .find(|i| !self.windows.iter().any(|w| w.index == *i))
+            .unwrap_or(0)
+    }
+
+    /// Adds a window in index order (windows are listed by index, as tmux lists them), keeping the
+    /// active window. Returns its position.
+    pub fn insert_window(&mut self, w: Window) -> usize {
+        let pos = self
+            .windows
+            .iter()
+            .position(|x| x.index > w.index)
+            .unwrap_or(self.windows.len());
+        self.windows.insert(pos, w);
+        if pos <= self.active_window && self.windows.len() > 1 {
+            self.active_window += 1;
+        }
+        pos
+    }
+
+    /// Adds a pane at the end of window `wi`, with the next index. Returns its position.
+    pub fn push_pane(&mut self, wi: usize, mut p: Pane) -> usize {
+        let w = &mut self.windows[wi];
+        p.index = w.panes.len();
+        w.panes.push(p);
+        w.panes.len() - 1
+    }
+
+    /// Makes window `wi` the active one; whether that changed anything.
+    pub fn select_window(&mut self, wi: usize) -> bool {
+        let changed = self.active_window != wi;
+        self.active_window = wi;
+        changed
+    }
+
+    /// Makes pane `pi` of window `wi` that window's active pane and the window the Terminal's
+    /// active one (tmux `select-pane` shows the pane). Returns (window changed, pane changed).
+    pub fn select_pane(&mut self, wi: usize, pi: usize) -> (bool, bool) {
+        let pane = self.windows[wi].active_pane != pi;
+        self.windows[wi].active_pane = pi;
+        (self.select_window(wi), pane)
+    }
+
+    /// Takes a pane out of the model (its process has ended). The last pane of a Terminal is
+    /// never taken out: a Terminal always has a window with a pane (it is removed, or kept as
+    /// `stopped`, by the state machine instead). A window that loses its last pane goes with it.
+    /// The pane indexes of its window are renumbered (tmux); when the active pane or window goes,
+    /// its neighbour (the next one, else the previous one) becomes active.
+    pub fn remove_pane(&mut self, pane_id: &str) -> Option<Removal> {
+        if self.panes().count() < 2 {
+            return None;
+        }
+        let wi = self
+            .windows
+            .iter()
+            .position(|w| w.panes.iter().any(|p| p.id == pane_id))?;
+        let before = (
+            self.windows[self.active_window].id.clone(),
+            self.active_pane().id.clone(),
+        );
+        let window_id = self.windows[wi].id.clone();
+        let w = &mut self.windows[wi];
+        let pi = w.panes.iter().position(|p| p.id == pane_id)?;
+        w.panes.remove(pi);
+        let window_removed = w.panes.is_empty();
+        if window_removed {
+            self.windows.remove(wi);
+            if self.active_window > wi || self.active_window >= self.windows.len() {
+                self.active_window = self.active_window.saturating_sub(1);
+            }
+        } else {
+            for (i, p) in w.panes.iter_mut().enumerate() {
+                p.index = i;
+            }
+            if w.active_pane > pi || w.active_pane >= w.panes.len() {
+                w.active_pane = w.active_pane.saturating_sub(1);
+            }
+        }
+        let after_window = self.windows[self.active_window].id.clone();
+        let after_pane = self.active_pane().id.clone();
+        // A window that stays but lost its active pane has a new one, even when it is not shown.
+        let window_pane = (!window_removed)
+            .then(|| {
+                let w = &self.windows[self.window_pos(&window_id)?];
+                (w.id != after_window).then(|| w.panes[w.active_pane].id.clone())
+            })
+            .flatten();
+        Some(Removal {
+            window_id,
+            window_removed,
+            window_changed: before.0 != after_window,
+            pane_changed: before.1 != after_pane,
+            window_pane,
+        })
+    }
+}
+
+/// What taking a pane out of a Terminal changed ([`Terminal::remove_pane`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Removal {
+    /// The window the pane was in.
+    pub window_id: String,
+    /// That window lost its last pane and went too.
+    pub window_removed: bool,
+    /// The Terminal's active window changed.
+    pub window_changed: bool,
+    /// The Terminal's active pane changed.
+    pub pane_changed: bool,
+    /// The new active pane of the pane's window when that window stays but is not the active one.
+    pub window_pane: Option<String>,
 }
 
 /// What the Host knows about a pane's processes and clients right now (volatile, never stored).
@@ -483,6 +629,12 @@ impl Registry {
         }
     }
 
+    /// A fresh data-stream id for a new pane (unique in the Host).
+    pub fn alloc_stream(&mut self) -> u32 {
+        self.next_stream += 1;
+        self.next_stream
+    }
+
     #[cfg(test)]
     pub fn issued(&self, id: &str) -> bool {
         self.issued.contains(id)
@@ -543,7 +695,7 @@ impl Registry {
         let tid = self.issue_id('t', &mut random);
         let wid = self.issue_id('w', &mut random);
         let pid = self.issue_id('p', &mut random);
-        self.next_stream += 1;
+        let stream = self.alloc_stream();
         let window_name = window_name(&spec.command.program);
         self.terminals.push(Terminal {
             id: tid,
@@ -565,7 +717,7 @@ impl Registry {
                     executable: None,
                     env: spec.env,
                     size: spec.size,
-                    stream: self.next_stream,
+                    stream,
                     pid: None,
                     history_limit: spec.history_limit,
                 }],
@@ -783,45 +935,7 @@ pub fn terminal_json(t: &Terminal, live: &dyn Fn(&Pane) -> Live) -> Value {
     let windows: Vec<Value> = t
         .windows
         .iter()
-        .map(|w| {
-            let panes: Vec<Value> = w
-                .panes
-                .iter()
-                .map(|p| {
-                    let l = live(p);
-                    clients += l.clients;
-                    let running = t.state.is_live() && l.running;
-                    busy |= running && self::busy(&p.command.program, l.processes);
-                    json!({
-                        "id": p.id,
-                        "index": p.index,
-                        "cwd": p.cwd,
-                        "command": command_json(&p.command),
-                        "command_line": p.command_line.as_deref().map(redact::command_line),
-                        "executable": p.executable,
-                        "env": env_json(&p.env),
-                        "title": Value::Null,
-                        "stream_id": p.stream,
-                        "pid": p.pid.filter(|_| running),
-                        "running": running,
-                        "processes": if running { l.processes } else { 0 },
-                        "size": {"cols": p.size.0, "rows": p.size.1},
-                        "clients": l.clients,
-                        "output_bytes": l.output_bytes,
-                        "history": l.history.as_ref().map(history_json),
-                    })
-                })
-                .collect();
-            json!({
-                "id": w.id,
-                "index": w.index,
-                "name": w.name,
-                "automatic_name": w.automatic_name,
-                "active_pane": w.panes[w.active_pane].id,
-                "layout": {"type": "pane", "pane": w.panes[w.active_pane].id},
-                "panes": panes,
-            })
-        })
+        .map(|w| window_json(t, w, live, &mut clients, &mut busy))
         .collect();
     json!({
         "id": t.id,
@@ -843,18 +957,78 @@ pub fn terminal_json(t: &Terminal, live: &dyn Fn(&Pane) -> Live) -> Value {
     })
 }
 
+/// The `Window` object of IPC v1 (in a Terminal object, `window.list`, `window.created`). Until
+/// Step 22 adds splits, `layout` is one pane: the window's active one. `clients` and `busy` add
+/// up the window's panes.
+pub fn window_json(
+    t: &Terminal,
+    w: &Window,
+    live: &dyn Fn(&Pane) -> Live,
+    clients: &mut usize,
+    busy: &mut bool,
+) -> Value {
+    let panes: Vec<Value> = w
+        .panes
+        .iter()
+        .map(|p| {
+            let l = live(p);
+            *clients += l.clients;
+            *busy |= t.state.is_live() && l.running && self::busy(&p.command.program, l.processes);
+            pane_json(t, p, &l)
+        })
+        .collect();
+    json!({
+        "id": w.id,
+        "index": w.index,
+        "name": w.name,
+        "automatic_name": w.automatic_name,
+        "active_pane": w.panes[w.active_pane].id,
+        "layout": {"type": "pane", "pane": w.panes[w.active_pane].id},
+        "panes": panes,
+    })
+}
+
+/// The `Pane` object of IPC v1 (in a Window object, `pane.created`).
+pub fn pane_json(t: &Terminal, p: &Pane, l: &Live) -> Value {
+    let running = t.state.is_live() && l.running;
+    json!({
+        "id": p.id,
+        "index": p.index,
+        "cwd": p.cwd,
+        "command": command_json(&p.command),
+        "command_line": p.command_line.as_deref().map(redact::command_line),
+        "executable": p.executable,
+        "env": env_json(&p.env),
+        "title": Value::Null,
+        "stream_id": p.stream,
+        "pid": p.pid.filter(|_| running),
+        "running": running,
+        "processes": if running { l.processes } else { 0 },
+        "size": {"cols": p.size.0, "rows": p.size.1},
+        "clients": l.clients,
+        "output_bytes": l.output_bytes,
+        "history": l.history.as_ref().map(history_json),
+    })
+}
+
 /// The summary object of `terminal.list` (`detail: "summary"`).
 pub fn summary_json(t: &Terminal, live: &dyn Fn(&Pane) -> Live) -> Value {
     let p = t.active_pane();
     let l = live(p);
     let running = t.state.is_live() && l.running;
     let clients: usize = t.panes().map(|p| live(p).clients).sum();
+    // Busy when any pane runs more than an idle shell (Step 21: a Terminal has several).
+    let any_busy = t.state.is_live()
+        && t.panes().any(|p| {
+            let l = live(p);
+            l.running && busy(&p.command.program, l.processes)
+        });
     json!({
         "id": t.id,
         "name": t.name.display,
         "state": t.state.as_str(),
         "created_at": t.created_at,
-        "busy": running && busy(&p.command.program, l.processes),
+        "busy": any_busy,
         "clients": clients,
         "windows": t.windows.len(),
         "panes": t.panes().count(),
@@ -1124,6 +1298,133 @@ mod tests {
         let e = r.resolve("work:cmd").unwrap_err();
         assert_eq!(e.code, ErrorCode::AmbiguousTarget);
         assert_eq!(e.details["candidates"].as_array().unwrap().len(), 2);
+    }
+
+    fn pane(id: &str) -> Pane {
+        Pane {
+            id: id.into(),
+            index: 0,
+            command: Command {
+                program: "cmd.exe".into(),
+                args: vec![],
+            },
+            command_line: None,
+            cwd: None,
+            executable: None,
+            env: EnvNames::default(),
+            size: (80, 24),
+            stream: 9,
+            pid: None,
+            history_limit: 0,
+        }
+    }
+
+    fn window(id: &str, index: usize) -> Window {
+        Window {
+            id: id.into(),
+            index,
+            name: "w".into(),
+            automatic_name: true,
+            panes: Vec::new(),
+            active_pane: 0,
+        }
+    }
+
+    /// Step 21 (ADR 0054): windows take the lowest free index and are kept in index order, panes
+    /// are renumbered when one goes, the selection moves to a neighbour, and the last pane of a
+    /// Terminal is never taken out.
+    #[test]
+    fn windows_and_panes_keep_indexes_selection_and_the_last_pane() {
+        let mut r = Registry::default();
+        let mut g = ids();
+        let i = r
+            .reserve(spec(Some("work")), "2026-11-04T01:02:03Z".into(), &mut g)
+            .unwrap();
+        let t = &mut r.terminals[i];
+        let first = t.windows[0].id.clone();
+        assert_eq!(t.free_window_index(), 1);
+        for (id, index) in [("w-0000000000a1", 1), ("w-0000000000a2", 2)] {
+            let wi = t.insert_window(window(id, index));
+            t.push_pane(wi, pane(&format!("p-0000000000{index}0")));
+        }
+        assert_eq!(t.active_window, 0, "inserting does not select");
+        let wi = t.window_pos("w-0000000000a1").unwrap();
+        t.push_pane(wi, pane("p-000000000011"));
+        t.push_pane(wi, pane("p-000000000012"));
+        let idx: Vec<usize> = t.windows[wi].panes.iter().map(|p| p.index).collect();
+        assert_eq!(idx, [0, 1, 2]);
+        assert_eq!(t.select_pane(wi, 2), (true, true));
+        assert_eq!(t.active_pane().id, "p-000000000012");
+        assert_eq!(t.select_pane(wi, 2), (false, false), "no change, no event");
+        // Taking out the middle pane renumbers; the active one keeps being active.
+        let rm = t.remove_pane("p-000000000011").unwrap();
+        assert!(!rm.window_removed && !rm.window_changed && !rm.pane_changed);
+        let idx: Vec<(&str, usize)> = t.windows[wi]
+            .panes
+            .iter()
+            .map(|p| (p.id.as_str(), p.index))
+            .collect();
+        assert_eq!(idx, [("p-000000000010", 0), ("p-000000000012", 1)]);
+        // Taking out the active pane selects its neighbour.
+        let rm = t.remove_pane("p-000000000012").unwrap();
+        assert!(rm.pane_changed && !rm.window_changed);
+        assert_eq!(t.active_pane().id, "p-000000000010");
+        // Taking out a window's last pane removes the window and selects a neighbour window.
+        let rm = t.remove_pane("p-000000000010").unwrap();
+        assert!(rm.window_removed && rm.window_changed);
+        assert_eq!(t.windows.len(), 2);
+        assert_eq!(t.windows[t.active_window].id, "w-0000000000a2");
+        // The freed index 1 is reused, in index order.
+        assert_eq!(t.free_window_index(), 1);
+        let pos = t.insert_window(window("w-0000000000a3", 1));
+        assert_eq!(pos, 1);
+        assert_eq!(
+            t.windows[t.active_window].id, "w-0000000000a2",
+            "still active"
+        );
+        t.push_pane(pos, pane("p-000000000030"));
+        // A pane of a window that is not shown: that window gets a new active pane, reported.
+        t.push_pane(pos, pane("p-000000000031"));
+        t.windows[pos].active_pane = 1;
+        let rm = t.remove_pane("p-000000000031").unwrap();
+        assert_eq!(rm.window_pane.as_deref(), Some("p-000000000030"));
+        assert!(!rm.window_changed && !rm.pane_changed);
+        // Down to one pane: it is never taken out.
+        t.remove_pane("p-000000000030").unwrap();
+        t.remove_pane("p-000000000020").unwrap();
+        assert_eq!(t.panes().count(), 1);
+        assert_eq!(t.windows[0].id, first);
+        let last = t.active_pane().id.clone();
+        assert!(t.remove_pane(&last).is_none());
+        assert_eq!(t.panes().count(), 1);
+        // Window names: the Terminal rules, and not only digits (an index).
+        assert_eq!(parse_window_name(" logs ").unwrap(), "logs");
+        assert_eq!(parse_window_name("빌드").unwrap(), "빌드");
+        for bad in [
+            "",
+            "1",
+            "042",
+            "a:b",
+            "a.b",
+            "-x",
+            "w-000000000001",
+            "tab\there",
+        ] {
+            assert_eq!(
+                parse_window_name(bad).unwrap_err().code,
+                ErrorCode::InvalidName,
+                "{bad:?}"
+            );
+        }
+        // The objects of several windows and panes are valid IPC v1.
+        let live = |_: &Pane| Live::default();
+        let t = &r.terminals[i];
+        crate::proto::assert_ipc_def("terminal", &terminal_json(t, &live));
+        let (mut c, mut b) = (0, false);
+        let w = window_json(t, &t.windows[0], &live, &mut c, &mut b);
+        crate::proto::assert_ipc_def("window", &w);
+        let p = pane_json(t, t.active_pane(), &Live::default());
+        crate::proto::assert_ipc_def("pane", &p);
     }
 
     #[test]

@@ -6,7 +6,7 @@
   "cli_contract": 1,
   "json_schema_version": 1,
   "implementation": "implemented",
-  "summary": "Pre-alpha: per-user Host with IPC v1, named Terminals (new, ls, attach, rename, kill, capture…), the tabbed window subak-gui, its hotkeys, settings and shell profiles; no splits or recovery yet",
+  "summary": "Pre-alpha: per-user Host with IPC v1, named Terminals (new, ls, attach, rename, kill, capture…), windows and panes, subak-gui tabs, hotkeys, settings and profiles; no split layouts or recovery yet",
   "commands": [
     {
       "name": "capabilities",
@@ -376,6 +376,96 @@
       "network": false,
       "dry_run": false,
       "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "window.new",
+      "usage": "subak window new <terminal> [--name <name>] [--no-select] [--cwd <dir>] [--env NAME[=VALUE]]... [--unset-env NAME]... [--size <cols>x<rows>] [--history-limit <lines>] [--command-line <line> | -- <program> [args...]] [--dry-run] [--json]",
+      "summary": "A new internal window (tmux new-window) with one pane running its own process in a running Terminal; it becomes the active one unless --no-select",
+      "effect": "write",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "window.ls",
+      "usage": "subak window ls <terminal> [--json]",
+      "summary": "The internal windows of a Terminal with their panes and the active window (tmux list-windows)",
+      "effect": "read",
+      "network": false,
+      "dry_run": false,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "window.select",
+      "usage": "subak window select <terminal:window | w-id> [--dry-run] [--json]",
+      "summary": "Make a window the Terminal's active one for every client (tmux select-window); no process changes",
+      "effect": "write",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "window.rename",
+      "usage": "subak window rename <terminal:window | w-id> <name> [--dry-run] [--json]",
+      "summary": "Rename an internal window (names need not be unique; not only digits)",
+      "effect": "write",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "window.kill",
+      "usage": "subak window kill <terminal:window | w-id> [--dry-run] [--yes] [--json]",
+      "summary": "End the processes of one window's panes at once and remove the window; every other pane keeps running; the last window is refused (use kill)",
+      "effect": "destructive",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": true,
+      "opens_window": false
+    },
+    {
+      "name": "pane.new",
+      "usage": "subak pane new <terminal | terminal:window | w-id> [--no-select] [--cwd <dir>] [--env NAME[=VALUE]]... [--unset-env NAME]... [--size <cols>x<rows>] [--history-limit <lines>] [--command-line <line> | -- <program> [args...]] [--dry-run] [--json]",
+      "summary": "A new pane with its own process in a window (splitting into a layout is Step 22; a window shows its active pane)",
+      "effect": "write",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "pane.ls",
+      "usage": "subak pane ls <terminal | terminal:window | w-id> [--json]",
+      "summary": "The panes of a Terminal or of one window, with pids, programs and the active ones (tmux list-panes)",
+      "effect": "read",
+      "network": false,
+      "dry_run": false,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "pane.select",
+      "usage": "subak pane select <terminal:window.pane | p-id> [--dry-run] [--json]",
+      "summary": "Make a pane its window's active one and that window the Terminal's (tmux select-pane); no process changes",
+      "effect": "write",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "pane.kill",
+      "usage": "subak pane kill <terminal:window.pane | p-id> [--dry-run] [--yes] [--json]",
+      "summary": "End one pane's processes at once and remove it; every other pane keeps running; the last pane is refused (use kill)",
+      "effect": "destructive",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": true,
       "opens_window": false
     }
   ]

@@ -36,6 +36,7 @@ use super::{COPYDATA_MAX, COPYDATA_OPEN, FloatOptions};
 use crate::client::Identity;
 use crate::gui::Options;
 use crate::gui::keys::{self, Action, Matcher, Outcome, Press, Surface, vk};
+use crate::gui::keystate;
 use crate::gui::layout::{Rect, px};
 use crate::gui::net::{self, Inbox, Link, Msg};
 use crate::gui::screens::{Choice, tokens};
@@ -80,8 +81,8 @@ use windows_sys::Win32::UI::HiDpi::{
     SetProcessDpiAwarenessContext,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    EnableWindow, GetKeyState, ReleaseCapture, SetCapture, SetFocus, TME_LEAVE, TRACKMOUSEEVENT,
-    ToUnicode, TrackMouseEvent,
+    EnableWindow, ReleaseCapture, SetCapture, SetFocus, TME_LEAVE, TRACKMOUSEEVENT, ToUnicode,
+    TrackMouseEvent,
 };
 use windows_sys::Win32::UI::Shell::{
     NIF_ICON, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NIM_SETVERSION,
@@ -358,14 +359,10 @@ fn produced_char(vk_code: u32, scan: u32, shift: bool) -> Option<char> {
         .flatten()
 }
 
+/// Shift, Ctrl and Alt for the message being processed (none from the real keyboard in the
+/// off-screen test mode, [`keystate`]).
 fn held() -> Mods {
-    // SAFETY: reads this thread's keyboard state.
-    let down = |k: u32| unsafe { GetKeyState(k as i32) } < 0;
-    Mods {
-        shift: down(vk::SHIFT),
-        ctrl: down(vk::CONTROL),
-        alt: down(vk::MENU),
-    }
+    keystate::held()
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -3290,6 +3287,8 @@ pub fn run(o: Options) -> ExitCode {
     };
     let fo = o.float.clone().unwrap_or_default();
     let test = o.test;
+    // The off-screen test UI never has the keyboard: it reads no real key state.
+    keystate::ignore_real_keyboard(test);
     let test_monitors: Option<Vec<Monitor>> = test.then(|| {
         fo.test_monitors
             .clone()

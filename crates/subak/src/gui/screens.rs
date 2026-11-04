@@ -586,6 +586,8 @@ mod tests {
             pid: Some(1),
             program: "cmd.exe".into(),
             history_limit: 2000,
+            place: None,
+            active_pane: None,
         }
     }
 

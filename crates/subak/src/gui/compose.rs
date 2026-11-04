@@ -218,6 +218,8 @@ mod tests {
             pid: Some(pid),
             program: "cmd.exe".into(),
             history_limit: 2000,
+            place: None,
+            active_pane: None,
         }
     }
 

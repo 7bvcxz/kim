@@ -1,11 +1,12 @@
 # Subak session model
 
-Status: **current** (implemented in Step 10, pane programs and environment in Step 11, CLI verbs and detaching other clients in Step 12, pane screens and history in Step 13; Windows only) · Decisions:
+Status: **current** (implemented in Step 10, pane programs and environment in Step 11, CLI verbs and detaching other clients in Step 12, pane screens and history in Step 13, internal windows and panes in Step 21; Windows only) · Decisions:
 [ADR 0020](adr/0020-terminal-session-lifecycle.md), [ADR 0007](adr/0007-object-identity-and-naming.md),
 [ADR 0003](adr/0003-subak-host-process-model.md), [ADR 0004](adr/0004-pty-and-process-ownership.md),
 [ADR 0009](adr/0009-gui-clients-and-keyboard-dispatch.md), [ADR 0027](adr/0027-subak-cli-structure-and-headless-control.md),
-[ADR 0030](adr/0030-host-terminal-model-scrollback-and-replay.md) · Requirements: `SUBAK-FR-002`,
-`SUBAK-FR-003`, `SUBAK-FR-010`…`SUBAK-FR-016`, `SUBAK-SEC-001`
+[ADR 0030](adr/0030-host-terminal-model-scrollback-and-replay.md),
+[ADR 0054](adr/0054-subak-internal-windows-and-panes.md) · Requirements: `SUBAK-FR-002`,
+`SUBAK-FR-003`, `SUBAK-FR-010`…`SUBAK-FR-017`, `SUBAK-SEC-001`
 
 This document states what a Terminal is inside the Host, which states it goes through, how it is
 named and addressed, and what every action does to its processes. The wire format is in
@@ -21,14 +22,21 @@ Panes, and each Pane runs one root process with its descendants:
 | Object | Id | Human name | Owns |
 | --- | --- | --- | --- |
 | Terminal | `t-` + 12 lowercase hex | unique per Host (§3) | ≥ 1 Window; `remain_on_exit`; its lifecycle state |
-| Window | `w-` + 12 hex, index from 0 | automatic: the program's file name (`cmd`) | ≥ 1 Pane; layout; active pane |
-| Pane | `p-` + 12 hex, index from 0 | — | one pseudo console (ConPTY), one kill-on-close job, a terminal model with its screen and bounded history (Step 13, [SCROLLBACK](SCROLLBACK.md)), a data stream id; its program, environment and I-O: [PTY_PROCESSES](PTY_PROCESSES.md) |
+| Window | `w-` + 12 hex, index from 0 (the lowest free one; kept) | automatic: its first program's file name (`cmd`) until renamed; need not be unique (§3) | ≥ 1 Pane; layout (one pane, its active one, until Step 22); active pane |
+| Pane | `p-` + 12 hex, index from 0 (contiguous; renumbered when a pane goes) | — | one pseudo console (ConPTY), one kill-on-close job, a terminal model with its screen and bounded history (Step 13, [SCROLLBACK](SCROLLBACK.md)), a data stream id; its program, environment and I-O: [PTY_PROCESSES](PTY_PROCESSES.md) |
 
-- **Until Steps 21–22 every Terminal has exactly one Window with exactly one Pane.** The model,
-  the ids and the targets already have the three levels, so nothing changes for clients when
-  splits and more windows arrive.
+- **Windows and panes (Step 21, [ADR 0054](adr/0054-subak-internal-windows-and-panes.md)).** A
+  Terminal holds any number of internal windows (a window is *not* a GUI tab: a tab is a Terminal),
+  each with any number of panes, up to 64 panes per Terminal and 512 running panes per Host
+  (`busy` beyond). Every pane runs its own process under its own pseudo console and job. The
+  **active window** of a Terminal and the **active pane** of each window are the Host's, the same
+  for every client; a Terminal- or window-level target means the active pane. Until Step 22 adds
+  splits, a window's layout is one pane, its active one (a window shows one pane at a time). A
+  new Terminal still starts with one window and one pane.
 - **Isolation.** Each Pane has its own pseudo console and its own job object (ADR 0004). Ending
-  one Terminal's job never touches another Terminal's processes. Measured: killing a Terminal
+  one pane's job never touches another pane's or Terminal's processes (Step 21: killing a pane
+  or window ended only its processes while the other panes and Terminals kept running,
+  `windows_panes.rs`). Measured: killing a Terminal
   ended its shell and a `ping` it had started, while a second Terminal's shell and `ping` kept
   running (`zero_one_and_many_terminals_have_isolated_process_trees`).
 - **Ids** are random 48-bit values. The Host remembers every id it has issued and never issues one
@@ -82,6 +90,18 @@ then `removed` (or `state_changed` to `failed`), so a client that saw the Termin
 `restorable` and `unknown` (ARCHITECTURE §4.2) belong to persistence and recovery (Steps 29–30)
 and are not produced yet.
 
+**Windows and panes in the lifecycle (Step 21).** The state machine stays per Terminal. A
+Terminal is `running` while any of its panes runs. Its end (stop, kill, `rm --force`, Host stop)
+ends **every** pane of every window in parallel and then applies the table above once; `stopped`
+keeps every window and pane with its screen. A pane whose program exits **while other panes of the
+Terminal run** leaves alone: `pane.exited`, then `pane.removed` (`reason: exited`), and
+`window.removed` when it was its window's last pane (tmux closes such a pane too; a per-pane
+`remain-on-exit` is not implemented). The exit of the **last running pane** is the Terminal's own
+end, `exited` as before (removed, or `stopped` with `remain_on_exit`). A Terminal therefore always
+has at least one window with one pane. Windows and panes are created and ended only while the
+Terminal is `running` and nothing ends it (`invalid_state` otherwise); selecting and renaming work
+in every state.
+
 ## 3. Names and targets
 
 **Terminal names** (ADR 0007, refined by ADR 0020):
@@ -107,6 +127,15 @@ and are not produced yet.
    creates or renames to one name, exactly one succeeds (measured with 8 concurrent creates and
    with mixed concurrent renames and creates).
 
+**Window names** (Step 21): the Terminal name rules 1–2 and 6 apply (NFC, trimmed, 1–64
+visible characters, no `:` or `.`, no leading `-`, nothing id-shaped), and a window name must not
+be only digits (a target reads digits as the window's index). Window names need **not** be unique
+(tmux semantics); a target naming several windows is `ambiguous_target` with the candidates. A
+window is named after its first program (`automatic_name: true`) until it is renamed. Window
+indexes start at 0; a new window takes the lowest free index and keeps it while it lives, and
+windows are listed by index. Pane indexes are contiguous within a window from 0 and are renumbered
+when a pane goes (tmux); ids never change.
+
 **Targets** (ADR 0007): `<terminal>[:<window>[.<pane>]]`, or an id alone. The Terminal part is a
 name or a `t-` id, the window an index, a name (window names need not be unique: several matches
 are `ambiguous_target`) or a `w-` id, the pane an index or a `p-` id. Names match exactly,
@@ -116,6 +145,15 @@ Terminal through a pane reference. `pane.attach` takes any level (a Terminal or 
 active pane), or no target when the Host has exactly one running pane (`ambiguous_target` with the
 candidates otherwise). The CLI targets the confirmed Terminal **by id** after asking, so a rename
 between the question and the action cannot redirect it.
+
+Step 21 makes every window and pane operation take **exactly one level**: `window.create`,
+`window.list` take a Terminal; `window.select`, `window.rename`, `window.kill` a window;
+`pane.create` and `pane.list` a Terminal (its active window, or all windows) or a window;
+`pane.select` and `pane.kill` a pane. Any other level is `invalid_params` (CLI `usage`), so no
+window or pane command ends a whole Terminal and no Terminal command acts through a window or pane
+reference. A window or pane id is looked up only inside the Terminal the target names: another
+Terminal's `w-`/`p-` id under `work:` is `target_not_found`, never that other Terminal's object.
+`subak window kill` and `pane kill` act on the confirmed **id** after asking.
 
 ## 4. Actions and what they do
 
@@ -135,6 +173,9 @@ command or IPC method: "close" in a UI is always one of the rows below.
 | Remove a running Terminal | `subak rm --force` / `terminal.remove` with `force` | as kill | removed | as kill |
 | Stop the Host | `subak host stop` / `host.stop` | every live Terminal ends as `host_stopped` | gone with the Host (until Step 29) | refused with live Terminals unless `--kill-terminals` (`terminals_running`), then ask or `--yes`; IPC `kill_terminals` |
 | The program exits by itself | — | already ended; leftovers in its job are ended | removed, or `stopped` with `remain_on_exit` | — |
+| Select a window or pane (Step 21) | `subak window select`, `pane select` / `window.select`, `pane.select` | untouched; clients showing the Terminal follow the selection (the GUI detaches the old pane and attaches the new one) | untouched | none |
+| **Kill a window or pane** (Step 21) | `subak window kill`, `pane kill` / `window.kill`, `pane.kill` | that window's panes (or that pane) ended at once (`TerminateJobObject`); every other pane keeps running | the pane leaves, a window with its last pane; the Terminal stays. The last running window or pane is refused (`invalid_state`, `last_window`/`last_pane`): `kill` ends a Terminal | CLI: ask or `--yes`, always, then by id. Host: `force` when a pane is busy |
+| A pane's program exits while others run (Step 21) | — | already ended; leftovers in its job are ended | the pane leaves (`pane.removed`, `exited`), a window with its last pane | — |
 
 - **Graceful, then a guarded force** (stop, host stop): `ClosePseudoConsole` sends
   `CTRL_CLOSE_EVENT` to the processes attached to the pseudo console, the Host waits up to 5 s for
@@ -193,6 +234,29 @@ call all of them; `mcp` clients may only list and inspect until Step 37; `hook` 
   once and its Terminal removed (`reason: host_stopping`); nothing outlives the Host, because every
   pane job is kill-on-close.
 
+**Windows and panes (Step 21, IPC_PROTOCOL §4.4).** `window.create {target, name?, command? |
+command_line?, cwd?, env?, size?, history_limit?, select?, dry_run?}` and `pane.create` (the same
+without `name`) start a new window with one pane, or a new pane in a window, of a running Terminal;
+`select` (default `true`, tmux `new-window` without `-d`) makes it the active one. The ids are
+reserved under the lock, the process starts outside it, and the window or pane enters the model,
+with its event, only once it runs and if its Terminal still runs and nothing ends it; otherwise the
+new process is ended at once (`invalid_state` or `host_stopping`). A failed start leaves no window,
+pane or pseudo console (`spawn_failed`). `window.list` and `pane.list` answer `{terminal_id, name,
+state, active_window, windows}`; `window.select`, `pane.select {target, dry_run?}`; `window.rename
+{target, name, dry_run?}`; `window.kill`, `pane.kill {target, force?, dry_run?}`. Events (topic
+`terminals`): `window.created`, `window.renamed`, `window.removed`, `window.selected` (the
+Terminal's active window changed), `pane.created`, `pane.removed`, `pane.selected` (a window's
+active pane changed), each in the critical section of its change.
+
+**Concurrency and cleanup (Step 21).** Ending is claimed once at two levels. A Terminal's end is
+claimed by setting its `ending`: the claimer claims every pane and tears them down in parallel;
+a pane someone else already ends is waited for. A pane-level end (`pane.kill`, `window.kill`, a
+pane's own exit while others run) claims its panes under the same lock that checked that another
+unclaimed pane of the Terminal still runs. So of two clients killing a Terminal's last two panes at
+once, exactly one succeeds and the other is refused as the last (measured, 3 rounds); a create
+racing a Terminal kill either ends with the Terminal or is refused, and no process is left
+(measured, 3 rounds); 6 concurrent `window new` gave indexes 1–6 with distinct ids.
+
 `client.detach {target?, client_id?, dry_run?}` (Step 12) ends other clients' attachments — every
 client of a Terminal, window or pane, or one client by the id `host.status` lists — and nothing
 else; each detached client learns it from the `pane.detached` event before its output stops.
@@ -221,9 +285,15 @@ ADR 0027; `subak terminal <verb>` is the deprecated Step 10 spelling) maps onto 
 - **Profiles** (`profile` of `terminal.create`, Step 33) are refused with `invalid_params`, never
   silently ignored. Environment overrides (`env`) exist since Step 11
   ([PTY_PROCESSES §3](PTY_PROCESSES.md)).
-- **More windows and panes** (Steps 21–22) — the Terminal manager exists since Step 18 and tabs since Step 17 — and
-  `pane.send_keys` (Step 24; Step 12 writes input only through an attach). `pane.capture` exists
-  since Step 13.
+- **Splits and layouts** (Step 22: `pane.split`, the layout tree, resize, swap, zoom); the prefix
+  keys that switch windows and panes in the GUI (Step 23; until then the GUI follows the selection
+  made by the CLI or another client); `last-window`/`last-pane`, `next`/`previous` window and
+  multi-target kills (`kill-window -a`); per-pane `remain-on-exit` and dead panes; pane titles;
+  window automatic renaming after the *foreground* program (a window keeps its first program's
+  name); and `pane.send_keys` (Step 24; Step 12 writes input only through an attach).
+  `pane.capture` exists since Step 13.
+- **Persisted topology** (Step 29): windows, panes and the selection are kept by the Host for as
+  long as it runs (clients may come and go, see §4), not written to disk yet.
 - **Persisted history** (Steps 29+): opt-in and off by default when it comes
   ([SCROLLBACK §6](SCROLLBACK.md)).
 
@@ -245,4 +315,8 @@ Automated, on real Windows 10 Pro 19045 with real `subak.exe` Hosts on private e
 | `subak_cli.rs::a_user_creates_attaches_detaches_lists_renames_and_kills_with_the_cli_only` (Step 12) | `subak detach <terminal>` and `--client <id>` end attachments only: the shell keeps running, the Terminal stays `running` with 0 clients, the other client stays attached |
 | `subak_cli.rs::client_exit_during_attach_leaves_host_work_running` (Step 12) | a killed CLI client and one whose reader vanished leave `ping` running in the Host |
 | `scrollback_replay.rs` (Step 13) | reattach reproduces history and screen (shell output, scrolling, `more`, a full-screen program), concurrent attaches lose or repeat nothing, resize, eviction, a stalled client resynced, idle cost, access and redaction ([SCROLLBACK §8](SCROLLBACK.md)) |
+| `windows_panes.rs::a_terminal_holds_windows_with_independent_pane_processes` (Step 21) | one Terminal with 3 windows and 5 panes: 5 distinct pane processes, 5 `conhost.exe`, 5 data streams; tmux numbering; the Host's selection and its events; per-pane capture (a marker printed in one pane is in no other pane's screen); renames, digits-only and id-shaped names refused, ambiguous names; every wrong-level target refused (`usage`), another Terminal's window or pane ids not found; the last pane refused; no window or pane change in a stopped Terminal |
+| `windows_panes.rs::only_an_intentional_kill_ends_and_only_its_target` (Step 21) | selecting, attaching, `subak detach`, a disconnecting and a crashing client end none of 5 pane processes; a new client sees the same topology and selection; the busy guard (CLI `confirmation_required`, Host `busy` with the plan); `pane kill` ended only its pid, `window kill` only its two panes, a bystander Terminal untouched; pane renumbering; the freed window index reused; the last window and pane refused |
+| `windows_panes.rs::exits_stop_and_kill_follow_the_hierarchy` (Step 21) | a pane whose program exits (code 3) leaves with its window, the Terminal runs on; `stop` ends 3 panes and keeps them as `stopped` (capture still works); the last running pane's exit removes the Terminal; `kill` ends 5 panes of 3 windows |
+| `windows_panes.rs::concurrent_operations_keep_one_consistent_topology` (Step 21) | 6 concurrent window creates; racing kills of the last two panes (one wins, 3 rounds); creates racing a Terminal kill; 10 failed starts leave no window, pane or `conhost.exe` |
 | `milestone_a.rs` (Step 14) | the Milestone A journey and matrix: cmd.exe, PowerShell, a development server grandchild and an interactive program keep their pids and state through every client-side event (a closed console window, killed clients and console hosts, every kind of detach, 16 concurrent clients, 60 cycles); a killed Host ends its panes, a restarted one has no stale Terminal, a hung one is never killed ([MILESTONE_A_VALIDATION](MILESTONE_A_VALIDATION.md)) |

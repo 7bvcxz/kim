@@ -60,6 +60,7 @@ a recorded justification.
 | 44 | #20 Step 20 – Subak visual polish, settings and basic shell profiles; Milestone B validation (merged; issue open for the maintainer's visible look and Milestone B journey, `SUBAK_GUI.md` §13.9) | `step20_subak_polish.rs` (2 tests): settings and profiles from the CLI and the window survive a restart; the Milestone B journey (open, CRUD, tabs, close and reopen) | 14 |
 | 45 | #64 Step 59 – Noeul pixel colour picker and colour clipboard workflow (merged; issue open for the maintainer's on-screen check, `NOEUL_UX_SPEC.md` §4.14) | `step59_noeul_color_picker.rs` (2 tests): the picker keys and settings are discoverable headlessly; the user picks known pixels and pins them as swatches off screen; master also fixed `step53_noeul_pins.rs`, which still asserted `pin.copy-text` was absent although it shipped in Step 55 | 15 |
 | 46 | #80 Step 75 – Ddalgak profiles: save, load, versions, export and import (merged; issue open for the maintainer's visible profile browser, `DDALGAK_GUI_JOURNEYS.md` §8 steps 13–16) | `step75_ddalgak_profiles.rs` (2 tests): an agent keeps versions, switches, exports and imports profiles headlessly; a running app switches profiles atomically and never by an import | 16 |
+| 47 | #21 Step 21 – Subak internal windows and pane model | `step21_windows_panes.rs` (2 tests): an agent organizes one Terminal into windows and panes and ends only what it means; a pane that exits is left alone and stop keeps the topology | 17 |
 
 ## E2E runs
 

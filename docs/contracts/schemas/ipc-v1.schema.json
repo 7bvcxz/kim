@@ -140,6 +140,13 @@
         {"$ref": "#/$defs/event_pane_detached"},
         {"$ref": "#/$defs/event_pane_resync"},
         {"$ref": "#/$defs/event_host_stopping"},
+        {"$ref": "#/$defs/event_window_created"},
+        {"$ref": "#/$defs/event_window_renamed"},
+        {"$ref": "#/$defs/event_window_removed"},
+        {"$ref": "#/$defs/event_window_selected"},
+        {"$ref": "#/$defs/event_pane_created"},
+        {"$ref": "#/$defs/event_pane_removed"},
+        {"$ref": "#/$defs/event_pane_selected"},
         {"$ref": "#/$defs/event_other"}
       ]
     },
@@ -161,7 +168,14 @@
               "pane.exited",
               "pane.detached",
               "pane.resync",
-              "host.stopping"
+              "host.stopping",
+              "window.created",
+              "window.renamed",
+              "window.removed",
+              "window.selected",
+              "pane.created",
+              "pane.removed",
+              "pane.selected"
             ]
           }
         },
@@ -328,6 +342,137 @@
       "type": "object",
       "required": ["reason"],
       "properties": {"reason": {"enum": ["stop_requested", "idle"]}}
+    },
+    "event_window_created": {
+      "type": "object",
+      "required": ["type", "seq", "event", "data"],
+      "properties": {
+        "type": {"const": "event"},
+        "seq": {"$ref": "#/$defs/u64"},
+        "event": {"const": "window.created"},
+        "data": {"$ref": "#/$defs/data_window_created"}
+      }
+    },
+    "event_window_renamed": {
+      "type": "object",
+      "required": ["type", "seq", "event", "data"],
+      "properties": {
+        "type": {"const": "event"},
+        "seq": {"$ref": "#/$defs/u64"},
+        "event": {"const": "window.renamed"},
+        "data": {"$ref": "#/$defs/data_window_renamed"}
+      }
+    },
+    "event_window_removed": {
+      "type": "object",
+      "required": ["type", "seq", "event", "data"],
+      "properties": {
+        "type": {"const": "event"},
+        "seq": {"$ref": "#/$defs/u64"},
+        "event": {"const": "window.removed"},
+        "data": {"$ref": "#/$defs/data_window_removed"}
+      }
+    },
+    "event_window_selected": {
+      "type": "object",
+      "required": ["type", "seq", "event", "data"],
+      "properties": {
+        "type": {"const": "event"},
+        "seq": {"$ref": "#/$defs/u64"},
+        "event": {"const": "window.selected"},
+        "data": {"$ref": "#/$defs/data_selection"}
+      }
+    },
+    "event_pane_created": {
+      "type": "object",
+      "required": ["type", "seq", "event", "data"],
+      "properties": {
+        "type": {"const": "event"},
+        "seq": {"$ref": "#/$defs/u64"},
+        "event": {"const": "pane.created"},
+        "data": {"$ref": "#/$defs/data_pane_created"}
+      }
+    },
+    "event_pane_removed": {
+      "type": "object",
+      "required": ["type", "seq", "event", "data"],
+      "properties": {
+        "type": {"const": "event"},
+        "seq": {"$ref": "#/$defs/u64"},
+        "event": {"const": "pane.removed"},
+        "data": {"$ref": "#/$defs/data_pane_removed"}
+      }
+    },
+    "event_pane_selected": {
+      "type": "object",
+      "required": ["type", "seq", "event", "data"],
+      "properties": {
+        "type": {"const": "event"},
+        "seq": {"$ref": "#/$defs/u64"},
+        "event": {"const": "pane.selected"},
+        "data": {"$ref": "#/$defs/data_selection"}
+      }
+    },
+    "data_window_created": {
+      "description": "Step 21: a new internal window, with its first pane, entered a running Terminal.",
+      "type": "object",
+      "required": ["terminal_id", "window"],
+      "properties": {
+        "terminal_id": {"$ref": "#/$defs/terminal_id"},
+        "window": {"$ref": "#/$defs/window"}
+      }
+    },
+    "data_window_renamed": {
+      "description": "Step 21.",
+      "type": "object",
+      "required": ["terminal_id", "window_id", "name", "previous_name"],
+      "properties": {
+        "terminal_id": {"$ref": "#/$defs/terminal_id"},
+        "window_id": {"$ref": "#/$defs/window_id"},
+        "name": {"type": "string", "minLength": 1},
+        "previous_name": {"type": "string", "minLength": 1}
+      }
+    },
+    "data_window_removed": {
+      "description": "Step 21: a window left its Terminal with its last pane (`exited`: the pane's program ended; `killed`: window.kill or pane.kill). Not sent when the whole Terminal is removed (terminal.removed).",
+      "type": "object",
+      "required": ["terminal_id", "window_id", "reason"],
+      "properties": {
+        "terminal_id": {"$ref": "#/$defs/terminal_id"},
+        "window_id": {"$ref": "#/$defs/window_id"},
+        "reason": {"enum": ["exited", "killed"]}
+      }
+    },
+    "data_selection": {
+      "description": "Step 21: window.selected (the Terminal's active window changed; pane_id is that window's active pane) and pane.selected (a window's active pane changed). The selection is the Host's, the same for every client.",
+      "type": "object",
+      "required": ["terminal_id", "window_id", "pane_id"],
+      "properties": {
+        "terminal_id": {"$ref": "#/$defs/terminal_id"},
+        "window_id": {"$ref": "#/$defs/window_id"},
+        "pane_id": {"$ref": "#/$defs/pane_id"}
+      }
+    },
+    "data_pane_created": {
+      "description": "Step 21: a new pane entered an existing window of a running Terminal.",
+      "type": "object",
+      "required": ["terminal_id", "window_id", "pane"],
+      "properties": {
+        "terminal_id": {"$ref": "#/$defs/terminal_id"},
+        "window_id": {"$ref": "#/$defs/window_id"},
+        "pane": {"$ref": "#/$defs/pane"}
+      }
+    },
+    "data_pane_removed": {
+      "description": "Step 21: a pane left its Terminal while others keep running (its program exited, or window.kill/pane.kill ended it). The last pane of a Terminal never leaves this way.",
+      "type": "object",
+      "required": ["terminal_id", "window_id", "pane_id", "reason"],
+      "properties": {
+        "terminal_id": {"$ref": "#/$defs/terminal_id"},
+        "window_id": {"$ref": "#/$defs/window_id"},
+        "pane_id": {"$ref": "#/$defs/pane_id"},
+        "reason": {"enum": ["exited", "killed"]}
+      }
     },
     "terminal_name": {
       "description": "A Terminal name (docs/SESSION_MODEL.md §3); the Host enforces the full rules.",
@@ -697,6 +842,96 @@
           "additionalProperties": false,
           "properties": {"dry_run": {"const": true}, "would_remove": {"$ref": "#/$defs/end_plan"}}
         }
+      ]
+    },
+    "would_create_pane": {
+      "description": "Step 21: what window.create (window_id null; the new window's index and name) or pane.create (the window it goes into) would start.",
+      "type": "object",
+      "required": ["terminal_id", "terminal", "window_id", "window_index", "window_name", "select", "command", "executable", "cwd", "env", "size", "history_limit"],
+      "additionalProperties": false,
+      "properties": {
+        "terminal_id": {"$ref": "#/$defs/terminal_id"},
+        "terminal": {"$ref": "#/$defs/terminal_name"},
+        "window_id": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/window_id"}]},
+        "window_index": {"type": ["integer", "null"], "minimum": 0},
+        "window_name": {"type": ["string", "null"], "minLength": 1},
+        "select": {"type": "boolean"},
+        "command": {"$ref": "#/$defs/command"},
+        "command_line": {"type": ["string", "null"]},
+        "executable": {"type": "string", "minLength": 1},
+        "cwd": {"type": ["string", "null"]},
+        "env": {"$ref": "#/$defs/env_names"},
+        "size": {"$ref": "#/$defs/size"},
+        "history_limit": {"type": "integer", "minimum": 0, "maximum": 100000}
+      }
+    },
+    "selection": {
+      "description": "Step 21: the selection window.select or pane.select made (or would make): the window, its active pane, and whether anything changed.",
+      "type": "object",
+      "required": ["terminal_id", "window_id", "pane_id", "changed"],
+      "additionalProperties": false,
+      "properties": {
+        "terminal_id": {"$ref": "#/$defs/terminal_id"},
+        "window_id": {"$ref": "#/$defs/window_id"},
+        "pane_id": {"$ref": "#/$defs/pane_id"},
+        "changed": {"type": "boolean"}
+      }
+    },
+    "close_plan": {
+      "description": "Step 21: what window.kill or pane.kill ends (also the details of its `busy` refusal).",
+      "type": "object",
+      "required": ["terminal_id", "name", "window_id", "window_index", "panes", "processes", "busy", "removes_window"],
+      "additionalProperties": false,
+      "properties": {
+        "terminal_id": {"$ref": "#/$defs/terminal_id"},
+        "name": {"$ref": "#/$defs/terminal_name"},
+        "window_id": {"$ref": "#/$defs/window_id"},
+        "window_index": {"type": "integer", "minimum": 0},
+        "panes": {"type": "array", "minItems": 1, "items": {"type": "object", "required": ["pane_id", "index", "pid", "program", "processes", "busy"], "additionalProperties": false, "properties": {"pane_id": {"$ref": "#/$defs/pane_id"}, "index": {"type": "integer", "minimum": 0}, "pid": {"type": ["integer", "null"], "minimum": 1}, "program": {"type": "string", "minLength": 1}, "processes": {"type": "integer", "minimum": 0}, "busy": {"type": "boolean"}}}},
+        "processes": {"type": "integer", "minimum": 0},
+        "busy": {"type": "boolean"},
+        "removes_window": {"type": "boolean"}
+      }
+    },
+    "result_window_create": {
+      "description": "Step 21: the result of window.create and pane.create: the new pane, the window that holds it, and whether it became the active one.",
+      "oneOf": [
+        {"type": "object", "required": ["terminal_id", "window_id", "pane_id", "selected", "window"], "additionalProperties": false, "properties": {"terminal_id": {"$ref": "#/$defs/terminal_id"}, "window_id": {"$ref": "#/$defs/window_id"}, "pane_id": {"$ref": "#/$defs/pane_id"}, "selected": {"type": "boolean"}, "window": {"$ref": "#/$defs/window"}}},
+        {"type": "object", "required": ["dry_run", "would_create"], "additionalProperties": false, "properties": {"dry_run": {"const": true}, "would_create": {"$ref": "#/$defs/would_create_pane"}}}
+      ]
+    },
+    "result_topology": {
+      "description": "Step 21: the result of window.list (every window) and pane.list (every window, or the one targeted, with its panes).",
+      "type": "object",
+      "required": ["terminal_id", "name", "state", "active_window", "windows"],
+      "additionalProperties": false,
+      "properties": {
+        "terminal_id": {"$ref": "#/$defs/terminal_id"},
+        "name": {"$ref": "#/$defs/terminal_name"},
+        "state": {"$ref": "#/$defs/terminal_state"},
+        "active_window": {"$ref": "#/$defs/window_id"},
+        "windows": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/window"}}
+      }
+    },
+    "result_select": {
+      "description": "Step 21: the result of window.select and pane.select.",
+      "oneOf": [
+        {"$ref": "#/$defs/selection"},
+        {"type": "object", "required": ["dry_run", "would_select"], "additionalProperties": false, "properties": {"dry_run": {"const": true}, "would_select": {"$ref": "#/$defs/selection"}}}
+      ]
+    },
+    "result_window_rename": {
+      "description": "Step 21: the result of window.rename.",
+      "oneOf": [
+        {"type": "object", "required": ["terminal_id", "window_id", "name", "previous_name", "changed"], "additionalProperties": false, "properties": {"terminal_id": {"$ref": "#/$defs/terminal_id"}, "window_id": {"$ref": "#/$defs/window_id"}, "name": {"type": "string", "minLength": 1}, "previous_name": {"type": "string", "minLength": 1}, "changed": {"type": "boolean"}}},
+        {"type": "object", "required": ["dry_run", "would_rename"], "additionalProperties": false, "properties": {"dry_run": {"const": true}, "would_rename": {"type": "object", "required": ["terminal_id", "window_id", "from", "to"], "additionalProperties": false, "properties": {"terminal_id": {"$ref": "#/$defs/terminal_id"}, "window_id": {"$ref": "#/$defs/window_id"}, "from": {"type": "string", "minLength": 1}, "to": {"type": "string", "minLength": 1}}}}}
+      ]
+    },
+    "result_close": {
+      "description": "Step 21: the result of window.kill and pane.kill: one report per ended pane; `terminal` is the Terminal afterwards.",
+      "oneOf": [
+        {"type": "object", "required": ["terminal_id", "window_id", "affected", "window_removed", "terminal"], "additionalProperties": false, "properties": {"terminal_id": {"$ref": "#/$defs/terminal_id"}, "window_id": {"$ref": "#/$defs/window_id"}, "affected": {"type": "array", "items": {"$ref": "#/$defs/pane_end_report"}}, "window_removed": {"type": "boolean"}, "terminal": {"anyOf": [{"type": "null"}, {"$ref": "#/$defs/terminal"}]}}},
+        {"type": "object", "required": ["dry_run", "would_kill"], "additionalProperties": false, "properties": {"dry_run": {"const": true}, "would_kill": {"$ref": "#/$defs/close_plan"}}}
       ]
     },
     "result_pane_attach": {

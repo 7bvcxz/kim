@@ -2,14 +2,16 @@
 
 Status: **implemented v1** (Step 09; Terminal methods added in Step 10, environment overrides
 in Step 11, verbatim command lines and `client.detach` in Step 12, terminal-state snapshots,
-`pane.resync`, `pane.capture` and `pane.clear_history` in Step 13, as additive changes; frozen:
+`pane.resync`, `pane.capture` and `pane.clear_history` in Step 13, internal windows and panes in
+Step 21, as additive changes; frozen:
 changes are additive or need major 2) · Designed in Step 03 · Decisions:
 [ADR 0005](../adr/0005-local-ipc.md),
 [ADR 0019](../adr/0019-secure-host-supervisor-and-ipc-v1.md),
 [ADR 0020](../adr/0020-terminal-session-lifecycle.md),
 [ADR 0025](../adr/0025-pane-programs-environment-and-backpressure.md),
 [ADR 0027](../adr/0027-subak-cli-structure-and-headless-control.md),
-[ADR 0030](../adr/0030-host-terminal-model-scrollback-and-replay.md) · Session semantics:
+[ADR 0030](../adr/0030-host-terminal-model-scrollback-and-replay.md),
+[ADR 0054](../adr/0054-subak-internal-windows-and-panes.md) · Session semantics:
 [SESSION_MODEL.md](../SESSION_MODEL.md) · Programs and environment:
 [PTY_PROCESSES.md](../PTY_PROCESSES.md) · Scrollback and replay:
 [SCROLLBACK.md](../SCROLLBACK.md)
@@ -100,8 +102,10 @@ takes `env`, panes report `executable` and their override names), `terminal.comm
 `client.detach` (Step 12: the `client.detach` method, the `pane.detached` event and client `id`s
 in `host.status`), `pane.snapshot` (Step 13: `pane.attach` sends a terminal-state snapshot and
 its `snapshot` result; lagging clients get `pane.resync`) and `pane.capture` (Step 13:
-`pane.capture`, `pane.clear_history`, pane `history`, `host.status.scrollback`). The Step 12 Host
-lacked the last two, the Step 11 Host also `terminal.command_line` and `client.detach`, the
+`pane.capture`, `pane.clear_history`, pane `history`, `host.status.scrollback`) and, since Step 21,
+`terminal.windows` (§4.4: internal windows and panes, `window.*`, `pane.create`, `pane.list`,
+`pane.select`, `pane.kill` and their events). The Step 13 Host lacked the last one; the Step 12
+Host also the two before it, the Step 11 Host also `terminal.command_line` and `client.detach`, the
 Step 10 Host also
 `terminal.environment`; the Step 09 Host announced `prototype.single_pane` instead of
 `terminal.lifecycle`. Clients must ignore features they do not know.
@@ -146,8 +150,16 @@ Host does not implement yet answers `unknown_request`, as does any name not in t
 | `terminal.kill` | `{target, force, dry_run}` | as `terminal.stop` (`would_kill`) | cli, gui, mcp* | **10** |
 | `terminal.remove` | `{target, force?, dry_run}` | as `terminal.stop` (`would_remove`) | cli, gui, mcp* | **10** |
 | `terminal.restore` | `{target, dry_run, claude_resume}` | `{plan}` or `{restored}` | cli, gui, mcp* | 30 |
-| `window.create` / `.list` / `.rename` / `.kill` / `.select` | target-based | objects | cli, gui, mcp* | 21 |
-| `pane.split` / `.list` / `.kill` / `.select` / `.swap` / `.zoom` | target-based | objects | cli, gui, mcp* | 21–22 |
+| `window.create` | `{target (Terminal), name?, command? \| command_line?, cwd?, env?, size?, history_limit?, select?, dry_run?}` | `{terminal_id, window_id, pane_id, selected, window}` or `{dry_run: true, would_create}` (§4.4) | cli, gui, mcp* | **21** |
+| `window.list` | `{target (Terminal)}` | `{terminal_id, name, state, active_window, windows}` | cli, gui, mcp | **21** |
+| `window.select` | `{target (window), dry_run?}` | `{terminal_id, window_id, pane_id, changed}` or `{dry_run: true, would_select}` | cli, gui, mcp* | **21** |
+| `window.rename` | `{target (window), name, dry_run?}` | `{terminal_id, window_id, name, previous_name, changed}` or `{dry_run: true, would_rename}` | cli, gui, mcp* | **21** |
+| `window.kill` | `{target (window), force?, dry_run?}` | `{terminal_id, window_id, affected, window_removed, terminal}` or `{dry_run: true, would_kill}` | cli, gui, mcp* | **21** |
+| `pane.create` | `{target (Terminal or window), command? \| command_line?, cwd?, env?, size?, history_limit?, select?, dry_run?}` | as `window.create` | cli, gui, mcp* | **21** |
+| `pane.list` | `{target (Terminal or window)}` | as `window.list` (the targeted window only) | cli, gui, mcp | **21** |
+| `pane.select` | `{target (pane), dry_run?}` | as `window.select` | cli, gui, mcp* | **21** |
+| `pane.kill` | `{target (pane), force?, dry_run?}` | as `window.kill` | cli, gui, mcp* | **21** |
+| `pane.split` / `.swap` / `.zoom` | target-based | objects | cli, gui, mcp* | 22 |
 | `pane.attach` | `{target?, interactive?, size?, history_lines?}` | `{stream_id, pane_id, terminal_id, seq, interactive, pane: {id, pid, size}, replay_bytes, snapshot: {bytes, frames, history_lines, alternate, size}}`, then the snapshot data frames and live output | cli, gui, mcp* | **09**, **10**, **13** |
 | `pane.detach` | `{stream_id?}` | `{}` | cli, gui, mcp | **09**, **10** |
 | `client.detach` | `{target?, client_id?, dry_run?}` (at least one of `target`, `client_id`) | `{detached: [attachment], terminal}` or `{dry_run: true, would_detach, terminal}` | cli, gui, mcp* | **12** |
@@ -159,7 +171,7 @@ Host does not implement yet answers `unknown_request`, as does any name not in t
 | `claude.status` | `{target?}` | `{panes: [{pane_id, state, since, session_id?}]}` | cli, gui, mcp | 28 |
 
 `mcp*` = only once the user granted that capability to MCP clients (Step 37). Until then MCP
-clients may call only the unstarred methods. Bold Step = implemented by the Step 13 Host.
+clients may call only the unstarred methods. Bold Step = implemented by the Step 21 Host.
 
 **Snapshots, history and capture (Step 13, [SCROLLBACK.md](../SCROLLBACK.md)).** The Host feeds
 every pane's output into a terminal model. `pane.attach` answers with `seq` and `snapshot`, then
@@ -180,8 +192,9 @@ per answer: older ones are left out, `truncated` is true and `start` is the firs
 `pane.clear_history` deletes the pane's history (not its screen); `dry_run` shows the counts.
 Typed by `result_pane_attach`, `result_pane_capture` and `result_pane_clear_history`.
 
-**Panes and streams (Step 10).** A Host owns any number of Terminals, each with one window and one
-pane (docs/SESSION_MODEL.md). Each pane has its own data stream id, unique in the Host.
+**Panes and streams (Step 10).** A Host owns any number of Terminals, each with internal windows
+and panes (one of each until Step 21; docs/SESSION_MODEL.md). Each pane has its own data stream
+id, unique in the Host.
 `pane.attach` takes a target of any level (a Terminal or window means its active pane; ADR 0007
 syntax), or no target when the Host has exactly one running pane (`target_not_found` with none,
 for example a Host started with `--no-shell`; `ambiguous_target` with `details.candidates` when
@@ -312,6 +325,41 @@ the `terminal`, `window`, `pane` and `terminal_summary` definitions of the schem
   forced, job_processes_left}`. A request that arrives while another one ends the same pane gets
   the same report; a kill during a graceful stop ends the job at once.
 
+### 4.4 Windows and panes (Step 21)
+
+Semantics are in [SESSION_MODEL.md](../SESSION_MODEL.md) §1–§5 and
+[ADR 0054](../adr/0054-subak-internal-windows-and-panes.md); results are typed by
+`result_window_create`, `result_topology`, `result_select`, `result_window_rename` and
+`result_close` (with `would_create_pane`, `selection` and `close_plan`).
+
+- **Levels.** Each method takes exactly the level in the table above; any other is
+  `invalid_params` (`details.field = "target"`). A window or pane id is looked up only inside the
+  Terminal the target names (`work:w-…` of another Terminal is `target_not_found`).
+- **`window.create` / `pane.create`** take the program parameters of `terminal.create` (`command`
+  or `command_line`, `cwd`, `env`, `size`, `history_limit`; same checks and errors) plus `name`
+  (window only; the window name rules) and `select` (default `true`). Only in a `running` Terminal
+  that nothing ends (`invalid_state` otherwise). The window takes the lowest free index; the pane
+  the next index of its window. The answer comes once the process runs; `window` is the window
+  that holds the new pane. Limits: 64 panes per Terminal, 512 running panes per Host (`busy`).
+  `dry_run` answers `would_create` (`terminal_id`, `terminal`, `window_id` (pane.create),
+  `window_index` and `window_name` (window.create), `select`, and the resolved program as in
+  `terminal.create`'s plan) and starts nothing.
+- **`window.list` / `pane.list`** answer the Terminal's windows (in index order) with their panes,
+  `pane.list` of a window only that window.
+- **`window.select` / `pane.select`** set the Terminal's active window, or a window's active pane
+  and that window. `changed` is false when nothing changed (then no event). Allowed in every state.
+- **`window.rename`** sets the name and clears `automatic_name`.
+- **`window.kill` / `pane.kill`** end the processes of the window's panes or of the pane at once
+  (job termination, as `terminal.kill`) and take them out of the Terminal; a window goes with its
+  last pane. A busy pane needs `force` (`busy` with the `close_plan` in `details`). The last
+  running window or pane of a Terminal is `invalid_state` (`details.reason` `last_window` or
+  `last_pane`): only `terminal.kill` ends a Terminal. `affected` lists one `pane_end_report` per
+  ended pane; `terminal` is the Terminal afterwards.
+- **Terminal methods** act on every pane since Step 21: `terminal.stop`, `.kill`, `.remove` with
+  `force` and `host.stop` end all panes of all windows (`affected` has one report per pane;
+  `busy` and `processes` of their plans add up the panes); a `stopped` Terminal keeps every window
+  and pane.
+
 ## 5. Events (v1)
 
 Each event is sent in the same critical section as the change it reports, so a client that
@@ -327,9 +375,15 @@ subscribes and then lists sees every later change exactly once, after its list.
 | `terminal.state_changed` | `terminals` | `{terminal_id, name, state, previous_state, cause}`; `cause` is `stopped`, `killed`, `exited`, `host_stopped` or `null` | 10 |
 | `terminal.renamed` | `terminals` | `{terminal_id, name, previous_name}` | 10 |
 | `terminal.removed` | `terminals` | `{terminal_id, name, reason}`; `reason` is `killed`, `removed`, `exited`, `spawn_failed` or `host_stopping` | 10 |
+| `window.created` | `terminals` | `{terminal_id, window: Window}` (with its first pane, running) | 21 |
+| `window.renamed` | `terminals` | `{terminal_id, window_id, name, previous_name}` | 21 |
+| `window.removed` | `terminals` | `{terminal_id, window_id, reason}`; `reason` is `exited` or `killed` (not sent when the whole Terminal is removed) | 21 |
+| `window.selected` | `terminals` | `{terminal_id, window_id, pane_id}`: the Terminal's active window changed; `pane_id` is its active pane | 21 |
+| `pane.created` | `terminals` | `{terminal_id, window_id, pane: Pane}` | 21 |
+| `pane.removed` | `terminals` | `{terminal_id, window_id, pane_id, reason}`; `reason` is `exited` or `killed`; after the pane's `pane.exited` | 21 |
+| `pane.selected` | `terminals` | `{terminal_id, window_id, pane_id}`: a window's active pane changed | 21 |
 
-Later Steps: `window.created`, `window.renamed`, `window.removed`, `pane.created`,
-`pane.removed`, `claude.state_changed`.
+Later Steps: `claude.state_changed`.
 
 ## 6. Error codes (stable)
 

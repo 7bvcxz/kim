@@ -37,7 +37,7 @@ pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 /// Event topics a client can subscribe to.
 pub const TOPICS: [&str; 4] = ["terminals", "panes", "claude", "host"];
 /// Additive capabilities announced in `welcome.features`.
-pub const FEATURES: [&str; 10] = [
+pub const FEATURES: [&str; 11] = [
     "host.health",
     "host.stats",
     "events.subscribe",
@@ -53,6 +53,9 @@ pub const FEATURES: [&str; 10] = [
     "pane.snapshot",
     // Step 13: `pane.capture`, `pane.clear_history`, pane `history` and `host.status.scrollback`.
     "pane.capture",
+    // Step 21: internal windows and panes (`window.*`, `pane.create|list|select|kill`) and their
+    // events.
+    "terminal.windows",
 ];
 
 /// One decoded frame.
@@ -552,15 +555,17 @@ pub const METHODS: &[Method] = &[
     m("terminal.kill", CG, true),
     m("terminal.remove", CG, true),
     m("terminal.restore", CG, false),
-    m("window.create", CG, false),
-    m("window.list", CG, false),
-    m("window.rename", CG, false),
-    m("window.kill", CG, false),
-    m("window.select", CG, false),
+    // Step 21 (ADR 0054): internal windows and panes; listing is read-only like terminal.list.
+    m("window.create", CG, true),
+    m("window.list", CGM, true),
+    m("window.rename", CG, true),
+    m("window.kill", CG, true),
+    m("window.select", CG, true),
+    m("pane.create", CG, true),
     m("pane.split", CG, false),
-    m("pane.list", CG, false),
-    m("pane.kill", CG, false),
-    m("pane.select", CG, false),
+    m("pane.list", CGM, true),
+    m("pane.kill", CG, true),
+    m("pane.select", CG, true),
     m("pane.swap", CG, false),
     m("pane.zoom", CG, false),
     m("pane.send_keys", CG, false),

@@ -37,6 +37,7 @@ use super::compose;
 use super::export::{self, Export};
 use super::find::{Edit, FindBar, Toggle};
 use super::keys::{self, Action, Matcher, Outcome, Press, Typed, vk};
+use super::keystate;
 use super::layout::{self, Cells, Rect};
 use super::model::{Confirm, Effect, Frame as Data, Model, Phase, Want};
 use super::motion::{self, Motion as Transitions, What};
@@ -98,8 +99,8 @@ use windows_sys::Win32::UI::Input::Ime::{
     ImmSetCompositionWindow,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    GetDoubleClickTime, GetKeyState, ReleaseCapture, SetCapture, TME_LEAVE, TRACKMOUSEEVENT,
-    ToUnicode, TrackMouseEvent,
+    GetDoubleClickTime, ReleaseCapture, SetCapture, TME_LEAVE, TRACKMOUSEEVENT, ToUnicode,
+    TrackMouseEvent,
 };
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -616,14 +617,10 @@ fn outer_for(w: u32, h: u32, dpi: u32, test: bool) -> (i32, i32) {
     (rc.right - rc.left, rc.bottom - rc.top)
 }
 
+/// Shift, Ctrl and Alt for the message being processed (none from the real keyboard in the
+/// off-screen test mode, [`keystate`]).
 fn mods() -> Mods {
-    // SAFETY: reads this thread's keyboard state.
-    let down = |k: u32| unsafe { GetKeyState(k as i32) } < 0;
-    Mods {
-        shift: down(vk::SHIFT),
-        ctrl: down(vk::CONTROL),
-        alt: down(vk::MENU),
-    }
+    keystate::held()
 }
 
 fn lparam_xy(lp: LPARAM) -> (i32, i32) {
@@ -2075,10 +2072,15 @@ impl App {
         let title = match self.model.terminal() {
             Some(t) if self.model.phase.shows_pane() => {
                 let program = self.pane.screen().title().trim().to_string();
+                // Step 21: which internal window and pane is shown, when there are several.
+                let name = match &t.place {
+                    Some(p) => format!("{} [{p}]", t.name),
+                    None => t.name.clone(),
+                };
                 if program.is_empty() || program == t.name {
-                    format!("{} — Subak", t.name)
+                    format!("{name} — Subak")
                 } else {
-                    format!("{program} — {} — Subak", t.name)
+                    format!("{program} — {name} — Subak")
                 }
             }
             _ => "Subak".to_string(),
@@ -3462,8 +3464,7 @@ impl App {
         Mods {
             shift: wp & 0x0004 != 0,
             ctrl: wp & 0x0008 != 0,
-            // SAFETY: reads this thread's keyboard state.
-            alt: unsafe { GetKeyState(vk::MENU as i32) } < 0,
+            alt: keystate::down(vk::MENU),
         }
     }
 
@@ -3800,7 +3801,12 @@ impl App {
         let mut dump = json!({
             "event": "dump",
             "phase": self.model.phase.name(),
-            "terminal": self.model.terminal().map(|t| json!({"id": t.id, "name": t.name, "pid": t.pid})),
+            "terminal": self.model.terminal().map(|t| json!({"id": t.id, "name": t.name, "pid": t.pid,
+                "place": t.place, "active_pane": t.active_pane})),
+            "pane_id": match &self.model.phase {
+                Phase::Attached { pane_id, .. } => Some(pane_id.clone()),
+                _ => None,
+            },
             "stream": self.model.input_stream(),
             "grid": [self.grid.0, self.grid.1],
             "pane_size": [self.pane.size().0, self.pane.size().1],
@@ -4568,8 +4574,7 @@ fn set_window_icon(hwnd: HWND, dpi: u32) {
 
 /// The modifiers held, with their side when only one side is down (for side-specific bindings).
 fn sided_mods(m: Mods) -> kim_hotkeys::keys::Mods {
-    // SAFETY: reads this thread's keyboard state.
-    let down = |k: u32| unsafe { GetKeyState(k as i32) } < 0;
+    let down = keystate::down;
     let side = |generic: bool, l: u32, r: u32| match (down(l), down(r)) {
         (true, false) => Side::Left,
         (false, true) => Side::Right,
@@ -4640,7 +4645,7 @@ fn pre_translate(msg: &MSG) -> bool {
             if app.hwnd != msg.hwnd {
                 return false;
             }
-            let m = mods();
+            let m = keystate::with_message(msg.message, msg.lParam);
             let scan = ((lp >> 16) & 0xFF) as u32;
             let p = Press {
                 vk: code,
@@ -4770,7 +4775,7 @@ fn handle(app: &mut App, hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> Option
             if wp == b' ' as usize {
                 return None; // Alt+Space: the window menu
             }
-            app.on_char(wp as u16, true, mods());
+            app.on_char(wp as u16, true, keystate::with_message(msg, lp));
             Some(0)
         }
         WM_SETFOCUS | WM_KILLFOCUS => {
@@ -5017,6 +5022,8 @@ pub fn run(o: Options) -> ExitCode {
         (None, None) => Want::Any,
     };
     let test = o.test;
+    // The off-screen test window never has the keyboard: it reads no real key state.
+    keystate::ignore_real_keyboard(test);
     let class = wide("SubakWindow");
     // SAFETY: registers our window class and creates one top-level window of this process. In
     // test mode it is a tool window far off every monitor, never activated.

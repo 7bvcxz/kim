@@ -1,0 +1,12 @@
+{
+  "command": "status",
+  "error": {
+    "code": "app_identity_mismatch",
+    "details": [],
+    "exit_code": 4,
+    "hint": null,
+    "message": "the endpoint is served by `cli-4f5e791b6f6b038e.exe` (pid 95672), not by ddalgak-gui.exe of this user; nothing was sent"
+  },
+  "ok": false,
+  "schema_version": 1
+}

@@ -1,0 +1,13 @@
+{
+  "command": "startup.enable",
+  "data": {
+    "after": "\"C:\\Users\\you\\AppData\\Local\\Programs\\mouv\\ddalgak\\versions\\0.0.1\\ddalgak-gui.exe\" --startup",
+    "before": null,
+    "changed": true,
+    "dry_run": true,
+    "location": "HKCU\\Software\\mouv-test\\ddalgak-cli-startup\\Run\\mouv.ddalgak"
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

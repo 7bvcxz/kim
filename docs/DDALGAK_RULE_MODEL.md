@@ -636,6 +636,9 @@ implements them; existing codes such as `hotkey_invalid`, `hotkey_reserved`, `us
 | [ddalgak-simulation-v1](contracts/schemas/ddalgak-simulation-v1.schema.json) + examples | Twenty-three playground results named `<rules example>--<what>.json` and fourteen invalid ones (effects performed or input injected in `simulate`, live launches without confirmation, live input outside the playground, previews that echo text, paths, arguments or URL paths). |
 | [kim-hotkey-manifest-v1/ddalgak.json](contracts/examples/kim-hotkey-manifest-v1/ddalgak.json) | Ddalgak's final GUI actions: four global ones (matching the Kim catalog) and the `rules` and `playground` contexts. |
 
+**Step 66** implements the engine for engine-control rules ([DDALGAK_ENGINE](DDALGAK_ENGINE.md));
+every other step type is inactive with `step_unsupported` until its Step.
+
 **Not tested on Windows in Step 65.** Everything about real input (hook timing, `SendInput`,
 UIPI, password-field detection, IME, layouts, stuck keys, the emergency chord) is specified, not
 measured. The owners are Steps 66 (engine), 68–72 (actions), 73 (emergency), 76 (playground) and

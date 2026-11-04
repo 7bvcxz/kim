@@ -1,0 +1,12 @@
+{
+  "command": "engine.fly",
+  "error": {
+    "code": "keylogger_failed",
+    "details": [],
+    "exit_code": 2,
+    "hint": "see `ddalgak --help`",
+    "message": "unknown command `engine fly`"
+  },
+  "ok": false,
+  "schema_version": 1
+}

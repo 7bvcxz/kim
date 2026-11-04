@@ -1,0 +1,12 @@
+{
+  "command": "engine.start",
+  "error": {
+    "code": "engine_not_running",
+    "details": [],
+    "exit_code": 3,
+    "hint": "start ddalgak-gui.exe (it shows a tray icon); the CLI never starts it",
+    "message": "Ddalgak is not running"
+  },
+  "ok": false,
+  "schema_version": 1
+}

@@ -256,10 +256,13 @@ fn run_e2e(root: &Path, force: bool) -> Result<(), String> {
             "subak",
             "--package",
             "noeul",
+            "--package",
+            "ddalgak",
         ],
     )?;
-    // Debug `kim` accepts a development catalog key (KIM_DEV_TRUSTED_KEY); some scenarios need it.
-    cargo(root, &["build", "--package", "kim"])?;
+    // Debug `kim` accepts a development catalog key (KIM_DEV_TRUSTED_KEY); debug `ddalgak-gui`
+    // has the test host (no tray icon, observe-only hook) that the Ddalgak scenarios need.
+    cargo(root, &["build", "--package", "kim", "--package", "ddalgak"])?;
     let bin_dir = root.join("target").join("release");
     let cargo_bin = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
     // --no-fail-fast: one failing scenario file must not hide the results of the others.

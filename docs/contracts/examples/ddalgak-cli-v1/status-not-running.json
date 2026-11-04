@@ -1,0 +1,50 @@
+{
+  "command": "status",
+  "data": {
+    "activity": [],
+    "app": {
+      "running": false
+    },
+    "engine": {
+      "hook": {
+        "installed": false,
+        "observe_only": false
+      },
+      "last_change": null,
+      "off_reason": "app_not_running",
+      "state": "off"
+    },
+    "profile": {
+      "id": "default",
+      "mode": "base"
+    },
+    "rules": {
+      "active": 0,
+      "active_rules": [],
+      "disabled": 0,
+      "engine_on_start": "off",
+      "file": "missing",
+      "inactive": [],
+      "other_modes": 0,
+      "problem": null,
+      "revision": null,
+      "total": 0
+    },
+    "shortcuts": {
+      "config": "default",
+      "global": [],
+      "off": false,
+      "problem": null
+    },
+    "startup": {
+      "command": null,
+      "enabled": false,
+      "foreign": false,
+      "location": "HKCU\\Software\\mouv-test\\ddalgak-cli-offline\\Run\\mouv.ddalgak",
+      "program": "C:\\Users\\you\\AppData\\Local\\Programs\\mouv\\ddalgak\\versions\\0.0.1\\ddalgak-gui.exe"
+    }
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

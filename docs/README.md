@@ -15,11 +15,12 @@ did.
 | [NOEUL_REQUIREMENTS.md](NOEUL_REQUIREMENTS.md) | current (Step 48; Step 49 registered its first error codes) | `NOEUL-*` requirements, milestones N1–N7 (Steps 49–64), platform permissions, performance budgets, deferrals, planned error codes |
 | [NOEUL_SNIPASTE_MATRIX.md](NOEUL_SNIPASTE_MATRIX.md) | current (inventory, Snipaste 2.11.3; 18 rows `partial` since Step 49) | Snipaste feature parity matrix with status, requirement, milestone and verification per row |
 | [NOEUL_UX_SPEC.md](NOEUL_UX_SPEC.md) | current (specification) | Noeul journeys and click paths, wireframes, the exact double-click-to-pin rules and their test cases, default shortcuts, session limits, privacy |
-| [DDALGAK_PHILOSOPHY.md](DDALGAK_PHILOSOPHY.md) | current (Step 65; Ddalgak not implemented yet) | Ddalgak, the automation engine: one action, useful automation; novice-friendly GUI and headless CLI; safe by construction; honest about AutoHotkey |
+| [DDALGAK_PHILOSOPHY.md](DDALGAK_PHILOSOPHY.md) | current (Step 65; engine core implemented in Step 66) | Ddalgak, the automation engine: one action, useful automation; novice-friendly GUI and headless CLI; safe by construction; honest about AutoHotkey |
 | [DDALGAK_REQUIREMENTS.md](DDALGAK_REQUIREMENTS.md) | current (Step 65) | `DDALGAK-*` requirements and milestones D1–D7 (Steps 65–83) |
-| [DDALGAK_RULE_MODEL.md](DDALGAK_RULE_MODEL.md) | current (rules document v1; not implemented) | Triggers, the seven core action types with inputs/outputs/errors/safety, modes, conditions, profiles, consent, precedence, validation, playground, outcomes and activity, versioning, CLI preview |
+| [DDALGAK_RULE_MODEL.md](DDALGAK_RULE_MODEL.md) | current (rules document v1; Step 66 runs engine-control rules only) | Triggers, the seven core action types with inputs/outputs/errors/safety, modes, conditions, profiles, consent, precedence, validation, playground, outcomes and activity, versioning, CLI preview |
 | [DDALGAK_GUI_JOURNEYS.md](DDALGAK_GUI_JOURNEYS.md) | current (design) | End-to-end GUI journeys and wireframes: create, capture, effects, playground, profiles, modes, rollback, search/edit/delete/duplicate/export, emergency |
-| [DDALGAK_SAFETY.md](DDALGAK_SAFETY.md) | current (nothing run on Windows yet) | Risks and scope: reserved shortcuts, elevated windows, engine lifecycle, layouts and IME, anti-cheat, hook security and emergency off, password fields and privacy, Linux, recursion and stuck keys, verification plan |
+| [DDALGAK_SAFETY.md](DDALGAK_SAFETY.md) | current (Step 66 ran the engine checks it owns, §11) | Risks and scope: reserved shortcuts, elevated windows, engine lifecycle, layouts and IME, anti-cheat, hook security and emergency off, password fields and privacy, Linux, recursion and stuck keys, verification plan |
+| [DDALGAK_ENGINE.md](DDALGAK_ENGINE.md) | current (implemented, Step 66; Windows) | The engine as built: event model, decision pipeline, threads and lifecycle, own shortcuts, `ddalgak` CLI, measurements (idle CPU and wake-ups, decision cost), real-Windows verification status and manual checks |
 | [DDALGAK_AHK_MATRIX.md](DDALGAK_AHK_MATRIX.md) | current (inventory, matrix v1, AutoHotkey v2.0.31) | AutoHotkey v2 comparison with sources: supported, partial, planned, not intended |
 
 ## Architecture and compatibility
@@ -62,8 +63,8 @@ conflict report with a reference checker, and the library recomputes them again
 Window and Pane objects, the `terminal.*` events and the Step 10 method results; Subak's tests
 validate every control message and result a real Host sends against it.
 
-The Ddalgak schemas (`ddalgak-rules-v1`, `ddalgak-simulation-v1`) are specifications that
-nothing implements yet (Step 65); `schema-check` validates their examples and runs the
+The Ddalgak rule schemas (`ddalgak-rules-v1`, `ddalgak-simulation-v1`) are specifications (Step 65;
+the Step 66 engine reads `ddalgak-rules-v1` documents for its engine-control rules); `schema-check` validates their examples and runs the
 cross-reference checks of [DDALGAK_RULE_MODEL §8](DDALGAK_RULE_MODEL.md) on them.
 
 ## Planned

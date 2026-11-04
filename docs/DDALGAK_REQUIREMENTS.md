@@ -1,6 +1,7 @@
 # Ddalgak Requirements
 
-Status: **current** (Step 65, specification; nothing is implemented yet) · Owner: mouv ·
+Status: **current** (Step 65, specification; the engine rows of D2 are implemented since Step 66,
+see [DDALGAK_ENGINE](DDALGAK_ENGINE.md) §8 for what was verified) · Owner: mouv ·
 Derived from [DDALGAK_PHILOSOPHY](DDALGAK_PHILOSOPHY.md) · Decision:
 [ADR 0022](adr/0022-ddalgak-rule-model-and-safety.md)
 

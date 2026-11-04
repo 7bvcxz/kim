@@ -1,0 +1,12 @@
+{
+  "command": "engine.start",
+  "error": {
+    "code": "rules_invalid",
+    "details": [],
+    "exit_code": 4,
+    "hint": null,
+    "message": "rules.json is not usable: not valid JSON: key must be a string at line 1 column 3"
+  },
+  "ok": false,
+  "schema_version": 1
+}

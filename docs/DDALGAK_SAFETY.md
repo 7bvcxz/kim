@@ -1,7 +1,7 @@
 # Ddalgak safety: risks, scope and policies
 
-Status: **current** (Step 65, specification; nothing here has been run on real Windows yet,
-§11) · Requirements: `DDALGAK-SEC-001…014`, `DDALGAK-NFR-002`, `DDALGAK-NFR-006`,
+Status: **current** (Step 65, specification; Step 66 ran the engine checks it owns on real
+Windows, §11) · Requirements: `DDALGAK-SEC-001…014`, `DDALGAK-NFR-002`, `DDALGAK-NFR-006`,
 `DDALGAK-NFR-009`, `KIM-SEC-020…023` · Decision: [ADR 0022](adr/0022-ddalgak-rule-model-and-safety.md)
 
 A keyboard hook sees every key, and an injector can type into any window the user can reach.
@@ -239,3 +239,17 @@ with the reason):
 **Step 65 ran none of these**: it is a specification. Its machine checks cover the schemas, the
 reserved chords, consent, recursion guards, cross-references and the playground's safety
 properties (`cargo xtask schema-check`).
+
+**Step 66** (engine, Windows 10 19045; details and evidence in
+[DDALGAK_ENGINE §7–§8](DDALGAK_ENGINE.md)): hook latency and idle cost **measured** (decision
+0.28 µs per event with 1000 rules in a release build; 60 s idle with 100 rules and the engine
+on: 0 ms CPU, no hook or worker wake-ups); hook clean-up on stop, timeout and panic
+**tested**; own injected input never matched and other programs' input reaching only
+`injected: accept` rules **tested with real `SendInput`** through the running app; DR-09 (two
+automation tools feeding each other) is cut by the per-rule rate limit (unit-tested; the
+real-input storm and the real held-key release were **not observed**, because the shared
+workstation locked during those runs). Password fields: Win32 `ES_PASSWORD` edits are recognized
+(tested on a hidden edit); browsers and UWP **not tested** (Step 69). Elevated-window skipping:
+implemented, **not tested** (no injecting rule before Step 68; Step 70). The hook health check
+of §7 is implemented as `ddalgak health` (passive signals; ADR 0024 §8). The emergency chord with
+physical keys and the tray icon are left to the manual check of DDALGAK_ENGINE §8 and Step 73.

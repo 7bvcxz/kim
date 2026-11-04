@@ -1,0 +1,91 @@
+{
+  "command": "status",
+  "data": {
+    "activity": [],
+    "app": {
+      "elevated": false,
+      "launched_by": "user",
+      "pid": 75504,
+      "running": true,
+      "started_at": "2026-11-04T01:43:43Z",
+      "test_mode": true,
+      "tray": false,
+      "uptime_s": 0,
+      "version": "0.0.1"
+    },
+    "engine": {
+      "hook": {
+        "installed": false,
+        "observe_only": true
+      },
+      "last_change": null,
+      "off_reason": "default",
+      "state": "off"
+    },
+    "profile": {
+      "id": "default",
+      "mode": "base"
+    },
+    "rules": {
+      "active": 3,
+      "active_rules": [
+        "pause-key",
+        "off-key",
+        "physical-only"
+      ],
+      "disabled": 0,
+      "engine_on_start": "off",
+      "file": "loaded",
+      "inactive": [
+        {
+          "code": "step_unsupported",
+          "reason": "`remap` steps are not implemented in this version yet (Step 68)",
+          "rule": "caps-remap",
+          "title": "CapsLock acts as Ctrl"
+        }
+      ],
+      "other_modes": 0,
+      "problem": null,
+      "revision": 1,
+      "total": 4
+    },
+    "session": {
+      "locked": false
+    },
+    "shortcuts": {
+      "config": "user",
+      "global": [
+        {
+          "action": "engine.toggle",
+          "keys": "Ctrl+Alt+Shift+F13",
+          "registration": "registered"
+        },
+        {
+          "action": "engine.pause",
+          "keys": "Ctrl+Alt+Shift+F14",
+          "registration": "registered"
+        },
+        {
+          "action": "editor.open",
+          "keys": "Ctrl+Alt+Shift+F15",
+          "registration": "unavailable"
+        }
+      ],
+      "off": false,
+      "problem": null
+    },
+    "start": {
+      "off_reason": "default"
+    },
+    "startup": {
+      "command": null,
+      "enabled": false,
+      "foreign": false,
+      "location": "HKCU\\Software\\mouv-test\\ddalgak-cli-lifecycle\\Run\\mouv.ddalgak",
+      "program": "C:\\Users\\you\\AppData\\Local\\Programs\\mouv\\ddalgak\\versions\\0.0.1\\ddalgak-gui.exe"
+    }
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

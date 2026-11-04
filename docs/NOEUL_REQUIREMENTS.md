@@ -1,6 +1,6 @@
 # Noeul Requirements
 
-Status: **current** (product definition; nothing of Noeul is implemented yet) · Owner: mouv ·
+Status: **current** (product definition; the app foundation is implemented since Step 49, [ADR 0023](adr/0023-noeul-app-foundation.md)) · Owner: mouv ·
 Step 48 · Derived from [NOEUL_PHILOSOPHY](NOEUL_PHILOSOPHY.md) and [KIM_PHILOSOPHY](KIM_PHILOSOPHY.md) ·
 Parity: [NOEUL_SNIPASTE_MATRIX](NOEUL_SNIPASTE_MATRIX.md) · UX: [NOEUL_UX_SPEC](NOEUL_UX_SPEC.md) ·
 Decision: [ADR 0021](adr/0021-noeul-product-definition.md)
@@ -274,8 +274,12 @@ ADR.
 
 ## 7. Planned CLI error codes
 
-Proposed for the Steps that implement them (Steps 49 and 62). They are **not registered yet**:
-each is added to [CLI_CONTRACT §6](CLI_CONTRACT.md) together with the code that returns it.
+Proposed for the Steps that implement them (Steps 49 and 62); each is added to
+[CLI_CONTRACT §6](CLI_CONTRACT.md) together with the code that returns it. **Registered in Step 49:**
+`desktop_unavailable`, `noeul_not_running`, `pin_not_found`, `clipboard_unavailable`,
+`nothing_to_pin` and `image_invalid`, plus the IPC codes `noeul_identity_mismatch`,
+`noeul_unresponsive`, `noeul_incompatible` and `noeul_start_failed` (CLI_CONTRACT §6, Noeul table).
+`capture_not_allowed` waits for the privacy setting of Step 62.
 Noeul also uses the shared codes (`usage`, `io`, `permission_denied`, `internal`,
 `confirmation_required`, `cancelled`, `unsupported_platform`) and the `hotkeys` codes.
 

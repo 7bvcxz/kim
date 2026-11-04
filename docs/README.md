@@ -11,9 +11,9 @@ did.
 | [KIM_PHILOSOPHY.md](KIM_PHILOSOPHY.md) | current | Why Kim exists and the principles every tool follows |
 | [SUBAK_PHILOSOPHY.md](SUBAK_PHILOSOPHY.md) | current | Subak's Host/Client model, object model, crucial distinctions, Claude indicator |
 | [PRODUCT_REQUIREMENTS.md](PRODUCT_REQUIREMENTS.md) | current | Numbered, testable requirements, milestones, platforms, privacy/safety policies |
-| [NOEUL_PHILOSOPHY.md](NOEUL_PHILOSOPHY.md) | current (Step 48; Noeul not implemented yet) | Noeul, the screenshot and floating-pin tool: the double-click-to-pin deviation from Snipaste, pins, frugality, privacy, keyboard, CLI, license and IP boundary |
-| [NOEUL_REQUIREMENTS.md](NOEUL_REQUIREMENTS.md) | current (Step 48) | `NOEUL-*` requirements, milestones N1–N7 (Steps 49–64), platform permissions, performance budgets, deferrals, planned error codes |
-| [NOEUL_SNIPASTE_MATRIX.md](NOEUL_SNIPASTE_MATRIX.md) | current (inventory, Snipaste 2.11.3) | Snipaste feature parity matrix with status, requirement, milestone and verification per row |
+| [NOEUL_PHILOSOPHY.md](NOEUL_PHILOSOPHY.md) | current (Step 48; app foundation implemented in Step 49) | Noeul, the screenshot and floating-pin tool: the double-click-to-pin deviation from Snipaste, pins, frugality, privacy, keyboard, CLI, license and IP boundary |
+| [NOEUL_REQUIREMENTS.md](NOEUL_REQUIREMENTS.md) | current (Step 48; Step 49 registered its first error codes) | `NOEUL-*` requirements, milestones N1–N7 (Steps 49–64), platform permissions, performance budgets, deferrals, planned error codes |
+| [NOEUL_SNIPASTE_MATRIX.md](NOEUL_SNIPASTE_MATRIX.md) | current (inventory, Snipaste 2.11.3; 18 rows `partial` since Step 49) | Snipaste feature parity matrix with status, requirement, milestone and verification per row |
 | [NOEUL_UX_SPEC.md](NOEUL_UX_SPEC.md) | current (specification) | Noeul journeys and click paths, wireframes, the exact double-click-to-pin rules and their test cases, default shortcuts, session limits, privacy |
 | [DDALGAK_PHILOSOPHY.md](DDALGAK_PHILOSOPHY.md) | current (Step 65; Ddalgak not implemented yet) | Ddalgak, the automation engine: one action, useful automation; novice-friendly GUI and headless CLI; safe by construction; honest about AutoHotkey |
 | [DDALGAK_REQUIREMENTS.md](DDALGAK_REQUIREMENTS.md) | current (Step 65) | `DDALGAK-*` requirements and milestones D1–D7 (Steps 65–83) |
@@ -50,7 +50,10 @@ Contract schemas live in `contracts/schemas/`, with valid and invalid examples i
 `contracts/examples/`; `cargo xtask schema-check` (also run by `cargo test`) validates them.
 The CLI schemas (`cli-envelope-v1`, `kim-cli-v1`, `tool-capabilities-v1`) are additionally
 checked against the real `kim` and `subak` binaries by their integration tests; the
-`kim-cli-v1` examples are golden files generated from real runs. The hotkey schemas
+`kim-cli-v1` examples are golden files generated from real runs. `noeul-ipc-v1` (Noeul's own
+IPC between its CLI and the running instance, [ADR 0023](adr/0023-noeul-app-foundation.md)) is
+checked against every message `crates/noeul` builds, and its CLI output against `cli-envelope-v1`,
+`tool-capabilities-v1` and `hotkeys-cli-v1`, by the `noeul` tests. The hotkey schemas
 (`kim-hotkeys-v1`, `kim-hotkey-manifest-v1`, `hotkeys-cli-v1`, `hotkey-scenarios-v1`) are
 implemented by the shared `kim-hotkeys` crate and `kim hotkeys` (Step 46), whose tests validate
 real output against them; for the scenarios, `schema-check` also recomputes every expected

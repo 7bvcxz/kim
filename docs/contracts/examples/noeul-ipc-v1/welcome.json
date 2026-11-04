@@ -1,0 +1,9 @@
+{
+  "type": "welcome",
+  "protocol": 1,
+  "instance": {
+    "pid": 4242,
+    "version": "0.0.1",
+    "started_at": "2026-11-04T10:15:00Z"
+  }
+}

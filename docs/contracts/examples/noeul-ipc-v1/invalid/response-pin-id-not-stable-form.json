@@ -1,0 +1,20 @@
+{
+  "type": "response",
+  "id": 5,
+  "result": {
+    "pins": [
+      {
+        "id": "p-01",
+        "rect": {
+          "x": 0,
+          "y": 0,
+          "width": 400,
+          "height": 300
+        },
+        "source": "capture",
+        "created_at": "2026-11-04T10:16:01Z"
+      }
+    ],
+    "reopenable": null
+  }
+}

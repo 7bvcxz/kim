@@ -218,7 +218,8 @@ OPTIONS:
     --no-input         Never ask; fail with `confirmation_required` instead (also KIM_NO_INPUT).
     -q, --quiet / -v, --verbose   Less / more diagnostics on stderr.
 
-Pre-alpha: no GUI, windows/panes splits, persistence or recovery yet (docs/PRODUCT_REQUIREMENTS.md);
+The window is a separate program, `subak-gui` (docs/SUBAK_GUI.md); no command here starts it.
+Pre-alpha: no tabs, windows/panes splits, persistence or recovery yet (docs/PRODUCT_REQUIREMENTS.md);
 history is never persisted.
 No command opens a window, installs anything or uses the network; no Windows service exists.
 ";
@@ -274,7 +275,8 @@ pub fn cli_main() -> ExitCode {
                  Commands: new, ls, info, status, attach, detach, rename, stop, kill, rm \
                  (named Terminals in the Host); capture, history, clear-history (scrollback); \
                  host start|status|health|attach|stop|serve; capabilities.\n\
-                 No GUI, splits, persistence or recovery yet.\n",
+                 The window is the separate program subak-gui; no tabs, splits, persistence\n\
+                 or recovery yet.\n",
                 env!("CARGO_PKG_VERSION")
             );
             ExitCode::SUCCESS

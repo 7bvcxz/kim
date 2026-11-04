@@ -88,3 +88,6 @@ not aligned to two cells).
   73.0 MiB / 12 threads. For Subak this is the fallback-B trigger of decision 4 ("memory budget
   missed or GPU stack undesired"): Step 16 builds the Subak window on plain Win32 with this
   renderer, or justifies the GPU stack's cost in its own ADR. Kim Manager keeps egui + glow.
+- 2026-11-04 (Step 16): the Subak window is plain Win32 with the `subak-term` renderer
+  ([ADR 0039](0039-subak-window-plain-win32-client.md)): measured idle in release 3.95 MiB
+  private, 5 threads, 0 CPU. egui + glow stays Kim Manager's toolkit only.

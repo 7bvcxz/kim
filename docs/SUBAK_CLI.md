@@ -18,7 +18,8 @@ verb does to processes are in [SESSION_MODEL.md](SESSION_MODEL.md); what runs in
 reproduces it, is in [SCROLLBACK.md](SCROLLBACK.md); the wire protocol is
 [IPC_PROTOCOL.md](contracts/IPC_PROTOCOL.md).
 
-Pre-alpha: there is no GUI, no split, no persistence and no recovery yet. No command opens a
+Pre-alpha: there are no tabs, no split, no persistence and no recovery yet; the window is the
+separate program `subak-gui` ([SUBAK_GUI](SUBAK_GUI.md)), which no `subak` command starts. No command opens a
 window, installs anything or uses the network, and the Host listens only on a local named pipe
 that only your user can open.
 

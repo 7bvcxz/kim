@@ -491,8 +491,9 @@ pub fn pin_list(ctx: &Ctx) -> Result<Outcome> {
             let mut rows = vec![vec![
                 "PIN".to_string(),
                 "RECT".into(),
-                "ZOOM".into(),
+                "VIEW".into(),
                 "STATE".into(),
+                "GROUP".into(),
                 "SOURCE".into(),
             ]];
             for p in &pins {
@@ -508,8 +509,9 @@ pub fn pin_list(ctx: &Ctx) -> Result<Outcome> {
                 rows.push(vec![
                     p["id"].as_str().unwrap_or("").into(),
                     format!("{},{},{},{}", r["x"], r["y"], r["width"], r["height"]),
-                    format!("{} %", p["zoom"]),
+                    view_words(p),
                     state.join(", "),
+                    p["group"].as_str().unwrap_or("").into(),
                     p["source"].as_str().unwrap_or("").into(),
                 ]);
             }
@@ -581,13 +583,41 @@ fn parse_point(text: &str) -> Option<Value> {
     Some(json!({"x": coord(x)?, "y": coord(y)?}))
 }
 
-/// The `id`/`all` parameters of a pin request.
+/// The `id`/`group`/`all` parameters of a pin request.
 #[cfg(windows)]
-fn targets(id: Option<&String>, dry_run: bool) -> Value {
-    match id {
-        Some(id) => json!({"id": id, "dry_run": dry_run}),
-        None => json!({"all": true, "dry_run": dry_run}),
+fn targets(id: Option<&String>, group: Option<&String>, dry_run: bool) -> Value {
+    match (id, group) {
+        (Some(id), _) => json!({"id": id, "dry_run": dry_run}),
+        (None, Some(g)) => json!({"group": g, "dry_run": dry_run}),
+        (None, None) => json!({"all": true, "dry_run": dry_run}),
     }
+}
+
+/// One pin's view in a line: `100 %, 90°, mirrored, 50 % opaque, thumbnail, click-through`.
+#[cfg(windows)]
+fn view_words(p: &Value) -> String {
+    let mut w = vec![format!("{} %", p["zoom"])];
+    let rot = p["orientation"]["rotation"].as_u64().unwrap_or(0);
+    if rot != 0 {
+        w.push(format!("{rot}\u{b0}"));
+    }
+    if p["orientation"]["mirrored"] == true {
+        w.push("mirrored".into());
+    }
+    let op = p["opacity"].as_u64().unwrap_or(100);
+    if op != 100 {
+        w.push(format!("{op} % opaque"));
+    }
+    if p["thumbnail"] == true {
+        w.push("thumbnail".into());
+    }
+    if p["click_through"] == true {
+        w.push("click-through".into());
+    }
+    if let Some(n) = p["animation"]["frames"].as_u64() {
+        w.push(format!("first of {n} GIF frames"));
+    }
+    w.join(", ")
 }
 
 /// Pin IDs of a result list, comma-separated.
@@ -605,7 +635,10 @@ fn names(v: &Value) -> String {
 pub fn pin_hide(ctx: &Ctx, a: &crate::PinHideArgs) -> Result<Outcome> {
     #[cfg(windows)]
     {
-        let v = session(ctx)?.request("pin.hide", targets(a.id.as_ref(), a.dry_run))?;
+        let v = session(ctx)?.request(
+            "pin.hide",
+            targets(a.id.as_ref(), a.group.as_ref(), a.dry_run),
+        )?;
         let list = names(&v["hidden"]);
         let human = match (list.is_empty(), a.dry_run) {
             (true, _) => "Nothing to hide.\n".to_string(),
@@ -625,7 +658,7 @@ pub fn pin_hide(ctx: &Ctx, a: &crate::PinHideArgs) -> Result<Outcome> {
 pub fn pin_show(ctx: &Ctx, a: &crate::PinShowArgs) -> Result<Outcome> {
     #[cfg(windows)]
     {
-        let mut params = targets(a.id.as_ref(), a.dry_run);
+        let mut params = targets(a.id.as_ref(), a.group.as_ref(), a.dry_run);
         params["on_screen"] = json!(a.on_screen);
         let v = session(ctx)?.request("pin.show", params)?;
         let (shown, moved) = (names(&v["shown"]), names(&v["moved"]));
@@ -659,7 +692,11 @@ pub fn pin_close(ctx: &Ctx, a: &crate::PinCloseArgs) -> Result<Outcome> {
     {
         let mut s = session(ctx)?;
         if !a.yes && !a.dry_run {
-            let what = a.id.clone().unwrap_or_else(|| "every pin".into());
+            let what = match (&a.id, &a.group) {
+                (Some(id), _) => id.clone(),
+                (None, Some(g)) => format!("every pin of group {g}"),
+                (None, None) => "every pin".into(),
+            };
             match confirm(
                 ctx,
                 &format!("Close {what}? Only the last closed pin can be reopened. [y/N]"),
@@ -678,10 +715,7 @@ pub fn pin_close(ctx: &Ctx, a: &crate::PinCloseArgs) -> Result<Outcome> {
                 }
             }
         }
-        let params = match &a.id {
-            Some(id) => json!({"id": id, "dry_run": a.dry_run}),
-            None => json!({"all": true, "dry_run": a.dry_run}),
-        };
+        let params = targets(a.id.as_ref(), a.group.as_ref(), a.dry_run);
         let v = s.request("pin.close", params)?;
         let names: Vec<&str> = v["closed"]
             .as_array()
@@ -719,6 +753,155 @@ pub fn pin_reopen(ctx: &Ctx, dry_run: bool) -> Result<Outcome> {
     #[cfg(not(windows))]
     {
         let _ = (ctx, dry_run);
+        Err(unsupported())
+    }
+}
+
+/// `noeul pin set`: changes pins precisely (Step 54). Every value is checked by the instance
+/// before anything changes; a dry run changes nothing.
+pub fn pin_set(ctx: &Ctx, a: &crate::PinSetArgs) -> Result<Outcome> {
+    let on = |v: &Option<String>| v.as_deref().map(|v| v == "on");
+    let mut params = json!({"dry_run": a.dry_run});
+    match (&a.id, &a.group) {
+        (Some(id), _) => params["id"] = json!(id),
+        (None, Some(g)) => params["group"] = json!(g),
+        (None, None) => params["all"] = json!(true),
+    }
+    if let Some(text) = &a.at {
+        params["at"] = parse_point(text).ok_or_else(|| {
+            NoeulError::new(Code::Usage, format!("`{text}` is not a point; use x,y"))
+                .hint("for example: noeul pin set pin-1 --at 100,200")
+        })?;
+    }
+    let mut put = |k: &str, v: Option<Value>| {
+        if let Some(v) = v {
+            params[k] = v;
+        }
+    };
+    put("zoom", a.zoom.map(|z| json!(z)));
+    put("opacity", a.opacity.map(|o| json!(o)));
+    put("rotate", a.rotate.as_ref().map(|r| json!(r)));
+    put(
+        "rotation",
+        a.rotation
+            .as_deref()
+            .and_then(|r| r.parse::<u32>().ok())
+            .map(|r| json!(r)),
+    );
+    put("flip", a.flip.as_ref().map(|f| json!(f)));
+    put("mirrored", on(&a.mirrored).map(|b| json!(b)));
+    put("thumbnail", on(&a.thumbnail).map(|b| json!(b)));
+    put("click_through", on(&a.click_through).map(|b| json!(b)));
+    put("move_to_group", a.move_to_group.as_ref().map(|g| json!(g)));
+    let given = params.as_object().map_or(0, |o| o.len());
+    if given <= 2 {
+        return Err(NoeulError::new(Code::Usage, "nothing to change").hint(
+            "give --at, --zoom, --opacity, --rotate, --rotation, --flip, --mirrored, --thumbnail, --click-through or --move-to-group",
+        ));
+    }
+    #[cfg(windows)]
+    {
+        let v = session(ctx)?.request("pin.set", params)?;
+        let mut human = String::new();
+        let changed = names(&v["changed"]);
+        if a.dry_run {
+            human.push_str(&format!(
+                "Would change: {} (dry run).\n",
+                names(&v["targets"])
+            ));
+        } else if changed.is_empty() {
+            human.push_str("Nothing changed.\n");
+        } else {
+            human.push_str(&format!("Changed: {changed}.\n"));
+        }
+        for p in v["pins"].as_array().into_iter().flatten() {
+            let r = &p["rect"];
+            human.push_str(&format!(
+                "  {} at {},{} {}\u{d7}{}: {} (group {})\n",
+                p["id"].as_str().unwrap_or(""),
+                r["x"],
+                r["y"],
+                r["width"],
+                r["height"],
+                view_words(p),
+                p["group"].as_str().unwrap_or("")
+            ));
+        }
+        Ok(Outcome::new(v, human))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = ctx;
+        Err(unsupported())
+    }
+}
+
+/// `noeul pin group list`: the groups and the current one.
+pub fn pin_group_list(ctx: &Ctx) -> Result<Outcome> {
+    #[cfg(windows)]
+    {
+        let v = session(ctx)?.request("group.list", json!({}))?;
+        let current = v["current"].as_str().unwrap_or("");
+        let mut rows = vec![vec![
+            "GROUP".to_string(),
+            "PINS".into(),
+            "HIDDEN".into(),
+            String::new(),
+        ]];
+        for g in v["groups"].as_array().into_iter().flatten() {
+            let name = g["name"].as_str().unwrap_or("");
+            rows.push(vec![
+                name.to_string(),
+                g["pins"].to_string(),
+                g["hidden"].to_string(),
+                if name == current {
+                    "current".into()
+                } else {
+                    String::new()
+                },
+            ]);
+        }
+        Ok(Outcome::new(v, noeul::util::table(&rows)))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = ctx;
+        Err(unsupported())
+    }
+}
+
+/// `noeul pin group switch <name>`: its pins show, every other pin hides, new pins go to it.
+pub fn pin_group_switch(ctx: &Ctx, a: &crate::PinGroupSwitchArgs) -> Result<Outcome> {
+    #[cfg(windows)]
+    {
+        let v = session(ctx)?.request(
+            "group.switch",
+            json!({"group": a.name, "dry_run": a.dry_run}),
+        )?;
+        let (shown, hidden) = (names(&v["shown"]), names(&v["hidden"]));
+        let none = |s: &str| {
+            if s.is_empty() {
+                "none".to_string()
+            } else {
+                s.to_string()
+            }
+        };
+        let human = format!(
+            "{} group {}: shown {}, hidden {}.\n",
+            if a.dry_run {
+                "Would switch to"
+            } else {
+                "Switched to"
+            },
+            v["group"].as_str().unwrap_or(""),
+            none(&shown),
+            none(&hidden)
+        );
+        Ok(Outcome::new(v, human))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (ctx, a);
         Err(unsupported())
     }
 }

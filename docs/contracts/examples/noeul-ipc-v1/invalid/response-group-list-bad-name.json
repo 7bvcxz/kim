@@ -1,0 +1,14 @@
+{
+  "type": "response",
+  "id": 25,
+  "result": {
+    "current": "default",
+    "groups": [
+      {
+        "name": "../escape",
+        "pins": 1,
+        "hidden": 0
+      }
+    ]
+  }
+}

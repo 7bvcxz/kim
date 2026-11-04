@@ -93,6 +93,13 @@ Flat by default. Overlays (menus, dialogs, floating manager) use `bg.overlay`, a
 `border.subtle` and one soft shadow (`0 8 24 rgba(0,0,0,0.45)`). No stacked shadows, blur or
 glass effects (they cost GPU time on idle windows).
 
+Noeul's floating pins (Step 54, [ADR 0044](adr/0044-noeul-pin-transforms-and-control.md)) use a
+1 px `border.subtle` outline (`pin.border`) and a smaller soft shadow, `pin.shadow`
+(`0 2 10 rgba(0,0,0,0.40)`), both switchable off. A pin window is hit-tested by its pixels, so its
+shadow is also the band that resizes it; the overlay's 24-pixel blur would make a ring around
+every pin catch clicks meant for the program below. The shadow is painted once into the pin's
+retained surface, never animated.
+
 ## 3. Components
 
 States for every interactive component: **rest · hover · pressed · focused (ring) · selected ·

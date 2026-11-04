@@ -33,14 +33,19 @@ Annotate before you pin, copy or save: the toolbar's rectangle, ellipse, line, a
 marker and text tools draw inside the selection (Ctrl+Z undoes, Ctrl+Y redoes, [ and ] or the
 wheel change the width, Esc leaves the tool and keeps the drawing); a label takes Korean and
 other input methods. Enter still pins, with the annotations.
-Pins float on top: drag to move, wheel or Plus/Minus to zoom, 0 or middle-click for 100 %,
-H hides, Esc closes, Shift+Esc destroys, Space edits the pin's annotations (Enter keeps them,
-Esc leaves the pin as it was), right-click (or Shift+F10) opens the pin's menu;
-`noeul pin list/hide/show/close` reach them from scripts. Pins live in memory only and do not
-survive a restart.
-Not in this build (labeled planned): mosaic, blur, eraser and redaction (57), pin transforms,
-opacity and click-through (54), settings window (61), capture to a file or the clipboard from
-the command line and `noeul pin <file>` (62).
+Annotation also has mosaic, blur, an eraser and an irreversible solid redaction.
+Pins float on top: drag to move, drag the border (or its shadow) to resize, wheel or Plus/Minus
+to zoom, Ctrl+wheel or Ctrl+Plus/Ctrl+Minus for opacity (never below 10 %), 1/2 rotate right
+and left, 3/4 flip, T or Shift+double-click for a thumbnail, Ctrl+Shift+T lets clicks pass
+through (the tray's Make all pins clickable, a second `noeul start` or `noeul pin set --all
+--click-through off` bring them back), 0 or middle-click for 100 % and opaque, H hides, Esc
+closes, Shift+Esc destroys, Space edits the pin's annotations (Enter keeps them, Esc leaves the
+pin as it was), right-click (or Shift+F10) opens the pin's menu. `noeul pin
+list/hide/show/close/set` and `noeul pin group list/switch` reach them from scripts. Pins live in
+memory only and do not survive a restart.
+Not in this build (labeled planned): animated GIF pins (a pin of an animated GIF shows its first
+frame and says so), settings window (61), capture to a file or the clipboard from the command
+line and `noeul pin <file>` (62).
 
 Exit codes: 0 ok · 1 failure (I/O, permission) · 2 usage · 3 not found (not running, no pin)
             4 integrity (protocol, identity) · 5 incompatible or unsupported platform
@@ -60,8 +65,9 @@ Exit codes: 0 ok · 1 failure (I/O, permission) · 2 usage · 3 not found (not r
         over a frozen picture of every monitor and pin it with a double-click inside it (or \
         Enter), copy it or save it, F3 to pin the clipboard image, pins of a screen region or \
         the clipboard requested from the command line, and the floating pin engine: \
-        always-on-top pins that move, zoom, hide, show and close independently, each with its \
-        own context menu.\n\n\
+        always-on-top pins that move, zoom, resize, rotate, flip, fade, shrink to thumbnails, let \
+        clicks through, hide, show, group and close independently, each with its own context \
+        menu.\n\n\
         Noeul never captures on its own, never watches the clipboard, writes a picture to disk \
         only when you save one, uses no network, installs no hook or service, and never \
         captures a locked, secure or other user's desktop.",
@@ -110,7 +116,7 @@ enum Command {
     /// region selection overlay as F1 does
     Capture(CaptureArgs),
     /// Pins of the running instance: `noeul pin --clipboard` pins the clipboard image; the
-    /// subcommands list, hide, show, close and reopen pins
+    /// subcommands list, hide, show, close, reopen and change pins, and switch groups
     Pin(PinArgs),
     /// Noeul's keyboard shortcuts: list, change, disable, reset, check conflicts (never
     /// registers a hotkey or opens a window)
@@ -221,13 +227,87 @@ enum PinCommand {
     Close(PinCloseArgs),
     /// Reopen the last closed pin
     Reopen(DryRun),
+    /// Change pins precisely: place, zoom, opacity, rotation and flips, thumbnail,
+    /// click-through, group (every change can be undone the same way)
+    Set(Box<PinSetArgs>),
+    /// Pin groups: list them, or switch to one (its pins show, the others hide)
+    #[command(subcommand)]
+    Group(PinGroupCommand),
+}
+
+#[derive(Debug, Subcommand)]
+enum PinGroupCommand {
+    /// The groups, their pins and the current group
+    List,
+    /// Switch to a group (created when new): its pins show, every other pin hides, new pins go
+    /// to it
+    Switch(PinGroupSwitchArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct PinGroupSwitchArgs {
+    /// The group's name (1–32 letters, digits, spaces, `-`, `_` or `.`)
+    pub name: String,
+    /// Show what would change; change nothing
+    #[arg(long)]
+    pub dry_run: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct PinSetArgs {
+    /// The pin ID, e.g. pin-1
+    #[arg(required_unless_present_any = ["all", "group"], conflicts_with_all = ["all", "group"])]
+    pub id: Option<String>,
+    /// Every pin
+    #[arg(long, conflicts_with = "group")]
+    pub all: bool,
+    /// Every pin of this group
+    #[arg(long, value_name = "NAME")]
+    pub group: Option<String>,
+    /// Put the picture's top-left corner exactly here: x,y in device pixels (one pin)
+    #[arg(long, value_name = "X,Y", allow_hyphen_values = true, requires = "id")]
+    pub at: Option<String>,
+    /// Zoom in percent, 10–800 (100: one image pixel per device pixel)
+    #[arg(long, value_name = "PERCENT", value_parser = clap::value_parser!(u32).range(10..=800))]
+    pub zoom: Option<u32>,
+    /// Opacity in percent, 10–100
+    #[arg(long, value_name = "PERCENT", value_parser = clap::value_parser!(u32).range(10..=100))]
+    pub opacity: Option<u32>,
+    /// Turn a quarter: cw (right) or ccw (left)
+    #[arg(long, value_parser = ["cw", "ccw"])]
+    pub rotate: Option<String>,
+    /// The rotation in degrees clockwise: 0, 90, 180 or 270
+    #[arg(long, value_parser = ["0", "90", "180", "270"])]
+    pub rotation: Option<String>,
+    /// Flip as shown: horizontal or vertical
+    #[arg(long, value_parser = ["horizontal", "vertical"])]
+    pub flip: Option<String>,
+    /// Mirrored left-right before the rotation: on or off (`--rotation 0 --mirrored off` is the
+    /// picture as captured)
+    #[arg(long, value_parser = ["on", "off"])]
+    pub mirrored: Option<String>,
+    /// Thumbnail mode: on or off
+    #[arg(long, value_parser = ["on", "off"])]
+    pub thumbnail: Option<String>,
+    /// Let mouse clicks pass through the pin: on or off
+    #[arg(long, value_parser = ["on", "off"])]
+    pub click_through: Option<String>,
+    /// Move the pins to this group
+    #[arg(long, value_name = "NAME")]
+    pub move_to_group: Option<String>,
+    /// Show what would change; change nothing
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 #[derive(Debug, Args)]
 pub struct PinHideArgs {
     /// The pin ID, e.g. pin-1
-    #[arg(required_unless_present = "all", conflicts_with = "all")]
+    #[arg(required_unless_present_any = ["all", "group"], conflicts_with_all = ["all", "group"])]
     pub id: Option<String>,
+    /// Every pin of this group
+    #[arg(long, value_name = "NAME", conflicts_with = "all")]
+    pub group: Option<String>,
     /// Every pin
     #[arg(long)]
     pub all: bool,
@@ -239,8 +319,11 @@ pub struct PinHideArgs {
 #[derive(Debug, Args)]
 pub struct PinShowArgs {
     /// The pin ID, e.g. pin-1
-    #[arg(required_unless_present = "all", conflicts_with = "all")]
+    #[arg(required_unless_present_any = ["all", "group"], conflicts_with_all = ["all", "group"])]
     pub id: Option<String>,
+    /// Every pin of this group
+    #[arg(long, value_name = "NAME", conflicts_with = "all")]
+    pub group: Option<String>,
     /// Every pin
     #[arg(long)]
     pub all: bool,
@@ -256,8 +339,11 @@ pub struct PinShowArgs {
 #[derive(Debug, Args)]
 pub struct PinCloseArgs {
     /// The pin ID, e.g. pin-1
-    #[arg(required_unless_present = "all", conflicts_with = "all")]
+    #[arg(required_unless_present_any = ["all", "group"], conflicts_with_all = ["all", "group"])]
     pub id: Option<String>,
+    /// Every pin of this group
+    #[arg(long, value_name = "NAME", conflicts_with = "all")]
+    pub group: Option<String>,
     /// Close every pin
     #[arg(long)]
     pub all: bool,
@@ -283,7 +369,7 @@ enum ConfigCommand {
     /// Change one setting in config.toml (e.g. `gestures.double_click copy`, or
     /// `gestures.preset snipaste` for the opt-in Snipaste-style gestures)
     Set(config_cmd::SetArgs),
-    /// Reset settings to their defaults: one section (general, capture, gestures) or all
+    /// Reset settings to their defaults: one section (general, capture, gestures, pins) or all
     Reset(config_cmd::ResetArgs),
 }
 
@@ -395,6 +481,11 @@ fn main() -> ExitCode {
             Some(PinCommand::Show(a)) => instance::pin_show(&ctx, a),
             Some(PinCommand::Close(a)) => instance::pin_close(&ctx, a),
             Some(PinCommand::Reopen(a)) => instance::pin_reopen(&ctx, a.dry_run),
+            Some(PinCommand::Set(a)) => instance::pin_set(&ctx, a),
+            Some(PinCommand::Group(PinGroupCommand::List)) => instance::pin_group_list(&ctx),
+            Some(PinCommand::Group(PinGroupCommand::Switch(a))) => {
+                instance::pin_group_switch(&ctx, a)
+            }
         },
         Command::Hotkeys(c) => hotkeys_cmd::run(c, &ctx),
         Command::Config(ConfigCommand::Show) => instance::config_show(),
@@ -422,6 +513,9 @@ fn command_name(c: &Command) -> &'static str {
             Some(PinCommand::Show(_)) => "pin.show",
             Some(PinCommand::Close(_)) => "pin.close",
             Some(PinCommand::Reopen(_)) => "pin.reopen",
+            Some(PinCommand::Set(_)) => "pin.set",
+            Some(PinCommand::Group(PinGroupCommand::List)) => "pin.group.list",
+            Some(PinCommand::Group(PinGroupCommand::Switch(_))) => "pin.group.switch",
         },
         Command::Hotkeys(c) => hotkeys_cmd::command_name(c),
         Command::Config(ConfigCommand::Show) => "config.show",

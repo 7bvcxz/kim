@@ -72,9 +72,10 @@ background service.
 - Every feature also gets an e2e scenario in `e2e/tests/` (one file per Step,
   `stepNN_<topic>.rs`). E2E tests are `#[ignore]`d **and** refuse to run unless started by
   `cargo xtask e2e`.
-- The e2e suite runs **once per 15 processed Step issues**. `cargo xtask e2e` checks
-  [e2e/LEDGER.md](e2e/LEDGER.md) and refuses otherwise. Record every processed Step and every
-  e2e run in the ledger.
+- The e2e suite runs **once a day** in the `Daily` GitHub Actions workflow
+  (`cargo xtask e2e --scheduled`); `cargo xtask e2e` refuses other runs unless `--force` is
+  given with a justification. Record every processed Step and every e2e run in
+  [e2e/LEDGER.md](e2e/LEDGER.md).
 
 ## Versioning conventions
 
@@ -104,10 +105,13 @@ together in a dedicated change, at most once per Rust release cycle, after `carg
 This repository does not use pull requests (see [AGENTS.md](AGENTS.md) §6).
 
 - Branch per issue; reference the issue (`Refs #N`) and requirement IDs in commits.
-- Push the branch: CI runs on every branch push. It must pass: Windows fmt/clippy/tests/docs,
-  the Linux compile check, and the dependency policy.
-- Merge into `main` locally with `git merge --no-ff` after the branch's CI is green and
-  `cargo xtask ci` passes on the merged result, then push `main`.
+- Push the branch. No CI runs on push: `cargo xtask ci` (fmt, clippy, tests, docs, schema,
+  design and deps checks) must pass locally on the branch, and again on the merged result.
+  Run `cargo deny check advisories licenses bans sources` when dependencies change.
+- Merge into `main` locally with `git merge --no-ff`, then push `main`.
+- The `Daily` GitHub Actions workflow runs the e2e suite (Windows) and the dependency policy
+  once a day (and on demand via `workflow_dispatch`). No Linux build or test for now
+  (AGENTS.md §3).
 - Keep changes focused; update the docs your change affects.
 
 ## License

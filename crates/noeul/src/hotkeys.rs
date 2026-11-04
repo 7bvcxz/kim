@@ -36,7 +36,11 @@
 //! (`Delete`), `annotate.select-next`/`-previous` (`N`/`Shift+N`) and the order keys (`PageUp`,
 //! `PageDown`, `Shift+PageUp`, `Shift+PageDown`) — and `pin.annotate` (`Space`). Step 57 added
 //! the privacy tools `annotate.mosaic`, `annotate.blur`, `annotate.eraser` and `annotate.redact`
-//! (bindable, no default).
+//! (bindable, no default). Step 54 added the pin transforms — `pin.rotate-cw`/`-ccw` (`1`/`2`),
+//! `pin.flip-horizontal`/`-vertical` (`3`/`4`), `pin.opacity-up`/`-down` (`Ctrl+Plus`/
+//! `Ctrl+Minus`), `pin.thumbnail` (`T`), `pin.click-through` (`Ctrl+Shift+T`) and `pin.group-new`
+//! (no default) — and the first global actions without defaults, `pins.clickable` and
+//! `pins.toggle-hidden` (the user binds them; HOTKEY_CONTRACT §7.5).
 
 use crate::paths::Paths;
 use kim_hotkeys::check::{Conflict, Severity, ToolState, analyze};
@@ -58,6 +62,8 @@ pub const TOOL: &str = "noeul";
 pub const IMPLEMENTED: &[&str] = &[
     "capture.region",
     "paste.float",
+    "pins.clickable",
+    "pins.toggle-hidden",
     "capture.pin",
     "capture.copy",
     "capture.save",
@@ -118,11 +124,20 @@ pub const IMPLEMENTED: &[&str] = &[
     "pin.zoom-in",
     "pin.zoom-out",
     "pin.zoom-reset",
+    "pin.opacity-up",
+    "pin.opacity-down",
+    "pin.rotate-cw",
+    "pin.rotate-ccw",
+    "pin.flip-horizontal",
+    "pin.flip-vertical",
     "pin.move-up",
     "pin.move-down",
     "pin.move-left",
     "pin.move-right",
+    "pin.thumbnail",
     "pin.hide",
+    "pin.click-through",
+    "pin.group-new",
     "pin.annotate",
 ];
 
@@ -716,6 +731,14 @@ impl Manager {
             })
     }
 
+    /// Whether a global binding of `action` is registered now (a way back from click-through,
+    /// Step 54).
+    pub fn is_registered(&self, action: &str) -> bool {
+        self.registrations
+            .iter()
+            .any(|r| r.action == action && r.status == "registered")
+    }
+
     pub fn registrations(&self) -> &[Registration] {
         &self.registrations
     }
@@ -1031,10 +1054,28 @@ mod tests {
             keys.lookup(&c("H", false, false, false), false),
             Some("pin.hide")
         );
+        // Step 54: the transforms.
+        for (chord, want) in [
+            (c("T", false, false, false), "pin.thumbnail"),
+            (c("1", false, false, false), "pin.rotate-cw"),
+            (c("2", false, false, false), "pin.rotate-ccw"),
+            (c("3", false, false, false), "pin.flip-horizontal"),
+            (c("4", false, false, false), "pin.flip-vertical"),
+            (c("Plus", true, false, false), "pin.opacity-up"),
+            (c("Minus", true, false, false), "pin.opacity-down"),
+            (c("T", true, false, true), "pin.click-through"),
+        ] {
+            assert_eq!(keys.lookup(&chord, false), Some(want), "{chord:?}");
+        }
         assert_eq!(
-            keys.lookup(&c("T", false, false, false), false),
+            keys.lookup(&c("Plus", false, false, false), false),
+            Some("pin.zoom-in"),
+            "Ctrl tells opacity from zoom: no conflict"
+        );
+        assert_eq!(
+            keys.lookup(&c("1", false, false, false), true),
             None,
-            "thumbnails are not in this build"
+            "a held 1 turns the pin once"
         );
         assert_eq!(
             keys.lookup(&c("F3", false, false, false), false),

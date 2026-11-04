@@ -1,0 +1,17 @@
+{
+  "type": "request",
+  "id": 23,
+  "method": "pin.set",
+  "params": {
+    "id": "pin-1",
+    "at": {
+      "x": -1910,
+      "y": 40
+    },
+    "zoom": 150,
+    "rotation": 0,
+    "mirrored": false,
+    "move_to_group": "research",
+    "dry_run": true
+  }
+}

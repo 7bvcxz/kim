@@ -152,7 +152,9 @@ screenshot and pin utility) and `ddalgak` (an AutoHotkey-style automation engine
 Ddalgak are `support: in-development` with `releases: []` and the metadata of §2.1: features,
 `runs: tray`, planned GUI, CLI and MCP entry points, links to their design issues and to the
 hotkey contract, their shortcut summaries (Noeul: `F1` and `F3` global with the `register`
-backend; Ddalgak: `hook` backend, only the fixed emergency chord bound) and their permissions
+backend, and since `catalog_version` 5 (Step 54) the global `pins.clickable` and
+`pins.toggle-hidden` with no default keys; Ddalgak: `hook` backend, only the fixed emergency
+chord bound) and their permissions
 (Ddalgak's keyboard hook, input injection and program launching are `opt_in`). Tests keep this
 honest (`the_bundled_catalog_lists_noeul_and_ddalgak_as_planned_tools_with_metadata`,
 `bundled_shortcut_summaries_match_the_contract_hotkey_manifests`). Each tool's release Step

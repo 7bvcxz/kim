@@ -6,16 +6,18 @@
 //! write and closed at once; when another program keeps it open the attempt is retried for at
 //! most 500 ms and then reported (`clipboard_unavailable`). Formats read in this build:
 //! `CF_DIBV5`, then `CF_DIB` (Windows synthesizes them from bitmaps, so screenshots and images
-//! copied from most programs qualify). A copy writes the registered `PNG` format and `CF_DIBV5`
+//! copied from most programs qualify), and since Step 54 the registered `GIF` format's frame
+//! count only, so a pin of an animated GIF's first frame says so (NOEUL-FR-068). A copy writes the registered `PNG` format and `CF_DIBV5`
 //! (Windows synthesizes `CF_DIB` and `CF_BITMAP` from it), plus `CanUploadToCloudClipboard` = 0
 //! so the picture stays out of cloud clipboard sync (NOEUL-FR-034's default; whether it shows in
 //! the local clipboard history stays the user's Windows setting). Nothing read or written here
 //! is logged or stored beyond what the user asked for. Pinning never calls this module
 //! (NOEUL-FR-025).
 
+use crate::app::Pasted;
 use crate::dib;
 use crate::error::{Code, NoeulError};
-use crate::frame::{Frame, Ledger};
+use crate::frame::Ledger;
 use crate::win::wide;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -65,9 +67,51 @@ fn open_for(owner: HWND) -> Result<Open, NoeulError> {
     }
 }
 
-/// The clipboard's image, decoded into a frame at (0, 0).
-pub fn read_image(ledger: &Arc<Ledger>) -> Result<Frame, NoeulError> {
+/// The bytes of one clipboard format while the clipboard is open, handed to `f`.
+fn with_data<T>(format: u32, f: impl FnOnce(&[u8]) -> T) -> Option<T> {
+    // SAFETY: plain query while the clipboard is open.
+    if unsafe { IsClipboardFormatAvailable(format) } == 0 {
+        return None;
+    }
+    // SAFETY: the clipboard is open; the handle stays owned by the clipboard.
+    let h = unsafe { GetClipboardData(format) };
+    if h.is_null() {
+        return None;
+    }
+    // SAFETY: global-memory clipboard data; locking gives a pointer to its bytes, unlocked below
+    // before the clipboard closes.
+    let p = unsafe { GlobalLock(h) };
+    if p.is_null() {
+        return None;
+    }
+    // SAFETY: the size of the same global block.
+    let size = unsafe { GlobalSize(h) };
+    // SAFETY: `p` points to `size` readable bytes while the block is locked.
+    let r = f(unsafe { std::slice::from_raw_parts(p.cast::<u8>(), size) });
+    // SAFETY: balances the GlobalLock above.
+    unsafe { GlobalUnlock(h) };
+    Some(r)
+}
+
+/// How many frames the GIF next to the clipboard's image has (the registered `GIF` format that
+/// programs copying a GIF offer); 1 when there is none or it cannot be read (Step 54,
+/// NOEUL-FR-068). Only the block structure is walked, nothing is decoded.
+fn gif_frames() -> u32 {
+    // SAFETY: registers (or looks up) the documented format name.
+    let format = unsafe { RegisterClipboardFormatW(wide("GIF").as_ptr()) };
+    if format == 0 {
+        return 1;
+    }
+    with_data(format, |b| crate::gif::frame_count(b).unwrap_or(1))
+        .unwrap_or(1)
+        .max(1)
+}
+
+/// The clipboard's image, decoded into a frame at (0, 0), and the frame count of an animated
+/// GIF offered next to it (its first frame is the image; NOEUL-FR-068).
+pub fn read_image(ledger: &Arc<Ledger>) -> Result<Pasted, NoeulError> {
     let _open = open()?;
+    let frames = gif_frames();
     for format in [CF_DIBV5, CF_DIB] {
         // SAFETY: plain query while the clipboard is open.
         if unsafe { IsClipboardFormatAvailable(u32::from(format)) } == 0 {
@@ -91,11 +135,14 @@ pub fn read_image(ledger: &Arc<Ledger>) -> Result<Frame, NoeulError> {
         let frame = dib::decode(ledger, bytes);
         // SAFETY: balances the GlobalLock above.
         unsafe { GlobalUnlock(h) };
-        return frame;
+        return frame.map(|frame| Pasted { frame, frames });
     }
     Err(
-        NoeulError::new(Code::NothingToPin, "the clipboard holds no image")
-            .hint("copy an image first; text, HTML, color and file cards are planned (Step 55)"),
+        NoeulError::new(Code::NothingToPin, "the clipboard holds no image").hint(if frames > 1 {
+            "the clipboard holds only an animated GIF; pins of GIF files are not supported yet"
+        } else {
+            "copy an image first; text, HTML, color and file cards are planned (Step 55)"
+        }),
     )
 }
 

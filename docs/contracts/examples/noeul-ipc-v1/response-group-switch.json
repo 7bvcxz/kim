@@ -1,0 +1,15 @@
+{
+  "type": "response",
+  "id": 24,
+  "result": {
+    "dry_run": false,
+    "group": "research",
+    "shown": [
+      "pin-4"
+    ],
+    "hidden": [
+      "pin-1",
+      "pin-3"
+    ]
+  }
+}

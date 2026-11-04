@@ -46,7 +46,7 @@ use crate::app::{App, Identity, OverlayEvent, OverlayWindow, Shell};
 use crate::capture::{CaptureBackend, Synthetic};
 use crate::detect::{ElementRequest, Snapshot};
 use crate::error::{Code, NoeulError, Result};
-use crate::frame::{Frame, Ledger, Rect};
+use crate::frame::{Ledger, Rect};
 use crate::hotkeys::{self, Manager};
 use crate::ipc;
 use crate::paths::Paths;
@@ -156,7 +156,7 @@ impl Shell for WinShell {
         &mut self.windows
     }
 
-    fn clipboard_image(&mut self, ledger: &Arc<Ledger>) -> Result<Frame> {
+    fn clipboard_image(&mut self, ledger: &Arc<Ledger>) -> Result<crate::app::Pasted> {
         crate::win::clipboard::read_image(ledger)
     }
 
@@ -454,7 +454,7 @@ unsafe extern "system" fn control_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPA
                     }
                     crate::tray::Click::Right => {
                         // The menu is modal: build it, release the core, then run the choice.
-                        if let Some(items) = with_app(|a| a.tray_menu()) {
+                        if let Some(items) = with_app(|a| a.tray_entries()) {
                             let choice = TRAY.with(|t| {
                                 t.try_borrow()
                                     .ok()

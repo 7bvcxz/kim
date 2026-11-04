@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/hellomouv/kim/blob/main/docs/contracts/schemas/noeul-ipc-v1.schema.json",
   "title": "Noeul IPC v1 message",
-  "description": "One JSON frame between the noeul CLI and the running Noeul instance (4-byte little-endian length, then the UTF-8 JSON object; at most 65536 bytes). See docs/adr/0023-noeul-app-foundation.md §4, docs/adr/0029-noeul-pin-engine.md (pin methods, Step 53) and crates/noeul/src/ipc.rs. Errors carry registered CLI error codes (docs/CLI_CONTRACT.md §6). Pictures never cross the pipe; results carry IDs, geometry and counts only (NOEUL-SEC-008).",
+  "description": "One JSON frame between the noeul CLI and the running Noeul instance (4-byte little-endian length, then the UTF-8 JSON object; at most 65536 bytes). See docs/adr/0023-noeul-app-foundation.md §4, docs/adr/0029-noeul-pin-engine.md (pin methods, Step 53), docs/adr/0044-noeul-pin-transforms-and-control.md (pin.set, groups, Step 54) and crates/noeul/src/ipc.rs. Errors carry registered CLI error codes (docs/CLI_CONTRACT.md §6). Pictures never cross the pipe; results carry IDs, geometry and counts only (NOEUL-SEC-008).",
   "oneOf": [
     { "$ref": "#/$defs/hello" },
     { "$ref": "#/$defs/welcome" },
@@ -48,7 +48,19 @@
         "y": { "type": "integer", "minimum": -1000000, "maximum": 1000000 }
       }
     },
-    "zoom": { "description": "Pin zoom in percent; 100 = one image pixel per device pixel (Step 53).", "type": "integer", "minimum": 10, "maximum": 800 },
+    "zoom": { "description": "Pin zoom in percent; 100 = one image pixel per device pixel (Step 53); any whole percent since border resizing (Step 54).", "type": "integer", "minimum": 10, "maximum": 800 },
+    "opacity": { "description": "Pin opacity in percent; never below 10 (Step 54, NOEUL-FR-062).", "type": "integer", "minimum": 10, "maximum": 100 },
+    "group_name": { "description": "A pin group (Step 54): 1–32 letters, digits, spaces, `-`, `_` or `.`, starting with a letter or digit.", "type": "string", "pattern": "^[\\p{L}\\p{N}][\\p{L}\\p{N} ._-]{0,31}$" },
+    "orientation": {
+      "description": "How a pin is turned (Step 54): mirrored left-right first, then rotated clockwise.",
+      "type": "object",
+      "required": ["rotation", "mirrored"],
+      "additionalProperties": false,
+      "properties": {
+        "rotation": { "enum": [0, 90, 180, 270] },
+        "mirrored": { "type": "boolean" }
+      }
+    },
     "rect": {
       "description": "Device pixels of the virtual desktop.",
       "type": "object",
@@ -124,12 +136,12 @@
       "properties": {
         "type": { "const": "request" },
         "id": { "type": "integer", "minimum": 1 },
-        "method": { "enum": ["status", "activate", "capture", "capture.region", "capture.cancel", "pin.list", "pin.create", "pin.hide", "pin.show", "pin.close", "pin.reopen", "hotkeys.reload", "settings.reload", "quit"] },
+        "method": { "enum": ["status", "activate", "capture", "capture.region", "capture.cancel", "pin.list", "pin.create", "pin.hide", "pin.show", "pin.close", "pin.reopen", "pin.set", "group.list", "group.switch", "hotkeys.reload", "settings.reload", "quit"] },
         "params": { "$ref": "#/$defs/params" }
       }
     },
     "params": {
-      "description": "Parameters of every method (absent flags are false). capture: region and pin (required); capture.region and capture.cancel: dry_run only; pin.create: source (region with region, or clipboard with an optional at); pin.hide, pin.show and pin.close: id or all; pin.show: on_screen; quit: force.",
+      "description": "Parameters of every method (absent flags are false). capture: region and pin (required); capture.region and capture.cancel: dry_run only; pin.create: source (region with region, or clipboard with an optional at); pin.hide, pin.show, pin.close and pin.set: id, group or all; pin.show: on_screen; pin.set: at (one pin), zoom, opacity, rotation, mirrored, rotate, flip, thumbnail, click_through, move_to_group (Step 54); group.switch: group; quit: force.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -141,8 +153,18 @@
         "force": { "type": "boolean" },
         "reason": { "enum": ["start"] },
         "source": { "description": "pin.create: what the instance reads itself (Step 53).", "enum": ["region", "clipboard"] },
-        "at": { "description": "pin.create with source clipboard: where the picture's top-left corner goes (default: the pointer).", "$ref": "#/$defs/point" },
-        "on_screen": { "description": "pin.show: also move pins no monitor shows into the nearest work area (NOEUL-FR-067).", "type": "boolean" }
+        "at": { "description": "pin.create with source clipboard: where the picture's top-left corner goes (default: the pointer); pin.set: where one pin's picture goes exactly (Step 54).", "$ref": "#/$defs/point" },
+        "on_screen": { "description": "pin.show: also move pins no monitor shows into the nearest work area (NOEUL-FR-067).", "type": "boolean" },
+        "group": { "description": "pin.hide, pin.show, pin.close and pin.set: every pin of this group; group.switch: the group to switch to (Step 54, NOEUL-FR-064).", "$ref": "#/$defs/group_name" },
+        "zoom": { "description": "pin.set: the zoom (Step 54).", "$ref": "#/$defs/zoom" },
+        "opacity": { "description": "pin.set: the opacity (Step 54, NOEUL-FR-062).", "$ref": "#/$defs/opacity" },
+        "rotation": { "description": "pin.set: the rotation in degrees clockwise (absolute).", "enum": [0, 90, 180, 270] },
+        "mirrored": { "description": "pin.set: mirrored left-right before the rotation (absolute).", "type": "boolean" },
+        "rotate": { "description": "pin.set: a quarter turn right (cw) or left (ccw), after rotation and mirrored.", "enum": ["cw", "ccw"] },
+        "flip": { "description": "pin.set: a flip as shown, after rotate.", "enum": ["horizontal", "vertical"] },
+        "thumbnail": { "description": "pin.set: thumbnail mode on or off.", "type": "boolean" },
+        "click_through": { "description": "pin.set: let mouse clicks pass through the pins (NOEUL-FR-063); the CLI's caller keeps the CLI as its way back.", "type": "boolean" },
+        "move_to_group": { "description": "pin.set: move the pins to this group.", "$ref": "#/$defs/group_name" }
       }
     },
     "response_ok": {
@@ -165,6 +187,9 @@
             { "$ref": "#/$defs/pin_show_result" },
             { "$ref": "#/$defs/pin_close_result" },
             { "$ref": "#/$defs/pin_reopen_result" },
+            { "$ref": "#/$defs/pin_set_result" },
+            { "$ref": "#/$defs/group_list_result" },
+            { "$ref": "#/$defs/group_switch_result" },
             { "$ref": "#/$defs/reload_result" },
             { "$ref": "#/$defs/settings_reload_result" },
             { "$ref": "#/$defs/quit_result" }
@@ -255,7 +280,7 @@
     },
     "settings_state": {
       "type": "object",
-      "required": ["path", "state", "tray_icon", "keyboard_help", "quick_save_folder", "detection", "magnifier", "gestures", "problems"],
+      "required": ["path", "state", "tray_icon", "keyboard_help", "quick_save_folder", "detection", "magnifier", "pins", "gestures", "problems"],
       "additionalProperties": false,
       "properties": {
         "path": { "type": "string", "minLength": 1 },
@@ -265,6 +290,16 @@
         "quick_save_folder": { "description": "`[capture] quick_save_folder` (Step 51); null: the Pictures folder + Noeul.", "type": ["string", "null"] },
         "detection": { "description": "`[capture] detection` (Step 52, NOEUL-FR-040): what the overlay detects under the pointer when it opens.", "enum": ["window", "element", "off"] },
         "magnifier": { "description": "`[capture] magnifier` (Step 52, NOEUL-FR-041): whether the overlay shows the magnifier when it opens.", "enum": ["on", "off"] },
+        "pins": {
+          "description": "`[pins]` (Step 54, UX spec §10): the outline and the shadow around every pin.",
+          "type": "object",
+          "required": ["border", "shadow"],
+          "additionalProperties": false,
+          "properties": {
+            "border": { "enum": ["on", "off"] },
+            "shadow": { "enum": ["on", "off"] }
+          }
+        },
         "gestures": {
           "description": "`[gestures]` (Step 51, NOEUL-FR-024): what a double-click and a middle-click inside a confirmed selection do, and the preset's name.",
           "type": "object",
@@ -303,13 +338,17 @@
         "capture_backend": { "description": "`synthetic` only in a debug build with the test hook NOEUL_DEV_SYNTHETIC_DESKTOP (ADR 0026).", "enum": ["gdi", "unsupported", "synthetic"] },
         "pins": {
           "type": "object",
-          "required": ["open", "reopenable", "hidden", "off_screen", "editor"],
+          "required": ["open", "reopenable", "hidden", "off_screen", "click_through", "thumbnails", "group", "groups", "editor"],
           "additionalProperties": false,
           "properties": {
             "open": { "$ref": "#/$defs/u64" },
             "reopenable": { "oneOf": [{ "$ref": "#/$defs/pin_id" }, { "type": "null" }] },
             "hidden": { "description": "Open pins that are hidden (Step 53).", "$ref": "#/$defs/u64" },
             "off_screen": { "description": "Open pins no monitor shows enough of to reach, e.g. after a monitor was removed (Step 53, NOEUL-FR-067).", "$ref": "#/$defs/u64" },
+            "click_through": { "description": "Open pins that let mouse clicks pass through (Step 54, NOEUL-FR-063).", "$ref": "#/$defs/u64" },
+            "thumbnails": { "description": "Open pins in thumbnail mode (Step 54).", "$ref": "#/$defs/u64" },
+            "group": { "description": "The current group: new pins go to it (Step 54).", "$ref": "#/$defs/group_name" },
+            "groups": { "description": "How many groups there are, the current one included.", "type": "integer", "minimum": 1 },
             "editor": { "description": "The annotation editor of a pin (`pin.annotate`, Step 56), while one is open.", "oneOf": [{ "$ref": "#/$defs/overlay_state" }, { "type": "null" }] }
           }
         },
@@ -377,12 +416,13 @@
     },
     "activate_result": {
       "type": "object",
-      "required": ["activated", "pid", "settings_window"],
+      "required": ["activated", "pid", "settings_window", "clickable"],
       "additionalProperties": false,
       "properties": {
         "activated": { "const": true },
         "pid": { "$ref": "#/$defs/u64" },
-        "settings_window": { "enum": ["planned", "opened"] }
+        "settings_window": { "enum": ["planned", "opened"] },
+        "clickable": { "description": "Pins that let clicks through and were made clickable again by this second start (Step 54, NOEUL-FR-063).", "type": "array", "items": { "$ref": "#/$defs/pin_id" } }
       }
     },
     "pin_ref": {
@@ -391,7 +431,7 @@
       "additionalProperties": false,
       "properties": {
         "id": { "$ref": "#/$defs/pin_id" },
-        "rect": { "description": "The pin window on screen: position and size at its zoom.", "$ref": "#/$defs/rect" },
+        "rect": { "description": "The picture on screen: position and shown size (at its zoom, turned, or the thumbnail); the window adds the outline and shadow around it.", "$ref": "#/$defs/rect" },
         "source": { "enum": ["capture", "clipboard"] },
         "zoom": { "$ref": "#/$defs/zoom" }
       }
@@ -567,39 +607,108 @@
     },
     "pin_list_result": {
       "type": "object",
-      "required": ["pins", "reopenable"],
+      "required": ["pins", "reopenable", "group"],
       "additionalProperties": false,
       "properties": {
         "pins": {
           "type": "array",
-          "items": {
-            "type": "object",
-            "required": ["id", "rect", "image", "zoom", "visible", "on_screen", "source", "created_at", "annotations", "editing"],
-            "additionalProperties": false,
-            "properties": {
-              "id": { "$ref": "#/$defs/pin_id" },
-              "rect": { "description": "The pin window on screen: position and size at its zoom.", "$ref": "#/$defs/rect" },
-              "image": {
-                "description": "The picture's size in pixels (100 %).",
-                "type": "object",
-                "required": ["width", "height"],
-                "additionalProperties": false,
-                "properties": {
-                  "width": { "type": "integer", "minimum": 1, "maximum": 32767 },
-                  "height": { "type": "integer", "minimum": 1, "maximum": 32767 }
-                }
-              },
-              "zoom": { "$ref": "#/$defs/zoom" },
-              "visible": { "description": "False while the pin is hidden (Step 53).", "type": "boolean" },
-              "on_screen": { "description": "Whether a monitor shows enough of the pin to reach it; null while the desktop is not available (Step 53).", "type": ["boolean", "null"] },
-              "source": { "enum": ["capture", "clipboard"] },
-              "created_at": { "$ref": "#/$defs/timestamp" },
-              "annotations": { "description": "Annotations the pin carries as editable objects (Step 56).", "$ref": "#/$defs/u64" },
-              "editing": { "description": "Its annotations are being edited (its window is hidden meanwhile).", "type": "boolean" }
-            }
+          "items": { "$ref": "#/$defs/pin_entry" }
+        },
+        "reopenable": { "oneOf": [{ "$ref": "#/$defs/pin_id" }, { "type": "null" }] },
+        "group": { "description": "The current group (Step 54).", "$ref": "#/$defs/group_name" }
+      }
+    },
+    "pin_entry": {
+      "type": "object",
+      "required": ["id", "rect", "image", "zoom", "visible", "on_screen", "source", "created_at", "annotations", "editing", "orientation", "opacity", "thumbnail", "click_through", "group", "animation"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/pin_id" },
+        "rect": { "description": "The picture on screen: position and shown size (at its zoom, turned, or the thumbnail); the window adds the outline and shadow around it.", "$ref": "#/$defs/rect" },
+        "image": {
+          "description": "The picture's size in pixels (100 %, as captured, before any rotation).",
+          "type": "object",
+          "required": ["width", "height"],
+          "additionalProperties": false,
+          "properties": {
+            "width": { "type": "integer", "minimum": 1, "maximum": 32767 },
+            "height": { "type": "integer", "minimum": 1, "maximum": 32767 }
           }
         },
-        "reopenable": { "oneOf": [{ "$ref": "#/$defs/pin_id" }, { "type": "null" }] }
+        "zoom": { "$ref": "#/$defs/zoom" },
+        "visible": { "description": "False while the pin is hidden (Step 53).", "type": "boolean" },
+        "on_screen": { "description": "Whether a monitor shows enough of the pin to reach it; null while the desktop is not available (Step 53).", "type": ["boolean", "null"] },
+        "source": { "enum": ["capture", "clipboard"] },
+        "created_at": { "$ref": "#/$defs/timestamp" },
+        "annotations": { "description": "Annotations the pin carries as editable objects (Step 56).", "$ref": "#/$defs/u64" },
+        "editing": { "description": "Its annotations are being edited (its window is hidden meanwhile).", "type": "boolean" },
+        "orientation": { "$ref": "#/$defs/orientation" },
+        "opacity": { "$ref": "#/$defs/opacity" },
+        "thumbnail": { "description": "Thumbnail mode: `rect` is the thumbnail, `zoom` waits for when it ends (Step 54).", "type": "boolean" },
+        "click_through": { "description": "Mouse clicks pass through it (Step 54, NOEUL-FR-063).", "type": "boolean" },
+        "group": { "$ref": "#/$defs/group_name" },
+        "animation": {
+          "description": "Made from an animated GIF, of which it shows only the first frame (NOEUL-FR-068: never flattened silently); null otherwise.",
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "required": ["frames", "shown"],
+              "additionalProperties": false,
+              "properties": {
+                "frames": { "type": "integer", "minimum": 2 },
+                "shown": { "const": "first_frame" }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "pin_set_result": {
+      "description": "`pin.set` (Step 54): the pins named, the ones that changed (none for a dry run) and how they are now.",
+      "type": "object",
+      "required": ["dry_run", "targets", "changed", "pins"],
+      "additionalProperties": false,
+      "properties": {
+        "dry_run": { "type": "boolean" },
+        "targets": { "type": "array", "items": { "$ref": "#/$defs/pin_id" } },
+        "changed": { "type": "array", "items": { "$ref": "#/$defs/pin_id" } },
+        "pins": { "type": "array", "items": { "$ref": "#/$defs/pin_entry" } }
+      }
+    },
+    "group_list_result": {
+      "description": "`group.list` (Step 54): every group with open pins and the current one.",
+      "type": "object",
+      "required": ["current", "groups"],
+      "additionalProperties": false,
+      "properties": {
+        "current": { "$ref": "#/$defs/group_name" },
+        "groups": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["name", "pins", "hidden"],
+            "additionalProperties": false,
+            "properties": {
+              "name": { "$ref": "#/$defs/group_name" },
+              "pins": { "$ref": "#/$defs/u64" },
+              "hidden": { "$ref": "#/$defs/u64" }
+            }
+          }
+        }
+      }
+    },
+    "group_switch_result": {
+      "description": "`group.switch` (Step 54): the pins shown and hidden by the switch (or that would be, in a dry run).",
+      "type": "object",
+      "required": ["dry_run", "group", "shown", "hidden"],
+      "additionalProperties": false,
+      "properties": {
+        "dry_run": { "type": "boolean" },
+        "group": { "$ref": "#/$defs/group_name" },
+        "shown": { "type": "array", "items": { "$ref": "#/$defs/pin_id" } },
+        "hidden": { "type": "array", "items": { "$ref": "#/$defs/pin_id" } }
       }
     },
     "pin_create_result": {

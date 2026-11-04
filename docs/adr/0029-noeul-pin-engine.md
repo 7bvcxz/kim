@@ -225,3 +225,9 @@ Idle (NOEUL-NFR-001): with twenty pins open, the measuring process waited for me
   Save… and Quick save (`pin.copy` `Ctrl+C`, `pin.save` `Ctrl+S`, `pin.quick-save`
   `Ctrl+Shift+S`, the same outputs as the overlay's, of the pin's picture at 100 % whatever its
   zoom); the save dialog is owned by the pin.
+- 2026-11-04 (Step 54): §5's border resizing landed with the transforms
+  ([ADR 0044](0044-noeul-pin-transforms-and-control.md) §2): the band is the pin's outline and
+  shadow plus 4 logical pixels inside, handled by the window's own messages, the aspect ratio
+  kept, any whole percent between 10 and 800. §2's surface now also holds the outline and the pin
+  shadow around the picture (§3 there), and §5's menu gained the transforms; `pin.zoom-reset` also
+  restores opacity and ends thumbnail mode, as NOEUL-FR-061 says.

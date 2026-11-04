@@ -18,6 +18,8 @@
 //! | [`output`] | Copy and save of a selection: PNG and `CF_DIBV5` in memory, files only where the user asked |
 //! | [`pins`] | The pin engine's model: stable IDs, placement, zoom, hide/show, close/reopen/destroy, the window trait |
 //! | [`zoom`] | Pin zoom levels, sizes, fitting and the premultiplying scaler |
+//! | [`transform`] | Pin transforms (Step 54): orientation, opacity, thumbnails, border resizing, and the window's outline, shadow and click-through badge |
+//! | [`gif`] | Recognising an animated GIF on the clipboard, so a pin never flattens one silently |
 //! | [`annotation`] | Annotation (Step 56): editable vector objects, undo/redo, the editor (tools, text, IME), the rasterizer and the export |
 //! | [`settings`], [`paths`] | `config.toml` and the stable per-user folders |
 //! | [`hotkeys`] | The shipped manifest subset, global registration, pin keys |
@@ -34,6 +36,7 @@ pub mod dib;
 pub mod dpi;
 pub mod error;
 pub mod frame;
+pub mod gif;
 pub mod hotkeys;
 pub mod ipc;
 pub mod output;
@@ -42,6 +45,7 @@ pub mod paths;
 pub mod pins;
 pub mod selection;
 pub mod settings;
+pub mod transform;
 pub mod tray;
 pub mod util;
 pub mod zoom;

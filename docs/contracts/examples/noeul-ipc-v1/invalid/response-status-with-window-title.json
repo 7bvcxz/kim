@@ -58,6 +58,10 @@
       "reopenable": null,
       "hidden": 0,
       "off_screen": 0,
+      "click_through": 0,
+      "thumbnails": 0,
+      "group": "default",
+      "groups": 1,
       "editor": null
     },
     "captures": {

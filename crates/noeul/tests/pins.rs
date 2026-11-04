@@ -225,14 +225,16 @@ fn many_pins_are_independent_windows_driven_by_cli_ipc_and_their_own_messages() 
             "off-screen: {w:?}"
         );
         assert!(
-            regions.iter().any(|r| (r.0, r.1, r.2, r.3) == w.rect),
+            regions
+                .iter()
+                .any(|r| common::framed((r.0, r.1, r.2, r.3)) == w.rect),
             "{w:?}"
         );
     }
     let by_rect = |rect: (i32, i32, i32, i32)| {
         pin_windows(pid)
             .into_iter()
-            .find(|w| w.rect == rect)
+            .find(|w| w.rect == common::framed(rect))
             .unwrap_or_else(|| panic!("no window at {rect:?}"))
     };
     let w1 = by_rect((regions[0].0, regions[0].1, regions[0].2, regions[0].3)).hwnd;
@@ -275,9 +277,9 @@ fn many_pins_are_independent_windows_driven_by_cli_ipc_and_their_own_messages() 
         "the picture is untouched"
     );
     eventually("the window took the new size", || {
-        pin_windows(pid)
-            .iter()
-            .any(|w| w.hwnd == w1 && w.rect == (regions[0].0 - 1, regions[0].1, 110, 66))
+        pin_windows(pid).iter().any(|w| {
+            w.hwnd == w1 && w.rect == common::framed((regions[0].0 - 1, regions[0].1, 110, 66))
+        })
     });
     // One notch towards the user zooms out (the pointer is not over the pin: around its corner).
     post(w1, WM_MOUSEWHEEL, 0xFF88usize << 16, 0);
@@ -387,7 +389,7 @@ fn pins_do_not_survive_a_restart_or_a_crash() {
     let l = list(&sb);
     assert_eq!(
         l,
-        json!({"pins": [], "reopenable": null}),
+        json!({"pins": [], "reopenable": null, "group": "default"}),
         "nothing restored"
     );
     let (code, doc) = sb.json(&["pin", "reopen"]);

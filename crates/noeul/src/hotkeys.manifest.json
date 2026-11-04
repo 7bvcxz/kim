@@ -13,6 +13,8 @@
   "actions": [
     { "id": "capture.region", "title": "Capture a region", "scopes": ["global", "app"], "defaults": ["F1"] },
     { "id": "paste.float", "title": "Pin the clipboard", "scopes": ["global", "app"], "defaults": ["F3"] },
+    { "id": "pins.clickable", "title": "Make every pin clickable again (after click-through)", "scopes": ["global", "app"], "defaults": [] },
+    { "id": "pins.toggle-hidden", "title": "Hide all pins, or show them again", "scopes": ["global", "app"], "defaults": [] },
     { "id": "capture.pin", "title": "Pin the selection (keyboard twin of double-click inside)", "context": "capture-overlay", "defaults": ["Enter"] },
     { "id": "capture.copy", "title": "Copy the selection", "context": "capture-overlay", "defaults": ["Ctrl+C"] },
     { "id": "capture.save", "title": "Save the selection", "context": "capture-overlay", "defaults": ["Ctrl+S"] },
@@ -73,11 +75,20 @@
     { "id": "pin.zoom-in", "title": "Zoom in", "context": "pin", "defaults": ["Plus", "NumpadAdd"] },
     { "id": "pin.zoom-out", "title": "Zoom out", "context": "pin", "defaults": ["Minus", "NumpadSubtract"] },
     { "id": "pin.zoom-reset", "title": "Back to 100 % and fully opaque", "context": "pin", "defaults": ["0", "Numpad0"] },
+    { "id": "pin.opacity-up", "title": "More opaque", "context": "pin", "defaults": ["Ctrl+Plus"] },
+    { "id": "pin.opacity-down", "title": "More transparent", "context": "pin", "defaults": ["Ctrl+Minus"] },
+    { "id": "pin.rotate-cw", "title": "Rotate right 90 degrees", "context": "pin", "defaults": ["1"] },
+    { "id": "pin.rotate-ccw", "title": "Rotate left 90 degrees", "context": "pin", "defaults": ["2"] },
+    { "id": "pin.flip-horizontal", "title": "Flip horizontally", "context": "pin", "defaults": ["3"] },
+    { "id": "pin.flip-vertical", "title": "Flip vertically", "context": "pin", "defaults": ["4"] },
     { "id": "pin.move-up", "title": "Move the pin up one pixel", "context": "pin", "defaults": [{ "keys": "Up", "repeat": true }] },
     { "id": "pin.move-down", "title": "Move the pin down one pixel", "context": "pin", "defaults": [{ "keys": "Down", "repeat": true }] },
     { "id": "pin.move-left", "title": "Move the pin left one pixel", "context": "pin", "defaults": [{ "keys": "Left", "repeat": true }] },
     { "id": "pin.move-right", "title": "Move the pin right one pixel", "context": "pin", "defaults": [{ "keys": "Right", "repeat": true }] },
+    { "id": "pin.thumbnail", "title": "Thumbnail mode on or off", "context": "pin", "defaults": ["T"] },
     { "id": "pin.hide", "title": "Hide the pin (show it again from the tray)", "context": "pin", "defaults": ["H"] },
+    { "id": "pin.click-through", "title": "Let mouse clicks pass through the pin", "context": "pin", "defaults": ["Ctrl+Shift+T"] },
+    { "id": "pin.group-new", "title": "Move the pin to a new group", "context": "pin", "defaults": [] },
     { "id": "pin.annotate", "title": "Annotate the pin", "context": "pin", "defaults": ["Space"] }
   ]
 }

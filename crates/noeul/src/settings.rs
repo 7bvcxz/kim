@@ -16,6 +16,14 @@
 //!   the preset's values (double-click copies, middle-click pins) and the preset's keys into
 //!   `hotkeys.json` (`Enter` copies, `Ctrl+T` pins); `noeul config reset gestures` undoes both.
 //!
+//! Since Step 52 (NOEUL-FR-040, NOEUL-FR-041, ADR 0035):
+//!
+//! - `[capture] detection`: what the overlay detects under the pointer when it opens,
+//!   `"window"` (default), `"element"` (UI Automation rectangles) or `"off"`; `E` cycles it
+//!   during a capture;
+//! - `[capture] magnifier`: whether the magnifier shows when the overlay opens, `"on"`
+//!   (default) or `"off"`; `M` toggles it during a capture.
+//!
 //! The rules every setting follows:
 //!
 //! - a missing file means defaults;
@@ -33,6 +41,7 @@
 //! first-run keyboard help was seen), in `%LOCALAPPDATA%\mouv\noeul\ui-state.json`, written once
 //! after the first capture finished from the overlay.
 
+use crate::detect::DetectMode;
 use crate::error::{Code, NoeulError};
 use crate::overlay::{GestureAction, Gestures};
 use serde_json::{Value, json};
@@ -140,6 +149,10 @@ pub struct Settings {
     pub gestures: Gestures,
     /// The gesture preset's name (NOEUL-FR-024).
     pub preset: Preset,
+    /// What the overlay detects when it opens (NOEUL-FR-040).
+    pub detection: DetectMode,
+    /// Whether the overlay shows the magnifier when it opens (NOEUL-FR-041).
+    pub magnifier: bool,
 }
 
 impl Default for Settings {
@@ -150,6 +163,8 @@ impl Default for Settings {
             quick_save_folder: None,
             gestures: Gestures::default(),
             preset: Preset::Noeul,
+            detection: DetectMode::Window,
+            magnifier: true,
         }
     }
 }
@@ -192,6 +207,8 @@ impl Loaded {
             "tray_icon": s.tray_icon,
             "keyboard_help": s.keyboard_help.as_str(),
             "quick_save_folder": s.quick_save_folder.as_ref().map(|p| p.display().to_string()),
+            "detection": s.detection.as_str(),
+            "magnifier": if s.magnifier { "on" } else { "off" },
             "gestures": {
                 "double_click": s.gestures.double_click.as_str(),
                 "middle_click": s.gestures.middle_click.as_str(),
@@ -258,6 +275,18 @@ const KEYS: &[Key] = &[
         default: "the Pictures folder + Noeul",
     },
     Key {
+        section: "capture",
+        name: "detection",
+        takes: "\"window\", \"element\" or \"off\"",
+        default: "\"window\"",
+    },
+    Key {
+        section: "capture",
+        name: "magnifier",
+        takes: "\"on\" or \"off\"",
+        default: "\"on\"",
+    },
+    Key {
         section: "gestures",
         name: "double_click",
         takes: "\"pin\", \"copy\", \"save\" or \"none\"",
@@ -302,6 +331,16 @@ fn apply(settings: &mut Settings, section: &str, name: &str, v: &toml::Value) ->
                 .filter(|p| p.is_absolute())
                 .ok_or(())?;
             settings.quick_save_folder = Some(p);
+        }
+        ("capture", "detection") => {
+            settings.detection = s.and_then(DetectMode::parse).ok_or(())?;
+        }
+        ("capture", "magnifier") => {
+            settings.magnifier = match s {
+                Some("on") => true,
+                Some("off") => false,
+                _ => return Err(()),
+            };
         }
         ("gestures", "double_click") => {
             settings.gestures.double_click = s.and_then(GestureAction::parse).ok_or(())?;
@@ -758,6 +797,34 @@ mod tests {
             "{:?}",
             l.problems
         );
+    }
+
+    #[test]
+    fn detection_and_magnifier_settings() {
+        let d = parse(&p(), "");
+        assert_eq!(
+            (d.settings.detection, d.settings.magnifier),
+            (DetectMode::Window, true)
+        );
+        let l = parse(
+            &p(),
+            "[capture]\ndetection = \"element\"\nmagnifier = \"off\"\n",
+        );
+        assert_eq!(
+            (l.settings.detection, l.settings.magnifier),
+            (DetectMode::Element, false)
+        );
+        assert_eq!(l.to_json()["detection"], "element");
+        assert_eq!(l.to_json()["magnifier"], "off");
+        let bad = parse(&p(), "[capture]\ndetection = \"text\"\nmagnifier = true\n");
+        assert_eq!(
+            (bad.settings.detection, bad.settings.magnifier),
+            (DetectMode::Window, true),
+            "invalid values fall back to the defaults"
+        );
+        assert_eq!(bad.problems.len(), 2, "{:?}", bad.problems);
+        assert!(key_names().contains(&"capture.detection".to_string()));
+        assert!(key_names().contains(&"capture.magnifier".to_string()));
     }
 
     #[test]

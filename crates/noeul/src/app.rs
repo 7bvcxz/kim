@@ -37,8 +37,18 @@
 //! context menu ([`PinMenu`], shown by the runtime with the core released), the tray and IPC
 //! (`pin.list`, `pin.hide`, `pin.show`, `pin.close`, `pin.reopen`). A display change
 //! ([`App::display_changed`]) keeps pins where they are and offers to bring the lost ones back.
+//!
+//! **Smart selection** (Step 52, ADR 0035): when a capture starts, right after the frozen picture
+//! and before the overlay is shown, the core asks [`Shell::window_snapshot`] for the windows on
+//! the desktop (rectangles and flags only, NOEUL-SEC-007) and hands them to the model with the
+//! `[capture] detection` mode; with detection off nothing is listed until `E` turns it on. Element
+//! lookups go to [`Shell::request_element`], which answers off the UI thread as an
+//! [`OverlayEvent::Element`]; [`Shell::end_detection`] stops them when the overlay closes. Pointer
+//! keys move the real cursor through [`OverlayWindow::warp_pointer`]. The rectangles of
+//! successful captures stay in memory for `history.*` (never on disk, NOEUL-SEC-005).
 
 use crate::capture::{CaptureBackend, DesktopState, check_region};
+use crate::detect::{DetectMode, ElementAnswer, ElementRequest, Snapshot};
 use crate::error::{Code, NoeulError, Result};
 use crate::frame::{Frame, Ledger, Rect};
 use crate::hotkeys::Manager;
@@ -98,6 +108,16 @@ pub trait Shell {
     /// Whether Noeul's windows may take keyboard focus and stay on top. `false` only in the
     /// debug-build test hook, whose windows are off-screen and must never move the user's focus.
     fn interactive(&self) -> bool;
+    /// The top-level windows of the desktop now, topmost first, over `picture`: rectangles and
+    /// flags only, never a title or other text (NOEUL-FR-040, NOEUL-SEC-007). Called when a
+    /// capture starts (before its overlay is shown) or when detection is turned on during it;
+    /// the overlay window itself is never listed.
+    fn window_snapshot(&mut self, picture: Rect) -> Snapshot;
+    /// Asks UI Automation for the element under `req.at` inside `req.token`'s window, off the UI
+    /// thread; the answer arrives as [`OverlayEvent::Element`]. Never blocks.
+    fn request_element(&mut self, req: ElementRequest);
+    /// The overlay closed: no more element lookups (a lookup still running is abandoned).
+    fn end_detection(&mut self);
 }
 
 /// The capture overlay's window (`win::overlay`; a fake in tests). It owns a back buffer of
@@ -111,6 +131,9 @@ pub trait OverlayWindow: Measure {
     fn set_cursor(&mut self, cursor: Cursor);
     /// Bytes of its back buffer (reported by `noeul status`).
     fn buffer_bytes(&self) -> u64;
+    /// Moves the real pointer to `at` after a pointer key (`SetCursorPos`), only while the
+    /// overlay is the foreground window and never under the test placement (NOEUL-SEC-012).
+    fn warp_pointer(&mut self, at: (i32, i32));
     /// Destroys the window and frees its back buffer now.
     fn destroy(&mut self);
 }
@@ -120,9 +143,12 @@ pub trait OverlayWindow: Measure {
 pub enum OverlayEvent {
     /// A pointer or focus input, in virtual-desktop device pixels.
     Input(OverlayInput),
-    /// A key press in the overlay (matched against the `capture-overlay` context); `true` when
+    /// A key press in the overlay (matched against the `capture-overlay` context): its logical
+    /// chord, its physical chord (`code:…`, from the scan code) when it has one, and `true` when
     /// it is an auto-repeat.
-    Key(Chord, bool),
+    Key(Chord, Option<Chord>, bool),
+    /// UI Automation's answer to an element request (Step 52).
+    Element(ElementRequest, ElementAnswer),
 }
 
 /// One first-frame measurement (NOEUL-NFR-003): from the request (the hotkey press reaching
@@ -207,6 +233,25 @@ impl OverlaySession {
             "buffer_bytes": self.window.buffer_bytes(),
             "help": self.model.help_shown(),
             "focus": self.model.toolbar_focus().map_or("canvas", overlay::ToolbarItem::as_str),
+            "pointer": {"x": self.model.pointer().0, "y": self.model.pointer().1},
+            "detection": {
+                "mode": self.model.detect_mode().as_str(),
+                "windows": self.model.detect_windows(),
+                "target": self.model.detected().filter(|d| !d.protected).map(|d| json!({
+                    "kind": d.kind.as_str(), "rect": d.rect.to_json(),
+                })),
+                "protected": self.model.detected().is_some_and(|d| d.protected),
+                "fallback": self.model.detect_fallback().map(crate::detect::Fallback::as_str),
+                "suspended": self.model.detect_suspended(),
+            },
+            "magnifier": {
+                "enabled": self.model.magnifier_enabled(),
+                "shown": self.scene.magnifier.is_some(),
+            },
+            "history": {
+                "count": self.model.history().0,
+                "position": self.model.history().1,
+            },
         })
     }
 }
@@ -214,8 +259,11 @@ impl OverlaySession {
 /// The overlay's keyboard help, from the effective bindings and gestures (so a changed key or
 /// gesture shows as such).
 pub fn overlay_help(m: &Manager, gestures: Gestures) -> Vec<String> {
-    let k = |a: &str| m.keys_for(a).map(str::to_string);
-    let mut lines = vec!["Drag to select a region. Esc or right-click cancels.".to_string()];
+    let k = |a: &str| m.keys_for(a).map(crate::hotkeys::key_label);
+    let mut lines = vec![
+        "Drag to select a region, or click a highlighted window. Esc or right-click cancels."
+            .to_string(),
+    ];
     let mut outputs = Vec::new();
     match gestures.double_click {
         GestureAction::Pin => outputs.push("Double-click inside pins it".to_string()),
@@ -279,6 +327,30 @@ pub fn overlay_help(m: &Manager, gestures: Gestures) -> Vec<String> {
     }
     if !third.is_empty() {
         lines.push(third.join(" \u{b7} "));
+    }
+    // The precision keys (Step 52).
+    let mut fourth = Vec::new();
+    let pointer: Option<Vec<String>> = ["up", "left", "down", "right"]
+        .iter()
+        .map(|d| k(&format!("pointer.move-{d}")))
+        .collect();
+    if let Some(p) = pointer {
+        fourth.push(format!("{} move the pointer", p.join(" ")));
+    }
+    if let Some(x) = k("selection.mark") {
+        fourth.push(format!("{x} marks a corner"));
+    }
+    if let Some(x) = k("detect.cycle") {
+        fourth.push(format!("{x} windows, elements, off"));
+    }
+    if let Some(x) = k("magnifier.toggle") {
+        fourth.push(format!("{x} magnifier"));
+    }
+    if let (Some(p), Some(n)) = (k("history.previous"), k("history.next")) {
+        fourth.push(format!("{p}/{n} earlier areas"));
+    }
+    if !fourth.is_empty() {
+        lines.push(fourth.join(" \u{b7} "));
     }
     lines
 }
@@ -585,6 +657,7 @@ impl<S: Shell> App<S> {
             "captures": {"started": started, "pinned": pinned, "copied": copied, "saved": saved,
                          "cancelled": cancelled, "open": self.captures.is_open(),
                          "ignored": self.captures.ignored(),
+                         "history": self.captures.history().len(),
                          "overlay": self.overlay.as_ref().map(OverlaySession::to_json),
                          "first_frame": self.latency.to_json()},
             "memory": self.ledger.to_json(),
@@ -1044,6 +1117,10 @@ impl<S: Shell> App<S> {
         };
         let help = self.help_lines();
         let monitors = desktop.monitors.len();
+        let mode = self.settings.settings.detection;
+        // The windows as the frozen picture shows them, listed before the overlay is shown
+        // (rectangles only); nothing is listed while detection is off (Step 52).
+        let snapshot = (mode != DetectMode::Off).then(|| self.shell.window_snapshot(picture));
         let model = Overlay::new(
             picture,
             desktop.monitors,
@@ -1052,9 +1129,13 @@ impl<S: Shell> App<S> {
             self.captures.last(),
             help,
         )
-        .with_gestures(self.settings.settings.gestures);
-        let scene = model.scene(&*window);
+        .with_gestures(self.settings.settings.gestures)
+        .with_detection(mode, snapshot)
+        .with_magnifier(self.settings.settings.magnifier)
+        .with_history(&self.captures.history());
+        let mut scene = model.scene(&*window);
         if let Some(frozen) = self.captures.frozen() {
+            scene.sample(frozen);
             window.present(frozen, &scene, &[picture]);
         }
         window.set_cursor(model.cursor());
@@ -1150,16 +1231,43 @@ impl<S: Shell> App<S> {
                 }
                 i
             }
-            OverlayEvent::Key(chord, repeat) => match self.overlay_key(&chord, repeat) {
-                Some(i) => i,
-                None => return,
-            },
+            OverlayEvent::Key(chord, code, repeat) => {
+                match self.overlay_key(&chord, code.as_ref(), repeat) {
+                    Some(i) => i,
+                    None => return,
+                }
+            }
+            OverlayEvent::Element(request, answer) => OverlayInput::Element { request, answer },
         };
         let outcome = match self.overlay.as_mut() {
             Some(ov) => ov.model.handle(input),
             None => return,
         };
+        self.after_overlay_input();
         self.overlay_outcome(outcome);
+    }
+
+    /// What the model asks of the platform after an input (Step 52): the real pointer follows a
+    /// pointer key, a UI Automation request goes out, and a window list is taken when detection
+    /// was turned on during the capture.
+    fn after_overlay_input(&mut self) {
+        let Some(ov) = self.overlay.as_mut() else {
+            return;
+        };
+        if let Some(at) = ov.model.take_warp() {
+            ov.window.warp_pointer(at);
+        }
+        let request = ov.model.take_element_request();
+        let picture = ov.model.picture();
+        if ov.model.needs_snapshot() {
+            let s = self.shell.window_snapshot(picture);
+            if let Some(ov) = self.overlay.as_mut() {
+                ov.model.set_snapshot(s);
+            }
+        }
+        if let Some(req) = request {
+            self.shell.request_element(req);
+        }
     }
 
     fn overlay_outcome(&mut self, outcome: OverlayOutcome) {
@@ -1181,7 +1289,12 @@ impl<S: Shell> App<S> {
     /// A key press in the overlay: the navigation keys go to a focused toolbar button first
     /// (ADR 0021 §5), then the `capture-overlay` bindings, then the reserved `Escape`; `Tab`
     /// and `Shift+Tab` move the focus into the toolbar when no binding uses them.
-    fn overlay_key(&self, chord: &Chord, repeat: bool) -> Option<OverlayInput> {
+    fn overlay_key(
+        &self,
+        chord: &Chord,
+        code: Option<&Chord>,
+        repeat: bool,
+    ) -> Option<OverlayInput> {
         let focused = self
             .overlay
             .as_ref()
@@ -1195,11 +1308,15 @@ impl<S: Shell> App<S> {
         }
         if let Some(a) = self
             .hotkeys
-            .overlay_action(chord, repeat)
+            .overlay_action(chord, code, repeat)
             .as_deref()
             .and_then(OverlayAction::from_id)
         {
-            return Some(OverlayInput::Action(a));
+            return Some(if repeat {
+                OverlayInput::Repeat(a)
+            } else {
+                OverlayInput::Action(a)
+            });
         }
         // The reserved navigation key always leaves (nav.cancel, NOEUL-SEC-013).
         if !repeat && is_escape(chord) {
@@ -1216,10 +1333,14 @@ impl<S: Shell> App<S> {
         let Some(ov) = self.overlay.as_mut() else {
             return;
         };
-        let scene = ov.model.scene(&*ov.window);
+        let mut scene = ov.model.scene(&*ov.window);
+        let frozen = self.captures.frozen();
+        if let Some(f) = frozen {
+            scene.sample(f);
+        }
         let dirty = overlay::dirty(&ov.scene, &scene);
         if !dirty.is_empty()
-            && let Some(frozen) = self.captures.frozen()
+            && let Some(frozen) = frozen
         {
             ov.window.present(frozen, &scene, &dirty);
         }
@@ -1233,6 +1354,7 @@ impl<S: Shell> App<S> {
             return false;
         };
         ov.window.destroy();
+        self.shell.end_detection();
         self.captures.cancel();
         self.overlay_menu = None;
         self.save_request = None;
@@ -1261,6 +1383,7 @@ impl<S: Shell> App<S> {
         let _ = self.captures.complete(id, how);
         if let Some(mut ov) = self.overlay.take() {
             ov.window.destroy();
+            self.shell.end_detection();
         }
         self.overlay_menu = None;
         self.save_request = None;
@@ -1984,6 +2107,8 @@ pub(crate) mod tests {
         /// The back buffer of the last window, composed exactly as the Win32 window does.
         pub buffer: Vec<u8>,
         pub scene: Option<Scene>,
+        /// Where pointer keys asked the real pointer to go (Step 52).
+        pub warps: Vec<(i32, i32)>,
     }
 
     #[derive(Debug, Default, Clone)]
@@ -2031,6 +2156,9 @@ pub(crate) mod tests {
         }
         fn buffer_bytes(&self) -> u64 {
             self.picture.bgra_bytes()
+        }
+        fn warp_pointer(&mut self, at: (i32, i32)) {
+            self.log.borrow_mut().warps.push(at);
         }
         fn destroy(&mut self) {
             if !self.destroyed {
@@ -2096,6 +2224,14 @@ pub(crate) mod tests {
         pub pictures: Option<PathBuf>,
         /// The user's pointer settings (Windows defaults when `None`).
         pub sys: Option<SystemValues>,
+        /// The windows the fake desktop lists, topmost first (Step 52).
+        pub facts: Vec<crate::detect::WindowFacts>,
+        /// How many window lists were taken.
+        pub snapshots: usize,
+        /// The UI Automation requests sent.
+        pub element_requests: Vec<ElementRequest>,
+        /// How many times element lookups were stopped (an overlay closed).
+        pub detection_ended: usize,
     }
 
     impl Shell for FakeShell {
@@ -2159,6 +2295,16 @@ pub(crate) mod tests {
         }
         fn interactive(&self) -> bool {
             self.interactive.unwrap_or(true)
+        }
+        fn window_snapshot(&mut self, picture: Rect) -> Snapshot {
+            self.snapshots += 1;
+            Snapshot::from_facts(self.facts.iter().copied(), picture)
+        }
+        fn request_element(&mut self, req: ElementRequest) {
+            self.element_requests.push(req);
+        }
+        fn end_detection(&mut self) {
+            self.detection_ended += 1;
         }
     }
 
@@ -2225,7 +2371,7 @@ pub(crate) mod tests {
 
     fn key(a: &mut App<FakeShell>, name: &str, ctrl: bool, shift: bool) {
         let c = crate::hotkeys::chord_of(name, ctrl, false, shift).unwrap();
-        a.overlay_event(OverlayEvent::Key(c, false));
+        a.overlay_event(OverlayEvent::Key(c, None, false));
     }
 
     fn drag(a: &mut App<FakeShell>, from: (i32, i32), to: (i32, i32)) {
@@ -2544,10 +2690,11 @@ pub(crate) mod tests {
         assert_eq!(
             help.lines,
             [
-                "Drag to select a region. Esc or right-click cancels.",
+                "Drag to select a region, or click a highlighted window. Esc or right-click cancels.",
                 "Double-click inside pins it \u{b7} Ctrl+C copies \u{b7} Ctrl+S saves \u{b7} Ctrl+Shift+S quick-saves",
                 "Arrows move \u{b7} Ctrl+arrows grow \u{b7} Shift+arrows shrink",
                 "Ctrl+A whole monitor \u{b7} R last area \u{b7} Enter pins the selection",
+                "W A S D move the pointer \u{b7} Space marks a corner \u{b7} E windows, elements, off \u{b7} M magnifier \u{b7} Comma/Period earlier areas",
             ]
         );
         assert_eq!(help.dpi, 144, "drawn at the primary monitor's 150 %");
@@ -2588,7 +2735,7 @@ pub(crate) mod tests {
         assert_eq!(
             overlay_help(&off, Gestures::default()),
             [
-                "Drag to select a region. Esc or right-click cancels.",
+                "Drag to select a region, or click a highlighted window. Esc or right-click cancels.",
                 "Double-click inside pins it"
             ],
             "without shortcuts only the mouse and Escape remain"
@@ -2627,8 +2774,8 @@ pub(crate) mod tests {
         });
         let lines = overlay_help(&m, Gestures::default());
         assert_eq!(
-            lines[2],
-            "code:KeyW/Down/Left/Right move \u{b7} Ctrl+arrows grow \u{b7} Shift+arrows shrink"
+            lines[2], "W/Down/Left/Right move \u{b7} Ctrl+arrows grow \u{b7} Shift+arrows shrink",
+            "a physical key reads as its letter"
         );
         assert_eq!(
             lines[3],

@@ -122,6 +122,17 @@ mod measure {
         fn interactive(&self) -> bool {
             false
         }
+        // Detection lists only this process's windows here: a measurement never reads the
+        // user's windows (Step 52).
+        fn window_snapshot(&mut self, picture: Rect) -> noeul::detect::Snapshot {
+            noeul::win::detect::snapshot(
+                picture,
+                &noeul::win::detect::Scope::Processes(vec![std::process::id()]),
+                noeul::win::overlay::current(),
+            )
+        }
+        fn request_element(&mut self, _: noeul::detect::ElementRequest) {}
+        fn end_detection(&mut self) {}
     }
 
     /// Private bytes of this process (`GetProcessMemoryInfo`).

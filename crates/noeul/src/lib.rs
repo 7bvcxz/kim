@@ -25,7 +25,9 @@
 pub mod annotation;
 pub mod app;
 pub mod capture;
+pub mod detect;
 pub mod dib;
+pub mod dpi;
 pub mod error;
 pub mod frame;
 pub mod hotkeys;

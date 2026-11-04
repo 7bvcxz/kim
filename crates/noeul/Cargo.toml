@@ -1,7 +1,7 @@
 [package]
 name = "noeul"
 version = "0.0.1"
-description = "Noeul: small native screenshot and floating-pin tool (pre-alpha, Steps 49-50)"
+description = "Noeul: small native screenshot and floating-pin tool (pre-alpha, Steps 49-53)"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -35,9 +35,12 @@ toml = { version = "1.1.8", default-features = false, features = ["parse", "serd
 # Plain Win32 (ADR 0023): GDI screen capture into memory, layered pin windows, the optional
 # notification-area icon, the clipboard (read on paste, written on Copy only), the save dialog and
 # the Pictures folder (Step 51), the per-user named pipe with peer identity checks, input-desktop
-# and session checks. No GUI framework, no hook, no service.
+# and session checks; window rectangles (DWM extended frame bounds) and UI Automation element
+# rectangles for hover detection (Step 52, COM through raw vtables). No GUI framework, no hook,
+# no service.
 windows-sys = { version = "0.61.2", features = [
     "Win32_Foundation",
+    "Win32_Graphics_Dwm",
     "Win32_Graphics_Gdi",
     "Win32_Security",
     "Win32_Security_Authorization",

@@ -381,6 +381,113 @@ fn font_size_changes_the_cells_and_redraws() {
     assert_eq!(r.frame().height, 2 * big.height + 16);
 }
 
+/// Step 20 (`appearance.line_height`, `padding`, `bold_is_bright`, theme `kim-light`): the cell
+/// height follows the line height, the padding moves the grid, bold ANSI colours stay or turn
+/// bright, and the light theme draws its own tokens.
+#[test]
+fn line_height_padding_bold_and_the_light_theme() {
+    let v = view(10, 2, b"ab\x1b[1;31mR\x1b[0m\x1b[?25l");
+    let mut r = builtin(1.0);
+    r.render(&v);
+    let normal = r.metrics();
+    assert_eq!(normal.height, (13.0f32 * 1.2).ceil() as u32);
+    let opts = |line_height: f32, padding: f32, bold_is_bright: bool| RenderOptions {
+        line_height,
+        padding,
+        bold_is_bright,
+        ..RenderOptions::default()
+    };
+    r.set_options(opts(1.6, 8.0, true));
+    assert!(r.render(&v).full, "a layout change redraws everything");
+    assert_eq!(r.metrics().height, (13.0f32 * 1.6).ceil() as u32);
+    assert_eq!(r.metrics().width, normal.width, "the advance is unchanged");
+    // The same options again: nothing to redraw.
+    r.set_options(opts(1.6, 8.0, true));
+    assert!(r.render(&v).is_empty());
+    // No padding: the first cell starts at the frame's corner.
+    r.set_options(opts(1.2, 0.0, true));
+    r.render(&v);
+    assert_eq!(r.padding(), 0);
+    assert_eq!(r.frame().width, 10 * r.metrics().width);
+    let t = Theme::kim_dark();
+    assert_eq!(
+        cell_colors(&r, 2, 0).1,
+        Some(t.ansi[9]),
+        "bold red is bright"
+    );
+    r.set_options(opts(1.2, 0.0, false));
+    r.render(&v);
+    assert_eq!(
+        cell_colors(&r, 2, 0).1,
+        Some(t.ansi[1]),
+        "bold red stays red"
+    );
+    // The light theme: its own background, foreground and ANSI red.
+    let light = Theme::kim_light();
+    r.set_theme(light.clone());
+    r.render(&v);
+    assert_eq!(
+        cell_colors(&r, 0, 0),
+        (light.background, Some(light.foreground))
+    );
+    assert_eq!(cell_colors(&r, 2, 0).1, Some(light.ansi[1]));
+    assert_eq!(r.frame().pixel(r.frame().width - 1, 0), light.background);
+    assert_ne!(light.background, t.background);
+}
+
+#[test]
+fn the_font_chain_puts_the_users_family_first() {
+    use subak_term::render::{MONO_FAMILY, font_chain};
+    assert_eq!(font_chain(""), MONO_FAMILY.to_vec());
+    let c = font_chain("Courier New");
+    assert_eq!(c[0], "Courier New");
+    assert_eq!(&c[1..], &MONO_FAMILY[..]);
+    // A family of the default chain moves to the front instead of appearing twice.
+    let c = font_chain(" consolas ");
+    assert_eq!(c[0], "consolas");
+    assert_eq!(c.len(), MONO_FAMILY.len());
+    assert!(!c[1..].contains(&"Consolas"));
+}
+
+/// Step 20 (`appearance.font_family`): the user's family draws Latin text when it is installed
+/// (Courier New and Consolas ship with Windows 10 and 11), the chain still sends Korean to
+/// Malgun Gothic, and a family that is not installed is skipped.
+#[cfg(windows)]
+#[test]
+fn a_chosen_font_family_draws_and_falls_back() {
+    use subak_term::render::font_chain;
+    let v = view(10, 1, "Aa 한\x1b[?25l".as_bytes());
+    let mut glyphs = Vec::new();
+    for family in ["Courier New", "Consolas"] {
+        let mut r = Renderer::with_font_chain(
+            Theme::kim_dark(),
+            RenderOptions::default(),
+            &font_chain(family),
+        )
+        .expect("system fonts");
+        assert_eq!(r.face_for('A').family, family);
+        assert!(!r.face_for('A').fallback);
+        assert_eq!(r.face_for('한').family, "Malgun Gothic");
+        r.render(&v);
+        glyphs.push(cell_pixels(&r, 0, 0));
+    }
+    assert_ne!(glyphs[0], glyphs[1], "two families draw `A` differently");
+    let mut r = Renderer::with_font_chain(
+        Theme::kim_dark(),
+        RenderOptions::default(),
+        &font_chain("No Such Font Family 20"),
+    )
+    .expect("the rest of the chain");
+    let primary = r.face_for('A').family;
+    assert!(
+        primary == "Cascadia Mono" || primary == "Consolas",
+        "{primary}"
+    );
+    assert!(
+        Renderer::with_font_chain(Theme::kim_dark(), RenderOptions::default(), &["Nope"]).is_err()
+    );
+}
+
 #[cfg(windows)]
 #[test]
 fn system_fonts_draw_korean_emoji_and_symbols_in_their_cells() {

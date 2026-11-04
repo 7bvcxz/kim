@@ -207,6 +207,8 @@ theme from the system colours (DESIGN_SYSTEM §4.3). Indexed colours 16–255 ar
 grey ramp; 24-bit colours are exact. Bold text in ANSI colours 0–7 uses the bright colour
 (Windows Terminal's default); dim mixes 40 % toward the background; inverse swaps; hidden draws
 nothing; the selection background is `terminal.selection`; DECSCNM swaps the default colours.
+Since Step 20, `Theme::kim_light()` is the light palette of `tokens.json` (every ANSI foreground
+≥ 4.5:1 on its background), and `RenderOptions::bold_is_bright` is a user setting.
 
 ### 5.3 Glyphs and fallback
 
@@ -224,7 +226,9 @@ antialiasing into a small DIB section, never a window; fallback faces use the pr
 the primary baseline; a bold or italic font keeps its own `cmap`. A character no face maps is a
 hollow box — honest "missing", never a wrong glyph. Colour emoji are drawn in monochrome by GDI
 (DESIGN_SYSTEM §4.4 allows it); a DirectWrite rasterizer behind the same trait is the upgrade
-path (ADR 0036).
+path (ADR 0036). Since Step 20 `render::font_chain(family)` puts a user's family first
+(`Renderer::with_font_chain`); a family that is not installed is skipped. Ligatures are not drawn:
+each cell is drawn on its own (ADR 0051 §7).
 
 `BoxRasterizer` draws every character as a box with its code point's bits — pixel-exact on every
 machine, used for golden frames and on platforms without a system rasterizer yet.
@@ -235,7 +239,9 @@ Sizes follow the tokens: font 13 logical px, line height 1.2, 8 px padding, all 
 cell height is `ceil(13 × 1.2 × scale)` or the primary font's ascent + descent if larger (Cascadia
 Mono needs 17 px at 100 %). A DPI change calls `set_scale`: glyphs are rasterized again at the new
 size, never scaled as bitmaps (DESIGN_SYSTEM §4.2). `grid_size_for(w, h)` gives the size to ask
-the Host for; `cell_at(x, y)` maps a pointer position to a cell.
+the Host for; `cell_at(x, y)` maps a pointer position to a cell. Since Step 20 the line height
+(1.0–2.0) and padding (0–16) are user settings applied with `Renderer::set_options`, and the
+view's word separators with `TermView::set_word_delimiters`.
 
 ### 5.5 Memory
 

@@ -1,0 +1,44 @@
+{
+  "config_version": 1,
+  "appearance": {
+    "theme": "kim-light",
+    "font_family": "Consolas",
+    "font_size": 15,
+    "line_height": 1.4,
+    "padding": 4,
+    "opacity": 90,
+    "motion": "reduced",
+    "bold_is_bright": true,
+    "future_knob": "unknown keys are kept"
+  },
+  "terminal": {
+    "default_profile": "PowerShell",
+    "copy_on_select": true,
+    "smart_ctrl_c": true,
+    "right_click": "menu",
+    "middle_click": "paste",
+    "word_separators": " ()"
+  },
+  "profiles": [
+    {
+      "name": "PowerShell",
+      "program": "powershell.exe",
+      "args": ["-NoLogo", "-NoProfile"],
+      "cwd": "C:\\work",
+      "env": { "GREETING": "안녕", "RUST_BACKTRACE": "1" },
+      "unset_env": ["HTTP_PROXY"],
+      "secret_env": [],
+      "default": true
+    },
+    {
+      "name": "dev",
+      "program": "cmd.exe",
+      "args": ["/k"],
+      "cwd": null,
+      "env": { "GITHUB_TOKEN": "***", "MODE": "fast" },
+      "unset_env": [],
+      "secret_env": ["GITHUB_TOKEN"],
+      "default": false
+    }
+  ]
+}

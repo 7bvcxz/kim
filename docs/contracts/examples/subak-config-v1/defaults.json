@@ -1,0 +1,22 @@
+{
+  "config_version": 1,
+  "appearance": {
+    "theme": "auto",
+    "font_family": "",
+    "font_size": 13,
+    "line_height": 1.2,
+    "padding": 8,
+    "opacity": 100,
+    "motion": "system",
+    "bold_is_bright": true
+  },
+  "terminal": {
+    "default_profile": "",
+    "copy_on_select": false,
+    "smart_ctrl_c": false,
+    "right_click": "copy-paste",
+    "middle_click": "none",
+    "word_separators": " /\\()\"'-.,:;<>~!@#$%^&*|+=[]{}?│"
+  },
+  "profiles": []
+}

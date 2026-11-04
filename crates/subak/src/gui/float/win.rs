@@ -380,7 +380,7 @@ struct ShellTray {
 }
 
 /// An icon handle from a picture (straight alpha, as icons take it).
-fn hicon(p: &Picture) -> HICON {
+pub(in crate::gui) fn hicon(p: &Picture) -> HICON {
     let size = p.size as i32;
     let bmi = BITMAPINFO {
         bmiHeader: BITMAPINFOHEADER {

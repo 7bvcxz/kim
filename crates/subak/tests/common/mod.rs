@@ -101,6 +101,11 @@ pub fn run_env(args: &[&str], env: &[(&str, &str)]) -> (i32, Value) {
         .args(args)
         .stdin(Stdio::null())
         .creation_flags(CREATE_NO_WINDOW);
+    // Step 20: `subak new` reads the user's settings (a default shell profile) from %APPDATA%; a
+    // test never reads the maintainer's real settings unless it gives its own APPDATA.
+    if !env.iter().any(|(k, _)| k.eq_ignore_ascii_case("APPDATA")) {
+        cmd.env("APPDATA", empty_appdata());
+    }
     for (k, v) in env {
         cmd.env(k, v);
     }
@@ -127,6 +132,13 @@ pub fn run_env(args: &[&str], env: &[(&str, &str)]) -> (i32, Value) {
 
 pub fn run(args: &[&str]) -> (i32, Value) {
     run_env(args, &[])
+}
+
+/// An empty `APPDATA` for CLI runs that do not bring their own (no settings, no shortcuts).
+pub fn empty_appdata() -> std::path::PathBuf {
+    let d = std::env::temp_dir().join(format!("subak-test-appdata-empty-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&d);
+    d
 }
 
 pub fn pid_of(v: &Value) -> u32 {

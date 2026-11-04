@@ -591,18 +591,29 @@ impl Model {
 
     /// `terminal.new` (`Ctrl+T`, `+`): a Terminal with the Host's defaults (its default shell
     /// in the user's profile folder), at this window's size; shown once it runs.
+    #[cfg(test)]
     pub fn create(&mut self) -> Vec<Effect> {
+        self.create_with(None)
+    }
+
+    /// Creates a Terminal with extra `terminal.create` parameters (Step 20: a shell profile's
+    /// explicit `command`, `cwd` and `env`; the Host never reads profiles itself).
+    pub fn create_with(&mut self, extra: Option<&Value>) -> Vec<Effect> {
         if !self.connected {
             return vec![Effect::Notice(
                 "Not connected to the Subak Host; no Terminal was created".into(),
             )];
         }
         let (cols, rows) = self.grid;
-        vec![self.request(
-            "terminal.create",
-            json!({"size": {"cols": cols, "rows": rows}}),
-            Pending::Create,
-        )]
+        let mut params = json!({"size": {"cols": cols, "rows": rows}});
+        if let Some(Value::Object(m)) = extra {
+            for (k, v) in m {
+                if !v.is_null() {
+                    params[k.as_str()] = v.clone();
+                }
+            }
+        }
+        vec![self.request("terminal.create", params, Pending::Create)]
     }
 
     /// Hides tab `i`: a detach of this window only. The Terminal keeps running (ADR 0020 §7).

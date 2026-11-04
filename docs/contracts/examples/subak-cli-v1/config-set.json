@@ -1,0 +1,21 @@
+{
+  "command": "config.set",
+  "data": {
+    "backup": null,
+    "changes": [
+      {
+        "after": "\"kim-light\"",
+        "before": null,
+        "key": "appearance.theme"
+      }
+    ],
+    "dry_run": false,
+    "path": "C:\\Users\\me\\AppData\\Roaming\\mouv\\subak\\config.toml",
+    "written": true
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": [
+    "a running Subak window applies the change when it next gets the focus; running Terminals are not changed"
+  ]
+}

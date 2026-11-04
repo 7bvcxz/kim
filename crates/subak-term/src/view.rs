@@ -190,7 +190,13 @@ pub struct TermView {
     current: Option<usize>,
     /// Keyboard selection (mark mode): the arrows move the selection's free end.
     marking: bool,
+    /// Characters that end a word for word selection and mark mode's word moves
+    /// ([`WORD_DELIMITERS`] unless the user configured others, Step 20).
+    delimiters: String,
 }
+
+/// The longest word-separator set a view accepts (characters).
+pub const MAX_WORD_DELIMITERS: usize = 128;
 
 impl TermView {
     /// A view of a pane of `cols × rows` keeping up to `history_lines` lines of scrollback.
@@ -220,7 +226,25 @@ impl TermView {
             highlights: Vec::new(),
             current: None,
             marking: false,
+            delimiters: WORD_DELIMITERS.to_string(),
         }
+    }
+
+    /// Sets the characters that end a word for double-click selection and mark mode's word
+    /// moves (Tabby's `wordSeparator`, Step 20). Letters of every script that are not listed —
+    /// Korean included — stay word characters. At most [`MAX_WORD_DELIMITERS`] characters are
+    /// kept; control characters are ignored.
+    pub fn set_word_delimiters(&mut self, delimiters: &str) {
+        self.delimiters = delimiters
+            .chars()
+            .filter(|c| !c.is_control())
+            .take(MAX_WORD_DELIMITERS)
+            .collect();
+    }
+
+    /// The characters that end a word.
+    pub fn word_delimiters(&self) -> &str {
+        &self.delimiters
     }
 
     pub fn screen(&self) -> &Screen {
@@ -736,7 +760,7 @@ impl TermView {
             } else {
                 c.ch
             };
-            Some(ch != ' ' && is_word(ch))
+            Some(ch != ' ' && is_word(ch, &self.delimiters))
         };
         let step = |q: Point| -> Option<Point> {
             if forward {
@@ -861,10 +885,10 @@ impl TermView {
             }
             SelectMode::Word => {
                 if let Some(row) = self.line(a.line) {
-                    a.col = word_start(&row, a.col);
+                    a.col = word_start(&row, a.col, &self.delimiters);
                 }
                 if let Some(row) = self.line(b.line) {
-                    b.col = word_end(&row, b.col);
+                    b.col = word_end(&row, b.col, &self.delimiters);
                 }
             }
             SelectMode::Line => {
@@ -1077,12 +1101,12 @@ impl TermView {
     }
 }
 
-fn is_word(c: char) -> bool {
-    !WORD_DELIMITERS.contains(c)
+fn is_word(c: char, delimiters: &str) -> bool {
+    !delimiters.contains(c)
 }
 
 /// The first column of the word (or run of delimiters) at `col`.
-fn word_start(row: &Row, col: u16) -> u16 {
+fn word_start(row: &Row, col: u16, delimiters: &str) -> u16 {
     let at = |x: usize| {
         let c = row.cell(x);
         if c.width == CellWidth::Tail && x > 0 {
@@ -1092,15 +1116,15 @@ fn word_start(row: &Row, col: u16) -> u16 {
         }
     };
     let mut x = usize::from(col).min(row.cols().saturating_sub(1));
-    let kind = is_word(at(x));
-    while x > 0 && is_word(at(x - 1)) == kind {
+    let kind = is_word(at(x), delimiters);
+    while x > 0 && is_word(at(x - 1), delimiters) == kind {
         x -= 1;
     }
     u16::try_from(x).unwrap_or(0)
 }
 
 /// The last column of the word (or run of delimiters) at `col`.
-fn word_end(row: &Row, col: u16) -> u16 {
+fn word_end(row: &Row, col: u16, delimiters: &str) -> u16 {
     let at = |x: usize| {
         let c = row.cell(x);
         if c.width == CellWidth::Tail && x > 0 {
@@ -1111,8 +1135,8 @@ fn word_end(row: &Row, col: u16) -> u16 {
     };
     let last = row.cols().saturating_sub(1);
     let mut x = usize::from(col).min(last);
-    let kind = is_word(at(x));
-    while x < last && is_word(at(x + 1)) == kind {
+    let kind = is_word(at(x), delimiters);
+    while x < last && is_word(at(x + 1), delimiters) == kind {
         x += 1;
     }
     u16::try_from(x).unwrap_or(0)

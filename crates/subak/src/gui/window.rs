@@ -16,6 +16,12 @@
 //! state is borrowed. Those calls are queued as [`After`] actions and run once the state is free;
 //! a message that still arrives while it is borrowed gets the default handling.
 //!
+//! **Settings** (Step 20, ADR 0051): `config.toml` ([`crate::config`]) decides the theme, the
+//! terminal font chain, text size, line height, padding, window opacity, motion, the mouse and
+//! keyboard choices and the shell profiles `Ctrl+T` and the menu start. It is read at start and
+//! again when the window gets the focus; the settings menu and the zoom keys edit it line by line.
+//! Nothing here is sent to the Host except a new Terminal's explicit command, cwd and env.
+//!
 //! **Test hooks** (debug builds, or feature `test-hooks`; `--test-offscreen`): the window is
 //! created far off every monitor (-20000, -20000) as a tool window (no taskbar button, not in
 //! Alt+Tab) with `WS_EX_NOACTIVATE`, shown with `SW_SHOWNOACTIVATE`, so it never appears on the
@@ -33,10 +39,12 @@ use super::find::{Edit, FindBar, Toggle};
 use super::keys::{self, Action, Matcher, Outcome, Press, Typed, vk};
 use super::layout::{self, Cells, Rect};
 use super::model::{Confirm, Effect, Frame as Data, Model, Phase, Want};
+use super::motion::{self, Motion as Transitions, What};
 use super::net::{self, Inbox, Link, Msg};
-use super::prefs::{LastTerminal, Placement, Prefs, ThemePref};
-use super::screens::{self, Banner, Choice, Hints, tokens};
+use super::prefs::{LastTerminal, Placement, Prefs};
+use super::screens::{self, Banner, Choice, Chrome, Hints};
 use super::tabs::{self, Hit};
+use crate::config::{self, MiddleClick, RightClick, Settings, ThemeChoice};
 use kim_hotkeys::keys::Side;
 use serde_json::{Value, json};
 use std::cell::RefCell;
@@ -74,6 +82,7 @@ use windows_sys::Win32::System::DataExchange::{
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
 use windows_sys::Win32::System::Ole::CF_UNICODETEXT;
+use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
 use windows_sys::Win32::UI::Accessibility::{HCF_HIGHCONTRASTON, HIGHCONTRASTW};
 use windows_sys::Win32::UI::Controls::Dialogs::{
     GetSaveFileNameW, OFN_EXPLORER, OFN_NOCHANGEDIR, OFN_OVERWRITEPROMPT, OFN_PATHMUSTEXIST,
@@ -89,7 +98,8 @@ use windows_sys::Win32::UI::Input::Ime::{
     ImmSetCompositionWindow,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    GetDoubleClickTime, GetKeyState, ReleaseCapture, SetCapture, ToUnicode,
+    GetDoubleClickTime, GetKeyState, ReleaseCapture, SetCapture, TME_LEAVE, TRACKMOUSEEVENT,
+    ToUnicode, TrackMouseEvent,
 };
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -110,6 +120,11 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WM_SYSCOLORCHANGE, WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_THEMECHANGED, WM_TIMER,
     WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_OVERLAPPEDWINDOW,
 };
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    GWL_EXSTYLE, GetLayeredWindowAttributes, GetWindowLongPtrW, ICON_BIG, ICON_SMALL, LWA_ALPHA,
+    MF_CHECKED, MF_POPUP, SPI_GETCLIENTAREAANIMATION, SendMessageW, SetLayeredWindowAttributes,
+    SetWindowLongPtrW, WM_GETICON, WM_SETICON, WS_EX_LAYERED,
+};
 
 /// The network threads have queued something.
 const WM_NET: u32 = WM_APP + 1;
@@ -120,6 +135,11 @@ const TIMER_TEST_EXIT: usize = 2;
 const TIMER_SYNC: usize = 3;
 /// A `hold` shortcut's delay, armed only while its key is down.
 const TIMER_HOLD: usize = 4;
+/// Step 20: redraws while a transition runs (never while idle), and hides a toast after 4 s.
+const TIMER_MOTION: usize = 5;
+const TIMER_TOAST: usize = 6;
+/// `WM_MOUSELEAVE` (the pointer left the client area after `TrackMouseEvent`).
+const WM_MOUSELEAVE: u32 = 0x02A3;
 /// The tab bar's text size (DESIGN_SYSTEM §2.3: UI body 12) and height (§2.4: 32), logical px.
 const BAR_FONT: f32 = 12.0;
 const BAR_HEIGHT: f32 = 32.0;
@@ -143,8 +163,25 @@ const CMD_FIND: u32 = 16;
 const CMD_SAVE: u32 = 17;
 const CMD_OPEN_LINK: u32 = 18;
 const CMD_COPY_LINK: u32 = 19;
+/// Step 20: the settings menu.
+const CMD_SETTINGS_EDIT: u32 = 20;
+const CMD_SETTINGS_RELOAD: u32 = 21;
 /// `CMD_SHOW + k`: show the `k`-th hidden Terminal again.
 const CMD_SHOW: u32 = 100;
+/// `CMD_SET + k`: the `k`-th choice of the settings menu (a key and its new value).
+const CMD_SET: u32 = 200;
+/// `CMD_PROFILE + k`: a new Terminal from the `k`-th shell profile.
+const CMD_PROFILE: u32 = 400;
+/// The terminal font families the settings menu offers (the installed ones are shown).
+const MENU_FONTS: [&str; 7] = [
+    "Cascadia Mono",
+    "Cascadia Code",
+    "Consolas",
+    "Courier New",
+    "Lucida Console",
+    "D2Coding",
+    "JetBrains Mono",
+];
 /// `dwData` of a test command (`WM_COPYDATA`): "SUBK".
 pub const COPYDATA_TEST: usize = 0x5355_424B;
 /// Where the off-screen test window is placed: off every monitor of any real desktop.
@@ -203,6 +240,64 @@ pub fn attach_parent_console() {
     }
 }
 
+/// One item of a native menu: a command (id > 0), a separator (id 0, no items) or a submenu
+/// (items).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MenuItem {
+    id: u32,
+    label: String,
+    enabled: bool,
+    checked: bool,
+    items: Vec<MenuItem>,
+}
+
+impl MenuItem {
+    fn cmd(id: u32, label: impl Into<String>, enabled: bool) -> Self {
+        Self {
+            id,
+            label: label.into(),
+            enabled,
+            checked: false,
+            items: Vec::new(),
+        }
+    }
+
+    fn check(id: u32, label: impl Into<String>, checked: bool) -> Self {
+        Self {
+            checked,
+            ..Self::cmd(id, label, true)
+        }
+    }
+
+    fn separator() -> Self {
+        Self::cmd(0, String::new(), true)
+    }
+
+    fn sub(label: impl Into<String>, items: Vec<MenuItem>) -> Self {
+        Self {
+            items,
+            ..Self::cmd(0, label, true)
+        }
+    }
+
+    fn to_json(&self) -> Value {
+        let mut v = json!({"id": self.id, "label": self.label, "enabled": self.enabled});
+        if self.checked {
+            v["checked"] = json!(true);
+        }
+        if !self.items.is_empty() {
+            v["items"] = Value::Array(self.items.iter().map(MenuItem::to_json).collect());
+        }
+        v
+    }
+}
+
+impl From<(u32, String, bool)> for MenuItem {
+    fn from((id, label, enabled): (u32, String, bool)) -> Self {
+        Self::cmd(id, label, enabled)
+    }
+}
+
 /// A Win32 call to make once the window's state is no longer borrowed (it sends messages back).
 #[derive(Debug)]
 enum After {
@@ -216,9 +311,16 @@ enum After {
     /// The tab menu at a client point (its own message loop): the items `(command, label,
     /// enabled)` (command 0: a separator), for tab `tab` (-1: the bar).
     Menu {
-        items: Vec<(u32, String, bool)>,
+        items: Vec<MenuItem>,
         at: (i32, i32),
         tab: isize,
+    },
+    /// Step 20: the window's opacity (`WS_EX_LAYERED` with a constant alpha; 255 removes it).
+    Opacity(u8),
+    /// Step 20: the caption in the theme's colours (dark or light mode, caption, text, border).
+    Caption {
+        dark: bool,
+        colors: [Rgb; 3],
     },
     /// The save dialog for an export the user agreed to (its own modal loop); `hide`: with the
     /// secret-looking values hidden.
@@ -337,6 +439,32 @@ struct App {
     frames: u64,
     bytes: u64,
     after: Vec<After>,
+    // Step 20: settings, motion and the polished chrome.
+    /// The effective settings (`config.toml`).
+    settings: Settings,
+    /// The settings file as last read (edits start from it).
+    cfg: config::Loaded,
+    /// Settings changed in this window that could not be saved (an invalid or newer file):
+    /// they last while it runs.
+    cfg_unsaved: bool,
+    /// Windows apps use the light mode (`theme = "system"`).
+    light_mode: bool,
+    /// Windows shows animations ("Show animations in Windows").
+    system_animations: bool,
+    motion: Transitions,
+    /// The active tab's id at the last bar layout (a change starts the tab transition).
+    bar_active: Option<String>,
+    /// The tab under the pointer, and whether `WM_MOUSELEAVE` is requested.
+    hover: Option<usize>,
+    leave_tracked: bool,
+    /// The toast shown (a notice that hides by itself after 4 s, unless another replaced it).
+    toast: Option<String>,
+    /// The settings menu's choices by command (`CMD_SET + k`): key and value.
+    menu_choices: Vec<(String, String)>,
+    /// The terminal families of [`MENU_FONTS`] that are installed (asked once).
+    fonts: Option<Vec<&'static str>>,
+    /// The family that draws Latin text in the terminal renderer (the user's, or a fallback).
+    face: String,
 }
 
 thread_local! {
@@ -374,6 +502,52 @@ fn make_renderer(theme: Theme, font_size: f32, scale: f32, padding: f32) -> Rend
     };
     Renderer::with_system_fonts(theme.clone(), opts)
         .unwrap_or_else(|_| Renderer::builtin(theme, opts))
+}
+
+/// A renderer with the user's terminal font chain (`appearance.font_family` first, Step 20).
+fn make_term_renderer(theme: Theme, opts: RenderOptions, family: &str) -> Renderer {
+    let chain = subak_term::render::font_chain(family);
+    Renderer::with_font_chain(theme.clone(), opts, &chain)
+        .unwrap_or_else(|_| Renderer::builtin(theme, opts))
+}
+
+/// Whether Windows apps use the light mode (`AppsUseLightTheme`; dark when unknown).
+pub(super) fn apps_use_light_theme() -> bool {
+    let key = wide("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize");
+    let name = wide("AppsUseLightTheme");
+    let mut v: u32 = 0;
+    let mut size = 4u32;
+    // SAFETY: reads one DWORD value of the current user's registry into `v` (4 bytes).
+    let r = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            key.as_ptr(),
+            name.as_ptr(),
+            RRF_RT_REG_DWORD,
+            null_mut(),
+            (&raw mut v).cast(),
+            &raw mut size,
+        )
+    };
+    r == 0 && v != 0
+}
+
+/// Whether Windows shows animations ("Show animations in Windows", DESIGN_SYSTEM §4.5).
+pub(super) fn system_animations() -> bool {
+    let mut on: i32 = 1;
+    // SAFETY: a BOOL out-parameter of the documented size.
+    let ok =
+        unsafe { SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, (&raw mut on).cast(), 0) };
+    ok == 0 || on != 0
+}
+
+/// The terminal families of `names` that are installed (the GDI rasterizer finds them).
+fn installed_fonts(names: &[&'static str]) -> Vec<&'static str> {
+    names
+        .iter()
+        .copied()
+        .filter(|f| subak_term::render::gdi::GdiRasterizer::new(&[f]).is_ok())
+        .collect()
 }
 
 /// The work areas of the monitors and their DPI.
@@ -460,22 +634,55 @@ fn lparam_xy(lp: LPARAM) -> (i32, i32) {
 }
 
 impl App {
+    /// The theme in use: `kim-dark`, `kim-light` or `high-contrast` (Step 20: the setting, Windows
+    /// High Contrast and, for `system`, Windows' light or dark app mode).
+    fn theme_name(&self) -> &'static str {
+        self.settings
+            .appearance
+            .theme
+            .resolve(self.high_contrast, self.light_mode)
+    }
+
     fn theme(&self) -> Theme {
-        let hc = match self.prefs.theme {
-            ThemePref::Auto => self.high_contrast,
-            ThemePref::KimDark => false,
-            ThemePref::HighContrast => true,
-        };
-        if hc {
-            let (w, t, h) = system_theme_colors();
-            Theme::high_contrast(w, t, h)
-        } else {
-            Theme::kim_dark()
+        match self.theme_name() {
+            "high-contrast" => {
+                let (w, t, h) = system_theme_colors();
+                Theme::high_contrast(w, t, h)
+            }
+            "kim-light" => Theme::kim_light(),
+            _ => Theme::kim_dark(),
         }
     }
 
     fn hc_theme(&self) -> bool {
-        self.theme().name == "high-contrast"
+        self.theme_name() == "high-contrast"
+    }
+
+    /// The chrome colours of the theme in use (the tokens of `kim-dark` or `kim-light`).
+    fn chrome(&self) -> Chrome {
+        Chrome::for_theme(self.theme_name())
+    }
+
+    /// VT text of the window's own parts (written in `kim-dark` tokens) in the theme in use:
+    /// reverse video in the system colours for High Contrast, the light tokens for `kim-light`.
+    fn themed_vt(&self, vt: &[u8]) -> Vec<u8> {
+        if self.hc_theme() {
+            screens::high_contrast(vt)
+        } else {
+            self.chrome().retint(vt)
+        }
+    }
+
+    /// The terminal's render options from the settings (the scale is the renderer's).
+    fn term_opts(&self) -> RenderOptions {
+        let a = &self.settings.appearance;
+        RenderOptions {
+            scale: self.scale(),
+            font_size: a.font_size,
+            line_height: a.line_height,
+            padding: a.padding as f32,
+            bold_is_bright: a.bold_is_bright,
+        }
     }
 
     fn cells(&self) -> Cells {
@@ -575,11 +782,7 @@ impl App {
         if let Some(vt) =
             screens::screen(&self.model.phase, &self.endpoint, cols, rows, &self.hints())
         {
-            v.feed(&if self.hc_theme() {
-                screens::high_contrast(&vt)
-            } else {
-                vt
-            });
+            v.feed(&self.themed_vt(&vt));
         }
         self.state_view = v;
     }
@@ -589,8 +792,9 @@ impl App {
     fn bar_theme(&self) -> Theme {
         let mut theme = self.theme();
         if !self.hc_theme() {
-            theme.background = tokens::BG_RAISED;
-            theme.foreground = tokens::TEXT_SECONDARY;
+            let c = self.chrome();
+            theme.background = c.bg_raised;
+            theme.foreground = c.text_secondary;
         }
         theme
     }
@@ -632,14 +836,25 @@ impl App {
             text: &e.text,
             cursor: e.cursor,
         });
-        let bar = tabs::layout(&items, active, edit.as_ref(), cols, self.bar.first);
+        let bar = tabs::layout_hover(
+            &items,
+            active,
+            edit.as_ref(),
+            cols,
+            self.bar.first,
+            self.hover,
+        );
         drop(items);
-        let mut view = TermView::new(cols, 1, 0);
-        if hc {
-            view.feed(&screens::high_contrast(&bar.vt));
-        } else {
-            view.feed(&bar.vt);
+        // Step 20: another tab shown starts the tab transition (the marker fades in).
+        let active_id = self.model.terminal().map(|t| t.id.clone());
+        if active_id != self.bar_active {
+            if self.bar_active.is_some() && active_id.is_some() {
+                self.animate(What::Tab);
+            }
+            self.bar_active = active_id;
         }
+        let mut view = TermView::new(cols, 1, 0);
+        view.feed(&self.themed_vt(&bar.vt));
         r.render(&view);
         let style = if hc {
             compose::BarStyle {
@@ -649,11 +864,16 @@ impl App {
                 border: Some(theme.foreground),
             }
         } else {
+            let c = self.chrome();
+            let t = motion::mix_amount(self.motion.progress(What::Tab, Instant::now()));
             compose::BarStyle {
-                fill: tokens::BG_RAISED,
-                active_fill: Some(tokens::BG_BASE),
-                marker: Some((tokens::ACCENT, layout::px(2.0, self.dpi).max(1) as u32)),
-                border: Some(tokens::BORDER_SUBTLE),
+                fill: c.bg_raised,
+                active_fill: Some(c.bg_raised.mix(c.bg_base, t)),
+                marker: Some((
+                    c.bg_raised.mix(c.accent, t),
+                    layout::px(2.0, self.dpi).max(1) as u32,
+                )),
+                border: Some(c.border_subtle),
             }
         };
         let strip = compose::bar_strip(
@@ -748,17 +968,19 @@ impl App {
         };
         let mut theme = self.theme();
         if !hc {
-            theme.background = tone.fill();
-            theme.foreground = tokens::TEXT_PRIMARY;
+            let c = self.chrome();
+            theme.background = c.tone_fill(tone);
+            theme.foreground = c.text_primary;
         }
+        let shown_before = self.banner.is_some();
+        let opts = RenderOptions {
+            padding: 4.0,
+            line_height: config::LINE_HEIGHT.2,
+            ..self.term_opts()
+        };
         let mut r = match self.banner.take() {
-            Some((_, o))
-                if o.renderer.options().font_size == self.prefs.font_size
-                    && o.renderer.options().scale == self.scale() =>
-            {
-                o.renderer
-            }
-            _ => make_renderer(theme.clone(), self.prefs.font_size, self.scale(), 4.0),
+            Some((_, o)) if o.renderer.options() == opts => o.renderer,
+            _ => make_term_renderer(theme.clone(), opts, &self.settings.appearance.font_family),
         };
         r.set_theme(theme);
         r.set_focused(self.focused);
@@ -804,9 +1026,13 @@ impl App {
             }
             Content::Text(b) => (screens::banner_vt(&b, cols), b),
         };
-        view.feed(&if hc { screens::high_contrast(&vt) } else { vt });
+        view.feed(&self.themed_vt(&vt));
         r.render(&view);
         self.banner = Some((b, Overlay { renderer: r }));
+        // Step 20: a banner that appears fades in and rises 4 px.
+        if !shown_before {
+            self.animate(What::Banner);
+        }
         self.invalidate_all();
         self.place_ime();
     }
@@ -822,8 +1048,9 @@ impl App {
         }
         let mut theme = self.theme();
         if !self.hc_theme() {
-            theme.background = tokens::BG_OVERLAY;
-            theme.foreground = tokens::TEXT_PRIMARY;
+            let c = self.chrome();
+            theme.background = c.bg_overlay;
+            theme.foreground = c.text_primary;
         }
         let cells: usize = self
             .composition
@@ -834,7 +1061,7 @@ impl App {
         let size = if self.rename.is_some() {
             BAR_FONT
         } else {
-            self.prefs.font_size
+            self.settings.appearance.font_size
         };
         let mut r = match self.ime.take() {
             Some(o)
@@ -929,11 +1156,22 @@ impl App {
     /// background around it, the banner and the IME composition. What `WM_PAINT` presents, for
     /// test shots.
     fn composed(&self) -> Frame {
+        let c = self.chrome();
+        let p = self.motion.progress(What::Banner, Instant::now());
         let banner = self.banner.as_ref().map(|(b, o)| compose::BannerLayer {
             frame: o.renderer.frame(),
             fill: o.renderer.theme().background,
-            marker: (!self.hc_theme())
-                .then(|| (b.tone.color(), layout::px(3.0, self.dpi).max(1) as u32)),
+            marker: (!self.hc_theme()).then(|| {
+                (
+                    c.tone_color(b.tone),
+                    layout::px(3.0, self.dpi).max(1) as u32,
+                )
+            }),
+            border: c.border_subtle,
+            fade: motion::mix_amount(p),
+            rise: ((1.0 - p) * motion::RISE_PX * self.scale())
+                .round()
+                .max(0.0) as u32,
         });
         let (x, y) = self.cursor_px();
         compose::compose(
@@ -998,6 +1236,18 @@ impl App {
                 DeleteObject(b);
             }
         };
+        // Step 20: while a transition runs, the composed client area is presented whole (a few
+        // frames over at most 160 ms); otherwise each layer is presented as it is.
+        if self.motion.is_running() {
+            let f = self.composed();
+            // SAFETY: standard paint handling of our own window; the frame lives until EndPaint.
+            unsafe {
+                let dc = BeginPaint(self.hwnd, &raw mut ps);
+                present(dc, &f, 0, 0);
+                EndPaint(self.hwnd, &raw const ps);
+            }
+            return;
+        }
         // SAFETY: standard paint handling of our own window; every frame lives in `self`.
         unsafe {
             let dc = BeginPaint(self.hwnd, &raw mut ps);
@@ -1033,15 +1283,16 @@ impl App {
                 );
                 present(dc, bf, 0, top as i32);
                 if !self.hc_theme() {
+                    let c = self.chrome();
                     let marker = layout::px(3.0, self.dpi).max(1) as u32;
-                    fill(dc, 0, top, marker, bf.height, b.tone.color());
+                    fill(dc, 0, top, marker, bf.height, c.tone_color(b.tone));
                     fill(
                         dc,
                         0,
                         top + bf.height.saturating_sub(1),
                         cw,
                         1,
-                        tokens::BORDER_SUBTLE,
+                        c.border_subtle,
                     );
                 }
             }
@@ -1062,6 +1313,12 @@ impl App {
             }
             self.bg_brush = CreateSolidBrush(colorref(theme.background));
         }
+        let c = self.chrome();
+        self.after.push(After::Caption {
+            dark: c.name != "kim-light",
+            colors: [c.bg_base, c.text_secondary, c.border_subtle],
+        });
+        self.apply_opacity();
         self.renderer.set_theme(theme);
         self.rebuild_state();
         self.rebuild_bar();
@@ -1157,16 +1414,398 @@ impl App {
         self.relayout();
     }
 
+    /// The zoom keys (and the settings menu): a new text size, saved in `config.toml`.
     fn set_font_size(&mut self, size: f32) {
-        if (size - self.prefs.font_size).abs() < f32::EPSILON {
+        if (size - self.settings.appearance.font_size).abs() < f32::EPSILON {
             return;
         }
-        self.prefs.font_size = size;
+        self.settings.appearance.font_size = size;
         self.renderer.set_font_size(size);
         self.banner = None;
         self.ime = None;
         self.relayout();
-        self.save_prefs();
+        self.persist("appearance.font_size", &size.to_string());
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // Settings (Step 20): config.toml.
+
+    /// Saves one setting in `config.toml` (an in-place line edit from the file as it is now);
+    /// an invalid or newer file is never rewritten: the change then lasts while this window
+    /// runs, and a notice says so.
+    fn persist(&mut self, key: &str, value: &str) {
+        let Some(dir) = self.prefs_dir.clone() else {
+            return;
+        };
+        let cfg = config::load(&dir);
+        let result = config::set(&cfg, &[(key, value)]).and_then(|e| {
+            if e.changes.is_empty() {
+                return Ok(false);
+            }
+            config::write_atomic(&cfg.path, &e.text)
+                .map(|()| true)
+                .map_err(|io| config::EditError::Layout(io.to_string()))
+        });
+        match result {
+            Ok(written) => {
+                self.cfg = config::load(&dir);
+                self.event(
+                    &json!({"event": "settings_saved", "key": key, "value": value,
+                    "written": written, "path": self.cfg.path}),
+                );
+            }
+            Err(e) => {
+                self.cfg_unsaved = true;
+                self.notice = Some(format!(
+                    "{}; the change applies to this window until it closes",
+                    e.message()
+                ));
+                self.event(&json!({"event": "settings_not_saved", "key": key,
+                    "error": e.message()}));
+                self.rebuild_banner();
+            }
+        }
+    }
+
+    /// Reads `config.toml` again (when the window gets the focus, or "Reload settings") and
+    /// applies what changed. Running Terminals are never touched: a profile is used only when a
+    /// Terminal is created; a new text size or line height only resizes the shown pane's grid.
+    fn reload_settings(&mut self, forced: bool) {
+        let Some(dir) = self.prefs_dir.clone() else {
+            return;
+        };
+        let cfg = config::load(&dir);
+        if !forced && cfg.text == self.cfg.text && cfg.state() == self.cfg.state() {
+            return;
+        }
+        let notice = cfg.notice();
+        let new = cfg.settings().clone();
+        self.cfg = cfg;
+        self.cfg_unsaved = false;
+        self.apply_settings(new);
+        self.event(
+            &json!({"event": "settings_reloaded", "state": self.cfg.state().as_str(),
+            "problem": notice}),
+        );
+        match notice {
+            Some(n) => {
+                self.notice = Some(n);
+                self.toast = None;
+            }
+            None if forced => self.toast("Settings reloaded from config.toml"),
+            None => {}
+        }
+        self.rebuild_banner();
+    }
+
+    /// Applies new settings: only what changed is redone.
+    fn apply_settings(&mut self, new: Settings) {
+        let old = std::mem::replace(&mut self.settings, new);
+        let (a, b) = (&old.appearance, &self.settings.appearance);
+        self.motion.enabled = b.motion.animates(self.system_animations);
+        if !self.motion.enabled {
+            self.motion.stop();
+        }
+        let look = a.font_family != b.font_family
+            || a.font_size != b.font_size
+            || a.line_height != b.line_height
+            || a.padding != b.padding
+            || a.bold_is_bright != b.bold_is_bright;
+        if a.font_family != b.font_family {
+            let mut r = make_term_renderer(self.theme(), self.term_opts(), &b.font_family);
+            r.set_focused(self.focused);
+            self.face = r.face_for('A').family;
+            self.renderer = r;
+            if !b.font_family.is_empty() && !self.face.eq_ignore_ascii_case(&b.font_family) {
+                self.notice = Some(format!(
+                    "The font `{}` is not installed; {} is used",
+                    b.font_family, self.face
+                ));
+            }
+        } else if look {
+            self.renderer.set_options(self.term_opts());
+        }
+        if old.terminal.word_separators != self.settings.terminal.word_separators {
+            self.pane
+                .set_word_delimiters(&self.settings.terminal.word_separators);
+        }
+        if a.theme != b.theme || a.opacity != b.opacity {
+            self.set_theme();
+        }
+        if look {
+            self.banner = None;
+            self.ime = None;
+            self.relayout();
+        }
+    }
+
+    /// The window's opacity from the setting (High Contrast is always opaque).
+    fn apply_opacity(&mut self) {
+        let pct = if self.hc_theme() {
+            100
+        } else {
+            self.settings.appearance.opacity
+        };
+        let alpha = u8::try_from(pct * 255 / 100).unwrap_or(255);
+        self.after.push(After::Opacity(alpha));
+    }
+
+    /// Starts a transition (none with reduced motion) and the timer that draws it.
+    fn animate(&mut self, what: What) {
+        let ms = self.motion.start(what, Instant::now());
+        self.event(&json!({"event": "motion", "what": what.as_str(), "ms": ms}));
+        if ms > 0 {
+            // SAFETY: our own window's timer, killed when no transition runs.
+            unsafe { SetTimer(self.hwnd, TIMER_MOTION, motion::FRAME_MS, None) };
+        }
+    }
+
+    /// One frame of the running transitions.
+    fn motion_tick(&mut self) {
+        let running = self.motion.tick(Instant::now());
+        if !running {
+            // SAFETY: our own timer.
+            unsafe { KillTimer(self.hwnd, TIMER_MOTION) };
+            self.event(&json!({"event": "motion_done"}));
+        }
+        self.rebuild_bar();
+        self.invalidate_all();
+    }
+
+    /// A short, non-critical message that hides by itself after 4 s (DESIGN_SYSTEM §3.8: a
+    /// toast; errors stay until dismissed).
+    fn toast(&mut self, text: impl Into<String>) {
+        let text = text.into();
+        self.event(&json!({"event": "toast", "text": text}));
+        self.toast = Some(text.clone());
+        self.notice = Some(text);
+        // SAFETY: a one-shot timer of our own window.
+        unsafe { SetTimer(self.hwnd, TIMER_TOAST, 4000, None) };
+        self.rebuild_banner();
+    }
+
+    /// The settings menu (Step 20): appearance, mouse and clipboard choices, the file.
+    fn settings_menu(&mut self) -> MenuItem {
+        let a = self.settings.appearance.clone();
+        let t = self.settings.terminal.clone();
+        let mut choices: Vec<(String, String)> = Vec::new();
+        let mut pick = |key: &str, value: String, label: String, on: bool| {
+            choices.push((key.to_string(), value));
+            MenuItem::check(CMD_SET + choices.len() as u32 - 1, label, on)
+        };
+        let themes = ThemeChoice::ALL
+            .iter()
+            .map(|c| {
+                pick(
+                    "appearance.theme",
+                    c.as_str().into(),
+                    c.title().into(),
+                    a.theme == *c,
+                )
+            })
+            .collect();
+        let size = a.font_size;
+        let sizes = vec![
+            pick(
+                "appearance.font_size",
+                Prefs::zoomed(size, 1).to_string(),
+                format!("Larger ({} px)", Prefs::zoomed(size, 1)),
+                false,
+            ),
+            pick(
+                "appearance.font_size",
+                Prefs::zoomed(size, -1).to_string(),
+                format!("Smaller ({} px)", Prefs::zoomed(size, -1)),
+                false,
+            ),
+            pick(
+                "appearance.font_size",
+                config::FONT_SIZE.2.to_string(),
+                format!("Default ({} px)", config::FONT_SIZE.2),
+                (size - config::FONT_SIZE.2).abs() < f32::EPSILON,
+            ),
+        ];
+        let installed = self
+            .fonts
+            .get_or_insert_with(|| installed_fonts(&MENU_FONTS))
+            .clone();
+        let mut fonts = vec![pick(
+            "appearance.font_family",
+            String::new(),
+            "Default (Cascadia Mono, Consolas, …)".into(),
+            a.font_family.is_empty(),
+        )];
+        for f in installed {
+            fonts.push(pick(
+                "appearance.font_family",
+                f.to_string(),
+                f.to_string(),
+                a.font_family.eq_ignore_ascii_case(f),
+            ));
+        }
+        fonts.push(MenuItem::separator());
+        fonts.push(MenuItem::cmd(
+            0,
+            "Ligatures: not drawn (each cell is drawn on its own, ADR 0051)",
+            false,
+        ));
+        let spacing = [1.0f32, 1.2, 1.4, 1.6]
+            .iter()
+            .map(|h| {
+                pick(
+                    "appearance.line_height",
+                    h.to_string(),
+                    format!("{h:.1}"),
+                    (a.line_height - h).abs() < 0.01,
+                )
+            })
+            .collect();
+        let opacity = [100u32, 95, 90, 80, 70]
+            .iter()
+            .map(|o| {
+                pick(
+                    "appearance.opacity",
+                    o.to_string(),
+                    format!("{o} %"),
+                    a.opacity == *o,
+                )
+            })
+            .collect();
+        let motions = [
+            (config::Motion::System, "Follow Windows (Show animations)"),
+            (config::Motion::Reduced, "Reduced (no motion)"),
+            (config::Motion::Full, "Full"),
+        ]
+        .iter()
+        .map(|(m, l)| {
+            pick(
+                "appearance.motion",
+                m.as_str().into(),
+                (*l).into(),
+                a.motion == *m,
+            )
+        })
+        .collect();
+        let rights = [
+            (RightClick::CopyPaste, "Copy a selection, else paste"),
+            (RightClick::Menu, "Open the pane menu"),
+            (RightClick::Paste, "Paste"),
+            (RightClick::None, "Nothing"),
+        ]
+        .iter()
+        .map(|(r, l)| {
+            pick(
+                "terminal.right_click",
+                r.as_str().into(),
+                (*l).into(),
+                t.right_click == *r,
+            )
+        })
+        .collect();
+        let items = vec![
+            MenuItem::sub("Theme", themes),
+            MenuItem::sub(format!("Text size ({size} px)"), sizes),
+            MenuItem::sub("Terminal font", fonts),
+            MenuItem::sub("Line spacing", spacing),
+            MenuItem::sub("Window opacity", opacity),
+            MenuItem::sub("Motion", motions),
+            MenuItem::separator(),
+            pick(
+                "terminal.copy_on_select",
+                (!t.copy_on_select).to_string(),
+                "Copy on select".into(),
+                t.copy_on_select,
+            ),
+            pick(
+                "terminal.smart_ctrl_c",
+                (!t.smart_ctrl_c).to_string(),
+                "Ctrl+C copies a selection".into(),
+                t.smart_ctrl_c,
+            ),
+            MenuItem::sub("Right click", rights),
+            pick(
+                "terminal.middle_click",
+                if t.middle_click == MiddleClick::Paste {
+                    "none".into()
+                } else {
+                    "paste".into()
+                },
+                "Middle click pastes".into(),
+                t.middle_click == MiddleClick::Paste,
+            ),
+            MenuItem::separator(),
+            MenuItem::cmd(CMD_SETTINGS_EDIT, "Edit settings file (config.toml)…", true),
+            MenuItem::cmd(CMD_SETTINGS_RELOAD, "Reload settings", true),
+        ];
+        self.menu_choices = choices;
+        MenuItem::sub("Settings", items)
+    }
+
+    /// A choice of the settings menu: applied at once and saved in `config.toml`.
+    fn choose_setting(&mut self, k: usize) {
+        let Some((key, value)) = self.menu_choices.get(k).cloned() else {
+            return;
+        };
+        let mut new = self.settings.clone();
+        if let Err(e) = config::set_value(&mut new, &key, &value) {
+            self.notice = Some(e.message());
+            self.rebuild_banner();
+            return;
+        }
+        self.event(&json!({"event": "setting", "key": key, "value": value}));
+        if key == "appearance.font_size" {
+            if let Ok(f) = value.parse::<f32>() {
+                self.set_font_size(f);
+            }
+            return;
+        }
+        self.apply_settings(new);
+        self.persist(&key, &value);
+        if !self.cfg_unsaved {
+            self.toast(format!("{key} = {value} (saved in config.toml)"));
+        }
+    }
+
+    /// "Edit settings file…": opens `config.toml` in Notepad (created with its header first, so
+    /// there is something to edit).
+    fn edit_settings(&mut self) {
+        let Some(dir) = self.prefs_dir.clone() else {
+            return;
+        };
+        let path = dir.join(config::FILE);
+        if !path.exists()
+            && let Err(e) = config::write_atomic(&path, &config::new_file_text())
+        {
+            self.notice = Some(format!("{} cannot be created: {e}", path.display()));
+            self.rebuild_banner();
+            return;
+        }
+        match self.opener.edit(&path) {
+            Ok(()) => self.toast(format!(
+                "Opened {}; the window applies your changes when it gets the focus",
+                path.display()
+            )),
+            Err(e) => {
+                self.notice = Some(format!("{} could not be opened: {e}", path.display()));
+                self.rebuild_banner();
+            }
+        }
+    }
+
+    /// Creates a Terminal: from shell profile `profile` (by index), or the default profile, or
+    /// the Host's defaults. The profile's command, cwd and env are sent explicitly.
+    fn new_terminal(&mut self, profile: Option<usize>) {
+        let p = match profile {
+            Some(i) => self.settings.profiles.get(i).cloned(),
+            None => self.settings.default_profile().cloned(),
+        };
+        self.leave_pane();
+        let params = p.as_ref().map(config::Profile::create_params);
+        self.event(
+            &json!({"event": "new_terminal", "profile": p.as_ref().map(|p| p.name.clone())}),
+        );
+        let fx = self.model.create_with(params.as_ref());
+        self.apply(fx);
     }
 
     // -----------------------------------------------------------------------------------------
@@ -1394,6 +2033,7 @@ impl App {
     fn reset_pane(&mut self, cols: u16, rows: u16, history: usize) {
         let mut v = TermView::new(cols, rows, history);
         v.set_answer_reports(true);
+        v.set_word_delimiters(&self.settings.terminal.word_separators);
         if !self.focused {
             let _ = v.focus(false);
         }
@@ -1583,6 +2223,7 @@ impl App {
             return false;
         }
         if self.notice.take().is_some() {
+            self.toast = None;
             self.rebuild_banner();
         }
         // The window's modal parts take the keyboard: nothing reaches the program, no shortcut
@@ -1656,6 +2297,17 @@ impl App {
         // (Ctrl+Alt is AltGr on many layouts: its characters still arrive for the field.)
         if self.find.is_some() || self.pane.marking() {
             return keys::special_key(code).is_some() || m.ctrl != m.alt;
+        }
+        // Step 20 (Tabby's smart Ctrl+C, off by default): Ctrl+C copies a selection; without a
+        // selection it reaches the program as always.
+        if self.settings.terminal.smart_ctrl_c
+            && code == u32::from(b'C')
+            && m == Mods::CTRL
+            && self.model.phase.shows_pane()
+            && self.pane.has_selection()
+        {
+            self.copy(false);
+            return true;
         }
         // 4. The program, or the state screen.
         match self.model.phase {
@@ -1899,11 +2551,7 @@ impl App {
         let rows = isize::try_from(self.grid.1).unwrap_or(1).max(1);
         self.event(&json!({"event": "action", "action": a.id()}));
         match a {
-            Action::NewTerminal => {
-                self.leave_pane();
-                let fx = self.model.create();
-                self.apply(fx);
-            }
+            Action::NewTerminal => self.new_terminal(None),
             Action::CloseTerminal => {
                 let fx = self.model.close_active();
                 self.apply(fx);
@@ -1944,9 +2592,15 @@ impl App {
             Action::MarkMode => self.toggle_mark(),
             Action::FindOpen => self.open_find(),
             Action::SaveOutput => self.ask_export(),
-            Action::ZoomIn => self.set_font_size(Prefs::zoomed(self.prefs.font_size, 1)),
-            Action::ZoomOut => self.set_font_size(Prefs::zoomed(self.prefs.font_size, -1)),
-            Action::ZoomReset => self.set_font_size(Prefs::zoomed(self.prefs.font_size, 0)),
+            Action::ZoomIn => {
+                self.set_font_size(Prefs::zoomed(self.settings.appearance.font_size, 1));
+            }
+            Action::ZoomOut => {
+                self.set_font_size(Prefs::zoomed(self.settings.appearance.font_size, -1));
+            }
+            Action::ZoomReset => {
+                self.set_font_size(Prefs::zoomed(self.settings.appearance.font_size, 0));
+            }
             Action::ScrollPageUp => self.scroll(rows),
             Action::ScrollPageDown => self.scroll(-rows),
             Action::ScrollLineUp => self.scroll(1),
@@ -2110,6 +2764,38 @@ impl App {
                 ));
             }
         }
+        // Step 20: a new Terminal from each shell profile, and the settings menu.
+        let mut items: Vec<MenuItem> = items.into_iter().map(MenuItem::from).collect();
+        let at_new = items
+            .iter()
+            .position(|i| i.id == CMD_NEW)
+            .map_or(items.len(), |i| i + 1);
+        let default = self.settings.default_profile().map(|p| p.name.clone());
+        let profiles: Vec<MenuItem> = self
+            .settings
+            .profiles
+            .iter()
+            .enumerate()
+            .take(64)
+            .map(|(k, p)| {
+                MenuItem::cmd(
+                    CMD_PROFILE + k as u32,
+                    format!(
+                        "New Terminal: {}{}",
+                        p.name,
+                        if default.as_deref() == Some(&p.name) {
+                            " (default)"
+                        } else {
+                            ""
+                        }
+                    ),
+                    connected,
+                )
+            })
+            .collect();
+        items.splice(at_new..at_new, profiles);
+        items.push(MenuItem::separator());
+        items.push(self.settings_menu());
         let at = at.unwrap_or_else(|| {
             let x = tab
                 .and_then(|i| {
@@ -2131,8 +2817,7 @@ impl App {
         if self.opts.test {
             // The test window never shows a menu (it would appear on the real desktop).
             self.event(&json!({"event": "menu", "tab": tab, "items": items.iter()
-                .map(|(id, label, enabled)| json!({"id": id, "label": label, "enabled": enabled}))
-                .collect::<Vec<_>>()}));
+                .map(MenuItem::to_json).collect::<Vec<_>>()}));
             return;
         }
         self.after.push(After::Menu { items, at, tab });
@@ -2176,6 +2861,12 @@ impl App {
             }
             CMD_NEW => self.run(Action::NewTerminal),
             CMD_FLOAT => self.start_float(),
+            CMD_SETTINGS_EDIT => self.edit_settings(),
+            CMD_SETTINGS_RELOAD => self.reload_settings(true),
+            c if (CMD_PROFILE..CMD_PROFILE + 64).contains(&c) => {
+                self.new_terminal(Some((c - CMD_PROFILE) as usize));
+            }
+            c if (CMD_SET..CMD_PROFILE).contains(&c) => self.choose_setting((c - CMD_SET) as usize),
             CMD_COPY => self.run(Action::Copy),
             CMD_COPY_HTML => self.run(Action::CopyHtml),
             CMD_PASTE => self.run(Action::Paste),
@@ -2230,7 +2921,11 @@ impl App {
             .then(|| self.pane.selected_cells())
             .flatten()
             .map(|cells| {
-                html::cf_html(&html::fragment(&cells, &self.theme(), self.prefs.font_size))
+                html::cf_html(&html::fragment(
+                    &cells,
+                    &self.theme(),
+                    self.settings.appearance.font_size,
+                ))
             });
         if let Err(e) = self.clipboard.write(&clip::crlf(&text), doc.as_deref()) {
             self.notice = Some(format!("Nothing was copied: {e}"));
@@ -2242,6 +2937,21 @@ impl App {
         self.pane.mark_end(false);
         self.pane.clear_selection();
         self.redraw();
+    }
+
+    /// Copy on select (Step 20): the selection as plain text, kept selected.
+    fn copy_keep(&mut self) {
+        let Some(text) = self.pane.selected_text() else {
+            return;
+        };
+        if let Err(e) = self.clipboard.write(&clip::crlf(&text), None) {
+            self.notice = Some(format!("Nothing was copied: {e}"));
+            self.rebuild_banner();
+        }
+        self.event(
+            &json!({"event": "copied", "chars": text.chars().count(), "html": false,
+            "on_select": true}),
+        );
     }
 
     /// Pastes the clipboard's plain text (Step 19): into the search field while it is open;
@@ -2664,6 +3374,8 @@ impl App {
             self.input(&report);
         }
         if focused {
+            // Step 20: `subak config …` or an editor may have changed config.toml meanwhile.
+            self.reload_settings(false);
             // `subak hotkeys …` may have changed hotkeys.json meanwhile (§8.3 5).
             if self.matcher.reload() {
                 self.event(&json!({"event": "hotkeys_reloaded",
@@ -2820,9 +3532,43 @@ impl App {
         true
     }
 
+    /// The tab under the pointer (Step 20: hover), and `WM_MOUSELEAVE` requested once.
+    fn track_hover(&mut self, x: i32, y: i32) {
+        let hover = if y >= 0 && y < self.top() as i32 {
+            let w = self.bar.renderer.as_ref().map_or(8, |r| r.metrics().width) as i32;
+            let col = (x - self.bar.pad_x as i32).div_euclid(w.max(1));
+            match u16::try_from(col).ok().and_then(|c| self.bar.layout.hit(c)) {
+                Some(Hit::Tab(i) | Hit::Close(i)) => Some(i),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        // The off-screen test window is never under the real pointer, so Windows would report a
+        // leave at once; its tests post WM_MOUSELEAVE themselves.
+        if !self.leave_tracked && !self.opts.test {
+            let mut t = TRACKMOUSEEVENT {
+                cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
+                dwFlags: TME_LEAVE,
+                hwndTrack: self.hwnd,
+                dwHoverTime: 0,
+            };
+            // SAFETY: a correctly sized structure for our own window.
+            self.leave_tracked = unsafe { TrackMouseEvent(&raw mut t) } != 0;
+        }
+        if hover != self.hover {
+            self.hover = hover;
+            self.event(&json!({"event": "hover", "tab": hover}));
+            self.rebuild_bar();
+        }
+    }
+
     fn on_mouse(&mut self, msg: u32, wp: WPARAM, x: i32, y: i32) {
         let m = Self::mouse_mods(wp);
         let top = self.top() as i32;
+        if msg == WM_MOUSEMOVE && self.drag.is_none() {
+            self.track_hover(x, y);
+        }
         if self.drag.is_none() && y < top {
             self.on_bar_mouse(msg, x);
             return;
@@ -2972,17 +3718,32 @@ impl App {
                     unsafe { ReleaseCapture() };
                     if !d.moved {
                         self.pane.clear_selection();
+                    } else if self.settings.terminal.copy_on_select && self.pane.has_selection() {
+                        // Step 20, off by default: the selection is copied when the button is
+                        // released, and stays selected (PuTTY style).
+                        self.copy_keep();
                     }
                     self.redraw();
                 }
             }
-            WM_RBUTTONDOWN => {
+            WM_RBUTTONDOWN => match self.settings.terminal.right_click {
                 // Windows Terminal's right click: copy a selection, else paste.
-                if self.pane.has_selection() {
-                    self.copy(false);
-                } else {
-                    self.paste(false);
+                RightClick::CopyPaste => {
+                    if self.pane.has_selection() {
+                        self.copy(false);
+                    } else {
+                        self.paste(false);
+                    }
                 }
+                RightClick::Paste => self.paste(false),
+                RightClick::Menu => {
+                    self.menu_link = links::link_at(&self.pane, col, row);
+                    self.open_pane_menu(Some((x, y)));
+                }
+                RightClick::None => {}
+            },
+            WM_MBUTTONDOWN if self.settings.terminal.middle_click == MiddleClick::Paste => {
+                self.paste(false);
             }
             _ => {}
         }
@@ -3047,7 +3808,7 @@ impl App {
             "dpi": self.dpi,
             "cell": [m.width, m.height],
             "padding": self.renderer.padding(),
-            "font_size": self.prefs.font_size,
+            "font_size": self.settings.appearance.font_size,
             "focused": self.focused,
             "minimized": self.minimized,
             "maximized": self.maximized,
@@ -3081,7 +3842,67 @@ impl App {
         if let (Some(d), Value::Object(more)) = (dump.as_object_mut(), self.step19_json()) {
             d.extend(more);
         }
+        if let (Some(d), Value::Object(more)) = (dump.as_object_mut(), self.step20_json()) {
+            d.extend(more);
+        }
         dump
+    }
+
+    /// The dump's Step 20 state: the settings in use, the theme, the font, opacity, motion and
+    /// the hovered tab.
+    fn step20_json(&self) -> Value {
+        let a = &self.settings.appearance;
+        let t = &self.settings.terminal;
+        let mut alpha = 0u8;
+        let mut flags = 0u32;
+        // SAFETY: plain queries of our own window.
+        let (layered, icon) = unsafe {
+            let layered = GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE) as u32 & WS_EX_LAYERED != 0;
+            if layered {
+                GetLayeredWindowAttributes(self.hwnd, null_mut(), &raw mut alpha, &raw mut flags);
+            }
+            (
+                layered,
+                SendMessageW(self.hwnd, WM_GETICON, ICON_SMALL as usize, 0) != 0,
+            )
+        };
+        let m = self.renderer.metrics();
+        json!({
+            "settings": {
+                "state": self.cfg.state().as_str(),
+                "unsaved": self.cfg_unsaved,
+                "theme": a.theme.as_str(),
+                "font_family": a.font_family,
+                "line_height": a.line_height,
+                "padding": a.padding,
+                "opacity": a.opacity,
+                "motion": a.motion.as_str(),
+                "bold_is_bright": a.bold_is_bright,
+                "copy_on_select": t.copy_on_select,
+                "smart_ctrl_c": t.smart_ctrl_c,
+                "right_click": t.right_click.as_str(),
+                "middle_click": t.middle_click.as_str(),
+                "word_separators": self.pane.word_delimiters(),
+                "default_profile": self.settings.default_profile().map(|p| p.name.clone()),
+                "profiles": self.settings.profiles.iter().map(|p| p.name.clone()).collect::<Vec<_>>(),
+            },
+            "theme_colors": {
+                "background": format!("{:06X}", self.theme().background.to_u32()),
+                "foreground": format!("{:06X}", self.theme().foreground.to_u32()),
+                "chrome": self.chrome().name,
+            },
+            "face": self.face,
+            "cell_height_ratio": f64::from(m.height) / f64::from(a.font_size * self.scale()),
+            "opacity_applied": if layered { u32::from(alpha) } else { 255 },
+            "motion": {
+                "enabled": self.motion.enabled,
+                "system": self.system_animations,
+                "active": self.motion.active(),
+            },
+            "hover": self.hover,
+            "icon": icon,
+            "toast": self.toast.is_some(),
+        })
     }
 
     /// The dump's Step 19 state: the fake clipboard's formats, what was opened, the search
@@ -3338,7 +4159,28 @@ impl App {
             }
             "zoom" => {
                 let step = cmd["step"].as_i64().unwrap_or(0);
-                self.set_font_size(Prefs::zoomed(self.prefs.font_size, step.signum() as i32));
+                self.set_font_size(Prefs::zoomed(
+                    self.settings.appearance.font_size,
+                    step.signum() as i32,
+                ));
+            }
+            // Step 20: what Windows reports, simulated (High Contrast, light mode, animations).
+            "system" => {
+                if let Some(hc) = cmd["high_contrast"].as_bool() {
+                    self.high_contrast = hc;
+                }
+                if let Some(l) = cmd["light_mode"].as_bool() {
+                    self.light_mode = l;
+                }
+                if let Some(an) = cmd["animations"].as_bool() {
+                    self.system_animations = an;
+                    self.motion.enabled = self
+                        .settings
+                        .appearance
+                        .motion
+                        .animates(self.system_animations);
+                }
+                self.set_theme();
             }
             "wheel" => {
                 // Positive notches scroll back (up), as a real wheel turned away from the user.
@@ -3499,6 +4341,29 @@ impl Opener for ShellOpener {
             Err(format!("ShellExecute error {}", r as isize))
         }
     }
+
+    fn edit(&mut self, path: &std::path::Path) -> Result<(), String> {
+        let verb = wide("open");
+        let program = wide("notepad.exe");
+        let args = wide(&format!("\"{}\"", path.display()));
+        // SAFETY: NUL-terminated wide strings that outlive the call; Notepad, the file as its one
+        // quoted argument (no shell command line).
+        let r = unsafe {
+            ShellExecuteW(
+                self.hwnd,
+                verb.as_ptr(),
+                program.as_ptr(),
+                args.as_ptr(),
+                null(),
+                SW_SHOWNORMAL,
+            )
+        };
+        if r as isize > 32 {
+            Ok(())
+        } else {
+            Err(format!("ShellExecute error {}", r as isize))
+        }
+    }
 }
 
 /// The save dialog (modal: run with the window's state free). The chosen path, or `None`.
@@ -3581,24 +4446,24 @@ fn run_after(hwnd: HWND, after: Vec<After>) {
                     }
                     SetForegroundWindow(hwnd);
                 }
-                After::Menu { items, at, tab } => {
-                    let menu = CreatePopupMenu();
-                    if menu.is_null() {
-                        continue;
-                    }
-                    for (id, label, enabled) in &items {
-                        if *id == 0 {
-                            AppendMenuW(menu, MF_SEPARATOR, 0, null());
-                        } else {
-                            let w = wide(label);
-                            let flags = if *enabled {
-                                MF_STRING
-                            } else {
-                                MF_STRING | MF_GRAYED
-                            };
-                            AppendMenuW(menu, flags, *id as usize, w.as_ptr());
+                After::Opacity(alpha) => {
+                    let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
+                    if alpha == 255 {
+                        if ex & WS_EX_LAYERED != 0 {
+                            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, (ex & !WS_EX_LAYERED) as isize);
                         }
+                    } else {
+                        if ex & WS_EX_LAYERED == 0 {
+                            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, (ex | WS_EX_LAYERED) as isize);
+                        }
+                        SetLayeredWindowAttributes(hwnd, 0, alpha, LWA_ALPHA);
                     }
+                }
+                After::Caption { dark, colors } => set_caption(hwnd, dark, colors),
+                After::Menu { items, at, tab } => {
+                    let Some(menu) = build_menu(&items) else {
+                        continue;
+                    };
                     let mut pt = POINT { x: at.0, y: at.1 };
                     ClientToScreen(hwnd, &raw mut pt);
                     // A modal loop of its own: the window's state is free meanwhile, so network
@@ -3629,6 +4494,74 @@ fn run_after(hwnd: HWND, after: Vec<After>) {
                     flush_after(hwnd);
                 }
             }
+        }
+    }
+}
+
+/// A native popup menu of `items` (submenus included); `None` if Windows has no menu for us.
+fn build_menu(items: &[MenuItem]) -> Option<windows_sys::Win32::UI::WindowsAndMessaging::HMENU> {
+    // SAFETY: a new popup menu owned by the caller (destroyed after use with its submenus);
+    // every label is a NUL-terminated wide string that outlives its call.
+    unsafe {
+        let menu = CreatePopupMenu();
+        if menu.is_null() {
+            return None;
+        }
+        for it in items {
+            let w = wide(&it.label);
+            if !it.items.is_empty() {
+                if let Some(sub) = build_menu(&it.items) {
+                    AppendMenuW(menu, MF_STRING | MF_POPUP, sub as usize, w.as_ptr());
+                }
+            } else if it.id == 0 && it.label.is_empty() {
+                AppendMenuW(menu, MF_SEPARATOR, 0, null());
+            } else {
+                let mut flags = MF_STRING;
+                if !it.enabled {
+                    flags |= MF_GRAYED;
+                }
+                if it.checked {
+                    flags |= MF_CHECKED;
+                }
+                AppendMenuW(menu, flags, it.id as usize, w.as_ptr());
+            }
+        }
+        Some(menu)
+    }
+}
+
+/// The caption in a theme's colours: dark or light mode, then caption, text and border colours
+/// (Windows 11; Windows 10 takes only the mode).
+fn set_caption(hwnd: HWND, dark: bool, colors: [Rgb; 3]) {
+    // SAFETY: documented DWM attributes of our own window, each a 4-byte value.
+    unsafe {
+        let d: i32 = i32::from(dark);
+        DwmSetWindowAttribute(hwnd, DWMWA_DARK, (&raw const d).cast(), 4);
+        for (attr, c) in [DWMWA_CAPTION, DWMWA_TEXT, DWMWA_BORDER]
+            .into_iter()
+            .zip(colors)
+        {
+            let v = colorref(c);
+            DwmSetWindowAttribute(hwnd, attr, (&raw const v).cast(), 4);
+        }
+    }
+}
+
+/// Subak's watermelon as the window's small and large icons (taskbar, Alt+Tab, caption), drawn
+/// by the floating icon's art at the monitor's DPI (Step 20; it was the generic icon before).
+fn set_window_icon(hwnd: HWND, dpi: u32) {
+    use super::float::art::{HostState, IconState, Palette, render};
+    let state = IconState {
+        host: HostState::Connected,
+        ..IconState::default()
+    };
+    for (which, logical) in [(ICON_SMALL, 16u32), (ICON_BIG, 32u32)] {
+        let size = (logical * dpi / 96).max(logical);
+        let pic = render(&state, size, &Palette::subak());
+        let icon = super::float::win::hicon(&pic);
+        if !icon.is_null() {
+            // SAFETY: our own window; the icon stays alive for the window's life (a few KiB).
+            unsafe { SendMessageW(hwnd, WM_SETICON, which as usize, icon as isize) };
         }
     }
 }
@@ -3799,9 +4732,24 @@ fn handle(app: &mut App, hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> Option
             Some(0)
         }
         WM_SETTINGCHANGE | WM_SYSCOLORCHANGE | WM_THEMECHANGED => {
+            if app.opts.test {
+                // The off-screen test window simulates what Windows reports (`system` command),
+                // so the machine's own settings never change a test.
+                return None;
+            }
             let hc = high_contrast_on();
-            if hc != app.high_contrast || msg == WM_SYSCOLORCHANGE {
+            let light = apps_use_light_theme();
+            let anim = system_animations();
+            if anim != app.system_animations {
+                app.system_animations = anim;
+                app.motion.enabled = app.settings.appearance.motion.animates(anim);
+                if !app.motion.enabled {
+                    app.motion.stop();
+                }
+            }
+            if hc != app.high_contrast || light != app.light_mode || msg == WM_SYSCOLORCHANGE {
                 app.high_contrast = hc;
+                app.light_mode = light;
                 app.set_theme();
             }
             None
@@ -3858,6 +4806,14 @@ fn handle(app: &mut App, hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> Option
             app.on_mouse(msg, wp, x, y);
             Some(0)
         }
+        WM_MOUSELEAVE => {
+            app.leave_tracked = false;
+            if app.hover.take().is_some() {
+                app.event(&json!({"event": "hover", "tab": null}));
+                app.rebuild_bar();
+            }
+            Some(0)
+        }
         WM_MOUSEWHEEL => {
             let delta = i32::from((wp >> 16) as u16 as i16);
             let (sx, sy) = lparam_xy(lp);
@@ -3903,6 +4859,18 @@ fn handle(app: &mut App, hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> Option
                     unsafe { KillTimer(hwnd, TIMER_HOLD) };
                     if let Some(a) = app.matcher.hold_elapsed() {
                         app.run(a);
+                    }
+                }
+                TIMER_MOTION => app.motion_tick(),
+                TIMER_TOAST => {
+                    // SAFETY: our own one-shot timer.
+                    unsafe { KillTimer(hwnd, TIMER_TOAST) };
+                    // Only the toast itself hides: a notice that replaced it meanwhile stays.
+                    if let Some(t) = app.toast.take()
+                        && app.notice.as_deref() == Some(t.as_str())
+                    {
+                        app.notice = None;
+                        app.rebuild_banner();
                     }
                 }
                 _ => {}
@@ -3971,6 +4939,74 @@ pub fn run(o: Options) -> ExitCode {
             problem: None,
             read_only: true,
         });
+    let mut loaded = loaded;
+    // Step 20: the settings, and the one-time move of gui.json version 1's text size and theme
+    // into config.toml (where that file is silent; gui.json is backed up first).
+    let mut cfg = prefs_dir
+        .as_deref()
+        .map(config::load)
+        .unwrap_or_else(|| config::load(std::path::Path::new("")));
+    let mut migration: Option<Value> = None;
+    let mut settings = cfg.settings().clone();
+    if let (Some(dir), Some(legacy)) = (prefs_dir.as_deref(), loaded.prefs.legacy) {
+        if loaded.read_only {
+            // Nothing can be rewritten: use the old values in memory.
+            if let Some(f) = legacy.font_size {
+                settings.appearance.font_size = f;
+            }
+            if let Some(t) = legacy.theme {
+                settings.appearance.theme = t;
+            }
+        } else {
+            let adopted = config::adopt(&cfg, legacy);
+            let result = match adopted {
+                Ok(edit) => {
+                    let backup =
+                        config::backup(dir, super::prefs::FILE, "v1").map_err(|e| e.to_string());
+                    let wrote = match (&edit, &backup) {
+                        (Some(e), Ok(_)) => config::write_atomic(&cfg.path, &e.text)
+                            .map(|()| true)
+                            .map_err(|e| e.to_string()),
+                        (_, Err(e)) => Err(e.clone()),
+                        (None, Ok(_)) => Ok(false),
+                    };
+                    wrote.and_then(|w| {
+                        loaded.prefs.legacy = None;
+                        loaded
+                            .prefs
+                            .save(dir)
+                            .map(|()| (w, backup.ok().flatten()))
+                            .map_err(|e| e.to_string())
+                    })
+                }
+                Err(e) => Err(e.message()),
+            };
+            match result {
+                Ok((wrote, backup)) => {
+                    cfg = config::load(dir);
+                    settings = cfg.settings().clone();
+                    migration = Some(
+                        json!({"event": "migrated", "from": 1, "to": super::prefs::VERSION,
+                        "config_written": wrote, "backup": backup}),
+                    );
+                }
+                Err(e) => {
+                    // config.toml cannot take them (invalid or newer): keep gui.json version 1
+                    // as it is and use its values in this window.
+                    loaded.read_only = true;
+                    if let Some(f) = legacy.font_size {
+                        settings.appearance.font_size = f;
+                    }
+                    if let Some(t) = legacy.theme {
+                        settings.appearance.theme = t;
+                    }
+                    loaded.problem = Some(format!(
+                        "gui.json version 1 was not migrated ({e}); its text size and theme apply to this window"
+                    ));
+                }
+            }
+        }
+    }
     let prefs = loaded.prefs.clone();
     let want = match (&o.target, &prefs.last_terminal) {
         (Some(t), _) => Want::Target(t.clone()),
@@ -4044,6 +5080,9 @@ pub fn run(o: Options) -> ExitCode {
             .is_some();
     let maximized = !test && restored && prefs.window.is_some_and(|w| w.maximized);
     let hc = high_contrast_on();
+    let animations = system_animations();
+    let settings_notice = cfg.notice();
+    let motion_on = settings.appearance.motion.animates(animations);
     let matcher = Matcher::load(
         prefs_dir.as_deref(),
         crate::hotkeys::off_reason(o.no_hotkeys),
@@ -4088,7 +5127,7 @@ pub fn run(o: Options) -> ExitCode {
         bar: TabBar {
             renderer: None,
             layout: tabs::layout(&[], None, None, 1, 0),
-            strip: Frame::new(1, 1, tokens::BG_RAISED),
+            strip: Frame::new(1, 1, Chrome::KIM_DARK.bg_raised),
             height: 0,
             pad_x: 0,
             first: 0,
@@ -4118,9 +5157,38 @@ pub fn run(o: Options) -> ExitCode {
         frames: 0,
         bytes: 0,
         after: Vec::new(),
+        settings,
+        cfg,
+        cfg_unsaved: false,
+        light_mode: apps_use_light_theme(),
+        system_animations: animations,
+        motion: Transitions::new(motion_on),
+        bar_active: None,
+        hover: None,
+        leave_tracked: false,
+        toast: None,
+        menu_choices: Vec::new(),
+        fonts: None,
+        face: String::new(),
     };
-    app.renderer = make_renderer(app.theme(), app.prefs.font_size, layout::scale(dpi), 8.0);
+    if let Some(m) = &migration {
+        app.event(m);
+    }
+    if app.notice.is_none() {
+        app.notice = settings_notice;
+    }
+    app.renderer = make_term_renderer(
+        app.theme(),
+        RenderOptions {
+            scale: layout::scale(dpi),
+            ..app.term_opts()
+        },
+        &app.settings.appearance.font_family,
+    );
     app.renderer.set_focused(false);
+    app.face = app.renderer.face_for('A').family;
+    app.pane
+        .set_word_delimiters(&app.settings.terminal.word_separators);
     // The tab bar's height is known before the first size is chosen.
     app.client = (800, 600);
     app.rebuild_bar();
@@ -4140,20 +5208,17 @@ pub fn run(o: Options) -> ExitCode {
             .client_for(layout::DEFAULT_GRID.0, layout::DEFAULT_GRID.1);
         Some(outer_for(cw, ch + app.top(), dpi, test))
     };
-    // SAFETY: Windows 10 20H1+ dark title bar; the caption, text and border colours apply on
-    // Windows 11 and are ignored (an error result) on Windows 10. Our own window.
-    unsafe {
-        let dark: i32 = 1;
-        DwmSetWindowAttribute(hwnd, DWMWA_DARK, (&raw const dark).cast(), 4);
-        for (attr, c) in [
-            (DWMWA_CAPTION, tokens::BG_BASE),
-            (DWMWA_TEXT, tokens::TEXT_SECONDARY),
-            (DWMWA_BORDER, tokens::BORDER_SUBTLE),
-        ] {
-            let v = colorref(c);
-            DwmSetWindowAttribute(hwnd, attr, (&raw const v).cast(), 4);
-        }
-    }
+    // Windows 10 20H1+ dark (or, for kim-light, light) title bar; the caption, text and border
+    // colours apply on Windows 11 and are ignored on Windows 10. Step 20: the window's icon is
+    // Subak's watermelon (the floating icon's picture), and its opacity follows the setting.
+    let c = app.chrome();
+    set_caption(
+        hwnd,
+        c.name != "kim-light",
+        [c.bg_base, c.text_secondary, c.border_subtle],
+    );
+    set_window_icon(hwnd, dpi);
+    app.apply_opacity();
     APP.with_borrow_mut(|slot| *slot = Some(app));
     // SAFETY: sizes and shows our own window (the state is set, so WM_SIZE is handled), then
     // runs this thread's message loop.

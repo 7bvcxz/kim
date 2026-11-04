@@ -1,7 +1,7 @@
 {
   "schema": "kim.catalog",
   "schema_version": 1,
-  "catalog_version": 5,
+  "catalog_version": 6,
   "generated_at": "2026-11-04T00:00:00Z",
   "expires_at": "2027-05-04T00:00:00Z",
   "publisher": "mouv",
@@ -30,14 +30,14 @@
       "id": "noeul",
       "name": "Noeul",
       "summary": "Screenshot and pin tool: F1 captures a region, double-click pins it on the desktop",
-      "description": "A small native screenshot utility in the spirit of Snipaste. F1 starts a region capture, a double-click inside the selection pins it as a floating window, and F3 pins the clipboard image. It stays in the notification area while you use it and uses no keyboard hook. Not released yet.",
+      "description": "A small native screenshot utility in the spirit of Snipaste. F1 starts a region capture, a double-click inside the selection pins it as a floating window, and F3 pins what is on the clipboard (an image, image files, a colour, HTML or text). It stays in the notification area while you use it and uses no keyboard hook. Not released yet.",
       "homepage": "https://github.com/hellomouv/kim",
       "license": "MIT OR Apache-2.0",
       "support": "in-development",
       "releases": [],
       "features": [
         "F1 starts a region capture; a double-click inside the selection pins it to the desktop",
-        "F3 pins the image on the clipboard as a floating window",
+        "F3 pins the clipboard as a floating window: an image, image files, a colour, HTML or text",
         "Copy (Ctrl+C) or save (Ctrl+S) a selection or a pin; Esc cancels",
         "Planned: annotation, color picker, capture history, multi-monitor and high-DPI support",
         "Every shortcut can be changed, turned off or reset"
@@ -112,7 +112,7 @@
           },
           {
             "action": "paste.float",
-            "title": "Pin the clipboard image",
+            "title": "Pin the clipboard",
             "scope": "global",
             "keys": [
               "F3"
@@ -151,7 +151,7 @@
         },
         {
           "id": "clipboard",
-          "detail": "Reads an image from the clipboard for F3 and writes the captures you copy"
+          "detail": "Reads the clipboard only when you press F3 (never in the background) and writes the captures you copy"
         },
         {
           "id": "autostart",

@@ -20,6 +20,11 @@
         "paths": "on",
         "file_cards": "off"
       },
+      "color": {
+        "format": "hex",
+        "hex_case": "upper",
+        "alpha": "off"
+      },
       "gestures": {
         "double_click": "copy",
         "middle_click": "pin",

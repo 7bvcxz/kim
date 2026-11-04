@@ -60,6 +60,27 @@ fn colors_parse_in_every_documented_notation_and_nothing_else() {
         ("0, 0, 1", Rgba::rgb(0, 0, 1)),
         ("1.0, 0.5, 0", Rgba::rgb(255, 128, 0)),
         ("0.0 0.0 1.0", Rgba::rgb(0, 0, 255)),
+        // Step 59: every format the colour picker copies comes back.
+        ("hsl(39, 100%, 50%)", Rgba::rgb(255, 166, 0)),
+        ("HSL(39deg 100% 50%)", Rgba::rgb(255, 166, 0)),
+        ("hsl(399, 100%, 50%)", Rgba::rgb(255, 166, 0)),
+        ("hsl(0, 0%, 100%)", Rgba::rgb(255, 255, 255)),
+        (
+            "hsla(240, 100%, 50%, 0.502)",
+            Rgba {
+                a: 128,
+                ..Rgba::rgb(0, 0, 255)
+            },
+        ),
+        (
+            "hsl(240 100% 50% / 25%)",
+            Rgba {
+                a: 64,
+                ..Rgba::rgb(0, 0, 255)
+            },
+        ),
+        ("rgba(58, 110, 165, 1)", Rgba::rgb(58, 110, 165)),
+        ("#3a6ea5ff", Rgba::rgb(58, 110, 165)),
     ] {
         assert_eq!(c(text), Some(want), "{text:?}");
     }
@@ -79,6 +100,11 @@ fn colors_parse_in_every_documented_notation_and_nothing_else() {
         "rgb(300, 0, 0)",
         "rgb(1, 2)",
         "rgba(1, 2, 3, 2)",
+        "hsl(10, 50, 50)",
+        "hsl(10, 50%, 101%)",
+        "hsl(10, 50%)",
+        "hsl(x, 50%, 50%)",
+        "hsla(10, 50%, 50%, 1.5)",
         "hello world",
         "#FF8800\n#000000",
         "1, 2, 3 apples",

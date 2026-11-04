@@ -201,12 +201,15 @@ fn hotkeys_commands_follow_the_contract() {
         (code, refused["error"]["code"].as_str()),
         (2, Some("hotkey_reserved"))
     );
-    let (code, refused) = hk(&["set", "color.copy", "C"]);
+    let (code, refused) = hk(&["set", "settings.open", "Ctrl+Comma"]);
     assert_eq!(
         (code, refused["error"]["code"].as_str()),
         (3, Some("action_not_found")),
-        "color.copy is planned (N3), not in this build"
+        "settings.open is planned (N5), not in this build"
     );
+    // The colour picker's keys ship since Step 59 and stay the user's to change.
+    let (code, dry) = hk(&["set", "color.copy", "X", "--dry-run"]);
+    assert_eq!((code, dry["data"]["written"].as_bool()), (0, Some(false)));
     let (code, needs_yes) = hk(&["reset", "--all"]);
     assert_eq!(
         (code, needs_yes["error"]["code"].as_str()),

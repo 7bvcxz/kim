@@ -1,0 +1,134 @@
+{
+  "command": "profile.show",
+  "data": {
+    "modes": [
+      {
+        "enabled": true,
+        "id": "base",
+        "parent": null,
+        "title": "Base"
+      },
+      {
+        "enabled": true,
+        "id": "nav",
+        "parent": null,
+        "title": "Arrows"
+      }
+    ],
+    "profile": {
+      "active": false,
+      "default_mode": "base",
+      "description": "Games, no launches",
+      "enabled": true,
+      "errors": 0,
+      "id": "gaming",
+      "modes": 2,
+      "rules": 1,
+      "rules_on": 1,
+      "title": "Gaming"
+    },
+    "revision": 1,
+    "rules": [
+      {
+        "enabled": true,
+        "id": "g-off",
+        "inactive": null,
+        "modes": [],
+        "steps": [
+          "engine"
+        ],
+        "title": "F13 turns the engine off",
+        "trigger": "F13"
+      }
+    ],
+    "source": "saved",
+    "switch_preview": {
+      "align": "trigger",
+      "counts": {
+        "changed": 1,
+        "only_left": 2,
+        "only_right": 0,
+        "same": 0
+      },
+      "left": {
+        "default_mode": "base",
+        "id": "work",
+        "modes": [
+          "base",
+          "nav"
+        ],
+        "title": "Work"
+      },
+      "right": {
+        "default_mode": "base",
+        "id": "gaming",
+        "modes": [
+          "base",
+          "nav"
+        ],
+        "title": "Gaming"
+      },
+      "rows": [
+        {
+          "key": "F13",
+          "left": {
+            "enabled": true,
+            "id": "w-pause",
+            "modes": [],
+            "steps": [
+              "engine"
+            ],
+            "title": "F13 pauses",
+            "trigger": "F13",
+            "path": "C:\\Tools\\tool.exe"
+          },
+          "right": {
+            "enabled": true,
+            "id": "g-off",
+            "modes": [],
+            "steps": [
+              "engine"
+            ],
+            "title": "F13 turns the engine off",
+            "trigger": "F13"
+          },
+          "status": "changed"
+        },
+        {
+          "key": "F14",
+          "left": {
+            "enabled": true,
+            "id": "w-nav",
+            "modes": [],
+            "steps": [
+              "mode"
+            ],
+            "title": "F14 holds Navigation",
+            "trigger": "F14"
+          },
+          "right": null,
+          "status": "only_left"
+        },
+        {
+          "key": "Ctrl+Alt+Shift+F16",
+          "left": {
+            "enabled": true,
+            "id": "w-tool",
+            "modes": [],
+            "steps": [
+              "open_program"
+            ],
+            "title": "F16 opens the tool",
+            "trigger": "Ctrl+Alt+Shift+F16"
+          },
+          "right": null,
+          "status": "only_left"
+        }
+      ]
+    },
+    "versions": 0
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

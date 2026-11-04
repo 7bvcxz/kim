@@ -73,6 +73,14 @@
 //! - *History.* `history.previous` / `history.next` (`Comma` / `Period`) step through the
 //!   rectangles of earlier successful captures over the current picture (memory only).
 //!
+//! **The colour picker** (Step 59, UX spec §4.14, ADR 0053, NOEUL-FR-044): the magnifier's
+//! readout writes the pixel under its crosshair as HEX and RGB (and HSL when that is the chosen
+//! format) in the picker's [`crate::color::Style`], the chosen format marked with an accent bar.
+//! `color.format-next` (`Shift+C`) chooses the next format; `color.copy` (`C`) asks the owner to
+//! copy that pixel's text ([`Outcome::Color`]) — only while the magnifier is shown, so `C` never
+//! copies a pixel nobody sees. With nothing selected the capture then ends; with a selection (or
+//! annotations) it stays, so no work is lost. The pin editor has no picker.
+//!
 //! **Annotation** (Step 56, UX spec §4.9, ADR 0038, NOEUL-FR-080…083): the toolbar gains the
 //! tools (rectangle, ellipse, line, arrow, pen, marker, text), the colour and width buttons, undo
 //! and redo. While a tool is active (phase `annotating`) presses inside the selection draw, pick
@@ -91,6 +99,7 @@
 
 use crate::annotation::{self, Editor, Ime, Object, Order, TextKey, Tool, Typesetter};
 use crate::capture::{Monitor, scale_px};
+use crate::color as pick;
 use crate::detect::{
     DetectMode, DetectWindow, ElementAnswer, ElementRequest, Fallback, Snapshot, check_element,
 };
@@ -282,6 +291,11 @@ pub enum Action {
     HistoryPrevious,
     /// `history.next` (`Period`).
     HistoryNext,
+    /// `color.copy` (`C`): copy the colour under the magnifier's crosshair (Step 59,
+    /// NOEUL-FR-044).
+    ColorCopy,
+    /// `color.format-next` (`Shift+C`): HEX, RGB, HSL (Step 59).
+    ColorFormatNext,
 }
 
 /// The action IDs of [`Action`], in manifest order.
@@ -312,6 +326,8 @@ pub const ACTION_IDS: &[&str] = &[
     "pointer.move-right",
     "detect.cycle",
     "magnifier.toggle",
+    "color.copy",
+    "color.format-next",
     "history.previous",
     "history.next",
 ];
@@ -338,6 +354,8 @@ impl Action {
             "magnifier.toggle" => Action::Magnifier,
             "history.previous" => Action::HistoryPrevious,
             "history.next" => Action::HistoryNext,
+            "color.copy" => Action::ColorCopy,
+            "color.format-next" => Action::ColorFormatNext,
             _ if id.starts_with("pointer.move-") => {
                 Action::Pointer(dir(id.strip_prefix("pointer.move-")?)?)
             }
@@ -580,6 +598,10 @@ pub enum Outcome {
     /// Open the selection's context menu at this point (`None`: from the keyboard, at the
     /// selection's corner). Only with a confirmed selection.
     Menu(Option<(i32, i32)>),
+    /// `color.copy`: put the text of the frozen picture's pixel at `at` in the picker's style on
+    /// the clipboard (Step 59). `keep`: a selection or annotations exist, so the capture stays
+    /// open; otherwise it ends after the copy.
+    Color { at: (i32, i32), keep: bool },
 }
 
 /// A button of the selection's toolbar, in tab order (UX spec §5).
@@ -936,6 +958,8 @@ pub struct Overlay {
     text_click: Option<((i32, i32), u32)>,
     /// Wheel deltas not yet worth a width step.
     wheel: i32,
+    /// How the colour picker writes colours and which format `color.copy` copies (Step 59).
+    color: pick::Style,
 }
 
 impl Overlay {
@@ -982,6 +1006,7 @@ impl Overlay {
             ann: Editor::default(),
             text_click: None,
             wheel: 0,
+            color: pick::Style::default(),
         };
         o.pointer = o.clamp(pointer);
         o.help_monitor = o.monitor_index(o.pointer);
@@ -1123,6 +1148,24 @@ impl Overlay {
     pub fn with_magnifier(mut self, on: bool) -> Overlay {
         self.magnifier = on;
         self
+    }
+
+    /// The same overlay with the colour picker's style (`[color]`, and the format chosen in an
+    /// earlier capture; Step 59).
+    #[must_use]
+    pub fn with_color(mut self, style: pick::Style) -> Overlay {
+        self.color = style;
+        self
+    }
+
+    /// The colour picker's style: its chosen format is what `color.copy` copies.
+    pub fn color_style(&self) -> pick::Style {
+        self.color
+    }
+
+    /// Whether the magnifier is on screen now (`color.copy` copies only then).
+    pub fn magnifier_shown(&self) -> bool {
+        self.magnifier && self.magnifier_wanted()
     }
 
     /// The same overlay with the rectangles of earlier captures, oldest first (`history.*`); the
@@ -2155,6 +2198,27 @@ impl Overlay {
                 self.magnifier = !self.magnifier;
                 return Outcome::Stay;
             }
+            // The colour picker (Step 59): not in the pin editor, which has no magnifier.
+            Action::ColorFormatNext | Action::ColorCopy if self.mode == Mode::PinEdit => {
+                return Outcome::Stay;
+            }
+            Action::ColorFormatNext => {
+                self.color.format = self.color.format.next();
+                return Outcome::Stay;
+            }
+            // `C` copies the pixel under the crosshair only while the magnifier shows it (also
+            // during a drag: the pixel the drag ends on is what it is for). With nothing to lose
+            // the capture then ends; a selection or its annotations keep it open.
+            Action::ColorCopy => {
+                if !self.magnifier_shown() {
+                    return Outcome::Stay;
+                }
+                let keep = self.selection.is_some() || !self.ann.objects().is_empty();
+                return Outcome::Color {
+                    at: self.pointer,
+                    keep,
+                };
+            }
             // The keyboard pointer works during a drag, a move and a resize too: the precise
             // end of a drag is what it is for.
             Action::Pointer(d) => {
@@ -2306,9 +2370,12 @@ impl Overlay {
                 }
                 Outcome::Stay
             }
-            Action::Cancel | Action::DetectCycle | Action::Magnifier | Action::Pointer(_) => {
-                Outcome::Stay
-            }
+            Action::Cancel
+            | Action::DetectCycle
+            | Action::Magnifier
+            | Action::Pointer(_)
+            | Action::ColorCopy
+            | Action::ColorFormatNext => Outcome::Stay,
         }
     }
 
@@ -2574,9 +2641,27 @@ impl Overlay {
                 dpi::scale_percent(m.dpi)
             ));
         }
+        // The colour lines, sized with their widest values until the frozen picture's pixel is
+        // sampled ([`Scene::sample`]): HEX and RGB, and HSL when it is the chosen format; the
+        // chosen one is marked (Step 59).
         let color = lines.len();
-        lines.extend(COLOR_TEMPLATE.iter().map(|s| (*s).to_string()));
+        let style = self.color;
+        let formats: Vec<pick::Format> = [pick::Format::Hex, pick::Format::Rgb]
+            .into_iter()
+            .chain((style.format == pick::Format::Hsl).then_some(pick::Format::Hsl))
+            .collect();
+        lines.extend(formats.iter().map(|f| pick::widest(*f, &style)));
+        let chosen = formats
+            .iter()
+            .position(|f| *f == style.format)
+            .map(|i| color + i);
+        if m.hdr == Some(true) {
+            // Windows converts an HDR monitor's picture to SDR: the values can differ from what
+            // the monitor shows (NOEUL-FR-092).
+            lines.push(HDR_NOTE.to_string());
+        }
         let mut text = Label::new(lines, Font::Mono, m.dpi, measure);
+        text.emphasis = chosen;
         let cell = m.px(MAG_CELL);
         let side = i64::from(cell * MAG_CELLS);
         let w = side.max(i64::from(text.rect.width)) + 2;
@@ -2607,6 +2692,8 @@ impl Overlay {
             at: self.pointer,
             text,
             color,
+            formats,
+            style,
         })
     }
 
@@ -2765,6 +2852,46 @@ impl Overlay {
             }
         }
         label
+    }
+}
+
+impl Overlay {
+    /// The overlay window's accessible name (UI Automation reads it as the window's Name;
+    /// NOEUL-NFR-013, UX spec §9): what it is, the confirmed selection, and while the magnifier is
+    /// shown its position and colour lines as drawn in `scene` (after [`Scene::sample`]) with the
+    /// format `color.copy` copies (Step 59). Only what the overlay shows; never a window title.
+    pub fn accessible_name(&self, scene: &Scene) -> String {
+        let mut name = match self.mode {
+            Mode::Capture => "Capture overlay".to_string(),
+            Mode::PinEdit => "Pin annotation".to_string(),
+        };
+        if let Some(s) = self.selection() {
+            name.push_str(&format!(
+                ", selection {} by {} at {}, {}",
+                s.width, s.height, s.x, s.y
+            ));
+        }
+        if let Some(m) = &scene.magnifier {
+            let lines = &m.text.lines;
+            let end = (m.color + m.formats.len()).min(lines.len());
+            let place = lines.get(..m.color.min(lines.len())).unwrap_or(&[]);
+            let colours = lines.get(m.color.min(end)..end).unwrap_or(&[]);
+            // The device-pixel position, and on a scaled monitor the logical one in brackets.
+            let at = match place {
+                [] => String::new(),
+                [p] => p.clone(),
+                [p, rest @ ..] => format!("{p} ({})", rest.join(", ")),
+            };
+            name.push_str(&format!(
+                ". Magnifier at {at}: {}; copy format {}",
+                colours.join(", "),
+                m.style.format.title()
+            ));
+            if let Some(note) = lines.get(end) {
+                name.push_str(&format!(" ({note})"));
+            }
+        }
+        name
     }
 }
 
@@ -3039,6 +3166,9 @@ pub struct Label {
     /// Padding inside the box and the height of one line (device pixels).
     pub pad: u32,
     pub line_height: u32,
+    /// A line drawn as strongly as the first one (the magnifier's chosen colour format, which an
+    /// accent bar also marks; Step 59).
+    pub emphasis: Option<usize>,
 }
 
 impl Label {
@@ -3059,7 +3189,23 @@ impl Label {
             dpi,
             pad,
             line_height: lh,
+            emphasis: None,
         }
+    }
+
+    /// Whether line `i` is drawn in the primary text colour (the first line and the emphasized
+    /// one); the others are secondary.
+    pub fn strong(&self, i: usize) -> bool {
+        i == 0 || self.emphasis == Some(i)
+    }
+
+    /// The accent bar left of the emphasized line, inside the box's padding.
+    pub fn emphasis_bar(&self) -> Option<Rect> {
+        let i = self.emphasis.filter(|i| *i < self.lines.len())?;
+        let (_, y) = self.line_origin(i);
+        let w = (self.pad / 2).max(1);
+        let x = self.rect.x + i32::try_from(self.pad.saturating_sub(w) / 2).unwrap_or(0);
+        Some(Rect::new(x, y, w, self.line_height))
     }
 
     /// Where line `i` starts.
@@ -3116,15 +3262,15 @@ pub struct AnnotationScene {
 /// The note of the size chip over a window protected from capture (NOEUL-SEC-004).
 pub const PROTECTED_NOTE: &str = "Protected window: Windows captures it as black";
 
-/// The widest colour lines (HEX, then RGB), for sizing the magnifier's readout before it is
-/// sampled.
-const COLOR_TEMPLATE: [&str; 2] = ["#000000", "255, 255, 255"];
+/// The magnifier's note on a monitor that shows HDR (Step 59, NOEUL-FR-092).
+pub const HDR_NOTE: &str = "HDR shown as SDR";
 
 /// The magnifier as drawn: a `bg.overlay` box with a `border.subtle` outline holding
 /// [`MAG_CELLS`]² enlarged pixels of the frozen picture around `at` (each `cell` device pixels
 /// wide, pixels outside the picture dark), a crosshair through the centre pixel, and the readout:
 /// the device-pixel position, on a scaled monitor the logical one, then the colour as HEX and
-/// RGB (filled in by [`Scene::sample`]).
+/// RGB, and HSL when it is the chosen format (filled in by [`Scene::sample`]; the chosen format is
+/// `text.emphasis`), and on an HDR monitor [`HDR_NOTE`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MagnifierScene {
     pub rect: Rect,
@@ -3133,8 +3279,12 @@ pub struct MagnifierScene {
     /// The picture pixel in the centre (the pointer).
     pub at: (i32, i32),
     pub text: Label,
-    /// The index of the HEX line in `text` (RGB follows it).
+    /// The index of the first colour line in `text`; one line per entry of `formats` follows.
     pub color: usize,
+    /// The formats of the colour lines, in order (Step 59).
+    pub formats: Vec<pick::Format>,
+    /// How the colour lines are written (case, alpha, the chosen format).
+    pub style: pick::Style,
 }
 
 impl MagnifierScene {
@@ -3160,25 +3310,32 @@ pub fn pixel_at(frozen: &Frame, (x, y): (i32, i32)) -> Option<[u8; 4]> {
         .map(|p| [p[0], p[1], p[2], p[3]])
 }
 
-/// The magnifier's colour lines for the frozen picture's pixel at `at`: HEX (`#3A6EA5`) and RGB
-/// (`58, 110, 165`) of the captured sRGB values (NOEUL-FR-041); dashes outside the picture.
-pub fn color_lines(frozen: &Frame, at: (i32, i32)) -> [String; 2] {
-    match pixel_at(frozen, at) {
-        Some([b, g, r, _]) => [format!("#{r:02X}{g:02X}{b:02X}"), format!("{r}, {g}, {b}")],
-        None => ["\u{2014}".to_string(), "\u{2014}".to_string()],
-    }
+/// The colour of the frozen picture's pixel at `at` (straight alpha; a screen picture is opaque),
+/// if it lies in the picture.
+pub fn pixel_color(frozen: &Frame, at: (i32, i32)) -> Option<crate::paste::Rgba> {
+    pixel_at(frozen, at).map(|[b, g, r, a]| crate::paste::Rgba { r, g, b, a })
+}
+
+/// The frozen picture's pixel at `at` as text in `format` with `style`'s case and alpha — the
+/// captured sRGB values (NOEUL-FR-041, NOEUL-FR-044); a dash outside the picture.
+pub fn color_text(
+    frozen: &Frame,
+    at: (i32, i32),
+    format: pick::Format,
+    style: &pick::Style,
+) -> String {
+    pixel_color(frozen, at).map_or_else(|| "\u{2014}".to_string(), |c| pick::text(c, format, style))
 }
 
 impl Scene {
     /// Fills in what depends on the frozen picture's pixels: the magnifier's colour lines.
     pub fn sample(&mut self, frozen: &Frame) {
         if let Some(m) = &mut self.magnifier {
-            let [hex, rgb] = color_lines(frozen, m.at);
-            if let Some(l) = m.text.lines.get_mut(m.color) {
-                *l = hex;
-            }
-            if let Some(l) = m.text.lines.get_mut(m.color + 1) {
-                *l = rgb;
+            for (k, f) in m.formats.iter().enumerate() {
+                let t = color_text(frozen, m.at, *f, &m.style);
+                if let Some(l) = m.text.lines.get_mut(m.color + k) {
+                    *l = t;
+                }
             }
         }
     }
@@ -3549,6 +3706,10 @@ pub fn compose(frozen: &Frame, layer: Option<&Frame>, scene: &Scene, area: Rect,
         }
         for r in outline_strips(c, 1) {
             fill(r, color::ACCENT);
+        }
+        // The chosen colour format's line (Step 59).
+        if let Some(bar) = m.text.emphasis_bar() {
+            fill(bar, color::ACCENT);
         }
     }
     if let Some(a) = &scene.annotation {
@@ -4113,7 +4274,12 @@ mod tests {
             Some(Action::Pointer(Dir::Left))
         );
         assert_eq!(Action::from_id("pointer.move-sideways"), None);
-        assert_eq!(Action::from_id("color.copy"), None, "not in this build");
+        assert_eq!(Action::from_id("color.copy"), Some(Action::ColorCopy));
+        assert_eq!(
+            Action::from_id("color.format-next"),
+            Some(Action::ColorFormatNext)
+        );
+        assert_eq!(Action::from_id("color.format-previous"), None);
         assert_eq!(Action::from_id("selection.move-sideways"), None);
     }
 
@@ -5386,8 +5552,16 @@ mod tests {
             m.text.lines[1],
             format!("#{:02X}{:02X}{:02X}", p[2], p[1], p[0])
         );
-        assert_eq!(m.text.lines[2], format!("{}, {}, {}", p[2], p[1], p[0]));
-        assert_eq!(color_lines(&frozen, (5000, 5)), ["\u{2014}", "\u{2014}"]);
+        assert_eq!(
+            m.text.lines[2],
+            format!("rgb({}, {}, {})", p[2], p[1], p[0]),
+            "Step 59: the RGB line is what C copies in RGB"
+        );
+        let style = pick::Style::default();
+        assert_eq!(
+            color_text(&frozen, (5000, 5), pick::Format::Hex, &style),
+            "\u{2014}"
+        );
         // Composed: every cell is its source pixel, the centre cell is outlined, the crosshair
         // runs through the middle.
         let mut out = vec![0u8; 800 * 600 * 4];
@@ -5490,6 +5664,268 @@ mod tests {
         );
         assert_eq!(m.color, 2);
         assert_eq!(m.text.dpi, 144);
+    }
+
+    /// The text of a synthetic picture's pixel in `format` (the known test image of
+    /// [`Synthetic::pixel`]).
+    fn known(x: i32, y: i32, format: pick::Format, style: &pick::Style) -> String {
+        let [b, g, r, a] = Synthetic::pixel(x, y);
+        pick::text(crate::paste::Rgba { r, g, b, a }, format, style)
+    }
+
+    /// Step 59 (NOEUL-FR-044, COLOR-01/02): `C` asks for the pixel under the crosshair only while
+    /// the magnifier shows it; `Shift+C` cycles HEX, RGB, HSL and the readout marks the chosen
+    /// format; without a selection the capture ends, with one it stays; the pin editor has no
+    /// picker.
+    #[test]
+    fn c_copies_the_pixel_under_the_crosshair_only_while_the_magnifier_shows_it() {
+        let pic = Rect::new(0, 0, 800, 600);
+        let (_l, frozen) = frame_of(pic);
+        let mut o = one(800, 600).with_magnifier(true);
+        mv(&mut o, 50, 40);
+        assert!(o.magnifier_shown());
+        assert_eq!(
+            act(&mut o, Action::ColorCopy),
+            Outcome::Color {
+                at: (50, 40),
+                keep: false
+            },
+            "nothing selected: the capture may end"
+        );
+        // The readout: HEX and RGB, HEX chosen (marked), exactly the known pixel.
+        let style = o.color_style();
+        assert_eq!(style, pick::Style::default());
+        let mut s = o.scene(&Approx);
+        s.sample(&frozen);
+        let m = s.magnifier.clone().unwrap();
+        assert_eq!(m.formats, [pick::Format::Hex, pick::Format::Rgb]);
+        assert_eq!(m.text.lines[1], known(50, 40, pick::Format::Hex, &style));
+        assert_eq!(m.text.lines[2], known(50, 40, pick::Format::Rgb, &style));
+        assert_eq!(m.text.emphasis, Some(1), "HEX is what C copies");
+        assert!(m.text.strong(0) && m.text.strong(1) && !m.text.strong(2));
+        // Shift+C: RGB, then HSL (its line appears), then HEX again.
+        act(&mut o, Action::ColorFormatNext);
+        assert_eq!(o.color_style().format, pick::Format::Rgb);
+        let m = o.scene(&Approx).magnifier.unwrap();
+        assert_eq!(m.text.emphasis, Some(2));
+        act(&mut o, Action::ColorFormatNext);
+        let mut s = o.scene(&Approx);
+        s.sample(&frozen);
+        let m = s.magnifier.clone().unwrap();
+        assert_eq!(
+            m.formats,
+            [pick::Format::Hex, pick::Format::Rgb, pick::Format::Hsl]
+        );
+        assert_eq!(m.text.lines.len(), 4);
+        assert_eq!(
+            m.text.lines[3],
+            known(50, 40, pick::Format::Hsl, &o.color_style())
+        );
+        assert!(m.text.lines[3].starts_with("hsl("));
+        assert_eq!(m.text.emphasis, Some(3));
+        // The accent bar marks the chosen line, inside the readout's padding.
+        let bar = m.text.emphasis_bar().unwrap();
+        assert!(m.text.rect.contains(&bar));
+        assert_eq!(bar.y, m.text.line_origin(3).1);
+        let mut out = vec![0u8; 800 * 600 * 4];
+        compose(&frozen, None, &s, pic, &mut out);
+        let i = ((bar.y as usize) * 800 + bar.x as usize) * 4;
+        assert_eq!(out[i..i + 4], color::ACCENT, "the bar is drawn");
+        act(&mut o, Action::ColorFormatNext);
+        assert_eq!(o.color_style().format, pick::Format::Hex, "back to HEX");
+        // M hides the magnifier: C copies nothing nobody sees.
+        act(&mut o, Action::Magnifier);
+        assert!(!o.magnifier_shown());
+        assert_eq!(act(&mut o, Action::ColorCopy), Outcome::Stay);
+        act(&mut o, Action::Magnifier);
+        // During a drag the magnifier shows the pixel the drag ends on: C copies it.
+        press(&mut o, Button::Left, 100, 100);
+        mv(&mut o, 200, 150);
+        assert_eq!(
+            act(&mut o, Action::ColorCopy),
+            Outcome::Color {
+                at: (200, 150),
+                keep: false
+            }
+        );
+        mv(&mut o, 399, 299);
+        release(&mut o, 399, 299);
+        // A selection: inside it the magnifier hides (nothing is copied); outside it C copies and
+        // the capture stays, so the selection is kept.
+        mv(&mut o, 250, 200);
+        assert_eq!(act(&mut o, Action::ColorCopy), Outcome::Stay);
+        mv(&mut o, 600, 500);
+        assert_eq!(
+            act(&mut o, Action::ColorCopy),
+            Outcome::Color {
+                at: (600, 500),
+                keep: true
+            }
+        );
+        assert_eq!(o.selection(), Some(Rect::new(100, 100, 300, 200)));
+        // With a tool, presses inside draw and the magnifier stays hidden there.
+        tool(&mut o, Tool::Rectangle);
+        mv(&mut o, 250, 200);
+        assert_eq!(act(&mut o, Action::ColorCopy), Outcome::Stay);
+        // The pin editor has no magnifier and no picker.
+        let mut e = Overlay::for_pin(
+            Rect::new(0, 0, 700, 500),
+            vec![Monitor::new(pic, true)],
+            SystemValues::default(),
+            Rect::new(100, 50, 300, 200),
+            Vec::new(),
+        );
+        mv(&mut e, 50, 20);
+        assert_eq!(act(&mut e, Action::ColorCopy), Outcome::Stay);
+        assert_eq!(act(&mut e, Action::ColorFormatNext), Outcome::Stay);
+        assert_eq!(e.color_style().format, pick::Format::Hex);
+    }
+
+    /// Step 59: exact values from a known picture across a synthetic layout — a 150 % monitor at
+    /// negative coordinates, a 100 % primary, a 125 % HDR monitor and a gap — with the pointer
+    /// keys nudging one device pixel at a time, every option (case, alpha), and the HDR note.
+    #[test]
+    fn the_picker_reads_exact_pixels_across_monitors_scales_hdr_and_pointer_keys() {
+        let mons = vec![
+            Monitor::new(Rect::new(-1200, 0, 1200, 900), false).with_dpi(144),
+            Monitor::new(Rect::new(0, 0, 800, 600), true),
+            Monitor::new(Rect::new(800, 0, 1000, 700), false)
+                .with_dpi(120)
+                .with_hdr(Some(true)),
+        ];
+        let pic = Rect::new(-1200, 0, 3000, 900);
+        let ledger = Ledger::new();
+        let syn = Synthetic::new(mons.clone());
+        let frozen = crate::capture::CaptureBackend::capture(&syn, &ledger, pic).unwrap();
+        let style = pick::Style {
+            format: pick::Format::Rgb,
+            case: pick::HexCase::Lower,
+            alpha: true,
+        };
+        let mut o =
+            Overlay::new(pic, mons, SystemValues::default(), (0, 0), None, None).with_color(style);
+        let read = |o: &Overlay| {
+            let mut s = o.scene(&Approx);
+            s.sample(&frozen);
+            s.magnifier.unwrap()
+        };
+        for (x, y, scaled) in [
+            (-1100, 50, true),
+            (-1, 899, true),
+            (0, 0, false),
+            (799, 599, false),
+        ] {
+            mv(&mut o, x, y);
+            let m = read(&o);
+            let first = m.color;
+            assert_eq!(first, if scaled { 2 } else { 1 }, "logical line at 150 %");
+            assert_eq!(m.text.lines[first], known(x, y, pick::Format::Hex, &style));
+            assert_eq!(
+                m.text.lines[first + 1],
+                known(x, y, pick::Format::Rgb, &style)
+            );
+            assert!(m.text.lines[first].starts_with('#') && m.text.lines[first].len() == 9);
+            assert_eq!(m.text.lines[first], m.text.lines[first].to_lowercase());
+            assert!(
+                m.text.lines[first + 1].starts_with("rgba(")
+                    && m.text.lines[first + 1].ends_with(", 1)")
+            );
+            assert_eq!(m.text.emphasis, Some(first + 1), "RGB chosen");
+            assert!(!m.text.lines.iter().any(|l| l == HDR_NOTE));
+            assert_eq!(
+                o.handle(Input::Action(Action::ColorCopy)),
+                Outcome::Color {
+                    at: (x, y),
+                    keep: false
+                }
+            );
+        }
+        // The pointer keys move one device pixel: the colour of the neighbour, exactly.
+        mv(&mut o, 300, 200);
+        o.handle(Input::Action(Action::Pointer(Dir::Right)));
+        o.handle(Input::Action(Action::Pointer(Dir::Down)));
+        assert_eq!(o.pointer(), (301, 201));
+        let m = read(&o);
+        assert_eq!(m.at, (301, 201));
+        assert_eq!(
+            m.text.lines[m.color],
+            known(301, 201, pick::Format::Hex, &style)
+        );
+        assert_ne!(
+            m.text.lines[m.color],
+            known(300, 200, pick::Format::Hex, &style)
+        );
+        assert_eq!(
+            o.handle(Input::Action(Action::ColorCopy)),
+            Outcome::Color {
+                at: (301, 201),
+                keep: false
+            }
+        );
+        // On the HDR monitor the readout says the values are the SDR picture's.
+        mv(&mut o, 900, 100);
+        let m = read(&o);
+        assert_eq!(
+            m.text.lines[m.color],
+            known(900, 100, pick::Format::Hex, &style)
+        );
+        assert_eq!(m.text.lines.last().map(String::as_str), Some(HDR_NOTE));
+        assert_eq!(m.text.dpi, 120);
+        // In the gap below the primary nothing is shown: Noeul made it opaque black.
+        mv(&mut o, 400, 800);
+        let m = read(&o);
+        assert_eq!(m.text.lines[m.color], "#000000ff");
+        assert_eq!(m.text.lines[m.color + 1], "rgba(0, 0, 0, 1)");
+    }
+
+    /// Step 59 (NOEUL-NFR-013): the accessible name says what the overlay shows — the selection,
+    /// the magnifier's position and colour values, the format `C` copies, the HDR note — and
+    /// nothing while the magnifier is hidden.
+    #[test]
+    fn the_accessible_name_reads_the_selection_and_the_magnifier() {
+        let pic = Rect::new(0, 0, 800, 600);
+        let (_l, frozen) = frame_of(pic);
+        let mut o = one(800, 600).with_magnifier(true);
+        mv(&mut o, 50, 40);
+        let name = |o: &Overlay| {
+            let mut s = o.scene(&Approx);
+            s.sample(&frozen);
+            o.accessible_name(&s)
+        };
+        let style = pick::Style::default();
+        assert_eq!(
+            name(&o),
+            format!(
+                "Capture overlay. Magnifier at 50, 40: {}, {}; copy format HEX",
+                known(50, 40, pick::Format::Hex, &style),
+                known(50, 40, pick::Format::Rgb, &style)
+            )
+        );
+        act(&mut o, Action::ColorFormatNext);
+        act(&mut o, Action::ColorFormatNext);
+        assert!(name(&o).ends_with("; copy format HSL"), "{}", name(&o));
+        assert!(name(&o).contains(", hsl("));
+        drag(&mut o, (100, 100), (399, 299));
+        mv(&mut o, 250, 200);
+        assert_eq!(
+            name(&o),
+            "Capture overlay, selection 300 by 200 at 100, 100",
+            "the magnifier hides inside the selection"
+        );
+        mv(&mut o, 600, 500);
+        assert!(name(&o).starts_with(
+            "Capture overlay, selection 300 by 200 at 100, 100. Magnifier at 600, 500: #"
+        ));
+        // HDR.
+        let mons = vec![Monitor::new(pic, true).with_hdr(Some(true))];
+        let mut h = Overlay::new(pic, mons, SystemValues::default(), (0, 0), None, None);
+        mv(&mut h, 10, 10);
+        let mut s = h.scene(&Approx);
+        s.sample(&frozen);
+        assert!(
+            h.accessible_name(&s)
+                .ends_with(&format!("; copy format HEX ({HDR_NOTE})"))
+        );
     }
 
     #[test]

@@ -1,7 +1,7 @@
-//! The editor window (docs/DDALGAK_GUI_JOURNEYS.md §2, J1–J4, J7; ADR 0049).
+//! The editor window (docs/DDALGAK_GUI_JOURNEYS.md §2, J1–J4, J6, J7; ADR 0049, ADR 0052).
 //!
 //! Header (engine state in a glyph *and* a word, the engine buttons, profile and mode, the
-//! language switch), navigation rail (Rules, Modes), the rule list with search, filters, grouping,
+//! language switch), navigation rail (Rules, Modes, Profiles), the rule list with search, filters, grouping,
 //! drag ordering, multi-select and badges, the detail or four-step form panel, and the status
 //! line with the truthful save state. Every control is reachable from the keyboard; `F6` cycles
 //! the regions; destructive actions confirm with the safe choice focused.
@@ -31,6 +31,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+mod profiles;
 mod view;
 
 /// How the editor starts.
@@ -89,6 +90,8 @@ pub enum Page {
     #[default]
     Rules,
     Modes,
+    /// Step 75: the profile browser (J6).
+    Profiles,
 }
 
 /// What a confirmed Discard leads to.
@@ -133,6 +136,37 @@ enum Dialog {
         error: Option<String>,
     },
     Help,
+    // Step 75: the profile dialogs (`app/profiles.rs`).
+    /// The side-by-side diff of a switch, Cancel focused.
+    SwitchProfile {
+        to: String,
+    },
+    EditProfile {
+        id: String,
+        name: String,
+        description: String,
+    },
+    DeleteProfile {
+        id: String,
+        name: String,
+    },
+    ExportProfile {
+        ids: Vec<String>,
+        path: String,
+        env_values: bool,
+        done: Option<String>,
+    },
+    ImportProfile {
+        path: String,
+        plan: Option<Box<ddalgak::profile::ImportPlan>>,
+        error: Option<String>,
+    },
+    History {
+        id: String,
+        versions: Vec<ddalgak::profile::Version>,
+        selected: Option<usize>,
+        label: String,
+    },
 }
 
 /// The undo toast after a delete (stays until dismissed, J7).
@@ -155,7 +189,11 @@ enum CaptureTarget {
 #[derive(Clone, Debug)]
 enum Act {
     New(Option<Effect>),
-    Select { id: String, ctrl: bool, shift: bool },
+    Select {
+        id: String,
+        ctrl: bool,
+        shift: bool,
+    },
     Edit(String),
     Duplicate(Vec<String>),
     AskDelete(Vec<String>),
@@ -179,6 +217,25 @@ enum Act {
     ReloadFromDisk,
     ModeEnabled(String, bool),
     NewMode(String),
+    // Step 75: profiles.
+    ProfileAdd(String),
+    OpenSwitch(String),
+    ApplyProfile(String),
+    DuplicateProfile(String),
+    OpenEditProfile(String),
+    SaveProfileFields {
+        id: String,
+        name: String,
+        description: String,
+    },
+    AskDeleteProfile(String),
+    DeleteProfile(String),
+    OpenHistory(String),
+    SaveProfileVersion(String, String),
+    RestoreProfile(Box<Profile>, String),
+    OpenProfileExport(Vec<String>),
+    OpenProfileImport,
+    ImportProfiles(Box<ddalgak::profile::ImportPlan>),
 }
 
 /// The editor's state.
@@ -226,6 +283,12 @@ pub struct EditorApp {
     close_now: bool,
     /// The Try step's document check, kept until the form or the file changes.
     doc_check: Option<DocCheck>,
+    // Step 75: the profile browser.
+    profile_search: String,
+    profile_sort: ddalgak::profile::Sort,
+    new_profile_title: String,
+    /// A saved switch the running app has not confirmed yet (the profile's ID).
+    switching: Option<String>,
 }
 
 /// The document checks of the form's rule for one state of the form and the file.
@@ -290,6 +353,10 @@ impl EditorApp {
             visible: Vec::new(),
             close_now: false,
             doc_check: None,
+            profile_search: String::new(),
+            profile_sort: ddalgak::profile::Sort::default(),
+            new_profile_title: String::new(),
+            switching: None,
         };
         app.start_watch();
         app.link.send(Job::Status);
@@ -448,6 +515,7 @@ impl EditorApp {
                     if current.is_none_or(|c| c == *revision) {
                         self.save = SaveState::after_reload(*revision, &r.result);
                     }
+                    self.confirm_switch(&r.result);
                 }
                 Job::Engine(_) => {
                     if let Err(e) = &r.result {
@@ -849,6 +917,20 @@ impl EditorApp {
                     Err(e) => self.fail(&e),
                 }
             }
+            a @ (Act::ProfileAdd(_)
+            | Act::OpenSwitch(_)
+            | Act::ApplyProfile(_)
+            | Act::DuplicateProfile(_)
+            | Act::OpenEditProfile(_)
+            | Act::SaveProfileFields { .. }
+            | Act::AskDeleteProfile(_)
+            | Act::DeleteProfile(_)
+            | Act::OpenHistory(_)
+            | Act::SaveProfileVersion(..)
+            | Act::RestoreProfile(..)
+            | Act::OpenProfileExport(_)
+            | Act::OpenProfileImport
+            | Act::ImportProfiles(_)) => self.apply_profile_act(a),
             Act::NewMode(title) => {
                 let p = self
                     .form

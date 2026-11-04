@@ -6,7 +6,7 @@
   "cli_contract": 1,
   "json_schema_version": 1,
   "implementation": "implemented",
-  "summary": "Pre-alpha: engine status, health and control of the tray app, opt-in sign-in start, rule store (CRUD, validation, drafts, history, live reload); rules of every core action; enable, disable and release",
+  "summary": "Pre-alpha: engine status, health and control of the tray app, opt-in sign-in start, rule store (CRUD, validation, drafts, history, live reload); every core action; enable, disable, release; profiles",
   "commands": [
     {
       "name": "capabilities",
@@ -455,6 +455,146 @@
       "effect": "read",
       "network": false,
       "dry_run": false,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "profile.list",
+      "usage": "ddalgak profile list [--search <text>] [--sort order|title|id|rules] [--draft] [--json]",
+      "summary": "Profiles with their rules, modes and errors; search and sort",
+      "effect": "read",
+      "network": false,
+      "dry_run": false,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "profile.show",
+      "usage": "ddalgak profile show <id> [--draft] [--json]",
+      "summary": "A profile's modes, rules (titles, triggers, step kinds), versions and what a switch to it would change",
+      "effect": "read",
+      "network": false,
+      "dry_run": false,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "profile.add",
+      "usage": "ddalgak profile add --title <name> [--id <id>] [--description <text>] [--dry-run] [--draft] [--if-revision <n>] [--endpoint <name>] [--json]",
+      "summary": "Create an empty profile (not active)",
+      "effect": "write",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "profile.edit",
+      "usage": "ddalgak profile edit <id> [--title <name>] [--description <text> | --no-description] [--dry-run] [--draft] [--if-revision <n>] [--endpoint <name>] [--json]",
+      "summary": "Change a profile's name or description",
+      "effect": "write",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "profile.rename",
+      "usage": "ddalgak profile rename <id> <name> [--dry-run] [--draft] [--if-revision <n>] [--endpoint <name>] [--json]",
+      "summary": "Give a profile a new name (its ID never changes)",
+      "effect": "write",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "profile.duplicate",
+      "usage": "ddalgak profile duplicate <id> [--id <new>] [--title <name>] [--dry-run] [--draft] [--if-revision <n>] [--endpoint <name>] [--json]",
+      "summary": "Copy a profile with every mode and rule (rules get new IDs; not active)",
+      "effect": "write",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "profile.delete",
+      "usage": "ddalgak profile delete <id> [--yes] [--dry-run] [--draft] [--if-revision <n>] [--endpoint <name>] [--json]",
+      "summary": "Remove a profile that is neither active nor the only one (asks, or needs --yes)",
+      "effect": "destructive",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": true,
+      "opens_window": false
+    },
+    {
+      "name": "profile.apply",
+      "usage": "ddalgak profile apply <id> [--dry-run] [--if-revision <n>] [--endpoint <name>] [--json]",
+      "summary": "Switch the active profile; a running app switches atomically (runs end, held keys released, default mode); --dry-run previews the diff",
+      "effect": "write",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "profile.save",
+      "usage": "ddalgak profile save <id> [--label <text>] [--dry-run] [--json]",
+      "summary": "Keep a labelled save point of the saved rules for a profile",
+      "effect": "write",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "profile.history",
+      "usage": "ddalgak profile history <id> [--json]",
+      "summary": "The versions of one profile from the history and its save points, and the rollback target",
+      "effect": "read",
+      "network": false,
+      "dry_run": false,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "profile.restore",
+      "usage": "ddalgak profile restore <id> <version> [--yes] [--dry-run] [--if-revision <n>] [--endpoint <name>] [--json]",
+      "summary": "Put one profile back as a version holds it, as a new change (shows a diff; asks, or needs --yes)",
+      "effect": "destructive",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": true,
+      "opens_window": false
+    },
+    {
+      "name": "profile.rollback",
+      "usage": "ddalgak profile rollback <id> [--yes] [--dry-run] [--if-revision <n>] [--endpoint <name>] [--json]",
+      "summary": "Go back to the profile's newest earlier version without errors (shows a diff; asks, or needs --yes)",
+      "effect": "destructive",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": true,
+      "opens_window": false
+    },
+    {
+      "name": "profile.export",
+      "usage": "ddalgak profile export <id>... | --all --output <file> [--include-env-values] [--yes] [--dry-run] [--json]",
+      "summary": "Write a portable file: every rule off, no consent, settings or revision, known-folder paths, environment values left out",
+      "effect": "write",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "profile.import",
+      "usage": "ddalgak profile import <file> [--id <id>] [--title <name>] [--show-targets] [--dry-run] [--draft] [--if-revision <n>] [--endpoint <name>] [--json]",
+      "summary": "Validate a file and add its profiles, never active, every rule off and without consent; --dry-run previews it",
+      "effect": "write",
+      "network": false,
+      "dry_run": true,
       "requires_yes": false,
       "opens_window": false
     }

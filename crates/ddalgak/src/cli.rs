@@ -59,6 +59,21 @@ pub enum Cmd {
     /// `release`: release every key and button Ddalgak holds and keys Windows still considers
     /// pressed although nobody holds them.
     Release,
+    // Step 75: profiles (rules.json through the rule store; `apply` makes a running app switch).
+    ProfileList,
+    ProfileShow,
+    ProfileAdd,
+    ProfileEdit,
+    ProfileRename,
+    ProfileDuplicate,
+    ProfileDelete,
+    ProfileApply,
+    ProfileSave,
+    ProfileHistory,
+    ProfileRestore,
+    ProfileRollback,
+    ProfileExport,
+    ProfileImport,
 }
 
 /// Options of the mode fields (`mode add`, `mode edit`; Step 72).
@@ -202,7 +217,27 @@ impl Cmd {
             Self::ModeEnable => "mode.enable".into(),
             Self::ModeDisable => "mode.disable".into(),
             Self::Release => "release".into(),
+            Self::ProfileList => "profile.list".into(),
+            Self::ProfileShow => "profile.show".into(),
+            Self::ProfileAdd => "profile.add".into(),
+            Self::ProfileEdit => "profile.edit".into(),
+            Self::ProfileRename => "profile.rename".into(),
+            Self::ProfileDuplicate => "profile.duplicate".into(),
+            Self::ProfileDelete => "profile.delete".into(),
+            Self::ProfileApply => "profile.apply".into(),
+            Self::ProfileSave => "profile.save".into(),
+            Self::ProfileHistory => "profile.history".into(),
+            Self::ProfileRestore => "profile.restore".into(),
+            Self::ProfileRollback => "profile.rollback".into(),
+            Self::ProfileExport => "profile.export".into(),
+            Self::ProfileImport => "profile.import".into(),
         }
+    }
+
+    /// A Step 75 profile command (`profile_cmd`).
+    #[cfg_attr(not(windows), allow(dead_code))] // only the Windows client runs commands (ADR 0011)
+    pub fn is_profile(self) -> bool {
+        self.name().starts_with("profile.")
     }
 
     /// A mode command that reads or writes rules.json (the others ask the running app).
@@ -353,10 +388,69 @@ impl Cmd {
                 v
             }
             Self::Release => vec![("--endpoint", Value), ("--dry-run", Flag)],
+            Self::ProfileList => vec![("--search", Value), ("--sort", Value), ("--draft", Flag)],
+            Self::ProfileShow => vec![("--draft", Flag)],
+            Self::ProfileAdd => {
+                let mut v = vec![
+                    ("--title", Value),
+                    ("--id", Value),
+                    ("--description", Value),
+                ];
+                v.extend_from_slice(WRITE);
+                v
+            }
+            Self::ProfileEdit => {
+                let mut v = vec![
+                    ("--title", Value),
+                    ("--description", Value),
+                    ("--no-description", Flag),
+                ];
+                v.extend_from_slice(WRITE);
+                v
+            }
+            Self::ProfileRename => WRITE.to_vec(),
+            Self::ProfileDuplicate => {
+                let mut v = vec![("--id", Value), ("--title", Value)];
+                v.extend_from_slice(WRITE);
+                v
+            }
+            Self::ProfileDelete => {
+                let mut v = vec![("--yes", Flag)];
+                v.extend_from_slice(WRITE);
+                v
+            }
+            Self::ProfileApply => vec![
+                ("--dry-run", Flag),
+                ("--if-revision", Value),
+                ("--endpoint", Value),
+            ],
+            Self::ProfileSave => vec![("--label", Value), ("--dry-run", Flag)],
+            Self::ProfileHistory => vec![],
+            Self::ProfileRestore | Self::ProfileRollback => vec![
+                ("--yes", Flag),
+                ("--dry-run", Flag),
+                ("--if-revision", Value),
+                ("--endpoint", Value),
+            ],
+            Self::ProfileExport => vec![
+                ("--output", Value),
+                ("--all", Flag),
+                ("--include-env-values", Flag),
+                ("--dry-run", Flag),
+            ],
+            Self::ProfileImport => {
+                let mut v = vec![
+                    ("--id", Value),
+                    ("--title", Value),
+                    ("--show-targets", Flag),
+                ];
+                v.extend_from_slice(WRITE);
+                v
+            }
         };
-        // Every rule command may name the app endpoint (writes ask that app to reload; scripts
-        // can pass the same options to every command).
-        if self.name().starts_with("rule") {
+        // Every rule and profile command may name the app endpoint (writes ask that app to
+        // reload; scripts can pass the same options to every command).
+        if self.name().starts_with("rule") || self.is_profile() {
             o.push(("--endpoint", Value));
         }
         o.sort_by_key(|(n, _)| *n);
@@ -379,6 +473,17 @@ impl Cmd {
             | Self::ModeEnable
             | Self::ModeDisable => (1, 1),
             Self::RulesRestore => (0, 1),
+            Self::ProfileShow
+            | Self::ProfileEdit
+            | Self::ProfileDuplicate
+            | Self::ProfileDelete
+            | Self::ProfileApply
+            | Self::ProfileSave
+            | Self::ProfileHistory
+            | Self::ProfileRollback
+            | Self::ProfileImport => (1, 1),
+            Self::ProfileRename | Self::ProfileRestore => (2, 2),
+            Self::ProfileExport => (0, 64),
             _ => (0, 0),
         }
     }
@@ -478,6 +583,26 @@ fn command(words: &[&str]) -> Result<(Cmd, usize), String> {
         ["mode", "status", ..] => (Cmd::ModeStatus, 2),
         ["mode", "enable", ..] => (Cmd::ModeEnable, 2),
         ["mode", "disable", ..] => (Cmd::ModeDisable, 2),
+        ["profile", "list", ..] => (Cmd::ProfileList, 2),
+        ["profile", "show", ..] => (Cmd::ProfileShow, 2),
+        ["profile", "add", ..] => (Cmd::ProfileAdd, 2),
+        ["profile", "edit", ..] => (Cmd::ProfileEdit, 2),
+        ["profile", "rename", ..] => (Cmd::ProfileRename, 2),
+        ["profile", "duplicate" | "copy", ..] => (Cmd::ProfileDuplicate, 2),
+        ["profile", "delete", ..] => (Cmd::ProfileDelete, 2),
+        ["profile", "apply" | "switch", ..] => (Cmd::ProfileApply, 2),
+        ["profile", "save", ..] => (Cmd::ProfileSave, 2),
+        ["profile", "history", ..] => (Cmd::ProfileHistory, 2),
+        ["profile", "restore", ..] => (Cmd::ProfileRestore, 2),
+        ["profile", "rollback", ..] => (Cmd::ProfileRollback, 2),
+        ["profile", "export", ..] => (Cmd::ProfileExport, 2),
+        ["profile", "import", ..] => (Cmd::ProfileImport, 2),
+        ["profile"] | ["profile", ..] => {
+            return Err(
+                "`profile` needs list, show, add, edit, rename, duplicate, delete, apply, save, history, restore, rollback, export or import"
+                    .into(),
+            );
+        }
         ["mode"] | ["mode", ..] => {
             return Err(
                 "`mode` needs list, show, add, edit, rename, copy, delete, enable, disable, set, toggle, reset or status"
@@ -525,6 +650,10 @@ pub fn parse(raw: &[String]) -> Result<(Cmd, Args), (String, CliError)> {
                             | "--rule"
                             | "--patch"
                             | "--to"
+                            | "--search"
+                            | "--sort"
+                            | "--output"
+                            | "--label"
                     ));
             i += if takes_value { 2 } else { 1 };
             continue;
@@ -548,12 +677,13 @@ pub fn parse(raw: &[String]) -> Result<(Cmd, Args), (String, CliError)> {
             "enable",
             "disable",
             "release",
+            "profile",
         ];
         match words.first() {
             Some(w) if known.contains(w) => {
                 let mut n = w.to_string();
                 if let Some(second) = words.get(1)
-                    && ["engine", "startup", "rule", "rules", "mode"].contains(w)
+                    && ["engine", "startup", "rule", "rules", "mode", "profile"].contains(w)
                     && second.chars().all(|c| c.is_ascii_lowercase())
                 {
                     n = format!("{n}.{second}");
@@ -631,6 +761,14 @@ pub fn parse(raw: &[String]) -> Result<(Cmd, Args), (String, CliError)> {
                                 "--patch",
                                 "--all-modes",
                                 "--backup",
+                                "--search",
+                                "--sort",
+                                "--output",
+                                "--label",
+                                "--all",
+                                "--include-env-values",
+                                "--no-description",
+                                "--show-targets",
                             ]
                             .contains(&f);
                         return usage(if known {
@@ -687,6 +825,12 @@ pub fn parse(raw: &[String]) -> Result<(Cmd, Args), (String, CliError)> {
             match cmd {
                 Cmd::RuleRevoke => "a rule ID and a permission".to_string(),
                 Cmd::ModeRename => "a mode ID and a new title".to_string(),
+                Cmd::ProfileRename => "a profile ID and a new name".to_string(),
+                Cmd::ProfileRestore => {
+                    "a profile ID and a version name from `ddalgak profile history`".to_string()
+                }
+                Cmd::ProfileImport => "the file to import".to_string(),
+                c if c.is_profile() => "a profile ID".to_string(),
                 c if c.name().starts_with("mode.") => "a mode ID".to_string(),
                 _ => "a rule ID".to_string(),
             }

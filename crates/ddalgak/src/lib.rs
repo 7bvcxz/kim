@@ -59,6 +59,7 @@ pub mod model;
 pub mod modes;
 pub mod mouse;
 pub mod paths;
+pub mod profile;
 pub mod recovery;
 pub mod remap;
 pub mod rules;

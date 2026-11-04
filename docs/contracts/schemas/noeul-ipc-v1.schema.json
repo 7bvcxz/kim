@@ -288,7 +288,7 @@
     },
     "settings_state": {
       "type": "object",
-      "required": ["path", "state", "tray_icon", "keyboard_help", "quick_save_folder", "detection", "magnifier", "pointer", "pins", "paste", "gestures", "problems"],
+      "required": ["path", "state", "tray_icon", "keyboard_help", "quick_save_folder", "detection", "magnifier", "pointer", "pins", "paste", "color", "gestures", "problems"],
       "additionalProperties": false,
       "properties": {
         "path": { "type": "string", "minLength": 1 },
@@ -317,6 +317,17 @@
           "properties": {
             "paths": { "enum": ["on", "off"] },
             "file_cards": { "enum": ["on", "off"] }
+          }
+        },
+        "color": {
+          "description": "`[color]` (Step 59, NOEUL-FR-044): the colour picker's format when a capture starts, the HEX case and whether the alpha is included.",
+          "type": "object",
+          "required": ["format", "hex_case", "alpha"],
+          "additionalProperties": false,
+          "properties": {
+            "format": { "enum": ["hex", "rgb", "hsl"] },
+            "hex_case": { "enum": ["upper", "lower"] },
+            "alpha": { "enum": ["on", "off"] }
           }
         },
         "gestures": {
@@ -373,13 +384,14 @@
         },
         "captures": {
           "type": "object",
-          "required": ["started", "pinned", "copied", "saved", "cancelled", "open", "ignored", "history", "overlay", "first_frame"],
+          "required": ["started", "pinned", "copied", "saved", "colors", "cancelled", "open", "ignored", "history", "overlay", "first_frame"],
           "additionalProperties": false,
           "properties": {
             "started": { "$ref": "#/$defs/u64" },
             "pinned": { "$ref": "#/$defs/u64" },
             "copied": { "description": "Captures that ended with Copy (Step 51).", "$ref": "#/$defs/u64" },
             "saved": { "description": "Captures that ended with Save or quick save (Step 51).", "$ref": "#/$defs/u64" },
+            "colors": { "description": "Captures that ended with the colour picker's `color.copy` (Step 59); a count only, never a colour.", "$ref": "#/$defs/u64" },
             "cancelled": { "$ref": "#/$defs/u64" },
             "open": { "type": "boolean" },
             "ignored": { "description": "Capture requests that found an overlay open and did nothing (NOEUL-FR-013).", "$ref": "#/$defs/u64" },
@@ -604,7 +616,7 @@
     "overlay_state": {
       "description": "The open capture overlay (Step 50, ADR 0026): geometry and state only, never pixels, colours, window titles or element names (NOEUL-SEC-007, NOEUL-SEC-008).",
       "type": "object",
-      "required": ["session", "mode", "pin", "phase", "selection", "picture", "monitors", "buffer_bytes", "help", "focus", "pointer", "detection", "magnifier", "history", "annotation"],
+      "required": ["session", "mode", "pin", "phase", "selection", "picture", "monitors", "buffer_bytes", "help", "focus", "pointer", "detection", "magnifier", "color", "history", "annotation"],
       "additionalProperties": false,
       "properties": {
         "session": { "description": "The capture session; 0 while a pin is edited.", "$ref": "#/$defs/u64" },
@@ -654,6 +666,17 @@
           "properties": {
             "enabled": { "type": "boolean" },
             "shown": { "type": "boolean" }
+          }
+        },
+        "color": {
+          "description": "The colour picker (Step 59, NOEUL-FR-044): the format `color.copy` copies now, the HEX case and whether the alpha is included. Never the colour under the pointer (NOEUL-SEC-008).",
+          "type": "object",
+          "required": ["format", "hex_case", "alpha"],
+          "additionalProperties": false,
+          "properties": {
+            "format": { "enum": ["hex", "rgb", "hsl"] },
+            "hex_case": { "enum": ["upper", "lower"] },
+            "alpha": { "type": "boolean" }
           }
         },
         "annotation": { "$ref": "#/$defs/annotation_state" },

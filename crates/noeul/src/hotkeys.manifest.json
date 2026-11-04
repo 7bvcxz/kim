@@ -43,6 +43,8 @@
     { "id": "pointer.move-right", "title": "Move the pointer right one pixel", "context": "capture-overlay", "defaults": [{ "keys": "code:KeyD", "repeat": true }] },
     { "id": "detect.cycle", "title": "Detect windows, UI elements, or nothing", "context": "capture-overlay", "defaults": ["E"] },
     { "id": "magnifier.toggle", "title": "Show or hide the magnifier", "context": "capture-overlay", "defaults": ["M"] },
+    { "id": "color.copy", "title": "Copy the color under the pointer", "context": "capture-overlay", "defaults": ["C"] },
+    { "id": "color.format-next", "title": "Switch the color format (HEX, RGB, HSL)", "context": "capture-overlay", "defaults": ["Shift+C"] },
     { "id": "history.previous", "title": "Previous captured rectangle", "context": "capture-overlay", "defaults": ["Comma"] },
     { "id": "history.next", "title": "Next captured rectangle", "context": "capture-overlay", "defaults": ["Period"] },
     { "id": "annotate.done", "title": "Leave the tool and keep the drawing", "context": "annotate", "defaults": ["Escape"] },

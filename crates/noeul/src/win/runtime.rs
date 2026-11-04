@@ -30,7 +30,10 @@
 //! file in the configured quick-save folder (never shown), and quick save never falls back to
 //! the user's Pictures folder. Since Step 55 a paste reads only the stand-in too: the formats a
 //! test synthesized in the folder `NOEUL_DEV_CLIPBOARD_DIR` (empty without it), never the user's
-//! clipboard, and the pins read no key state (a modifier held elsewhere changes nothing).
+//! clipboard, and the pins read no key state (a modifier held elsewhere changes nothing). Since
+//! Step 59 a copy to the stand-in replaces that folder's formats (text as `CF_UNICODETEXT`, a
+//! picture as `PNG` and `CF_DIBV5`), so a test reads the exact text the colour picker copied and
+//! pastes it back as a swatch.
 //!
 //! **Detection** (Step 52, ADR 0035): the window list is read on the UI thread when a capture
 //! starts ([`crate::win::detect::snapshot`]); element lookups run on a UI Automation worker that
@@ -203,13 +206,16 @@ impl Shell for WinShell {
     }
 
     fn clipboard_write_text(&mut self, text: &str) -> Result<()> {
-        match self.copy {
+        match &self.copy {
             CopyTarget::System => crate::win::clipboard::write_text(CONTROL.get() as HWND, text),
             CopyTarget::Synthetic { busy: true, .. } => Err(NoeulError::new(
                 Code::ClipboardUnavailable,
                 "another program keeps the clipboard open (test hook)",
             )),
-            CopyTarget::Synthetic { busy: false, .. } => Ok(()),
+            CopyTarget::Synthetic { busy: false, dir } => stand_in_write(
+                dir.as_deref(),
+                &[(crate::paste::Format::Text, text.as_bytes())],
+            ),
         }
     }
 
@@ -222,7 +228,7 @@ impl Shell for WinShell {
     }
 
     fn clipboard_write(&mut self, png: &[u8], dib: &[u8]) -> Result<()> {
-        match self.copy {
+        match &self.copy {
             CopyTarget::System => {
                 crate::win::clipboard::write_image(CONTROL.get() as HWND, png, dib)
             }
@@ -230,7 +236,13 @@ impl Shell for WinShell {
                 Code::ClipboardUnavailable,
                 "another program keeps the clipboard open (test hook)",
             )),
-            CopyTarget::Synthetic { busy: false, .. } => Ok(()),
+            CopyTarget::Synthetic { busy: false, dir } => stand_in_write(
+                dir.as_deref(),
+                &[
+                    (crate::paste::Format::Png, png),
+                    (crate::paste::Format::DibV5, dib),
+                ],
+            ),
         }
     }
 
@@ -343,6 +355,20 @@ impl Shell for WinShell {
                 .ok()?;
             crate::win::detect::window(h as HWND, &self.detect_scope)
         }
+    }
+}
+
+/// A write to the debug-build test hook's stand-in clipboard: it replaces the stand-in folder's
+/// formats when a test named one (`NOEUL_DEV_CLIPBOARD_DIR`), as a clipboard write replaces the
+/// clipboard (Step 59); without a folder it goes nowhere. Never the user's clipboard.
+fn stand_in_write(
+    dir: Option<&std::path::Path>,
+    formats: &[(crate::paste::Format, &[u8])],
+) -> Result<()> {
+    match dir {
+        Some(d) => crate::paste::replace_stand_in(d, formats)
+            .map_err(|e| NoeulError::io("the stand-in clipboard", &e)),
+        None => Ok(()),
     }
 }
 

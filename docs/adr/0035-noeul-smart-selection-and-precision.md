@@ -230,3 +230,13 @@ COM object exists while no overlay is open.
 `NOEUL-FR-040`…`NOEUL-FR-043`, `NOEUL-FR-050`, `NOEUL-FR-090`, `NOEUL-FR-091`, `NOEUL-FR-101`,
 `NOEUL-FR-102`, `NOEUL-NFR-001`, `NOEUL-NFR-003`, `NOEUL-NFR-012`, `NOEUL-SEC-003`,
 `NOEUL-SEC-004`, `NOEUL-SEC-005`, `NOEUL-SEC-007`, `NOEUL-SEC-008`, `NOEUL-SEC-012`.
+
+## Notes
+
+- 2026-11-04 (Step 59): the colour picker ([ADR 0053](0053-noeul-color-picker.md)) builds on §6.
+  The magnifier's RGB line is now `rgb(58, 110, 165)` (what `C` copies in RGB), an HSL line
+  appears when HSL is the chosen format, the chosen line is marked with an accent bar, and an HDR
+  monitor adds "HDR shown as SDR". §3's rule stands for status, IPC and logs: they report the
+  picker's format, never the colour. The overlay window's accessible name now carries the
+  readout as drawn (UI Automation's Name), which ADR 0053 §6 records as a deliberate exception:
+  it shows nothing the screen does not show.

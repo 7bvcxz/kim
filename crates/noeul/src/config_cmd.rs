@@ -36,8 +36,8 @@ pub struct SetArgs {
 
 #[derive(Debug, Args)]
 pub struct ResetArgs {
-    /// Reset only this section: general, capture, gestures, pins or paste (default: every
-    /// setting)
+    /// Reset only this section: general, capture, gestures, pins, paste or color (default:
+    /// every setting)
     pub section: Option<String>,
     /// Confirm without asking
     #[arg(long, short)]

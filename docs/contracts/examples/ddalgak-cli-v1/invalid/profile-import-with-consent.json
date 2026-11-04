@@ -1,0 +1,148 @@
+{
+  "command": "profile.import",
+  "data": {
+    "app": null,
+    "backup": null,
+    "changed": true,
+    "counts": {
+      "conflicts": 0,
+      "inactive": 0,
+      "missing_programs": 0,
+      "need_consent": 1,
+      "profiles": 2,
+      "renamed_rules": 4,
+      "restored_modes": 0,
+      "rules": 4
+    },
+    "created": "work-2",
+    "dry_run": true,
+    "file": {
+      "by_version": "0.0.1",
+      "exported_at": "2026-11-04T14:14:19Z",
+      "migrated_from": null
+    },
+    "notes": [
+      "imported profiles are not active and every imported rule is off: review each one, then turn it on (programs, websites and typing ask for consent first)"
+    ],
+    "problems": [],
+    "profiles": [
+      {
+        "description": "Office keyboard",
+        "id": "work-2",
+        "modes": [
+          "base",
+          "nav"
+        ],
+        "renamed_from": "work",
+        "restored_modes": [],
+        "rules": [
+          {
+            "conflicts": [],
+            "id": "w-pause-2",
+            "inactive": null,
+            "missing_programs": 0,
+            "permissions": [],
+            "renamed_from": "w-pause",
+            "steps": [
+              "engine"
+            ],
+            "targets": {
+              "count": 0,
+              "redacted": true
+            },
+            "title": "F13 pauses",
+            "trigger": "F13",
+            "consent": {
+              "input-injection": {
+                "granted_at": "2026-11-04T09:00:00Z",
+                "via": "import"
+              }
+            }
+          },
+          {
+            "conflicts": [],
+            "id": "w-nav-2",
+            "inactive": null,
+            "missing_programs": 0,
+            "permissions": [],
+            "renamed_from": "w-nav",
+            "steps": [
+              "mode"
+            ],
+            "targets": {
+              "count": 0,
+              "redacted": true
+            },
+            "title": "F14 holds Navigation",
+            "trigger": "F14"
+          },
+          {
+            "conflicts": [],
+            "id": "w-tool-2",
+            "inactive": null,
+            "missing_programs": 0,
+            "permissions": [
+              "launch-programs"
+            ],
+            "renamed_from": "w-tool",
+            "steps": [
+              "open_program"
+            ],
+            "targets": {
+              "count": 1,
+              "redacted": true
+            },
+            "title": "F16 opens the tool",
+            "trigger": "Ctrl+Alt+Shift+F16"
+          }
+        ],
+        "title": "Work"
+      },
+      {
+        "description": "Games, no launches",
+        "id": "gaming-2",
+        "modes": [
+          "base",
+          "nav"
+        ],
+        "renamed_from": "gaming",
+        "restored_modes": [],
+        "rules": [
+          {
+            "conflicts": [],
+            "id": "g-off-2",
+            "inactive": null,
+            "missing_programs": 0,
+            "permissions": [],
+            "renamed_from": "g-off",
+            "steps": [
+              "engine"
+            ],
+            "targets": {
+              "count": 0,
+              "redacted": true
+            },
+            "title": "F13 turns the engine off",
+            "trigger": "F13"
+          }
+        ],
+        "title": "Gaming"
+      }
+    ],
+    "revision": {
+      "from": 10,
+      "to": null
+    },
+    "rules": [
+      "w-pause-2",
+      "w-nav-2",
+      "w-tool-2",
+      "g-off-2"
+    ],
+    "snapshot": null,
+    "target": "saved"
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

@@ -293,7 +293,8 @@ real runs. The mode commands (Step 72) and the profile commands (Steps 75, 81) u
 | `snapshot_not_found` | 3 | The backup, history snapshot or draft to restore or apply does not exist. |
 | `app_identity_mismatch` | 4 | The endpoint is served by a process that is not `ddalgak-gui.exe` of this user. Nothing was sent to it. |
 | `rules_invalid` | 4 | `rules.json` is malformed or not a usable `ddalgak.rules` document; the engine cannot be turned on with it, a running engine keeps its previous rules, and it is never rewritten automatically. |
-| `rules_from_newer_version` | 5 | `rules.json` was written by a newer Ddalgak; it is not run and never rewritten. |
+| `import_invalid` | 4 | Step 75: the file given to `ddalgak profile import` is not JSON, not a `ddalgak.rules` document, or fails the schema outside its rules (a corrupt or truncated export); nothing was imported. A newer file is `rules_from_newer_version`. |
+| `rules_from_newer_version` | 5 | `rules.json` was written by a newer Ddalgak; it is not run and never rewritten. Since Step 75 also a file to import that a newer Ddalgak wrote; nothing was imported. |
 | `engine_elevated` | 5 | The app runs as administrator; it refuses to turn its engine on elevated (DDALGAK_SAFETY §3). |
 | `app_unresponsive` | 6 | The verified app accepted the connection but did not answer in time. It is neither stopped nor restarted. |
 | `engine_off` | 7 | Pause or resume needs the engine on; resume never turns it on. Since Step 72 also `mode set`, `toggle` and `reset`: an engine that is off has no active mode. |
@@ -302,6 +303,7 @@ real runs. The mode commands (Step 72) and the profile commands (Steps 75, 81) u
 | `consent_required` | 7 | The change needs `--allow <permission>`; a new rule was saved disabled, anything else was not written. |
 | `mode_in_use` | 7 | Step 72: `mode delete` of the default mode, of a mode other modes are layers over, of a mode a rule switches to, or of a mode rules are limited to without `--delete-rules`; nothing was written. `details` name the rules and modes that use it. |
 | `mode_disabled` | 7 | Step 73: `mode set` or `mode toggle` (or the tray's mode menu) to a mode the user disabled; nothing changed. `ddalgak enable --mode <id>` turns it on again. |
+| `profile_in_use` | 7 | Step 75: `profile delete` of the active profile (switch first with `ddalgak profile apply <other>`) or of the only profile; nothing was written. |
 
 ## 7. Output streams and the `--json` envelope
 

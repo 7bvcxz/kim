@@ -381,7 +381,7 @@ fn handle(raw: &RawKey) -> bool {
             match d.source {
                 Source::Own => st.own_injected.fetch_add(1, Ordering::Relaxed),
                 Source::Other => st.other_injected.fetch_add(1, Ordering::Relaxed),
-                Source::Physical => 0,
+                Source::Physical => st.physical.fetch_add(1, Ordering::Relaxed),
             };
         }
         if d.signal == Some(Signal::Emergency) {
@@ -609,6 +609,17 @@ impl HookThread {
         unsafe { PostThreadMessageW(self.thread_id, WM_SWAP, 0, 0) };
     }
 
+    /// Hands the rules of another profile to the callback (Step 75, a profile switch): between
+    /// two callbacks the old profile's pending and held work ends and the new rules start in their
+    /// default mode ([`crate::core::Core::switch_table`]).
+    pub fn switch_table(&self, generation: u32, table: Table) {
+        if let Ok(mut p) = self.shared.pending.lock() {
+            *p = Some((generation, table));
+        }
+        // SAFETY: posts a message without pointers to the hook thread.
+        unsafe { PostThreadMessageW(self.thread_id, WM_SWAP, 1, 0) };
+    }
+
     /// Drops pending taps, holds and sequences (pause, session lock).
     pub fn cancel_pending(&self) {
         // SAFETY: posts a message without pointers to the hook thread.
@@ -731,12 +742,21 @@ fn run(
         match msg.message {
             WM_UNHOOK => break,
             WM_SWAP => {
+                let switch = msg.wParam == 1;
                 let next = shared.pending.lock().ok().and_then(|mut p| p.take());
                 if let Some((generation, table)) = next {
                     let wants_mouse = table.has_mouse();
                     CTX.with(|c| {
                         if let Some(ctx) = c.borrow_mut().as_mut() {
-                            let mode = ctx.core.set_table(table);
+                            let mode = if switch {
+                                // A profile switch: the old rules' work ends under their own
+                                // generation, then the new rules start in their default mode.
+                                let (before, mode) = ctx.core.switch_table(table);
+                                ctx.send_all(&before);
+                                mode
+                            } else {
+                                ctx.core.set_table(table)
+                            };
                             ctx.generation = generation;
                             ctx.disarm();
                             // The worker and the host learn the modes of the new rules.

@@ -2,7 +2,7 @@
   "command": "status",
   "data": {
     "catalog": {
-      "catalog_version": 7,
+      "catalog_version": 8,
       "expires_at": "2027-05-04T00:00:00Z",
       "generated_at": "2026-11-04T00:00:00Z",
       "publisher": "mouv",

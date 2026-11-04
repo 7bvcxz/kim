@@ -57,6 +57,9 @@ pub enum EditError {
         /// The rules and modes that use it.
         users: Vec<String>,
     },
+    /// `profile_in_use` (Step 75): the active profile or the only profile cannot be deleted;
+    /// nothing was changed.
+    ProfileInUse(String),
 }
 
 impl EditError {
@@ -71,6 +74,7 @@ impl EditError {
             EditError::Conflict { .. } => "rule_conflict",
             EditError::ConsentRequired { .. } => "consent_required",
             EditError::ModeInUse { .. } => "mode_in_use",
+            EditError::ProfileInUse(_) => "profile_in_use",
         }
     }
 
@@ -78,7 +82,8 @@ impl EditError {
         match self {
             EditError::Usage(m)
             | EditError::Invalid { message: m, .. }
-            | EditError::ModeInUse { message: m, .. } => m.clone(),
+            | EditError::ModeInUse { message: m, .. }
+            | EditError::ProfileInUse(m) => m.clone(),
             EditError::Conflict { message, .. } => message.clone(),
             EditError::RuleNotFound(id) => format!("no rule `{id}`"),
             EditError::ProfileNotFound(id) => format!("no profile `{id}`"),
@@ -122,6 +127,10 @@ pub struct Change {
     pub modes: Vec<String>,
     /// A mode it created (Step 72).
     pub created_mode: Option<String>,
+    /// The profiles it touched (Step 75 profile commands), in order.
+    pub profiles: Vec<String>,
+    /// A profile it created (Step 75).
+    pub created_profile: Option<String>,
 }
 
 /// Where a rule goes in its profile's list (the list order is the last precedence step, §7.1).

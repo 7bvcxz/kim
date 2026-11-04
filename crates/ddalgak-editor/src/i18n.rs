@@ -56,6 +56,181 @@ pub const LABELS: &[(&str, &str, &str)] = &[
     ("lang.switch", "한국어", "English"),
     ("nav.rules", "Rules", "규칙"),
     ("nav.modes", "Modes", "모드"),
+    ("nav.profiles", "Profiles", "프로필"),
+    (
+        "profiles.note",
+        "A profile is a complete set of modes and rules (work, gaming, development). Exactly one is active. A switch never leaves a key half-pressed: held keys are released and the new profile starts in its default mode.",
+        "프로필은 모드와 규칙의 완전한 묶음입니다(업무, 게임, 개발). 사용 중인 프로필은 하나뿐입니다. 전환할 때 눌린 키는 놓이고, 새 프로필은 기본 모드에서 시작하므로 키가 반쯤 눌린 채로 남지 않습니다.",
+    ),
+    ("profiles.search", "Search profiles", "프로필 검색"),
+    ("profiles.sort", "Sort", "정렬"),
+    ("sort.order", "File order", "파일 순서"),
+    ("sort.title", "Name", "이름"),
+    ("sort.id", "ID", "ID"),
+    ("sort.rules", "Most rules", "규칙 많은 순"),
+    (
+        "profiles.none_match",
+        "No profile matches the search.",
+        "검색과 맞는 프로필이 없습니다.",
+    ),
+    ("profiles.new", "New profile name", "새 프로필 이름"),
+    ("profiles.add", "+ New profile", "+ 새 프로필"),
+    ("profiles.import", "Import profile…", "프로필 가져오기…"),
+    ("profiles.export_all", "Export all…", "모두 내보내기…"),
+    ("profiles.active", "● Active", "● 사용 중"),
+    ("profiles.on", "on", "켜짐"),
+    ("profiles.modes", "modes", "개 모드"),
+    ("profiles.errors", "errors", "개 오류"),
+    (
+        "profiles.active_cannot_delete",
+        "The active profile cannot be deleted; switch to another one first.",
+        "사용 중인 프로필은 삭제할 수 없습니다. 먼저 다른 프로필로 전환하세요.",
+    ),
+    ("profiles.switching", "switching…", "전환 중…"),
+    ("profiles.open", "Open the profiles", "프로필 열기"),
+    (
+        "profiles.switched",
+        "Switched; the running app confirmed it",
+        "전환됨. 실행 중인 앱이 확인했습니다",
+    ),
+    (
+        "profiles.switch_saved",
+        "Saved as the active profile; Ddalgak is not running and starts with it",
+        "사용 중인 프로필로 저장됨. 딸깍이 실행 중이 아니며 다음 시작 때 이 프로필을 씁니다",
+    ),
+    ("btn.switch", "Switch…", "전환…"),
+    ("btn.rename", "Rename…", "이름 바꾸기…"),
+    ("btn.history", "History…", "기록…"),
+    ("btn.delete_profile", "Delete profile", "프로필 삭제"),
+    (
+        "btn.switch_to",
+        "Switch to this profile",
+        "이 프로필로 전환",
+    ),
+    (
+        "btn.import_profiles",
+        "Add them, not active",
+        "사용하지 않는 상태로 추가",
+    ),
+    ("btn.save_point", "Save this version", "이 버전 저장"),
+    (
+        "btn.rollback",
+        "Roll back to the last working version",
+        "마지막 정상 버전으로 되돌리기",
+    ),
+    (
+        "btn.restore_version",
+        "Restore this version",
+        "이 버전 복원",
+    ),
+    ("dialog.switch", "Switch profile", "프로필 전환"),
+    (
+        "dialog.switch_text",
+        "What each key does now and after the switch. Nothing changes until you switch.",
+        "지금과 전환 후에 각 키가 하는 일입니다. 전환하기 전에는 아무것도 바뀌지 않습니다.",
+    ),
+    ("dialog.starts_in", "starts in", "시작 모드"),
+    ("dialog.now", "Now", "지금"),
+    ("dialog.after", "After", "전환 후"),
+    ("diff.same", "same", "같음"),
+    ("diff.changed", "changed", "바뀜"),
+    ("diff.only_left", "only now", "지금만"),
+    ("diff.only_right", "only after", "이후에만"),
+    (
+        "diff.empty",
+        "Neither side has rules.",
+        "양쪽 모두 규칙이 없습니다.",
+    ),
+    ("dialog.edit_profile", "Name and description", "이름과 설명"),
+    ("field.profile_name", "Profile name", "프로필 이름"),
+    ("field.profile_description", "Description", "설명"),
+    ("dialog.delete_profile", "Delete profile", "프로필 삭제"),
+    (
+        "dialog.delete_profile_text",
+        "Its modes and rules are deleted. The history keeps every earlier version, so it can be restored.",
+        "모드와 규칙이 삭제됩니다. 기록에 이전 버전이 모두 남아 있어 복원할 수 있습니다.",
+    ),
+    (
+        "dialog.export_profile",
+        "Export profiles",
+        "프로필 내보내기",
+    ),
+    (
+        "dialog.export_profile_text",
+        "Every rule is exported turned off and without consent; paths under known folders become portable. Environment values are left out unless you include them.",
+        "모든 규칙은 꺼진 상태로, 동의 없이 내보냅니다. 알려진 폴더 아래의 경로는 이식 가능한 형태가 됩니다. 환경 변수 값은 포함을 선택하지 않으면 빠집니다.",
+    ),
+    (
+        "field.env_values",
+        "Include environment values (they may be secrets)",
+        "환경 변수 값 포함(비밀일 수 있음)",
+    ),
+    (
+        "export.env_removed",
+        "environment values left out",
+        "개 환경 변수 값 제외",
+    ),
+    (
+        "dialog.import_profile",
+        "Import profiles",
+        "프로필 가져오기",
+    ),
+    (
+        "dialog.import_profile_text",
+        "Check the file first. Imported profiles are never switched to, every rule arrives turned off and without consent, and nothing is opened or run.",
+        "먼저 파일을 확인하세요. 가져온 프로필로는 전환되지 않고, 모든 규칙은 꺼진 상태로 동의 없이 들어오며, 아무것도 열거나 실행하지 않습니다.",
+    ),
+    (
+        "import.not_active",
+        "Added as a profile that is not active; every rule off",
+        "사용하지 않는 프로필로 추가, 모든 규칙 꺼짐",
+    ),
+    (
+        "import.restored",
+        "Modes the file lacked, added empty",
+        "파일에 없던 모드(빈 모드로 추가)",
+    ),
+    (
+        "import.consent",
+        "needs your consent before it can run",
+        "실행하려면 동의가 필요함",
+    ),
+    (
+        "import.missing",
+        "the program is not on this computer",
+        "이 컴퓨터에 프로그램이 없음",
+    ),
+    ("import.conflict", "same trigger as", "같은 트리거:"),
+    (
+        "import.shortcut",
+        "Ddalgak's own shortcut",
+        "딸깍 자체 단축키",
+    ),
+    ("import.inactive", "stays inactive", "계속 비활성"),
+    ("dialog.history", "Versions", "버전 기록"),
+    (
+        "history.none",
+        "No saved version yet.",
+        "저장된 버전이 아직 없습니다.",
+    ),
+    ("history.save_point", "save point", "저장 지점"),
+    ("history.current", "current", "현재"),
+    ("history.has_errors", "had errors", "오류 있음"),
+    (
+        "history.compare",
+        "Now and the chosen version, side by side:",
+        "지금과 선택한 버전을 나란히 비교:",
+    ),
+    (
+        "history.saved",
+        "The version was saved",
+        "버전을 저장했습니다",
+    ),
+    (
+        "field.save_label",
+        "Label for a saved version",
+        "저장할 버전의 이름표",
+    ),
     ("engine.running", "● Running", "● 실행 중"),
     ("engine.paused", "◐ Paused", "◐ 일시 정지됨"),
     ("engine.off", "○ Off", "○ 꺼짐"),
@@ -644,7 +819,12 @@ mod tests {
     /// Every literal key the window asks for (`.t("…")`) is in the table, so no label shows "?".
     #[test]
     fn every_key_the_window_uses_exists() {
-        let src = [include_str!("app.rs"), include_str!("app/view.rs")].concat();
+        let src = [
+            include_str!("app.rs"),
+            include_str!("app/view.rs"),
+            include_str!("app/profiles.rs"),
+        ]
+        .concat();
         let keys: BTreeSet<&str> = LABELS.iter().map(|(k, _, _)| *k).collect();
         let mut missing = Vec::new();
         for part in src.split(".t(").skip(1) {
@@ -672,6 +852,13 @@ mod tests {
         }
         for w in ["normal", "maximized", "minimized"] {
             assert!(keys.contains(format!("field.window.{w}").as_str()));
+        }
+        // Step 75: the sort names and the diff statuses.
+        for s in ddalgak::profile::Sort::ALL {
+            assert!(keys.contains(format!("sort.{}", s.as_str()).as_str()));
+        }
+        for d in ["same", "changed", "only_left", "only_right"] {
+            assert!(keys.contains(format!("diff.{d}").as_str()));
         }
     }
 

@@ -25,9 +25,12 @@ const AFTER_HELP: &str = "\
 While Noeul runs, F1 opens the region selection overlay: drag a rectangle, then double-click
 inside it to pin it at once (also Enter, the toolbar's Pin button or a middle-click). Ctrl+C or
 Copy copies it, Ctrl+S or Save saves it where you choose, Ctrl+Shift+S quick-saves it, Esc or
-right-click outside cancels; `noeul capture --interactive` opens the same overlay. F3 pins what
+right-click outside cancels; `noeul capture --interactive` opens the same overlay. In the overlay
+C copies the colour under the magnifier's crosshair as text and Shift+C switches between HEX, RGB
+and HSL (`noeul config set color.hex_case lower`, `color.alpha on`); F3 then pins it as a swatch.
+F3 pins what
 the clipboard holds: an image, image files copied in Explorer (or one copied path), a colour value
-(#RGB, #RRGGBB, rgb(...), three numbers) as a swatch, HTML or text as a card (Noeul's own
+(#RGB, #RRGGBB, rgb(...), hsl(...), three numbers) as a swatch, HTML or text as a card (Noeul's own
 renderer: no script, nothing downloaded; images become placeholders); Ctrl+Shift+C copies a card's
 text back, and the pin's menu offers 'Pin clipboard as' the other kinds. Content marked private
 (password managers) is never pinned. Image files dropped on a pin are pinned too; `noeul pin
@@ -406,7 +409,8 @@ enum ConfigCommand {
     /// Change one setting in config.toml (e.g. `gestures.double_click copy`, or
     /// `gestures.preset snipaste` for the opt-in Snipaste-style gestures)
     Set(config_cmd::SetArgs),
-    /// Reset settings to their defaults: one section (general, capture, gestures, pins) or all
+    /// Reset settings to their defaults: one section (general, capture, gestures, pins, paste,
+    /// color) or all
     Reset(config_cmd::ResetArgs),
 }
 

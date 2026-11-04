@@ -5,7 +5,9 @@
 //! app, opt-in start at sign-in (Step 66), and managing rules — list, show, check, add, edit,
 //! delete, duplicate, enable, disable, move, revoke consent, drafts, history, backup and restore
 //! (Step 67, `rule_cmd`), and modes — list, show, add, edit, rename, copy, delete, and set,
-//! toggle, reset and status of the running engine's mode (Step 72, `mode_cmd`). The CLI
+//! toggle, reset and status of the running engine's mode (Step 72, `mode_cmd`), and profiles —
+//! list, show, add, edit, rename, duplicate, delete, apply (the switch), save points, history,
+//! restore, rollback, export and import (Step 75, `profile_cmd`). The CLI
 //! **never** starts the app, installs a hook, opens a window or
 //! shows a tray icon (`DDALGAK-FR-060`, `DDALGAK-SEC-010`); with no app running, commands that
 //! need it fail with `engine_not_running`, and rule changes are simply saved.
@@ -17,6 +19,8 @@ mod mode_cmd;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod output;
 #[cfg_attr(not(windows), allow(dead_code))]
+mod profile_cmd;
+#[cfg_attr(not(windows), allow(dead_code))]
 mod rule_cmd;
 
 use cli::{Args, Cmd};
@@ -27,7 +31,7 @@ use std::process::ExitCode;
 
 const HELP: &str = "\
 ddalgak — Ddalgak automation engine (pre-alpha: engine core, rule store, remaps, typing,
-hotstrings, launches, mouse actions, modes, enable/disable and recovery; Steps 66–73)
+hotstrings, launches, mouse actions, modes, enable/disable and recovery, profiles; Steps 66–75)
 
 USAGE:
     ddalgak [--help | --version]
@@ -69,6 +73,22 @@ USAGE:
     ddalgak mode enable <id> | disable <id> [--profile <p>] [write options]
     ddalgak mode set <id> | toggle <id> | reset [--endpoint <name>] [--dry-run] [--json]
     ddalgak mode status [--endpoint <name>] [--json]
+    ddalgak profile list [--search <text>] [--sort order|title|id|rules] [--draft] [--json]
+    ddalgak profile show <id> [--draft] [--json]
+    ddalgak profile add --title <name> [--id <id>] [--description <text>] [write options]
+    ddalgak profile edit <id> [--title <name>] [--description <text> | --no-description]
+                     [write options]
+    ddalgak profile rename <id> <name> | duplicate <id> [--id <new>] [--title <name>]
+                     [write options]
+    ddalgak profile delete <id> [--yes] [write options]
+    ddalgak profile apply <id> [--dry-run] [--if-revision <n>] [--endpoint <name>] [--json]
+    ddalgak profile save <id> [--label <text>] [--dry-run] [--json]
+    ddalgak profile history <id> [--json]
+    ddalgak profile restore <id> <version> | rollback <id> [--yes] [--dry-run] [--json]
+    ddalgak profile export <id>... | --all --output <file> [--include-env-values] [--yes]
+                     [--dry-run] [--json]
+    ddalgak profile import <file> [--id <id>] [--title <name>] [--show-targets]
+                     [write options]
 
 COMMANDS:
     status        Engine state (off, running, paused) and why it is off, the rules summary
@@ -271,6 +291,37 @@ MODES (Step 72):
                     ddalgak rule add --trigger Ctrl+Alt+Shift+F13 --action mode --op toggle
                       --target-mode nav
 
+PROFILES (Step 75):
+    A profile is a complete set of modes and rules (work, gaming, development); exactly one is
+    active and it stays active across restarts until you switch. Nothing else ever switches
+    it: not a restart, a crash, an import or a reload.
+    profile list  Every profile with its rules (on/total), modes and errors; --search matches
+                  the ID, name and description, --sort order|title|id|rules.
+    profile show  Its modes, its rules (titles, triggers and step kinds only), how many saved
+                  versions it has and, when it is not active, what a switch would change.
+    profile add | edit | rename | duplicate | delete   Friendly names and descriptions;
+                  duplicate copies every mode and rule (rules get new IDs); delete is refused
+                  for the active and the only profile (profile_in_use).
+    profile apply Switch: --dry-run previews what each trigger does before and after. A
+                  running app switches atomically: the old profile's runs end, every key and
+                  button it holds is released, keys pressed during the switch keep their pairs,
+                  and the new profile starts in its default mode. `switched` says the app
+                  confirmed it.
+    profile save  A save point (in savepoints, labelled, kept apart from the automatic history).
+    profile history | restore | rollback   Versions of one profile from the history and its
+                  save points; rollback goes back to the newest earlier version that had no
+                  error. Both show a side-by-side diff, ask first (--yes) and are new changes
+                  themselves, so they can be undone the same way.
+    profile export  A portable file (ddalgak.rules with an `exported` block): every rule off,
+                  no consent, settings or revision, paths under known folders as tokens
+                  (%LocalAppData%\\...), environment values left out unless
+                  --include-env-values.
+    profile import  Validates (a corrupt or newer file is refused), shows what would be added
+                  (--dry-run): renamed IDs, modes the file lacked, rules that need consent,
+                  missing programs, duplicate triggers and Ddalgak's own shortcuts. It adds the
+                  profiles NOT active, with every rule off and without consent, and never
+                  opens, types or runs anything. Targets are shown only with --show-targets.
+
     The CLI never starts the app: start ddalgak-gui.exe yourself (it shows a tray icon). Every
     command checks, before sending anything, that the pipe is served by ddalgak-gui.exe of this
     user (`app_identity_mismatch` otherwise). The emergency chord Ctrl+Alt+Shift+Escape always
@@ -295,7 +346,8 @@ OPTIONS:
 
 FILES:
     %APPDATA%\\mouv\\ddalgak\\rules.json     rules (ddalgak.rules v1), with rules.json.bak, history\\,
-                                         rules.draft.json and the writers' lock rules.json.lock
+                                         savepoints\\, rules.draft.json and the writers' lock
+                                         rules.json.lock
     %APPDATA%\\mouv\\ddalgak\\hotkeys.json   Ddalgak's own shortcuts (engine.toggle, engine.pause)
     %LOCALAPPDATA%\\mouv\\ddalgak\\          crash, emergency and turned-off markers
 
@@ -381,10 +433,13 @@ fn run(cmd: Cmd, a: &Args) -> Outcome {
     if a.verbose {
         eprintln!("ddalgak: endpoint \\\\.\\pipe\\{endpoint}");
     }
-    if is_rule_cmd(cmd) || cmd.is_mode_file() {
+    if is_rule_cmd(cmd) || cmd.is_mode_file() || cmd.is_profile() {
         let paths = ddalgak::paths::Paths::from_env().map_err(|e| CliError::new(Code::Io, e))?;
         let notify =
             |dry_run: bool| client::call(&endpoint, Method::RulesReload, dry_run).map(|(v, _)| v);
+        if cmd.is_profile() {
+            return profile_cmd::run(cmd, a, &paths, &notify);
+        }
         if cmd.is_mode_file() {
             // The running engine's mode, when there is one (listing never starts the app).
             let active = || client::live_mode(&endpoint);
@@ -945,6 +1000,7 @@ fn human(cmd: Cmd, d: &Value) -> String {
         Cmd::Enable | Cmd::Disable => return mode_cmd::scope_human(cmd, d),
         Cmd::Release => return mode_cmd::release_human(d),
         c if c.name().starts_with("mode.") => return mode_cmd::human(cmd, d),
+        c if c.is_profile() => return profile_cmd::human(cmd, d),
         _ => return rule_cmd::human(cmd, d),
     }
     o
@@ -990,7 +1046,14 @@ mod tests {
         // DDALGAK-SEC-010 by inspection: the CLI's sources do not name the hook, the tray, the
         // host loop or the injector. Only `host::rules_json` (a pure formatter) is used.
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        for f in ["main.rs", "cli.rs", "output.rs", "rule_cmd.rs"] {
+        for f in [
+            "main.rs",
+            "cli.rs",
+            "output.rs",
+            "rule_cmd.rs",
+            "mode_cmd.rs",
+            "profile_cmd.rs",
+        ] {
             let text = std::fs::read_to_string(dir.join(f)).unwrap();
             let shipped = text.split("#[cfg(test)]").next().unwrap_or_default();
             let code: String = shipped

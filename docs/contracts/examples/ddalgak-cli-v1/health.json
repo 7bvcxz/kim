@@ -54,6 +54,7 @@
       "other_injected": 0,
       "own_injected": 0,
       "panics": 0,
+      "physical": 0,
       "wakeups": {
         "hook_thread": 1,
         "host": 11,

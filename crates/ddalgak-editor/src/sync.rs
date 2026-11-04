@@ -416,7 +416,10 @@ impl Engine for FakeEngine {
                 s.active = loaded.revision;
             }
             let engine = serde_json::json!({ "state": s.engine });
-            let active = s.active.map(|r| serde_json::json!({ "revision": r }));
+            // The real app names the profile it runs (Step 75).
+            let active = s
+                .active
+                .map(|r| serde_json::json!({ "revision": r, "profile": loaded.profile }));
             Ok(match method {
                 Method::RulesReload => serde_json::json!({
                     "saved": { "revision": loaded.revision },

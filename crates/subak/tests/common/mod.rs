@@ -358,6 +358,10 @@ pub enum Got {
 
 pub struct Raw {
     pub h: OwnedHandle,
+    /// Bytes read but not yet returned as a frame. A timeout in the middle of a frame keeps
+    /// them here, so the next call continues the same frame instead of reading the rest of it
+    /// as a new header (CI saw "bad frame length" and "frame kind 92" from exactly that).
+    pending: std::cell::RefCell<Vec<u8>>,
 }
 
 impl Raw {
@@ -380,7 +384,10 @@ impl Raw {
             if h != INVALID_HANDLE_VALUE {
                 // SAFETY: fresh owned handle.
                 let h = unsafe { OwnedHandle::from_raw_handle(h) };
-                return Ok(Self { h });
+                return Ok(Self {
+                    h,
+                    pending: std::cell::RefCell::new(Vec::new()),
+                });
             }
             // SAFETY: thread-local read.
             let err = unsafe { GetLastError() };
@@ -479,53 +486,62 @@ impl Raw {
         self.write(&control(msg)).expect("send to the Host");
     }
 
-    /// Reads exactly `buf`; `Ok(false)` at end of stream.
-    pub fn fill(&self, buf: &mut [u8], until: Instant) -> Result<bool, Got> {
-        let mut got = 0;
-        while got < buf.len() {
-            let left = until.saturating_duration_since(Instant::now());
-            if left.is_zero() {
-                return Err(Got::Timeout);
-            }
-            match self.io(false, buf[got..].as_mut_ptr(), buf.len() - got, left) {
-                Ok(0) => return Ok(false),
-                Ok(n) => got += n,
-                Err(e) if e.kind() == std::io::ErrorKind::TimedOut => return Err(Got::Timeout),
-                Err(_) => return Ok(false),
-            }
-        }
-        Ok(true)
-    }
-
     /// The next frame, end of stream, or a timeout. Control messages are schema-validated.
+    ///
+    /// Reads into `pending` and returns a frame only once it is complete, so a timeout never
+    /// loses bytes or the frame boundary.
     pub fn next(&self, timeout: Duration) -> Got {
         let until = Instant::now() + timeout;
-        let mut head = [0u8; 5];
-        match self.fill(&mut head, until) {
-            Ok(true) => {}
-            Ok(false) => return Got::Eof,
-            Err(g) => return g,
+        loop {
+            if let Some(frame) = self.take_frame() {
+                return frame;
+            }
+            let left = until.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Got::Timeout;
+            }
+            let mut chunk = vec![0u8; 64 * 1024];
+            match self.io(false, chunk.as_mut_ptr(), chunk.len(), left) {
+                Ok(n) if n > 0 => self.pending.borrow_mut().extend_from_slice(&chunk[..n]),
+                Err(e) if e.kind() == std::io::ErrorKind::TimedOut => return Got::Timeout,
+                // End of stream (or a broken pipe, reported as 0 by `io`).
+                _ => {
+                    assert!(
+                        self.pending.borrow().is_empty(),
+                        "the Host sent a truncated frame"
+                    );
+                    return Got::Eof;
+                }
+            }
         }
-        let len = u32::from_le_bytes(head[..4].try_into().unwrap()) as usize;
+    }
+
+    /// One complete frame from `pending`, if it holds one.
+    fn take_frame(&self) -> Option<Got> {
+        let mut pending = self.pending.borrow_mut();
+        if pending.len() < 5 {
+            return None;
+        }
+        let len = u32::from_le_bytes(pending[..4].try_into().unwrap()) as usize;
         assert!(
             (1..=(1 << 20) + 14).contains(&len),
             "the Host sent a bad frame length {len}"
         );
-        let mut body = vec![0u8; len - 1];
-        match self.fill(&mut body, until) {
-            Ok(true) => {}
-            Ok(false) => panic!("the Host sent a truncated frame"),
-            Err(g) => return g,
+        if pending.len() < 4 + len {
+            return None;
         }
-        match head[4] {
+        let frame: Vec<u8> = pending.drain(..4 + len).collect();
+        drop(pending);
+        let body = &frame[5..];
+        Some(match frame[4] {
             1 => {
-                let v: Value = serde_json::from_slice(&body).expect("the Host sends JSON");
+                let v: Value = serde_json::from_slice(body).expect("the Host sends JSON");
                 ipc_valid(&v);
                 Got::Control(v)
             }
             2 => Got::Data(body[13..].to_vec()),
             k => panic!("the Host sent frame kind {k}"),
-        }
+        })
     }
 
     /// The next control message, skipping data frames.

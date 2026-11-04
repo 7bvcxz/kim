@@ -4,11 +4,15 @@
 //! off in the running tray app (`ddalgak-gui.exe`) over an identity-checked local pipe, ending the
 //! app, opt-in start at sign-in (Step 66), and managing rules — list, show, check, add, edit,
 //! delete, duplicate, enable, disable, move, revoke consent, drafts, history, backup and restore
-//! (Step 67, `rule_cmd`). The CLI **never** starts the app, installs a hook, opens a window or
+//! (Step 67, `rule_cmd`), and modes — list, show, add, edit, rename, copy, delete, and set,
+//! toggle, reset and status of the running engine's mode (Step 72, `mode_cmd`). The CLI
+//! **never** starts the app, installs a hook, opens a window or
 //! shows a tray icon (`DDALGAK-FR-060`, `DDALGAK-SEC-010`); with no app running, commands that
 //! need it fail with `engine_not_running`, and rule changes are simply saved.
 
 mod cli;
+#[cfg_attr(not(windows), allow(dead_code))]
+mod mode_cmd;
 // Portable, but until the Linux engine (D7, ADR 0011) only the Windows client uses every code.
 #[cfg_attr(not(windows), allow(dead_code))]
 mod output;
@@ -22,8 +26,8 @@ use std::io::Write;
 use std::process::ExitCode;
 
 const HELP: &str = "\
-ddalgak — Ddalgak automation engine (pre-alpha: engine core, rule store, remaps, typing and
-hotstrings; Steps 66–69)
+ddalgak — Ddalgak automation engine (pre-alpha: engine core, rule store, remaps, typing,
+hotstrings, launches, mouse actions and modes; Steps 66–72)
 
 USAGE:
     ddalgak [--help | --version]
@@ -51,6 +55,15 @@ USAGE:
     ddalgak rules restore (--backup | <snapshot>) [--yes] [--dry-run] [--json]
     ddalgak rules reload [--endpoint <name>] [--dry-run] [--json]
     ddalgak rules draft [show] | draft apply [--dry-run] | draft discard [--yes] [--json]
+    ddalgak mode list | show <id> [--profile <p>] [--draft] [--json]
+    ddalgak mode add --title <name> [mode options] [--id <id>] [write options]
+    ddalgak mode edit <id> [mode options] [--no-icon|--no-color|--no-parent|--no-one-shot|
+                     --no-timeout] [write options]
+    ddalgak mode rename <id> <title> | copy <id> [--id <new>] [--title <t>] [--without-rules]
+                     [write options]
+    ddalgak mode delete <id> [--delete-rules] [--yes] [write options]
+    ddalgak mode set <id> | toggle <id> | reset [--endpoint <name>] [--dry-run] [--json]
+    ddalgak mode status [--endpoint <name>] [--json]
 
 COMMANDS:
     status        Engine state (off, running, paused) and why it is off, the rules summary
@@ -103,9 +116,9 @@ RULES (rules.json; these commands work without the app):
                   Rule options: --title, --description, --on press|release|hold, --hold-ms,
                   --repeat, --pass-through, --accept-injected, --mode <m>..., --priority,
                   --on-error stop|continue. Engine, remap, block, send_keys, type_text,
-                  open_program, open_url and mouse rules run (a typing step alone; launches
-                  together, in order; mouse steps together, in order); the others stay
-                  inactive (step_unsupported) until their Step.
+                  open_program, open_url, mouse and mode rules run (a typing or mode step
+                  alone; launches together, in order; mouse steps together, in order); the
+                  others stay inactive (step_unsupported) until their Step.
     mouse         mouse_move moves the pointer by --dx/--dy logical pixels (scaled by the
                   monitor's display scale; with --grid, cells of a virtual grid, landing on
                   cell centres) or to --x/--y (desktop pixels, or relative to the primary
@@ -209,6 +222,37 @@ RULES (rules.json; these commands work without the app):
     rules history | backup | restore   The snapshots; a snapshot now; bring back rules.json.bak
                   or a snapshot as a new revision (asks, or needs --yes).
 
+MODES (Step 72):
+    A mode is a named state of a profile; rules limited to it (--mode <m> on rule add) work only
+    while it is active, rules without modes work in every mode. A mode with --parent is a layer:
+    keys it does not change keep the parent's rules (and the parent's parent's); without a
+    parent it is exclusive. Exactly one mode is active; the engine starts in the default mode
+    and never restores another one after a restart, a pause or the emergency chord.
+    mode list/show  The modes with their policy (exclusive or layer), chain, exits, rules, the
+                  rules that switch to them, problems and, with a running engine, the active one.
+    mode add      --title <name> [--id <id>] [--icon <badge>] [--color #rrggbb] [--parent <m>]
+                  [--one-shot] (ends after the next key) [--timeout-ms <1000-3600000>] (the
+                  default mode returns after that long without a key) [--default].
+    mode edit     The same options, --no-… to clear one. IDs never change; rename changes the
+                  title. copy duplicates the mode and the rules limited to it (fresh IDs).
+    mode delete   Refused for the default mode, a mode other modes are layers over, and a mode
+                  a rule switches to (mode_in_use); rules limited to it are kept unless
+                  --delete-rules. Deleting the active mode returns the engine to the default.
+    mode set | toggle | reset   Change the running engine's mode (engine_off when it is off;
+                  never starts the app). Every change of the active mode releases held keys and
+                  buttons. reset is the safe way back to the default mode.
+    mode status   The active mode, held layers, the precedence chain and since when.
+    Mode rules: --action mode --op set|toggle|hold|previous|default [--target-mode <m>] or
+                  --op cycle --target-mode <a> --target-mode <b>...; hold is a layer while the
+                  key is held. They inject nothing and need no consent. Examples:
+                    ddalgak mode add --id nav --title Navigation --parent base --icon N
+                    ddalgak rule add --trigger CapsLock --action mode --op hold
+                      --target-mode nav
+                    ddalgak rule add --trigger code:KeyH --mode nav --action remap --to Left
+                      --allow input-injection
+                    ddalgak rule add --trigger Ctrl+Alt+Shift+F13 --action mode --op toggle
+                      --target-mode nav
+
     The CLI never starts the app: start ddalgak-gui.exe yourself (it shows a tray icon). Every
     command checks, before sending anything, that the pipe is served by ddalgak-gui.exe of this
     user (`app_identity_mismatch` otherwise). The emergency chord Ctrl+Alt+Shift+Escape always
@@ -230,8 +274,8 @@ FILES:
 
 Pre-alpha: rules can control the engine (pause, resume, turn off), remap keys and mouse buttons,
 block keys, send key sequences, type text, open programs and websites, and move, scroll and
-click the mouse; modes arrive in a later step and stay inactive until then. Linux is not
-supported yet. No command opens a window, installs anything or uses the network.
+click the mouse, and switch user-defined modes and layers. Linux is not supported yet. No
+command opens a window, installs anything or uses the network.
 ";
 
 /// The capabilities document (`kim.capabilities` v1); a test keeps it equal to
@@ -297,7 +341,7 @@ type Outcome = Result<(Value, Vec<String>), CliError>;
 
 #[cfg(windows)]
 fn run(cmd: Cmd, a: &Args) -> Outcome {
-    use ddalgak::ipc::Method;
+    use ddalgak::ipc::{Method, ModeCmd};
     if cmd == Cmd::Capabilities {
         let data: Value = serde_json::from_str(CAPABILITIES).expect("valid built-in JSON");
         return Ok((data, Vec::new()));
@@ -310,13 +354,32 @@ fn run(cmd: Cmd, a: &Args) -> Outcome {
     if a.verbose {
         eprintln!("ddalgak: endpoint \\\\.\\pipe\\{endpoint}");
     }
-    if is_rule_cmd(cmd) {
+    if is_rule_cmd(cmd) || cmd.is_mode_file() {
         let paths = ddalgak::paths::Paths::from_env().map_err(|e| CliError::new(Code::Io, e))?;
         let notify =
             |dry_run: bool| client::call(&endpoint, Method::RulesReload, dry_run).map(|(v, _)| v);
+        if cmd.is_mode_file() {
+            // The running engine's mode, when there is one (listing never starts the app).
+            let active = || client::live_mode(&endpoint);
+            return mode_cmd::run(cmd, a, &paths, &notify, &active);
+        }
         return rule_cmd::run(cmd, a, &paths, &notify);
     }
     match cmd {
+        Cmd::ModeSet | Cmd::ModeToggle | Cmd::ModeReset => {
+            let m = match cmd {
+                Cmd::ModeSet => ModeCmd::Set(a.positional[0].clone()),
+                Cmd::ModeToggle => ModeCmd::Toggle(a.positional[0].clone()),
+                _ => ModeCmd::Reset,
+            };
+            if let ModeCmd::Set(id) | ModeCmd::Toggle(id) = &m
+                && !ddalgak::model::is_short_id(id)
+            {
+                return Err(CliError::usage(format!("`{id}` is not a mode ID")));
+            }
+            client::call(&endpoint, Method::Mode(m), a.dry_run).map(|(v, _)| (v, Vec::new()))
+        }
+        Cmd::ModeStatus => client::mode_status(&endpoint),
         Cmd::Status => client::status(&endpoint),
         Cmd::Health => client::health(&endpoint),
         Cmd::Engine(r) => {
@@ -570,7 +633,7 @@ mod client {
                             "last_change": null,
                             "hook": { "installed": false, "observe_only": false },
                         },
-                        "profile": { "id": loaded.profile, "mode": loaded.mode },
+                        "profile": { "id": loaded.profile, "mode": loaded.mode, "mode_state": offline_mode(&loaded) },
                         "rules": rules_json,
                         "shortcuts": shortcuts.to_json(&|_| Some("not_running")),
                         "activity": [],
@@ -581,6 +644,42 @@ mod client {
             }
             Err(e) => Err(e),
         }
+    }
+
+    /// The running engine's (profile, active mode), or `None` without an app or with the engine
+    /// off (Step 72).
+    pub fn live_mode(endpoint: &str) -> Option<(String, String)> {
+        let (v, _) = call(endpoint, Method::Status, false).ok()?;
+        let p = &v["profile"];
+        (p["mode_state"]["live"] == true).then(|| {
+            (
+                p["id"].as_str().unwrap_or_default().to_string(),
+                p["mode"].as_str().unwrap_or_default().to_string(),
+            )
+        })
+    }
+
+    /// `mode status`: the live mode of the running engine, or the mode it starts in.
+    pub fn mode_status(endpoint: &str) -> crate::Outcome {
+        let (v, _) = status(endpoint)?;
+        Ok((
+            json!({
+                "app_running": v["app"]["running"],
+                "engine": v["engine"]["state"],
+                "profile": v["profile"]["id"],
+                "mode": v["profile"]["mode_state"],
+            }),
+            Vec::new(),
+        ))
+    }
+
+    /// The mode block of `status` without the app: the mode the engine starts in.
+    fn offline_mode(loaded: &rules::Loaded) -> Value {
+        let st = loaded.modes.initial();
+        let ind = ddalgak::modes::indicator(loaded.mode_indicator, &loaded.modes, &st);
+        let mut v = st.to_json(false, None);
+        v["indicator"] = ind.to_json();
+        v
     }
 
     pub fn health(endpoint: &str) -> crate::Outcome {
@@ -652,6 +751,10 @@ fn human(cmd: Cmd, d: &Value) -> String {
                 s(&d["profile"]["id"]),
                 s(&d["profile"]["mode"])
             ));
+            if d["profile"]["mode_state"].is_object() {
+                o.push_str("          ");
+                o.push_str(&mode_cmd::mode_line(&d["profile"]["mode_state"]));
+            }
             let r = &d["rules"];
             o.push_str(&format!(
                 "rules:    {} — {} active, {} disabled, {} inactive, {} in other modes\n",
@@ -802,6 +905,7 @@ fn human(cmd: Cmd, d: &Value) -> String {
             });
         }
         Cmd::Help | Cmd::Version => {}
+        c if c.name().starts_with("mode.") => return mode_cmd::human(cmd, d),
         _ => return rule_cmd::human(cmd, d),
     }
     o

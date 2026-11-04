@@ -297,6 +297,116 @@
       "dry_run": true,
       "requires_yes": true,
       "opens_window": false
+    },
+    {
+      "name": "mode.list",
+      "usage": "ddalgak mode list [--profile <p>] [--draft] [--endpoint <name>] [--json]",
+      "summary": "The profile's modes: layers, exits, rules, the default and (with a running engine) the active one",
+      "effect": "read",
+      "network": false,
+      "dry_run": false,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "mode.show",
+      "usage": "ddalgak mode show <id> [--profile <p>] [--draft] [--endpoint <name>] [--json]",
+      "summary": "One mode with its rules, the rules that switch to it and its layers",
+      "effect": "read",
+      "network": false,
+      "dry_run": false,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "mode.add",
+      "usage": "ddalgak mode add --title <name> [--id <id>] [--icon <c>] [--color <#rrggbb>] [--parent <mode>] [--one-shot] [--timeout-ms <n>] [--default] [--profile <p>] [--dry-run] [--draft] [--if-revision <n>] [--json]",
+      "summary": "A new mode, exclusive or a layer over a parent",
+      "effect": "write",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "mode.edit",
+      "usage": "ddalgak mode edit <id> [mode options] [--no-icon] [--no-color] [--no-parent] [--no-one-shot] [--no-timeout] [--dry-run] [--draft] [--if-revision <n>] [--json]",
+      "summary": "Change a mode's title, badge, color, parent, exit or make it the default",
+      "effect": "write",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "mode.rename",
+      "usage": "ddalgak mode rename <id> <title> [--profile <p>] [--dry-run] [--draft] [--if-revision <n>] [--json]",
+      "summary": "A new title; the ID stays",
+      "effect": "write",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "mode.copy",
+      "usage": "ddalgak mode copy <id> [--id <new>] [--title <t>] [--without-rules] [--profile <p>] [--dry-run] [--draft] [--if-revision <n>] [--json]",
+      "summary": "A copy of a mode and of the rules limited to it",
+      "effect": "write",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "mode.delete",
+      "usage": "ddalgak mode delete <id> [--delete-rules] [--yes] [--profile <p>] [--dry-run] [--draft] [--if-revision <n>] [--json]",
+      "summary": "Remove a mode nothing depends on (asks, or needs --yes)",
+      "effect": "destructive",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": true,
+      "opens_window": false
+    },
+    {
+      "name": "mode.set",
+      "usage": "ddalgak mode set <id> [--endpoint <name>] [--dry-run] [--json]",
+      "summary": "Switch the running engine to a mode (held keys are released)",
+      "effect": "write",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "mode.toggle",
+      "usage": "ddalgak mode toggle <id> [--endpoint <name>] [--dry-run] [--json]",
+      "summary": "Switch to a mode, or back to the previous one when it is active",
+      "effect": "write",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "mode.reset",
+      "usage": "ddalgak mode reset [--endpoint <name>] [--dry-run] [--json]",
+      "summary": "The safe reset: back to the default mode, nothing held",
+      "effect": "write",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "mode.status",
+      "usage": "ddalgak mode status [--endpoint <name>] [--json]",
+      "summary": "The active mode of the running engine, or the mode it starts in",
+      "effect": "read",
+      "network": false,
+      "dry_run": false,
+      "requires_yes": false,
+      "opens_window": false
     }
   ]
 }

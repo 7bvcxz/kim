@@ -3,9 +3,10 @@
 //!
 //! Every instance runs in an isolated profile on its own pipe endpoint with `--no-tray`, and its
 //! `hotkeys.json` binds `paste.float` to an obscure `Ctrl+Alt+Shift+F2x` chord before it starts
-//! (tests never register F1, F3 or a common key). Every process a test starts is ended. The only
-//! picture captured is a 1×1 region pinned at its own position (it looks exactly like the pixel
-//! under it), held in memory and closed at once.
+//! (tests never register F1, F3 or a common key). Every process a test starts is ended. No test
+//! here reads the screen or shows a window on the user's desktop: the only pin is a 1×1 region of
+//! the debug-build test hook's synthetic desktop, far off-screen, held in memory and closed at
+//! once.
 #![cfg(windows)]
 
 mod common;
@@ -86,31 +87,31 @@ fn lifecycle_status_health_capture_checks_and_quit() {
     assert_eq!(status(&sb)["running"], false);
 }
 
+/// Runs on the debug-build test hook's synthetic desktop (`NOEUL_DEV_SYNTHETIC_DESKTOP=1`): the
+/// 1×1 pin is cut from a synthetic picture and lies far off-screen, never topmost, never
+/// activated, so nothing appears on the user's monitors and the screen is never read. (Until
+/// Step 51 this test pinned a real pixel at the corner of the real primary monitor.)
 #[test]
 fn a_one_pixel_pin_lives_closes_and_reopens() {
-    let mut sb = Sandbox::new("pin");
+    let mut sb = Sandbox::synthetic("pin", Keys::Off);
     sb.instance();
     let st = status(&sb);
-    let Some(m) = st["desktop"]["monitors"]
+    assert_eq!(st["capture_backend"], "synthetic", "{st:#}");
+    let m = st["desktop"]["monitors"]
         .as_array()
         .and_then(|m| m.iter().find(|m| m["primary"] == true))
-    else {
-        eprintln!(
-            "SKIP: desktop state is {}; nothing can be captured",
-            st["desktop"]["state"]
-        );
-        return;
-    };
+        .expect("the synthetic desktop has a primary monitor")
+        .clone();
     let (x, y) = (
         m["rect"]["x"].as_i64().unwrap(),
         m["rect"]["y"].as_i64().unwrap(),
     );
+    assert!(
+        x <= -10_000 && y <= -10_000,
+        "the synthetic monitor lies far off-screen: {m:#}"
+    );
     let region = format!("{x},{y},1,1");
     let (code, cap) = sb.json(&["capture", "--region", &region, "--pin"]);
-    if code == 6 {
-        eprintln!("SKIP: {}", cap["error"]["message"]);
-        return;
-    }
     assert_eq!(code, 0, "{cap:#}");
     assert_eq!(cap["data"]["pin"]["id"], "pin-1");
     let st = status(&sb);

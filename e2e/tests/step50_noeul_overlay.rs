@@ -224,9 +224,12 @@ fn a_the_overlay_is_discoverable_headlessly() {
     ] {
         assert!(ids.contains(&id), "{id} is listed: {ids:?}");
     }
+    // This scenario used to assert that `selection.mark` was still planned (not listed). Step 52
+    // implemented it, and Noeul reports no planned global action any more, so it must be listed
+    // like the other overlay actions.
     assert!(
-        !ids.contains(&"selection.mark"),
-        "planned actions are not listed"
+        ids.contains(&"selection.mark"),
+        "selection.mark is listed: {ids:?}"
     );
     for args in [
         &["capture", "--interactive"][..],

@@ -85,6 +85,9 @@ pub struct Prefs {
     pub theme: ThemePref,
     pub window: Option<Placement>,
     pub last_terminal: Option<LastTerminal>,
+    /// Terminals hidden in the window when it last ran (ids; Step 18 keeps tab hiding across
+    /// runs). The Terminal manager shows them; opening one there shows its tab again.
+    pub hidden_terminals: Vec<String>,
     /// Unknown keys of the file, written back unchanged.
     extra: Map<String, Value>,
 }
@@ -96,6 +99,7 @@ impl Default for Prefs {
             theme: ThemePref::Auto,
             window: None,
             last_terminal: None,
+            hidden_terminals: Vec::new(),
             extra: Map::new(),
         }
     }
@@ -197,6 +201,21 @@ impl Prefs {
                 _ => bad.push("last_terminal"),
             }
         }
+        if let Some(v) = map.remove("hidden_terminals") {
+            let ids: Option<Vec<String>> = v.as_array().and_then(|a| {
+                a.iter()
+                    .map(|x| {
+                        x.as_str()
+                            .filter(|s| !s.is_empty() && s.len() <= 64)
+                            .map(String::from)
+                    })
+                    .collect()
+            });
+            match ids {
+                Some(ids) if ids.len() <= 1000 => p.hidden_terminals = ids,
+                _ => bad.push("hidden_terminals"),
+            }
+        }
         p.extra = map;
         Loaded {
             problem: (!bad.is_empty()).then(|| {
@@ -252,6 +271,7 @@ impl Prefs {
                 .as_ref()
                 .map_or(Value::Null, |t| json!({"id": t.id, "name": t.name})),
         );
+        m.insert("hidden_terminals".into(), json!(self.hidden_terminals));
         for (k, v) in &self.extra {
             m.entry(k.clone()).or_insert_with(|| v.clone());
         }
@@ -457,6 +477,22 @@ mod tests {
             name: "build".into(),
         });
         p.extra.insert("future_option".into(), json!(true));
+        p.hidden_terminals = vec!["t-0123456789ab".into()];
         check(&p.to_json());
+    }
+
+    #[test]
+    fn hidden_tabs_are_kept_by_id_and_a_bad_list_falls_back() {
+        let l = Prefs::parse(
+            r#"{"schema":"subak.gui","schema_version":1,"hidden_terminals":["t-aaaaaaaaaaaa","t-bbbbbbbbbbbb"]}"#,
+        );
+        assert_eq!(l.problem, None);
+        assert_eq!(
+            l.prefs.hidden_terminals,
+            ["t-aaaaaaaaaaaa", "t-bbbbbbbbbbbb"]
+        );
+        let l = Prefs::parse(r#"{"schema":"subak.gui","schema_version":1,"hidden_terminals":[1]}"#);
+        assert!(l.prefs.hidden_terminals.is_empty());
+        assert!(l.problem.unwrap().contains("hidden_terminals"));
     }
 }

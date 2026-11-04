@@ -46,11 +46,19 @@ pub enum Action {
     ScrollLineDown,
     ScrollTop,
     ScrollBottom,
+    /// The Terminal manager's actions (context `manager`, Step 18).
+    ManagerOpen,
+    ManagerNew,
+    ManagerRename,
+    ManagerDelete,
+    ManagerSearch,
+    ManagerPin,
+    ManagerClose,
 }
 
 impl Action {
     /// Every action with its manifest ID, in manifest order ([`crate::hotkeys::IMPLEMENTED`]).
-    pub const ALL: [(Action, &'static str); 19] = [
+    pub const ALL: [(Action, &'static str); 26] = [
         (Action::NewTerminal, "terminal.new"),
         (Action::CloseTerminal, "terminal.close"),
         (Action::NextTab, "tab.next"),
@@ -70,6 +78,13 @@ impl Action {
         (Action::ScrollLineDown, "scroll.line-down"),
         (Action::ScrollTop, "scroll.top"),
         (Action::ScrollBottom, "scroll.bottom"),
+        (Action::ManagerOpen, "manager.open"),
+        (Action::ManagerNew, "manager.new"),
+        (Action::ManagerRename, "manager.rename"),
+        (Action::ManagerDelete, "manager.delete"),
+        (Action::ManagerSearch, "manager.search"),
+        (Action::ManagerPin, "manager.pin"),
+        (Action::ManagerClose, "manager.close"),
     ];
 
     pub fn from_id(id: &str) -> Option<Action> {
@@ -130,10 +145,39 @@ struct Active {
     repeat: bool,
 }
 
+/// Which surface a matcher serves: the window (its `app` actions and the `terminal` context) or
+/// the Terminal manager (the `manager` context, Step 18).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Surface {
+    Window,
+    Manager,
+}
+
+impl Surface {
+    /// Whether a binding of `scope` is active on this surface.
+    fn takes(self, scope: &Scope) -> bool {
+        match self {
+            Self::Window => {
+                matches!(scope, Scope::App) || *scope == Scope::Context(sh::TERMINAL_CONTEXT.into())
+            }
+            Self::Manager => *scope == Scope::Context(sh::MANAGER_CONTEXT.into()),
+        }
+    }
+
+    /// The surface's innermost context (its bindings win over `app` ones, §9.1).
+    fn context(self) -> &'static str {
+        match self {
+            Self::Window => sh::TERMINAL_CONTEXT,
+            Self::Manager => sh::MANAGER_CONTEXT,
+        }
+    }
+}
+
 /// The window's shortcuts: Subak's bindings after layering, and the state of a pending sequence
 /// or an armed `release`/`hold` binding.
 #[derive(Debug)]
 pub struct Matcher {
+    surface: Surface,
     loaded: Loaded,
     active: Vec<Active>,
     pending: Option<(usize, Vec<usize>)>,
@@ -293,8 +337,14 @@ impl Matcher {
     /// Subak's shortcuts from `hotkeys.json` in `dir` over the shipped defaults. `off`
     /// (`--no-hotkeys`, `KIM_NO_HOTKEYS`) turns every shortcut off without touching the file.
     pub fn load(dir: Option<&Path>, off: Option<&'static str>) -> Matcher {
+        Self::load_for(Surface::Window, dir, off)
+    }
+
+    /// The shortcuts of `surface` (the window's, or the Terminal manager's).
+    pub fn load_for(surface: Surface, dir: Option<&Path>, off: Option<&'static str>) -> Matcher {
         let (_, loaded) = sh::load(dir);
         let mut m = Matcher {
+            surface,
             problem: sh::safe_mode_warning(&loaded),
             loaded,
             active: Vec::new(),
@@ -328,9 +378,7 @@ impl Matcher {
             let Some(action) = Action::from_id(&b.action) else {
                 continue; // not implemented by this build (never shipped)
             };
-            if !matches!(b.scope, Scope::App)
-                && b.scope != Scope::Context(sh::TERMINAL_CONTEXT.into())
-            {
+            if !self.surface.takes(&b.scope) {
                 continue;
             }
             let hold_ms = state
@@ -446,7 +494,7 @@ impl Matcher {
             .filter(|i| self.active[*i].steps.get(step).is_some_and(|s| hits(p, s)))
             .collect();
         // The innermost context wins over `app` bindings with the same keys (§9.1).
-        let terminal = Scope::Context(sh::TERMINAL_CONTEXT.into());
+        let terminal = Scope::Context(self.surface.context().into());
         let matched = if matched.iter().any(|i| self.active[*i].scope == terminal) {
             matched
                 .into_iter()

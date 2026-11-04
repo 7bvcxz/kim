@@ -1,0 +1,10 @@
+{
+  "schema": "subak.float",
+  "schema_version": 1,
+  "icon": true,
+  "tray": true,
+  "on_top": true,
+  "manager_pinned": false,
+  "position": { "x": 2856, "y": 1316, "dpi": 144 },
+  "an_option_of_a_later_version": { "kept": true }
+}

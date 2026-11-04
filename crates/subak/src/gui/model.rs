@@ -267,6 +267,9 @@ pub struct Model {
     host_stopping: Option<String>,
     /// Whether a connection is up.
     connected: bool,
+    /// Terminals hidden in this window's last run (`gui.json`, Step 18): they go to `hidden`
+    /// instead of the tabs when the first list arrives.
+    pre_hidden: Vec<String>,
 }
 
 fn text(v: &Value) -> Option<String> {
@@ -289,7 +292,47 @@ impl Model {
             snapshot_size: None,
             host_stopping: None,
             connected: false,
+            pre_hidden: Vec::new(),
         }
+    }
+
+    /// Starts with these Terminals hidden (by id; the ones the window hid in its last run).
+    pub fn with_hidden(mut self, ids: Vec<String>) -> Self {
+        self.pre_hidden = ids;
+        self
+    }
+
+    /// The ids of the hidden Terminals (persisted in `gui.json`).
+    pub fn hidden_ids(&self) -> Vec<String> {
+        self.hidden.iter().map(|t| t.id.clone()).collect()
+    }
+
+    /// Another Subak client (the Terminal manager, Step 18) asks this window to show the
+    /// Terminal `id`: its tab is shown (a hidden one comes back first). A Terminal this window
+    /// does not know yet (created a moment ago) is attached by id; its tab follows the answer.
+    pub fn open_id(&mut self, id: &str) -> Vec<Effect> {
+        if let Some(i) = self.tabs.iter().position(|t| t.id == id) {
+            return self.select(i);
+        }
+        if self.hidden.iter().any(|t| t.id == id) {
+            return self.unhide(id);
+        }
+        if !self.connected {
+            self.want = Want::Target(id.to_string());
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        let t = TermInfo {
+            id: id.to_string(),
+            name: id.to_string(),
+            state: "running".into(),
+            pid: None,
+            program: String::new(),
+            history_limit: 2000,
+        };
+        self.show(t, &mut out);
+        out.push(self.request("terminal.list", json!({"detail": "full"}), Pending::List));
+        out
     }
 
     pub fn connected(&self) -> bool {
@@ -987,10 +1030,16 @@ impl Model {
             }
         }
         for t in list {
-            if !tabs.iter().any(|x| x.id == t.id) && !self.hidden.iter().any(|h| h.id == t.id) {
+            if tabs.iter().any(|x| x.id == t.id) || self.hidden.iter().any(|h| h.id == t.id) {
+                continue;
+            }
+            if self.pre_hidden.contains(&t.id) {
+                self.hidden.push(t.clone());
+            } else {
                 tabs.push(t.clone());
             }
         }
+        self.pre_hidden.clear();
         self.tabs = tabs;
     }
 

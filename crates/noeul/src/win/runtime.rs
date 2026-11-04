@@ -28,7 +28,9 @@
 //! the clipboard; `NOEUL_DEV_CLIPBOARD=busy` makes it fail like a held clipboard), the
 //! selection's context menu is recorded instead of shown, the save dialog is answered with a new
 //! file in the configured quick-save folder (never shown), and quick save never falls back to
-//! the user's Pictures folder.
+//! the user's Pictures folder. Since Step 55 a paste reads only the stand-in too: the formats a
+//! test synthesized in the folder `NOEUL_DEV_CLIPBOARD_DIR` (empty without it), never the user's
+//! clipboard, and the pins read no key state (a modifier held elsewhere changes nothing).
 //!
 //! **Detection** (Step 52, ADR 0035): the window list is read on the UI thread when a capture
 //! starts ([`crate::win::detect::snapshot`]); element lookups run on a UI Automation worker that

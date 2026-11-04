@@ -158,6 +158,7 @@ impl Sandbox {
         // Rule changes ask a running app to reload: always this sandbox's app, never the user's.
         let talks_to_app = [
             "status", "health", "engine", "pause", "resume", "quit", "rule", "rules", "mode",
+            "enable", "disable", "release",
         ]
         .iter()
         .any(|c| args.first() == Some(c));
@@ -201,8 +202,9 @@ impl Sandbox {
 
     /// Starts the debug test host with extra options (`--test-launch-root <dir>`).
     fn host_with(&self, extra: &[&str]) -> Host {
+        let turn = turn();
         let child = self.spawn_host_with(extra);
-        let mut h = Host { child };
+        let mut h = Host { child, _turn: turn };
         let until = Instant::now() + Duration::from_secs(15);
         loop {
             let (_, d) = self.json(&["status"]);
@@ -249,9 +251,79 @@ impl Drop for Sandbox {
     }
 }
 
-/// A started test host; killed (and waited for) on every path.
+/// A started test host; killed (and waited for) on every path. It holds a real-input turn: every
+/// test host's hook sees every key injected in the session, so hosts and injections of parallel
+/// tests (and of the same tests run from another checkout) take turns (Step 73).
 struct Host {
     child: Child,
+    _turn: Turn,
+}
+
+std::thread_local! {
+    static TURN_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+static TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// A turn of a test that injects keys or runs a test host (see [`Host`]): this process's lock
+/// and the session-wide mutex the hook tests use too. Nested turns of one thread are free.
+struct Turn {
+    _local: Option<std::sync::MutexGuard<'static, ()>>,
+    session: windows_sys::Win32::Foundation::HANDLE,
+}
+
+impl Drop for Turn {
+    #[allow(unsafe_code)]
+    fn drop(&mut self) {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::Threading::ReleaseMutex;
+        TURN_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+        if !self.session.is_null() {
+            // SAFETY: a mutex this thread owns (acquired in `turn`), released and closed once.
+            unsafe {
+                ReleaseMutex(self.session);
+                CloseHandle(self.session);
+            }
+        }
+    }
+}
+
+#[allow(unsafe_code)]
+fn turn() -> Turn {
+    use windows_sys::Win32::Foundation::{CloseHandle, WAIT_ABANDONED, WAIT_OBJECT_0};
+    use windows_sys::Win32::System::Threading::{CreateMutexW, WaitForSingleObject};
+    let depth = TURN_DEPTH.with(|d| {
+        let n = d.get();
+        d.set(n + 1);
+        n
+    });
+    if depth > 0 {
+        return Turn {
+            _local: None,
+            session: std::ptr::null_mut(),
+        };
+    }
+    let local = TURN
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let name = ddalgak::win::wide("Local\\mouv-ddalgak-real-input-tests");
+    // SAFETY: NUL-terminated name, default security, not initially owned.
+    let h = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
+    let mut session = std::ptr::null_mut();
+    if !h.is_null() {
+        // SAFETY: a valid mutex handle; waits at most three minutes for another checkout's test.
+        match unsafe { WaitForSingleObject(h, 180_000) } {
+            WAIT_OBJECT_0 | WAIT_ABANDONED => session = h,
+            _ => {
+                eprintln!("note: another real-input test kept its turn for 3 minutes; going ahead");
+                // SAFETY: closes the handle opened above (not owned).
+                unsafe { CloseHandle(h) };
+            }
+        }
+    }
+    Turn {
+        _local: Some(local),
+        session,
+    }
 }
 
 impl Host {
@@ -2871,6 +2943,634 @@ fn modes_through_the_cli_and_the_real_test_host() {
     }
     let (_, st) = sb.json(&["status"]);
     bless("status-running-in-a-mode", &st);
+    sb.json(&["quit"]);
+    assert_eq!(host.wait_exit(Duration::from_secs(10)), Some(0));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Step 73: enable, disable, pause and recovery (DDALGAK-FR-002…004, DDALGAK-SEC-003,
+// DDALGAK-SEC-005, DDALGAK-NFR-001). Session messages are synthetic and go only to this test's
+// own host window (found by process ID and class); the workstation is never locked, nobody is
+// signed out, nothing reboots. Only the test's own host is killed. Only F13–F20 are injected.
+// ---------------------------------------------------------------------------------------------
+
+const WM_QUERYENDSESSION: u32 = 0x0011;
+const WM_ENDSESSION: u32 = 0x0016;
+const WM_WTSSESSION_CHANGE: u32 = 0x02B1;
+const WTS_SESSION_LOCK: usize = 0x7;
+const VK_F20: u16 = 0x83;
+
+/// The hidden window of the test host with process `pid` (never another program's window).
+#[allow(unsafe_code)]
+fn host_window(pid: u32) -> Option<isize> {
+    use windows_sys::Win32::Foundation::{HWND, LPARAM};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetClassNameW, GetWindowThreadProcessId,
+    };
+    struct Find {
+        pid: u32,
+        found: Option<isize>,
+    }
+    unsafe extern "system" fn each(hwnd: HWND, lp: LPARAM) -> i32 {
+        // SAFETY: `lp` is the `Find` passed below, alive for the whole enumeration.
+        let f = unsafe { &mut *(lp as *mut Find) };
+        let mut pid = 0u32;
+        // SAFETY: a window handle from the enumeration; a writable u32.
+        unsafe { GetWindowThreadProcessId(hwnd, &raw mut pid) };
+        if pid != f.pid {
+            return 1;
+        }
+        let mut class = [0u16; 64];
+        // SAFETY: a valid window; the buffer holds 64 UTF-16 units.
+        let n = unsafe { GetClassNameW(hwnd, class.as_mut_ptr(), 64) };
+        let name = String::from_utf16_lossy(&class[..usize::try_from(n).unwrap_or(0)]);
+        if name == "mouv.ddalgak.host" {
+            f.found = Some(hwnd as isize);
+            return 0;
+        }
+        1
+    }
+    let mut f = Find { pid, found: None };
+    // SAFETY: the callback only reads window information and writes to `f`.
+    unsafe { EnumWindows(Some(each), (&raw mut f) as LPARAM) };
+    f.found
+}
+
+/// Posts a message without pointers to the test host's own window.
+#[allow(unsafe_code)]
+fn post(hwnd: isize, msg: u32, wparam: usize) -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::PostMessageW;
+    // SAFETY: a window of this test's own host process; the message carries no pointers.
+    unsafe { PostMessageW(hwnd as _, msg, wparam, 0) != 0 }
+}
+
+#[allow(unsafe_code)]
+fn key_down(vk: u16) -> bool {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
+    // SAFETY: reads the async state of one of the test's obscure keys.
+    (unsafe { GetAsyncKeyState(i32::from(vk)) } as u16) & 0x8000 != 0
+}
+
+impl Sandbox {
+    /// Starts the test host with extra environment variables (debug-only test settings).
+    fn host_env(&self, vars: &[(&str, &str)]) -> Host {
+        let turn = turn();
+        let mut c = Command::new(env!("CARGO_BIN_EXE_ddalgak-gui"));
+        c.args([
+            "--test-host",
+            "--test-max-seconds",
+            "60",
+            "--endpoint",
+            &self.endpoint,
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+        self.env(&mut c);
+        for (k, v) in vars {
+            c.env(k, v);
+        }
+        let mut h = Host {
+            child: c.spawn().unwrap(),
+            _turn: turn,
+        };
+        let until = Instant::now() + Duration::from_secs(15);
+        loop {
+            let (_, d) = self.json(&["status"]);
+            if d["data"]["app"]["running"] == true {
+                return h;
+            }
+            if let Ok(Some(status)) = h.child.try_wait() {
+                panic!("the test host exited early: {status}");
+            }
+            assert!(Instant::now() < until, "the test host did not answer");
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+
+    /// Waits until `status` satisfies `cond` (5 s at most) and returns it.
+    fn status_until(&self, what: &str, cond: impl Fn(&Value) -> bool) -> Value {
+        let until = Instant::now() + Duration::from_secs(5);
+        loop {
+            let (_, st) = self.json(&["status"]);
+            if cond(&st["data"]) {
+                return st;
+            }
+            assert!(Instant::now() < until, "never {what}: {st:#}");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+}
+
+/// Modes and rules for the scope tests: `base` (default) and `nav`, an engine-control rule on
+/// F13, a rule limited to `nav`, a rule that switches to `nav`.
+fn scope_doc(on_start: &str) -> Value {
+    json!({
+        "schema": "ddalgak.rules", "schema_version": 1, "hotkey_contract": 1,
+        "revision": 1, "active_profile": "default",
+        "settings": { "engine_on_start": on_start },
+        "profiles": [ { "id": "default", "title": "Test", "default_mode": "base",
+            "modes": [ { "id": "base", "title": "Base" }, { "id": "nav", "title": "Navigation" } ],
+            "rules": [
+                { "id": "pause-key", "title": "F13 pauses or resumes", "enabled": true,
+                  "trigger": { "keys": "F13", "injected": "accept" },
+                  "steps": [ { "type": "engine", "op": "toggle_pause" } ] },
+                { "id": "nav-only", "title": "F15 pauses in nav", "enabled": true,
+                  "trigger": { "keys": "F15" }, "modes": ["nav"],
+                  "steps": [ { "type": "engine", "op": "pause" } ] },
+                { "id": "to-nav", "title": "F16 switches to nav", "enabled": true,
+                  "trigger": { "keys": "F16", "injected": "accept" },
+                  "steps": [ { "type": "mode", "op": "set", "mode": "nav" } ] }
+            ] } ]
+    })
+}
+
+fn inactive_code(d: &Value, rule: &str) -> Option<String> {
+    d["rules"]["inactive"]
+        .as_array()?
+        .iter()
+        .find(|i| i["rule"] == rule)
+        .and_then(|i| i["code"].as_str())
+        .map(str::to_string)
+}
+
+#[test]
+fn enable_disable_and_pause_per_scope_never_reenable_by_themselves() {
+    let sb = Sandbox::new("scopes");
+    sb.write_rules(&scope_doc("on"));
+    let ok = |args: &[&str]| {
+        let (exit, d) = sb.json(args);
+        assert_eq!(exit, 0, "{args:?}: {d:#}");
+        d
+    };
+    let err = |args: &[&str], code: &str, exit: i32| {
+        let (e, d) = sb.json(args);
+        assert_eq!(
+            (e, d["error"]["code"].as_str()),
+            (exit, Some(code)),
+            "{d:#}"
+        );
+        d
+    };
+    // Rules, modes and profiles without the app (rules.json through the rule store).
+    let before = sb.rules_bytes();
+    let d = ok(&["disable", "--rule", "pause-key", "--dry-run"]);
+    assert_eq!(d["data"]["scope"], "rule");
+    assert_eq!(sb.rules_bytes(), before, "a dry run writes nothing");
+    let d = ok(&["disable", "--rule", "pause-key"]);
+    assert_eq!(d["data"]["rules"], json!(["pause-key"]));
+    bless("disable-rule", &d);
+    let (_, st) = sb.json(&["status"]);
+    assert_eq!(st["data"]["rules"]["disabled"], 1);
+    ok(&["enable", "--rule", "pause-key"]);
+    let d = ok(&["disable", "--mode", "nav"]);
+    assert_eq!(
+        (d["data"]["scope"].as_str(), d["data"]["modes"].clone()),
+        (Some("mode"), json!(["nav"]))
+    );
+    assert_eq!(d["data"]["rules"], json!(["nav-only"]));
+    bless("disable-mode", &d);
+    let (_, st) = sb.json(&["status"]);
+    assert_eq!(
+        inactive_code(&st["data"], "nav-only").as_deref(),
+        Some("mode_disabled")
+    );
+    assert_eq!(
+        inactive_code(&st["data"], "to-nav").as_deref(),
+        Some("mode_disabled"),
+        "nothing switches to a disabled mode"
+    );
+    let (_, list) = sb.json(&["rule", "list"]);
+    let state = |id: &str| {
+        list["data"]["rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == id)
+            .map(|r| (r["state"].clone(), r["code"].clone()))
+            .unwrap()
+    };
+    assert_eq!(state("to-nav"), (json!("inactive"), json!("mode_disabled")));
+    err(&["disable", "--mode", "base"], "mode_invalid", 2);
+    err(&["mode", "disable", "nowhere"], "mode_not_found", 3);
+    err(&["disable", "--profile", "nowhere"], "profile_not_found", 3);
+    err(
+        &["disable", "--rule", "pause-key", "--mode", "nav"],
+        "usage",
+        2,
+    );
+    err(&["disable", "--allow", "input-injection"], "usage", 2);
+    let d = ok(&["mode", "enable", "nav"]);
+    assert_eq!(d["command"], "mode.enable");
+    let d = ok(&["disable", "--profile", "default"]);
+    assert_eq!(d["data"]["scope"], "profile");
+    bless("disable-profile", &d);
+    let (_, st) = sb.json(&["status"]);
+    assert_eq!(st["data"]["profile"]["enabled"], false);
+    assert_eq!(st["data"]["rules"]["active"], 0);
+    assert!(
+        st["data"]["rules"]["inactive"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|i| i["code"] == "profile_disabled")
+    );
+    // The running app: the profile stays disabled through starts, enables and restarts.
+    let mut host = sb.host();
+    let (_, st) = sb.json(&["status"]);
+    let running = if elevated() { "off" } else { "running" };
+    assert_eq!(
+        st["data"]["engine"]["state"], running,
+        "engine_on_start: on"
+    );
+    assert_eq!(st["data"]["profile"]["enabled"], false);
+    if elevated() {
+        eprintln!("skipped (elevated): the app refuses to turn its engine on as administrator");
+        sb.json(&["quit"]);
+        assert_eq!(host.wait_exit(Duration::from_secs(10)), Some(0));
+        return;
+    }
+    assert_eq!(st["data"]["indicator"]["attention"], "profile_disabled");
+    bless("status-profile-disabled", &st);
+    let (_, d) = sb.json(&["enable"]);
+    assert_eq!(d["data"]["scope"], "engine");
+    assert!(
+        d["warnings"][0]
+            .as_str()
+            .is_some_and(|w| w.contains("disabled")),
+        "a global enable says the profile is still disabled: {d:#}"
+    );
+    ok(&["enable", "--profile", "default"]);
+    let st = sb.status_until("the profile enabled", |d| d["rules"]["active"] == 3);
+    assert_eq!(st["data"]["profile"]["enabled"], true);
+    // A disabled mode refuses a switch from the CLI.
+    ok(&["mode", "disable", "nav"]);
+    sb.status_until("nav disabled", |d| {
+        inactive_code(d, "to-nav").as_deref() == Some("mode_disabled")
+    });
+    let d = err(&["mode", "set", "nav"], "mode_disabled", 7);
+    bless("error-mode-disabled", &d);
+    ok(&["mode", "enable", "nav"]);
+    sb.status_until("nav enabled", |d| d["rules"]["active"] == 3);
+    ok(&["mode", "set", "nav"]);
+    // Disabling the active mode returns the engine to the default mode on the reload.
+    ok(&["mode", "disable", "nav"]);
+    sb.status_until("back in base", |d| d["profile"]["mode"] == "base");
+    ok(&["mode", "enable", "nav"]);
+    // Pause and resume are temporary: the engine stays on, the hook stays installed.
+    let d = ok(&["pause"]);
+    assert_eq!(d["data"]["engine"]["hook"]["installed"], true);
+    let (_, st) = sb.json(&["status"]);
+    assert_eq!(st["data"]["indicator"]["shape"], "bars");
+    ok(&["resume"]);
+    // Release: nothing is held; counts only.
+    let d = ok(&["release", "--dry-run"]);
+    assert_eq!(d["data"]["dry_run"], true);
+    let d = ok(&["release"]);
+    assert_eq!(d["data"]["held_by_ddalgak"], 0);
+    assert_eq!(d["data"]["key_state_reset"], true);
+    bless("release", &d);
+    // The global disable is remembered: a restart keeps the engine off despite engine_on_start.
+    let d = ok(&["disable", "--dry-run"]);
+    assert_eq!(d["data"]["would"]["to"], "off");
+    let d = ok(&["disable"]);
+    assert_eq!(d["data"]["change"]["to"], "off");
+    bless("disable", &d);
+    assert!(sb.local().join("engine.disabled").exists());
+    sb.json(&["quit"]);
+    assert_eq!(host.wait_exit(Duration::from_secs(10)), Some(0));
+    drop(host);
+    let mut host = sb.host();
+    let (_, st) = sb.json(&["status"]);
+    assert_eq!(st["data"]["engine"]["state"], "off");
+    assert_eq!(st["data"]["start"]["off_reason"], "disabled");
+    assert_eq!(st["data"]["engine"]["off_reason"], "disabled");
+    bless("status-disabled-by-user", &st);
+    let d = ok(&["enable"]);
+    assert_eq!(d["data"]["change"]["to"], "running");
+    bless("enable", &d);
+    assert!(!sb.local().join("engine.disabled").exists());
+    // Quitting while on is not a turn-off: the next start follows engine_on_start again.
+    sb.json(&["quit"]);
+    assert_eq!(host.wait_exit(Duration::from_secs(10)), Some(0));
+    drop(host);
+    let mut host = sb.host();
+    let (_, st) = sb.json(&["status"]);
+    assert_eq!(st["data"]["engine"]["state"], "running");
+    sb.json(&["quit"]);
+    assert_eq!(host.wait_exit(Duration::from_secs(10)), Some(0));
+}
+
+#[test]
+fn crash_lock_logoff_and_reboot_recover_without_re_enabling() {
+    if elevated() {
+        eprintln!("skipped (elevated): the app refuses to turn its engine on as administrator");
+        return;
+    }
+    // One turn for the whole test: it injects between two hosts too.
+    let _turn = turn();
+    let sb = Sandbox::new("recover");
+    sb.write_rules(&rules_doc("on"));
+    let mut host = sb.host();
+    let pid = host.child.id();
+    let hwnd = host_window(pid).expect("the test host's own window");
+    let (_, st) = sb.json(&["status"]);
+    assert_eq!(st["data"]["engine"]["state"], "running");
+    assert!(st["data"]["start"]["recovered"].is_null(), "a clean start");
+    // A synthetic session lock: keys released, rules wait, the engine state stays.
+    assert!(post(hwnd, WM_WTSSESSION_CHANGE, WTS_SESSION_LOCK));
+    let st = sb.status_until("locked", |d| d["session"]["locked"] == true);
+    assert_eq!(st["data"]["engine"]["state"], "running");
+    assert_eq!(st["data"]["indicator"]["attention"], "session_locked");
+    bless("status-session-locked", &st);
+    let send =
+        |vk: u16, up: bool| ddalgak::win::inject::send_as_other_program(&[OutKey { vk, up }]) == 1;
+    let desktop = ddalgak::win::input_desktop_available();
+    if desktop && send(VK_F13, false) && send(VK_F13, true) {
+        let st = sb.status_until("the rule skipped", |d| {
+            d["activity"]
+                .as_array()
+                .is_some_and(|a| a.iter().any(|e| e["outcome"] == "skipped_secure_desktop"))
+        });
+        assert_eq!(
+            st["data"]["engine"]["state"], "running",
+            "nothing fired while locked"
+        );
+        eprintln!("verified with real SendInput: a rule waits while the session is locked");
+    } else {
+        eprintln!("skipped (locked or SendInput refused): a key while locked");
+    }
+    assert!(post(hwnd, WM_WTSSESSION_CHANGE, 0x8)); // WTS_SESSION_UNLOCK
+    sb.status_until("unlocked", |d| d["session"]["locked"] == false);
+    if desktop && send(VK_F13, false) && send(VK_F13, true) {
+        sb.status_until("paused by the rule", |d| d["engine"]["state"] == "paused");
+        sb.json(&["resume"]);
+        eprintln!("verified with real SendInput: rules run again after the unlock");
+    }
+    // A crash: the test kills its own host while the engine is on.
+    host.child.kill().unwrap();
+    let _ = host.child.wait();
+    drop(host);
+    assert!(
+        sb.local().join("engine.running").exists(),
+        "the run marker stays"
+    );
+    // A key the killed app "left pressed": F20 (an obscure key) held by injection. Whatever
+    // happens below, the test lets go of it.
+    struct LetGo(u16);
+    impl Drop for LetGo {
+        fn drop(&mut self) {
+            if key_down(self.0) {
+                let _ = ddalgak::win::inject::send_as_other_program(&[OutKey {
+                    vk: self.0,
+                    up: true,
+                }]);
+            }
+        }
+    }
+    let _let_go = LetGo(VK_F20);
+    let stuck = desktop && send(VK_F20, false) && key_down(VK_F20);
+    let mut host = sb.host();
+    let (_, st) = sb.json(&["status"]);
+    assert_eq!(
+        st["data"]["engine"]["state"], "off",
+        "never back on after a crash"
+    );
+    assert_eq!(st["data"]["start"]["off_reason"], "unclean_exit");
+    assert_eq!(st["data"]["indicator"]["shape"], "ring_struck");
+    let rec = &st["data"]["start"]["recovered"];
+    assert!(
+        rec["checked"].as_u64().unwrap() >= 1,
+        "F20 is a remap output: {rec}"
+    );
+    if stuck {
+        assert_eq!(rec["released"], 1, "the stale F20 was released: {rec}");
+        assert!(!key_down(VK_F20), "F20 is up again");
+        eprintln!("verified with real SendInput: a key left pressed by a killed app is released");
+    } else {
+        let _ = send(VK_F20, true);
+        eprintln!("skipped (locked or SendInput refused): a stale key after a crash");
+    }
+    bless("status-unclean-exit-recovered", &st);
+    // A sign-out: Windows asks, then ends the session; the engine stops cleanly.
+    sb.json(&["engine", "start"]);
+    let hwnd = host_window(host.child.id()).expect("the test host's own window");
+    assert!(post(hwnd, WM_QUERYENDSESSION, 0));
+    assert!(post(hwnd, WM_ENDSESSION, 1));
+    let st = sb.status_until("stopped by the session end", |d| {
+        d["engine"]["state"] == "off"
+    });
+    assert_eq!(st["data"]["engine"]["last_change"]["origin"], "session");
+    assert!(!sb.local().join("engine.running").exists(), "a clean stop");
+    assert!(
+        !sb.local().join("engine.disabled").exists(),
+        "a sign-out is not the user's turn-off"
+    );
+    // Windows then ends the process; the "reboot": the next start follows engine_on_start.
+    host.child.kill().unwrap();
+    let _ = host.child.wait();
+    drop(host);
+    let mut host = sb.host();
+    let (_, st) = sb.json(&["status"]);
+    assert_eq!(st["data"]["engine"]["state"], "running");
+    assert_eq!(st["data"]["start"]["off_reason"], "default");
+    // The user turns it off, then the machine "reboots": it stays off.
+    sb.json(&["disable"]);
+    host.child.kill().unwrap();
+    let _ = host.child.wait();
+    drop(host);
+    let mut host = sb.host();
+    let (_, st) = sb.json(&["status"]);
+    assert_eq!(st["data"]["engine"]["state"], "off");
+    assert_eq!(st["data"]["start"]["off_reason"], "disabled");
+    sb.json(&["quit"]);
+    assert_eq!(host.wait_exit(Duration::from_secs(10)), Some(0));
+}
+
+#[test]
+#[allow(unsafe_code)]
+fn a_taken_shortcut_is_reported_and_never_stolen() {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+        MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, RegisterHotKey, UnregisterHotKey,
+    };
+    const VK_F16: u16 = 0x7F;
+    // This test thread plays "another program" that owns Ctrl+Alt+Shift+F16.
+    // SAFETY: a thread hotkey (no window) with an obscure chord, unregistered below.
+    let mine = unsafe {
+        RegisterHotKey(
+            std::ptr::null_mut(),
+            0x7301,
+            MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_NOREPEAT,
+            u32::from(VK_F16),
+        )
+    } != 0;
+    if !mine {
+        eprintln!("skipped: another program already owns Ctrl+Alt+Shift+F16");
+        return;
+    }
+    let sb = Sandbox::new("taken");
+    sb.write_rules(&rules_doc("off"));
+    sb.write_hotkeys(
+        &json!({ "schema": "kim.hotkeys", "schema_version": 1, "tool": "ddalgak",
+        "overrides": [ { "action": "engine.toggle", "bindings": ["Ctrl+Alt+Shift+F16"] } ] }),
+    );
+    let mut host = sb.host();
+    let reg = |st: &Value| {
+        st["data"]["shortcuts"]["global"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["action"] == "engine.toggle")
+            .map(|s| s["registration"].clone())
+    };
+    let (_, st) = sb.json(&["status"]);
+    assert_eq!(reg(&st), Some(json!("taken")));
+    assert_eq!(st["data"]["indicator"]["attention"], "shortcut_taken");
+    let (_, h) = sb.json(&["health"]);
+    assert!(
+        h["data"]["problems"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["code"] == "shortcut_taken")
+    );
+    // The other program lets go: Ddalgak still does not take it (nothing is retried).
+    // SAFETY: the hotkey this thread registered above.
+    unsafe { UnregisterHotKey(std::ptr::null_mut(), 0x7301) };
+    std::thread::sleep(Duration::from_millis(200));
+    let (_, st) = sb.json(&["status"]);
+    assert_eq!(reg(&st), Some(json!("taken")), "never retried or stolen");
+    // The engine is still reachable without the shortcut.
+    let (code, _) = sb.json(&["enable"]);
+    assert_eq!(code, if elevated() { 5 } else { 0 });
+    sb.json(&["quit"]);
+    assert_eq!(host.wait_exit(Duration::from_secs(10)), Some(0));
+}
+
+#[test]
+fn the_engine_has_no_polling_loop_in_any_state() {
+    // DDALGAK-NFR-001: threads wake only for input, posted messages and requests. Measured
+    // between two `health` requests 2 s apart, with the engine off, running, paused and running
+    // in a (synthetically) locked session.
+    let sb = Sandbox::new("idle");
+    sb.write_rules(&rules_doc("off"));
+    let mut host = sb.host();
+    let hwnd = host_window(host.child.id()).expect("the test host's own window");
+    let wake = |d: &Value| {
+        let w = &d["data"]["counters"]["wakeups"];
+        (
+            w["hook_thread"].as_u64().unwrap(),
+            w["worker"].as_u64().unwrap(),
+            w["host"].as_u64().unwrap(),
+        )
+    };
+    let mut states = vec!["off"];
+    if !elevated() {
+        states.extend(["running", "paused", "locked"]);
+    }
+    for state in states {
+        match state {
+            "running" => {
+                sb.json(&["enable"]);
+            }
+            "paused" => {
+                sb.json(&["pause"]);
+            }
+            "locked" => {
+                sb.json(&["resume"]);
+                assert!(post(hwnd, WM_WTSSESSION_CHANGE, WTS_SESSION_LOCK));
+                sb.status_until("locked", |d| d["session"]["locked"] == true);
+            }
+            _ => {}
+        }
+        // Let the change settle (the worker gets its rules, the hook thread its table).
+        std::thread::sleep(Duration::from_millis(300));
+        let (_, a) = sb.json(&["health"]);
+        std::thread::sleep(Duration::from_secs(2));
+        let (_, b) = sb.json(&["health"]);
+        let (h0, w0, m0) = wake(&a);
+        let (h1, w1, m1) = wake(&b);
+        eprintln!(
+            "{state}: 2 s idle: hook thread +{}, worker +{}, app +{} wake-ups",
+            h1 - h0,
+            w1 - w0,
+            m1 - m0
+        );
+        assert_eq!(h1 - h0, 0, "{state}: the hook thread has no timer");
+        assert_eq!(w1 - w0, 0, "{state}: the worker has no timer");
+        if state == "off" {
+            // Off: no watchers; the app wakes for the second request only.
+            assert!(m1 - m0 <= 3, "{state}: app wake-ups {}", m1 - m0);
+        }
+    }
+    sb.json(&["quit"]);
+    assert_eq!(host.wait_exit(Duration::from_secs(10)), Some(0));
+}
+
+#[test]
+fn a_hook_that_reaches_the_timeout_turns_the_engine_off() {
+    if elevated() {
+        eprintln!("skipped (elevated): the app refuses to turn its engine on as administrator");
+        return;
+    }
+    if !ddalgak::win::input_desktop_available() {
+        eprintln!("skipped (locked): the hook sees no key event to measure");
+        return;
+    }
+    let sb = Sandbox::new("hooklost");
+    sb.write_rules(&rules_doc("off"));
+    // Debug-only: a 1 µs threshold makes any ordinary callback count as one that reached
+    // LowLevelHooksTimeout, so the whole path runs without slowing a single real key.
+    let mut host = sb.host_env(&[("DDALGAK_DEV_HOOK_TIMEOUT_US", "1")]);
+    sb.json(&["enable"]);
+    let (_, h) = sb.json(&["health"]);
+    assert_eq!(h["data"]["engine"]["hook"]["timeout_us"], 1);
+    let send =
+        |vk: u16, up: bool| ddalgak::win::inject::send_as_other_program(&[OutKey { vk, up }]) == 1;
+    let mut off = None;
+    for _ in 0..5 {
+        if !(send(VK_F17, false) && send(VK_F17, true)) {
+            eprintln!("skipped (SendInput refused): no key event reached the hook");
+            sb.json(&["quit"]);
+            let _ = host.wait_exit(Duration::from_secs(10));
+            return;
+        }
+        let until = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < until {
+            let (_, st) = sb.json(&["status"]);
+            if st["data"]["engine"]["state"] == "off" {
+                off = Some(st);
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        if off.is_some() {
+            break;
+        }
+    }
+    let st = off.expect("the engine turned itself off");
+    assert_eq!(st["data"]["engine"]["off_reason"], "hook_lost");
+    assert_eq!(st["data"]["engine"]["last_change"]["origin"], "hook_lost");
+    assert_eq!(st["data"]["engine"]["hook"]["installed"], false);
+    assert_eq!(st["data"]["indicator"]["shape"], "ring_struck");
+    assert_eq!(st["data"]["indicator"]["attention"], "hook_lost");
+    bless("status-hook-lost", &st);
+    let (_, h) = sb.json(&["health"]);
+    assert!(h["data"]["counters"]["hook_timeouts"].as_u64().unwrap() >= 1);
+    assert!(
+        h["data"]["problems"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["code"] == "hook_lost")
+    );
+    assert!(
+        !sb.local().join("engine.disabled").exists(),
+        "a lost hook is not the user's turn-off"
+    );
+    // Turning it on again installs a fresh hook (never by itself).
+    let (_, d) = sb.json(&["engine", "start"]);
+    assert_eq!(d["data"]["engine"]["hook"]["installed"], true);
     sb.json(&["quit"]);
     assert_eq!(host.wait_exit(Duration::from_secs(10)), Some(0));
 }

@@ -855,6 +855,132 @@ mod tests {
                 "steps": [ { "type": "engine", "op": op } ] })
     }
 
+    #[test]
+    fn disabled_profiles_and_modes_keep_their_rules_from_running() {
+        // Step 73: per-scope enable/disable (`profile_disabled`, `mode_disabled`).
+        let rules = json!([
+            engine_rule("everywhere", "F13", "pause"),
+            { "id": "nav-only", "title": "n", "enabled": true, "modes": ["nav"],
+              "trigger": { "keys": "F14" }, "steps": [ { "type": "engine", "op": "pause" } ] },
+            { "id": "both", "title": "b", "enabled": true, "modes": ["base", "nav"],
+              "trigger": { "keys": "F15" }, "steps": [ { "type": "engine", "op": "pause" } ] },
+            { "id": "to-nav", "title": "t", "enabled": true, "trigger": { "keys": "F16" },
+              "steps": [ { "type": "mode", "op": "set", "mode": "nav" } ] },
+            { "id": "back", "title": "p", "enabled": true, "trigger": { "keys": "F17" },
+              "steps": [ { "type": "mode", "op": "default" } ] },
+            { "id": "off", "title": "o", "enabled": false, "trigger": { "keys": "F18" },
+              "steps": [ { "type": "engine", "op": "pause" } ] }
+        ]);
+        let with = |profile_enabled: Option<bool>, nav_enabled: Option<bool>| {
+            let mut d: Value = serde_json::from_slice(&doc(rules.clone())).unwrap();
+            if let Some(e) = profile_enabled {
+                d["profiles"][0]["enabled"] = json!(e);
+            }
+            if let Some(e) = nav_enabled {
+                d["profiles"][0]["modes"][1]["enabled"] = json!(e);
+            }
+            let bytes = d.to_string().into_bytes();
+            let l = parse(&bytes);
+            let states = rule_states(&store::interpret(&bytes, &Context::default(), MIGRATIONS));
+            (l, states)
+        };
+        let code = |l: &Loaded, id: &str| l.inactive.iter().find(|i| i.rule == id).map(|i| i.code);
+        // Everything enabled (absent fields mean enabled).
+        let (l, _) = with(None, None);
+        assert!(l.profile_enabled);
+        assert_eq!(l.bindings.len(), 5);
+        // A disabled mode: its own rules and switches to it are inactive; a rule that also works
+        // elsewhere keeps working there; the profile's other rules are untouched.
+        let (l, states) = with(None, Some(false));
+        assert_eq!(code(&l, "nav-only"), Some("mode_disabled"));
+        assert_eq!(code(&l, "to-nav"), Some("mode_disabled"));
+        let both = l.bindings.iter().find(|b| b.rule == "both").unwrap();
+        assert_eq!(both.modes, 0b01, "only in base now");
+        assert!(l.bindings.iter().any(|b| b.rule == "back"));
+        assert!(!l.modes.is_enabled(l.modes.index("nav").unwrap()));
+        let st = |id: &str| states.iter().find(|s| s.id == id).unwrap();
+        assert_eq!(
+            (st("nav-only").state, st("nav-only").code),
+            ("inactive", Some("mode_disabled"))
+        );
+        assert_eq!(
+            (st("to-nav").state, st("to-nav").code),
+            ("inactive", Some("mode_disabled"))
+        );
+        assert_eq!(st("both").state, "active");
+        // A disabled profile: no rule runs; every rule keeps its own `enabled`.
+        let (l, states) = with(Some(false), None);
+        assert!(!l.profile_enabled);
+        assert!(l.bindings.is_empty());
+        assert_eq!(
+            l.disabled, 1,
+            "the disabled rule stays disabled, not inactive"
+        );
+        assert_eq!(l.inactive.len(), 5);
+        assert!(l.inactive.iter().all(|i| i.code == "profile_disabled"));
+        assert!(
+            states
+                .iter()
+                .filter(|s| s.id != "off")
+                .all(|s| s.code == Some("profile_disabled"))
+        );
+        // `enabled: true` written out is the same as absent.
+        let (l, _) = with(Some(true), Some(true));
+        assert_eq!(l.bindings.len(), 5);
+    }
+
+    #[test]
+    fn the_scopes_example_loads_as_documented() {
+        let bytes =
+            std::fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(
+                "../../docs/contracts/examples/ddalgak-rules-v1/16-enable-disable-scopes.json",
+            ))
+            .unwrap();
+        let l = parse(&bytes);
+        assert_eq!(l.state, FileState::Loaded);
+        assert_eq!(l.floating_indicator, Some(FloatingIndicator::Paused));
+        assert!(l.profile_enabled, "work is enabled; travel is not active");
+        let codes: Vec<(&str, &str)> = l
+            .inactive
+            .iter()
+            .map(|i| (i.rule.as_str(), i.code))
+            .collect();
+        assert_eq!(
+            codes,
+            [
+                ("game-toggle", "mode_disabled"),
+                ("game-no-win", "mode_disabled")
+            ]
+        );
+        assert_eq!(l.disabled, 1);
+        assert_eq!(l.bindings.len(), 1);
+        // Switched to the disabled travel profile, nothing runs.
+        let mut d: Value = serde_json::from_slice(&bytes).unwrap();
+        d["active_profile"] = json!("travel");
+        let l = parse(d.to_string().as_bytes());
+        assert!(!l.profile_enabled && l.bindings.is_empty());
+        assert_eq!(l.inactive[0].code, "profile_disabled");
+    }
+
+    #[test]
+    fn the_default_mode_is_never_disabled() {
+        let mut d: Value = serde_json::from_slice(&doc(json!([]))).unwrap();
+        d["profiles"][0]["modes"][0]["enabled"] = json!(false);
+        let bytes = d.to_string().into_bytes();
+        let l = parse(&bytes);
+        assert!(
+            l.modes.is_enabled(l.modes.default_mode()),
+            "ignored there (never broader)"
+        );
+        let s = store::interpret(&bytes, &Context::default(), MIGRATIONS);
+        assert!(
+            s.report
+                .all()
+                .any(|p| p.code == "mode_invalid" && p.message.contains("enabled: false")),
+            "and reported"
+        );
+    }
+
     /// A launch rule with `launch-programs` consent for exactly its targets.
     #[allow(clippy::needless_pass_by_value)]
     fn launch_rule(id: &str, keys: &str, steps: Value) -> Value {

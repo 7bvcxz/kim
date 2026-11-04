@@ -461,3 +461,51 @@ fn mode_steps_compile_against_the_profile() {
         assert!(ModeAction::compile(&bad, &s).is_err(), "{bad}");
     }
 }
+
+#[test]
+fn nothing_switches_to_a_disabled_mode_and_a_reload_leaves_it() {
+    // Step 73: `enabled: false` on a mode.
+    let mut p = profile();
+    p.modes[3].enabled = Some(false); // game
+    p.modes[0].enabled = Some(false); // base, the default: ignored
+    let s = ModeSet::from_profile(&p);
+    let game = ix(&s, "game");
+    let nav = ix(&s, "nav");
+    assert!(!s.is_enabled(game));
+    assert!(
+        s.is_enabled(s.default_mode()),
+        "the default mode is never disabled"
+    );
+    assert_eq!(s.enabled_mask((1 << game) | (1 << nav)), 1 << nav);
+    let mut st = ModeState::new(&s);
+    for a in [
+        ModeAction::Set(game),
+        ModeAction::Toggle(game),
+        ModeAction::Hold(game),
+        ModeAction::Cycle(vec![game].into()),
+    ] {
+        assert_eq!(st.apply(&s, &a, 0x7C, 0, 0), None, "{a:?}");
+        assert_eq!(st.active(), s.default_mode());
+        assert!(a.targets_disabled(&s));
+    }
+    // A cycle skips the disabled mode.
+    let cycle = ModeAction::Cycle(vec![s.default_mode(), game, nav].into());
+    assert!(!cycle.targets_disabled(&s));
+    st.apply(&s, &cycle, 0x7C, 0, 0).unwrap();
+    assert_eq!(
+        id(&s, st.active()),
+        "nav",
+        "base, then game skipped, then nav"
+    );
+    // Enabled, then disabled by a reload while active: back to the default mode.
+    let on = set();
+    let mut st = ModeState::new(&on);
+    st.apply(&on, &ModeAction::Set(ix(&on, "game")), 0x7C, 0, 0)
+        .unwrap();
+    let carried = st.carry(&on, &s, 0);
+    assert_eq!(id(&s, carried.active()), "base");
+    let status = on.status(&st.view(), &|_| None);
+    assert_eq!(status.carried(&s).active, "base");
+    // The mode menu does not offer it.
+    assert!(menu(&s, &s.initial()).iter().all(|e| e.id != "game"));
+}

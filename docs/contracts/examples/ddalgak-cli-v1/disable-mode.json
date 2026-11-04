@@ -1,0 +1,33 @@
+{
+  "command": "disable",
+  "data": {
+    "app": {
+      "running": false
+    },
+    "backup": "rules.json.bak",
+    "changed": true,
+    "created": null,
+    "dry_run": false,
+    "modes": [
+      "nav"
+    ],
+    "notes": [
+      "rules limited to `nav` alone do not run, and nothing switches to it, until `ddalgak enable --mode nav`"
+    ],
+    "problems": [],
+    "profile": "default",
+    "revision": {
+      "from": 3,
+      "to": 4
+    },
+    "rules": [
+      "nav-only"
+    ],
+    "scope": "mode",
+    "snapshot": "20261104T112926Z-r4.json",
+    "target": "saved"
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

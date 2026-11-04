@@ -45,6 +45,11 @@
 //!   save output them flattened ([`Pins::rendered`]). Editing a pin ([`Pins::set_editing`],
 //!   [`Pins::commit_edit`]) replaces the objects and may crop the picture; a cancelled edit changes
 //!   nothing. Closing and reopening keeps them.
+//! - **Cards and files** (Step 55): a pin may be a card made from text, HTML, a colour value or
+//!   file names (`crate::card`), or an image file; to the engine it is a picture like any other
+//!   (it moves, zooms, transforms, copies, saves, closes and reopens the same way). Its
+//!   [`Content`] adds the card's text for `pin.copy-text` and the kinds the clipboard offered for
+//!   "Pin clipboard as…"; `pin.list` reports only the kind.
 //! - **Animated pictures** (NOEUL-FR-068): this build has no animated pins. A pin made from an
 //!   animated GIF shows its first frame and says so ([`Pins::mark_animation`], `pin.list`), never
 //!   silently.
@@ -84,6 +89,8 @@ impl std::fmt::Display for PinId {
 pub enum Source {
     Capture,
     Clipboard,
+    /// An image file: `noeul pin <file>` or dropped on a pin (Step 55, NOEUL-FR-073).
+    File,
 }
 
 impl Source {
@@ -91,8 +98,47 @@ impl Source {
         match self {
             Source::Capture => "capture",
             Source::Clipboard => "clipboard",
+            Source::File => "file",
         }
     }
+}
+
+/// What a pin shows (Step 55): a picture, or a card made from text, HTML, a colour value or file
+/// names. Every pin is a picture to the engine; a card also keeps its text for `pin.copy-text`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ContentKind {
+    #[default]
+    Image,
+    Text,
+    Html,
+    Color,
+    Files,
+}
+
+impl ContentKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ContentKind::Image => "image",
+            ContentKind::Text => "text",
+            ContentKind::Html => "html",
+            ContentKind::Color => "color",
+            ContentKind::Files => "files",
+        }
+    }
+}
+
+/// A pin's content beyond its picture (Step 55). Held only while the pin (or its reopen memory)
+/// exists, never written anywhere, never reported (NOEUL-SEC-002, NOEUL-SEC-008).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Content {
+    pub kind: ContentKind,
+    /// A card's text (`pin.copy-text`); `None` for pictures.
+    pub text: Option<String>,
+    /// What the clipboard offered when this pin was pasted (kinds only, no content), for
+    /// "Pin clipboard as…".
+    pub offered: Vec<crate::paste::Kind>,
+    /// The kind it was pasted as.
+    pub pasted: Option<crate::paste::Kind>,
 }
 
 /// How a pin window is created.
@@ -217,6 +263,8 @@ pub struct PinInfo {
     pub transforms: Transforms,
     /// Frames of the animated picture it was made from, of which it shows the first (Step 54).
     pub animation: Option<u32>,
+    /// What made it (Step 55).
+    pub content: ContentKind,
 }
 
 struct Pin {
@@ -235,6 +283,7 @@ struct Pin {
     animation: Option<u32>,
     /// The effective DPI of the monitor the pin is on (its outline, shadow and badge scale).
     dpi: u32,
+    content: Content,
 }
 
 impl Pin {
@@ -336,6 +385,7 @@ struct Closed {
     group: String,
     animation: Option<u32>,
     dpi: u32,
+    content: Content,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -506,6 +556,7 @@ impl Pins {
                         group: self.group.clone(),
                         animation: None,
                         dpi,
+                        content: Content::default(),
                     },
                 );
                 Ok(id)
@@ -571,6 +622,7 @@ impl Pins {
             editing: p.editing,
             transforms: p.state,
             animation: p.animation,
+            content: p.content.kind,
         })
     }
 
@@ -708,6 +760,7 @@ impl Pins {
             group: pin.group,
             animation: pin.animation,
             dpi: pin.dpi,
+            content: pin.content,
         });
         Ok(())
     }
@@ -759,6 +812,7 @@ impl Pins {
                         group: c.group,
                         animation: c.animation,
                         dpi: c.dpi,
+                        content: c.content,
                     },
                 );
                 Ok(c.id)
@@ -1071,6 +1125,23 @@ impl Pins {
         }
     }
 
+    /// Records what an open pin shows beyond its picture (Step 55): a card's kind and text, and
+    /// what the clipboard offered.
+    pub fn set_content(&mut self, id: PinId, content: Content) -> bool {
+        match self.open.get_mut(&id) {
+            Some(p) => {
+                p.content = content;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// What an open pin shows beyond its picture.
+    pub fn content(&self, id: PinId) -> Option<&Content> {
+        self.open.get(&id).map(|p| &p.content)
+    }
+
     /// The group of an open pin.
     pub fn group(&self, id: PinId) -> Option<&str> {
         self.open.get(&id).map(|p| p.group.as_str())
@@ -1200,6 +1271,7 @@ impl Pins {
             "click_through": p.state.click_through,
             "group": p.group,
             "animation": p.animation.map(|n| json!({"frames": n, "shown": "first_frame"})),
+            "content": p.content.kind.as_str(),
         })
     }
 

@@ -752,5 +752,56 @@ pub fn is_image_format(f: Format) -> bool {
     f.is_image()
 }
 
+/// The error a refusal is reported as (NOEUL-FR-074): what happened, never what the clipboard
+/// holds.
+pub fn refusal_error(r: &Refusal) -> crate::error::NoeulError {
+    use crate::error::{Code, NoeulError};
+    let names = |kinds: &[Kind]| {
+        kinds
+            .iter()
+            .map(|k| k.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    match r {
+        Refusal::Nothing => NoeulError::new(
+            Code::NothingToPin,
+            "the clipboard holds nothing Noeul can pin",
+        )
+        .hint("copy an image, image files, text, HTML or a color value first"),
+        Refusal::NotOffered(k, offered) => NoeulError::new(
+            Code::NothingToPin,
+            format!("the clipboard holds no {} to pin", k.as_str()),
+        )
+        .hint(if offered.is_empty() {
+            "the clipboard holds nothing Noeul can pin".to_string()
+        } else {
+            format!("it offers: {}", names(offered))
+        }),
+        Refusal::Private => NoeulError::new(
+            Code::NothingToPin,
+            "the clipboard content is marked private by the program that copied it (for example a password manager); Noeul does not pin it",
+        )
+        .hint("paste it where you need it instead"),
+        Refusal::TooLarge(f, size) => NoeulError::new(
+            if f.is_image() {
+                Code::ImageInvalid
+            } else {
+                Code::NothingToPin
+            },
+            format!(
+                "the clipboard's {} data is {} MiB, more than Noeul reads",
+                f.name(),
+                size.div_ceil(1024 * 1024)
+            ),
+        )
+        .hint("nothing was pinned"),
+        Refusal::Unreadable(f) => NoeulError::new(
+            Code::NothingToPin,
+            format!("the clipboard's {} data could not be read", f.name()),
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests;

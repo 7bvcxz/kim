@@ -72,6 +72,7 @@
     { "id": "pin.copy", "title": "Copy the pinned image", "context": "pin", "defaults": ["Ctrl+C"] },
     { "id": "pin.save", "title": "Save the pinned image", "context": "pin", "defaults": ["Ctrl+S"] },
     { "id": "pin.quick-save", "title": "Quick-save the pinned image", "context": "pin", "defaults": ["Ctrl+Shift+S"] },
+    { "id": "pin.copy-text", "title": "Copy the text of a text card", "context": "pin", "defaults": ["Ctrl+Shift+C"] },
     { "id": "pin.zoom-in", "title": "Zoom in", "context": "pin", "defaults": ["Plus", "NumpadAdd"] },
     { "id": "pin.zoom-out", "title": "Zoom out", "context": "pin", "defaults": ["Minus", "NumpadSubtract"] },
     { "id": "pin.zoom-reset", "title": "Back to 100 % and fully opaque", "context": "pin", "defaults": ["0", "Numpad0"] },

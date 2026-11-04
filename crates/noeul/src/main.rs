@@ -115,8 +115,9 @@ enum Command {
     /// Ask the running instance to capture a region and pin it, or to open (or cancel) the
     /// region selection overlay as F1 does
     Capture(CaptureArgs),
-    /// Pins of the running instance: `noeul pin --clipboard` pins the clipboard image; the
-    /// subcommands list, hide, show, close, reopen and change pins, and switch groups
+    /// Pins of the running instance: `noeul pin --clipboard` pins what the clipboard holds (as
+    /// F3 does), `noeul pin <file>` an image file; the subcommands list, hide, show, close,
+    /// reopen and change pins, and switch groups
     Pin(PinArgs),
     /// Noeul's keyboard shortcuts: list, change, disable, reset, check conflicts (never
     /// registers a hotkey or opens a window)
@@ -194,24 +195,34 @@ pub struct PinArgs {
 }
 
 #[derive(Debug, Args)]
+#[command(group = clap::ArgGroup::new("source").args(["clipboard", "file"]))]
 pub struct PinCreateArgs {
-    /// Read the clipboard once and pin its image, as F3 does (without taking focus; inside the
-    /// work area of the monitor, zoomed out when larger)
+    /// An image file to pin (PNG, JPEG, GIF, BMP, ICO, TIFF or TGA on a local drive; never a
+    /// network path), read by the running Noeul
+    #[arg(value_name = "FILE", conflicts_with = "clipboard")]
+    pub file: Option<std::path::PathBuf>,
+    /// Read the clipboard once and pin what it holds, as F3 does — an image, image files, a
+    /// colour value, HTML or text (without taking focus; inside the work area of the monitor,
+    /// zoomed out when larger)
     #[arg(long)]
     pub clipboard: bool,
+    /// Pin the clipboard as this kind instead of the first one it offers: image, image_file,
+    /// color, html, text or files
+    #[arg(long = "as", value_name = "KIND", requires = "clipboard")]
+    pub as_kind: Option<String>,
     /// Where the picture's top-left corner goes: x,y in device pixels (default: the pointer)
     #[arg(
         long,
         value_name = "X,Y",
         allow_hyphen_values = true,
-        requires = "clipboard"
+        requires = "source"
     )]
     pub at: Option<String>,
     /// Start Noeul first when it is not running
-    #[arg(long, requires = "clipboard")]
+    #[arg(long, requires = "source")]
     pub start: bool,
-    /// Check the desktop; read nothing and pin nothing
-    #[arg(long, requires = "clipboard")]
+    /// Check the desktop (and the arguments); read nothing and pin nothing
+    #[arg(long, requires = "source")]
     pub dry_run: bool,
 }
 

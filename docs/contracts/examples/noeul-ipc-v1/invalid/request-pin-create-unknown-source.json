@@ -3,6 +3,6 @@
   "id": 13,
   "method": "pin.create",
   "params": {
-    "source": "file"
+    "source": "url"
   }
 }

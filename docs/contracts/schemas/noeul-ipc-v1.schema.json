@@ -141,7 +141,7 @@
       }
     },
     "params": {
-      "description": "Parameters of every method (absent flags are false). capture: region and pin (required); capture.region and capture.cancel: dry_run only; pin.create: source (region with region, or clipboard with an optional at); pin.hide, pin.show, pin.close and pin.set: id, group or all; pin.show: on_screen; pin.set: at (one pin), zoom, opacity, rotation, mirrored, rotate, flip, thumbnail, click_through, move_to_group (Step 54); group.switch: group; quit: force.",
+      "description": "Parameters of every method (absent flags are false). capture: region and pin (required); capture.region and capture.cancel: dry_run only; pin.create: source (region with region, clipboard with an optional at and as, or file with path and an optional at; Step 55); pin.hide, pin.show, pin.close and pin.set: id, group or all; pin.show: on_screen; pin.set: at (one pin), zoom, opacity, rotation, mirrored, rotate, flip, thumbnail, click_through, move_to_group (Step 54); group.switch: group; quit: force.",
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -152,7 +152,9 @@
         "all": { "type": "boolean" },
         "force": { "type": "boolean" },
         "reason": { "enum": ["start"] },
-        "source": { "description": "pin.create: what the instance reads itself (Step 53).", "enum": ["region", "clipboard"] },
+        "source": { "description": "pin.create: what the instance reads itself (Step 53; file since Step 55).", "enum": ["region", "clipboard", "file"] },
+        "as": { "description": "pin.create with source clipboard: pin this kind instead of the first one the clipboard offers (Step 55, NOEUL-FR-071).", "$ref": "#/$defs/paste_kind" },
+        "path": { "description": "pin.create with source file: an absolute local path to an image file (Step 55, NOEUL-FR-073); never echoed in a result.", "type": "string", "minLength": 3, "maxLength": 32767 },
         "at": { "description": "pin.create with source clipboard: where the picture's top-left corner goes (default: the pointer); pin.set: where one pin's picture goes exactly (Step 54).", "$ref": "#/$defs/point" },
         "on_screen": { "description": "pin.show: also move pins no monitor shows into the nearest work area (NOEUL-FR-067).", "type": "boolean" },
         "group": { "description": "pin.hide, pin.show, pin.close and pin.set: every pin of this group; group.switch: the group to switch to (Step 54, NOEUL-FR-064).", "$ref": "#/$defs/group_name" },
@@ -280,7 +282,7 @@
     },
     "settings_state": {
       "type": "object",
-      "required": ["path", "state", "tray_icon", "keyboard_help", "quick_save_folder", "detection", "magnifier", "pins", "gestures", "problems"],
+      "required": ["path", "state", "tray_icon", "keyboard_help", "quick_save_folder", "detection", "magnifier", "pins", "paste", "gestures", "problems"],
       "additionalProperties": false,
       "properties": {
         "path": { "type": "string", "minLength": 1 },
@@ -298,6 +300,16 @@
           "properties": {
             "border": { "enum": ["on", "off"] },
             "shadow": { "enum": ["on", "off"] }
+          }
+        },
+        "paste": {
+          "description": "`[paste]` (Step 55, NOEUL-FR-071): whether a copied path to an image file pins the file, and whether copied non-image files become a card of their names.",
+          "type": "object",
+          "required": ["paths", "file_cards"],
+          "additionalProperties": false,
+          "properties": {
+            "paths": { "enum": ["on", "off"] },
+            "file_cards": { "enum": ["on", "off"] }
           }
         },
         "gestures": {
@@ -432,7 +444,7 @@
       "properties": {
         "id": { "$ref": "#/$defs/pin_id" },
         "rect": { "description": "The picture on screen: position and shown size (at its zoom, turned, or the thumbnail); the window adds the outline and shadow around it.", "$ref": "#/$defs/rect" },
-        "source": { "enum": ["capture", "clipboard"] },
+        "source": { "enum": ["capture", "clipboard", "file"] },
         "zoom": { "$ref": "#/$defs/zoom" }
       }
     },
@@ -620,7 +632,7 @@
     },
     "pin_entry": {
       "type": "object",
-      "required": ["id", "rect", "image", "zoom", "visible", "on_screen", "source", "created_at", "annotations", "editing", "orientation", "opacity", "thumbnail", "click_through", "group", "animation"],
+      "required": ["id", "rect", "image", "zoom", "visible", "on_screen", "source", "created_at", "annotations", "editing", "orientation", "opacity", "thumbnail", "click_through", "group", "animation", "content"],
       "additionalProperties": false,
       "properties": {
         "id": { "$ref": "#/$defs/pin_id" },
@@ -638,7 +650,7 @@
         "zoom": { "$ref": "#/$defs/zoom" },
         "visible": { "description": "False while the pin is hidden (Step 53).", "type": "boolean" },
         "on_screen": { "description": "Whether a monitor shows enough of the pin to reach it; null while the desktop is not available (Step 53).", "type": ["boolean", "null"] },
-        "source": { "enum": ["capture", "clipboard"] },
+        "source": { "enum": ["capture", "clipboard", "file"] },
         "created_at": { "$ref": "#/$defs/timestamp" },
         "annotations": { "description": "Annotations the pin carries as editable objects (Step 56).", "$ref": "#/$defs/u64" },
         "editing": { "description": "Its annotations are being edited (its window is hidden meanwhile).", "type": "boolean" },
@@ -661,7 +673,8 @@
               }
             }
           ]
-        }
+        },
+        "content": { "description": "What the pin shows (Step 55): a picture, or a card made from text, HTML, a colour value or file names; never the content itself.", "enum": ["image", "text", "html", "color", "files"] }
       }
     },
     "pin_set_result": {
@@ -712,15 +725,24 @@
       }
     },
     "pin_create_result": {
-      "description": "`pin.create` (Step 53): the instance captured the region or read the clipboard itself; `pin` is null for a dry run, which captures and reads nothing.",
+      "description": "`pin.create` (Step 53): the instance captured the region or read the clipboard or the file itself; `pin` is null for a dry run, which captures and reads nothing. Since Step 55 a clipboard or file pin also says what it pinned: `kind`, every kind the clipboard offered (`offered`, names only), all the pins it made (`pins`, the first is `pin`) and how many offered files were skipped or failed.",
       "type": "object",
       "required": ["dry_run", "source", "pin"],
       "additionalProperties": false,
       "properties": {
         "dry_run": { "type": "boolean" },
-        "source": { "enum": ["region", "clipboard"] },
-        "pin": { "oneOf": [{ "$ref": "#/$defs/pin_ref" }, { "type": "null" }] }
+        "source": { "enum": ["region", "clipboard", "file"] },
+        "pin": { "oneOf": [{ "$ref": "#/$defs/pin_ref" }, { "type": "null" }] },
+        "kind": { "oneOf": [{ "$ref": "#/$defs/paste_kind" }, { "type": "null" }] },
+        "offered": { "type": "array", "items": { "$ref": "#/$defs/paste_kind" } },
+        "pins": { "type": "array", "items": { "$ref": "#/$defs/pin_ref" } },
+        "skipped": { "$ref": "#/$defs/u64" },
+        "failed": { "$ref": "#/$defs/u64" }
       }
+    },
+    "paste_kind": {
+      "description": "What a paste pins (Step 55, NOEUL-FR-071), in priority order: an image, image files, a colour value, HTML, plain text, file names.",
+      "enum": ["image", "image_file", "color", "html", "text", "files"]
     },
     "pin_hide_result": {
       "description": "`pin.hide` (Step 53): the pins that were (or, in a dry run, would be) hidden; pins hidden already are not listed.",

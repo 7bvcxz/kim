@@ -441,3 +441,72 @@ fn starters_are_drafts_with_sensible_defaults() {
         assert!(!f.fields.title.is_empty());
     }
 }
+
+/// Acceptance 2: every action category the form saves is what the engine runs. The rules the
+/// form builds (enabled, with the editor's consent) become active bindings in the engine's own
+/// loader (`rules::from_store`, what the tray app applies on reload), none inactive.
+#[test]
+fn every_category_the_form_saves_becomes_an_active_engine_binding() {
+    let p = profile();
+    let mut forms = Vec::new();
+    let mut f = with(Effect::Remap, "Ctrl+Alt+Shift+F13");
+    f.fields.remap.to = "F20".into();
+    forms.push(f);
+    let mut f = with(Effect::SendKeys, "Ctrl+Alt+Shift+F14");
+    f.fields.keys.keys = "Ctrl+C".into();
+    forms.push(f);
+    let mut f = with(Effect::TypeText, "Ctrl+Alt+Shift+F15");
+    f.fields.text.text = "감사합니다.".into();
+    forms.push(f);
+    let mut f = with(Effect::OpenProgram, "Ctrl+Alt+Shift+F16");
+    f.fields.program.path = r"C:\Windows\System32\notepad.exe".into();
+    forms.push(f);
+    let mut f = with(Effect::OpenUrl, "Ctrl+Alt+Shift+F17");
+    f.fields.url = "example.com".into();
+    forms.push(f);
+    let mut f = with(Effect::Mouse, "Ctrl+Alt+Shift+F18");
+    f.fields.mouse = MouseAction::MoveBy {
+        dx: 10,
+        dy: 0,
+        grid: None,
+        hold: HoldChoice::Once,
+    };
+    forms.push(f);
+    let mut f = with(Effect::Mode, "Ctrl+Alt+Shift+F19");
+    f.fields.mode.mode = "nav".into();
+    forms.push(f);
+    let mut f = with(Effect::Engine, "Ctrl+Alt+Shift+F20");
+    f.fields.engine = EngineOp::Pause;
+    forms.push(f);
+    forms.push(with(Effect::Block, "Ctrl+Alt+Shift+F21"));
+    let mut d = Document::empty();
+    d.profiles[0].modes.push(Mode::new("nav", "Navigation"));
+    let mut ids = Vec::new();
+    for (i, f) in forms.iter().enumerate() {
+        let id = format!("cat-{i}");
+        let mut r = f
+            .build(&id, Some(&p))
+            .unwrap_or_else(|e| panic!("{i}: {e:?}"));
+        r.enabled = true;
+        let needed = r.permissions_needed();
+        grant_gui(&mut r, &needed);
+        d.profiles[0]
+            .rules
+            .push(ddalgak::model::RuleEntry::Typed(Box::new(r)));
+        ids.push(id);
+    }
+    let l = store::interpret(
+        d.to_text().as_bytes(),
+        &Context::default(),
+        store::MIGRATIONS,
+    );
+    assert!(l.state.usable(), "{:?}", l.state);
+    let engine = ddalgak::rules::from_store(&l);
+    assert!(engine.inactive.is_empty(), "{:?}", engine.inactive);
+    for id in &ids {
+        assert!(
+            engine.bindings.iter().any(|b| &b.rule == id),
+            "{id} is not an active binding"
+        );
+    }
+}

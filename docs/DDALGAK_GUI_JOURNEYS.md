@@ -177,7 +177,7 @@ Each form shows its inputs (RULE_MODEL §5), a live summary sentence, and the pe
 
 | Tile | Form | Summary sentence | Permission |
 | --- | --- | --- | --- |
-| Act as another key | Target key (capture or pick), optional *Tap alone sends* key and time | "CapsLock acts as Left Ctrl; a quick tap is Escape" | type for me |
+| Act as another key | Target key (capture or pick; a mouse button from a list), optional *Tap alone sends* key and time, *Also let the original key through* (not with a tap) | "CapsLock acts as Left Ctrl; a quick tap is Escape" | type for me |
 | Press a shortcut | Up to eight chords, optional delay between them | "Presses Ctrl+K, then Ctrl+V" | type for me |
 | Type text | Multi-line text box (Hangul, emoji), *Paste instead of typing*, delay | "Types 13 characters on 2 lines" | type for me (+ clipboard for paste) |
 | Open a program | **Choose program…** (file picker limited to `.exe`) or **Choose an app…** (installed packaged apps), arguments as a list, start folder, window state, *bring to front if running* | "Opens Notepad" | open programs |
@@ -196,6 +196,22 @@ Each form shows its inputs (RULE_MODEL §5), a live summary sentence, and the pe
 │ ✓ Found. Ddalgak starts it as you, never as administrator.    │
 └──────────────────────────────────────────────────────────────┘
 ```
+
+**The "Act as another key" and "Block this key" forms** (Step 68 fixed their fields;
+`crates/ddalgak/src/remap.rs` `FIELDS`, `BLOCK_FIELDS`, `summary` and `preview`, whose tests check
+every field against the rules schema and every preview against the playground contract):
+
+| Field (rule document) | Input | Required | Default | Label and help |
+| --- | --- | --- | --- | --- |
+| `steps[0].to` | capture, with *Type instead* | yes | — | **Acts as**: one key, chord, modifier or mouse button. Logical keys follow the layout; *this key position* stores `code:Key…` instead |
+| `steps[0].tap` | capture | no | — | **A quick tap alone sends**: dual role; a press and release with no other key within the tap time sends this instead |
+| `steps[0].tap_ms` | number | no | 200 | **Tap time (ms)**: 100–1000; held longer, or another key pressed meanwhile, the key acts as the target |
+| `trigger.pass_through` | toggle | no | off | **Also let the original key through**: not with a tap alternative |
+
+"Block this key" has no inputs ("Insert does nothing (blocked)"). Under the summary the form says
+when a plain trigger combines with held modifiers ("Shift+CapsLock sends Shift+Escape") and, for
+a mouse-button trigger, that Ddalgak then uses a mouse hook while the engine is on. Choosing
+`MouseLeft` or `MouseRight` as the trigger is not offered.
 
 **Advanced** (folded): *Only in modes…*, *Only in apps… / except in…*, *Window title contains…*,
 *Priority*, *If a step fails: stop / continue*, *Accept input from other programs* (shown only

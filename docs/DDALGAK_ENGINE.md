@@ -1,11 +1,13 @@
-# Ddalgak engine (Step 66)
+# Ddalgak engine (Steps 66–68)
 
 Status: **current** (engine implemented in Step 66 for Windows, the rule store and live reload in
-Step 67, §10; remaps and the other actions follow in Steps 68–72) · Decisions:
+Step 67, §10; remaps, blocks and mouse-button triggers in Step 68, §11; the other actions follow in
+Steps 69–72) · Decisions:
 [ADR 0022](adr/0022-ddalgak-rule-model-and-safety.md),
 [ADR 0024](adr/0024-ddalgak-windows-input-apis-and-permissions.md),
-[ADR 0028](adr/0028-ddalgak-rule-store-validation-and-reload.md) · Code: `crates/ddalgak` ·
-Requirements: `DDALGAK-FR-001…009`, `DDALGAK-FR-017`, `DDALGAK-FR-060`,
+[ADR 0028](adr/0028-ddalgak-rule-store-validation-and-reload.md),
+[ADR 0031](adr/0031-ddalgak-remap-execution-and-mouse-hook.md) · Code: `crates/ddalgak` ·
+Requirements: `DDALGAK-FR-001…010`, `DDALGAK-FR-017`, `DDALGAK-FR-020`, `DDALGAK-FR-060`, `DDALGAK-FR-071`,
 `DDALGAK-NFR-001`, `DDALGAK-NFR-002`, `DDALGAK-NFR-004`, `DDALGAK-SEC-001…005`, `DDALGAK-SEC-007`,
 `DDALGAK-SEC-010`, `DDALGAK-SEC-011`
 
@@ -19,14 +21,15 @@ the rule format is [DDALGAK_RULE_MODEL](DDALGAK_RULE_MODEL.md); the safety scope
 | Delivered | Not yet (owner Step) |
 | --- | --- |
 | `ddalgak-gui.exe`: the tray app that owns the engine (tray icon with state by shape and text, single instance per user session, hidden window, no editor) | the rule editor and playground windows (74, 76) |
-| The low-level keyboard hook engine: event model, trigger tables, decision core, worker, lifecycle, emergency chord, held-key ledger, rate limit, stepping aside | remaps, send keys, text, launches, mouse, modes (68–72); mouse-button triggers and the mouse hook (68) |
+| The low-level keyboard hook engine: event model, trigger tables, decision core, worker, lifecycle, emergency chord, held-key ledger, rate limit, stepping aside; since Step 68 remaps and blocks, mouse-button triggers with the on-demand mouse hook (§11) | send keys and text (69), launches (70), mouse actions and wheel triggers (71), modes (72), ordered multi-step runs (78) |
 | Ddalgak's own global shortcuts `engine.toggle` and `engine.pause` from `hotkeys.json`, registered with `RegisterHotKey` | the `ddalgak hotkeys …` commands (81; bind by editing `hotkeys.json` until then) |
-| Rules: the engine runs **engine-control rules** (`engine` steps) and keeps every other rule inactive with a stated code; since Step 67 the rule store with full validation, CRUD, drafts, history and live reload (§10) | the other action types (68–72) |
+| Rules: the engine runs **engine-control rules** (`engine` steps), since Step 68 **remap** and **block** rules (§11), and keeps every other rule inactive with a stated code; since Step 67 the rule store with full validation, CRUD, drafts, history and live reload (§10) | the other action types (69–72, 78) |
 | `ddalgak status`, `health`, `engine start|pause|resume|stop`, `pause`, `resume`, `quit`, `startup status|enable|disable`, `capabilities` with `--json` and `--dry-run`; since Step 67 `rule …` and `rules …` | `profile`, `mode`, `test`, `explain` (72, 75, 76, 77, 81) |
 | Opt-in start at sign-in through the user's Run key | — |
 
 **Never broader.** A rule this version does not run is listed in `status` as inactive with its
-code: `step_unsupported` (an action type of a later Step, or an unknown one),
+code: `step_unsupported` (an action type of a later Step — `send_keys` and `type_text` in 69,
+launches in 70, mouse actions in 71, modes in 72, `delay` in 78 — or an unknown one),
 `condition_unsupported` (`when`, Step 77), `rule_unsupported` (an unknown field inside the rule),
 `trigger_invalid`/`trigger_reserved`, `duplicate_rule_id`, `duplicate_trigger` and every other
 error of DDALGAK_RULE_MODEL §8. A file that is not a usable `ddalgak.rules` v1 document is not
@@ -52,6 +55,11 @@ Modifier matching is exact (HOTKEY_CONTRACT §5.5): generic modifiers accept eit
 side-specific ones need that side, nothing else may be held, `Win` is never part of a trigger,
 and AltGr is its own modifier (`AltGr+Q` ≠ `Ctrl+Alt+Q`). The normalizer keeps only the
 current key state; nothing is recorded (`DDALGAK-SEC-001`).
+
+**Mouse buttons** (Step 68). While the low-level mouse hook is installed (§11), middle and X
+button events become `RawKey`s with the documented `VK_MBUTTON`, `VK_XBUTTON1` and `VK_XBUTTON2`
+codes (a keyboard never sends them) and go through the same normalizer and core; moves, the wheel
+and the primary and secondary buttons pass on without reaching the core.
 
 **IME and layouts.** No character translation happens in the hook (dead keys stay intact).
 While an IME window reports a composition (`EVENT_OBJECT_IME_SHOW`), no rule fires and keys pass
@@ -88,7 +96,8 @@ over a table compiled when the engine starts (`crates/ddalgak/src/table.rs`):
 
 Widened matching for `remap`/`block` (a trigger without modifiers matches with modifiers held,
 except where that forms a reserved chord: with `Tab` remapped, `Alt+Tab` still switches
-windows) is implemented and tested in the core for Step 68.
+windows) runs since Step 68; an exact chord of another rule wins over a widened match. Remaps
+themselves are §11.
 
 ## 4. Process, threads and lifecycle
 
@@ -99,12 +108,13 @@ flowchart LR
   file -- "folder change notification" --> app
   subgraph app["ddalgak-gui.exe (user-started, tray icon)"]
     main["main thread<br/>hidden window · tray · RegisterHotKey<br/>session + WinEvent watchers · lifecycle"]
-    hook["hook thread<br/>WH_KEYBOARD_LL · Core::decide"]
-    worker["worker thread<br/>rules · holds · activity"]
+    hook["hook thread<br/>WH_KEYBOARD_LL · Core::decide<br/>WH_MOUSE_LL only while a mouse-button rule is active"]
+    worker["worker thread<br/>rules · holds · activity<br/>injector and its ledger"]
     ipc["IPC thread"]
   end
   hook -- "bounded queue (try_send)" --> worker
   worker -- "engine-control steps" --> main
+  worker -- "SendInput (marked): remap outputs" --> os[("input stream")]
   ipc -- "requests" --> main
   main -- "atomics: state, flags" --> hook
 ```
@@ -121,7 +131,9 @@ flowchart LR
   or when the app runs elevated. `status` reports the reason as `start.off_reason`.
 - **No rule turns the engine on** (`DDALGAK-FR-004`); the lifecycle refuses it.
 - **Held keys** are released on pause, stop, emergency, session lock or disconnect, shutdown,
-  `Drop` and in the panic hook (`DDALGAK-SEC-005`). After a desktop switch (lock screen, UAC,
+  `Drop` and in the panic hook (`DDALGAK-SEC-005`); since Step 68 the worker owns the injector
+  and its ledger (keys and mouse buttons), the hook thread tells it to release everything when it
+  drops its remaps, and an elevated window taking focus releases too (§11). After a desktop switch (lock screen, UAC,
   Ctrl+Alt+Del) or an unlock the hook forgets its key state, so a key-up it never saw (the
   `Win` of `Win+L`) cannot block every trigger afterwards (unit-tested; the switch events
   themselves are **not tested** on this machine).
@@ -243,13 +255,14 @@ tray icon on your desktop):
 | Path | What |
 | --- | --- |
 | `crates/ddalgak/src/{event,trigger,table,core,worker,lifecycle,inject,shortcuts,rules,ipc,startup,stats}.rs` | portable engine, unit-tested on every platform |
+| `crates/ddalgak/src/remap.rs` | remap outputs (`Output`), the playground preview, the editor's summary sentence and form fields (Step 68, §11) |
 | `crates/ddalgak/src/{model,schema,validate,store,edit}.rs` | the rule store (Step 67, §10): typed model, run-time schema, validation, files, operations |
 | `crates/ddalgak/src/win/{hook,inject,context,host,tray,pipe,instance,startup,watch}.rs` | Windows layer (`watch`: the folder change notifications of §10) |
 | `crates/ddalgak/src/main.rs`, `cli.rs`, `output.rs`, `rule_cmd.rs` | the `ddalgak` CLI (`rule_cmd`: the `rule` and `rules` commands) |
 | `crates/ddalgak/src/bin/ddalgak-gui.rs` | the tray app |
 | `crates/ddalgak/hotkeys.manifest.json` | the built-in hotkey manifest (equal to the contract example) |
 | `crates/ddalgak/tests/{cli,hook_windows}.rs` | real-binary and real-hook tests |
-| `e2e/tests/step66_ddalgak_engine.rs`, `e2e/tests/step67_ddalgak_rules.rs` | the e2e scenarios (run only through `cargo xtask e2e`) |
+| `e2e/tests/step66_ddalgak_engine.rs`, `e2e/tests/step67_ddalgak_rules.rs`, `e2e/tests/step68_ddalgak_remap.rs` | the e2e scenarios (run only through `cargo xtask e2e`) |
 
 ## 10. The rule store and live reload (Step 67)
 
@@ -294,4 +307,97 @@ bad version. The engine state (off, running, paused) never changes by a reload.
 | Reload in the running app with the engine on: a CLI change is applied at once, a broken file keeps the previous rules, the hook stays installed and healthy, a repair is applied again | **tested** (Windows 10 19045; with the engine off when the tests run elevated) | `tests/cli.rs::a_running_app_reloads_valid_rules_and_keeps_its_hook` |
 | A rule added while the engine runs fires through the swapped table in the same hook (real `SendInput` of `F17` as "another program") | **tested** on an unlocked desktop of this machine; reports **skipped** when the desktop is locked | same test |
 | Load, validate and compile 1000 rules | **measured**: 33–34 ms (release, including compiling the schema's patterns once), 120–133 ms (debug); `DDALGAK-NFR-004` (< 100 ms with the hook, which installs in 0.2–0.3 ms) met | `rules::tests::loading_and_validating_1000_rules_is_fast_enough` |
-| A reload while a remap holds a key | **not tested**: remaps run from Step 68, which owns that check | — |
+| A reload while a remap holds a key | **tested** in the core and the worker (Step 68): the held output stays until its trigger goes up, an undecided dual role is dropped, the release after the reload frees the right key | `core::tests::a_reload_keeps_held_outputs_until_their_trigger_goes_up`, `worker::tests::a_reload_never_strands_a_held_output` |
+
+## 11. Remaps, blocks and the mouse hook (Step 68)
+
+Decision: [ADR 0031](adr/0031-ddalgak-remap-execution-and-mouse-hook.md). Format:
+[DDALGAK_RULE_MODEL §3, §5.1, §5.2](DDALGAK_RULE_MODEL.md).
+
+**What runs.** A `remap` rule makes its trigger act as another key, chord, modifier or mouse
+button for exactly as long as it is held; `block` consumes its trigger. Both are widened (a plain
+trigger matches with modifiers held, an exact chord of another rule wins, reserved and `Win`
+chords never). Triggers can be keys, chords, lock keys, bare side-specific modifiers and the mouse
+buttons `MouseMiddle`, `MouseX1`, `MouseX2`; outputs can be named keys (by virtual key, so the
+layout decides), `code:` keys (by scan code), bare modifiers including `LWin`/`RWin`, and all five
+mouse buttons.
+
+**How.** The core keeps up to 16 held remaps and decides each output event from its key state;
+the worker sends exactly what it was told with `SendInput`, marked as Ddalgak's own:
+
+| Event | The core decides | The worker sends |
+| --- | --- | --- |
+| Trigger down | release the trigger's own modifiers (exact chord triggers, not with pass-through); press the target modifiers and key that nobody holds yet (reference counts; a key the user holds is left alone) | `Press`: ups of the released modifiers (not recorded), downs of the target (recorded in the ledger) |
+| Auto-repeat | — | `Repeat`: the target key's down again, only while the ledger still holds it |
+| Trigger up | release what this remap alone held; restore released trigger modifiers still held | `Release`: ups of the target, downs of the restored modifiers (not recorded) |
+| Dual role (`tap`) | undecided until another key goes down (target first, that key held back and sent on after it), the hook thread's one-shot timer after `tap_ms`, or the trigger's up (the tap output) | `Press`/`Replay` or `Tap` (all in one `SendInput` call) |
+| Pause, stop, session lock, profile switch | drop every remap, restore the user's still-held trigger modifiers | `ReleaseAll`, ordered after every press decided before; then `Restore` |
+| Desktop switch, unlock, an elevated window takes focus | forget the key state (key-ups made there never reach the hook) and drop every remap | `ReleaseAll` |
+| Reload | keep held remaps (their instructions carry the output keys), drop undecided dual roles | — |
+
+The debug test host never injects (its worker's backend sends nothing): a remapped key pressed on
+the real keyboard during an automated test types nothing.
+
+**The mouse hook** (`WH_MOUSE_LL`, permission `mouse-hook`) is installed on the hook thread only
+while the engine is on and an active rule has a mouse-button trigger, and removed when a reload,
+a disable or a stop leaves none. `status` and `health` show `engine.hook.mouse_installed`. While it
+exists the hook thread wakes for every mouse move (the callback passes moves on at once); without
+a mouse rule the engine's idle cost is unchanged (§7).
+
+**Measurements** (Windows 10 Pro 19045, this machine; numbers stay local, ADR 0012):
+
+| What | Method | Result |
+| --- | --- | --- |
+| Decision cost, 1000 rules, a key no rule uses, with 0 and with 16 held remaps | `core::tests::decision_cost_with_1000_rules_…` and `…decisions_with_remaps_stay_far_below_the_hook_budget`, 20 000 calls | **0.66 µs** per event in a release build with or without held remaps, 2.5–2.7 µs in a debug build (measured while other builds ran on the machine; Step 66 measured 0.28 µs on an idle one) |
+| Hook callback time with real remaps (injected obscure keys) | `tests/hook_windows.rs::real_remap_block_and_dual_role_with_obscure_keys`, the callback's own timing | max **85 µs**, p99 ≤ 100 µs (24 callbacks) |
+| Trigger down to target down (worker wake-up and `SendInput`) | same test, polling `GetAsyncKeyState` every 2 ms | **2.6 ms** including the polling interval |
+| Dual-role timer | same test, `tap_ms` 200 | target down **210 ms** after the trigger (thread timer resolution) |
+
+**Verification on real Windows** (the shared machine; real-input tests inject only F13–F20 and no
+mouse input; they report **skipped** when the workstation is locked):
+
+| Check | Status | Evidence |
+| --- | --- | --- |
+| Press/repeat/release pairing, chord triggers releasing and restoring their modifiers, widening and exact-chord precedence, reserved and `Win` chords, left/right targets, consumed versus injected modifiers, shared outputs, keys the user holds, dual role (tap, timer, interrupt with replay, keys with their own rule, mouse never deciding), pass-through, block, mouse-button and `code:` targets, rate limits, swaps and chains that cannot loop, stepping aside, every release path, reloads | **tested** (decision core and worker, no input injected) | `core::tests` (Step 68 section), `worker::tests` |
+| A remap `F15` → `F16` holds `F16` exactly while `F15` is held (repeat included), `F15` never goes down; `F17` blocked (down and up consumed); the pause path and the key-reset path release a held target; dual role `F18`: a tap sends `F20`, a hold presses `F19` after the tap time; nothing is left pressed | **tested** once on an unlocked desktop of this machine (`GetAsyncKeyState` of the test's own keys, the engine's counters); later runs reported **skipped (locked)** | `tests/hook_windows.rs::real_remap_block_and_dual_role_with_obscure_keys` |
+| The mouse hook exists only while a mouse-button rule is active: absent without one, installed by the reload that adds one, removed when it is disabled and when the engine stops, installed at start when the rule exists | **tested** through the CLI and the test host (the hook passes every event on, nothing is injected) | `tests/cli.rs::the_mouse_hook_exists_only_while_a_mouse_button_rule_does` |
+| Remaps refuse other programs' input (`skipped_injected_input`) and the test host injects nothing | **tested** in the core; in the real app by the e2e scenario (when it runs) | `core::tests::swapped_and_chained_remaps_never_loop`, `e2e/tests/step68_ddalgak_remap.rs` |
+| CLI: remaps and blocks added, refused (primary-button or sequence mouse triggers, `Win` chords, self-remaps, dual role with pass-through, the Secure Attention Sequence as output, duplicate triggers) with nothing written | **tested** (unit tests, CLI tests, a manual run of the commands in a sandbox) | `edit::tests`, `tests/cli.rs`, `e2e/tests/step68_ddalgak_remap.rs` |
+| **Typing with a physical keyboard** in normal applications and the shell, Korean 2-set IME (composition guard, `HangulMode` as an output), a layout switch (logical versus `code:` keys), Ctrl/Win/Alt combinations with remaps active, **real mouse buttons**, an elevated window taking focus while a remap holds its target, session lock while held, killing the app while held | **not tested**: physical keys, mouse buttons, the IME and elevation cannot be used by automated tests on this shared machine (AGENTS.md §5); the manual checks below | — |
+
+**Manual checks for the maintainer** (about fifteen minutes; release build, the real tray app;
+every rule below is removed again at the end):
+
+1. `cargo build -p ddalgak --release`, start `target\release\ddalgak-gui.exe`, then
+   `target\release\ddalgak engine start`.
+2. Add the rules (each `rule add` also takes `--allow input-injection` for remaps):
+   `ddalgak rule add --id caps --trigger CapsLock --action remap --to LCtrl --tap Escape --allow input-injection`,
+   `ddalgak rule add --id hangul --trigger RAlt --action remap --to HangulMode --allow input-injection`,
+   `ddalgak rule add --id jdown --trigger Ctrl+Shift+J --action remap --to Down --allow input-injection`,
+   `ddalgak rule add --id x1 --trigger MouseX1 --action remap --to Alt+Left --allow input-injection`,
+   `ddalgak rule add --id noins --trigger Insert --action block`. `ddalgak status` lists them
+   active and shows `mouse hook installed`.
+3. **Notepad**: CapsLock alone does not toggle caps; CapsLock+A selects all, CapsLock+C/V copy and
+   paste, also when pressed quickly (within 200 ms); a quick tap of CapsLock acts as Escape (in a
+   browser address bar it closes the suggestions); Shift+CapsLock acts as Shift+Escape; Insert does
+   nothing, Shift+Insert does nothing either (widened block).
+4. **PowerShell / cmd** in Windows Terminal: the same; Ctrl+Shift+J moves down in the command
+   history like the Down key; holding it repeats; afterwards Ctrl and Shift are not stuck (type
+   letters: they are not selected or uppercase).
+5. **Korean IME** (add Korean 2-set if needed): Right Alt toggles 한/영 (the indicator changes);
+   while composing a Hangul syllable, CapsLock is skipped (`ddalgak status` activity:
+   `skipped_ime_composition`); Right Alt with an IME that composes inline: note whether it is
+   skipped.
+6. **Layout switch** (add German or US-International): `ddalgak rule add --id z --trigger code:KeyZ --action remap --to F16 --allow input-injection`
+   acts on the key at the US Z position on both layouts; a logical `Z` rule follows the label.
+7. **Combinations**: Alt+Tab still switches windows with a `Tab` remap; Win+CapsLock and Win+E
+   still reach Windows; Ctrl+Shift+Escape opens Task Manager with an `Escape` remap; the emergency
+   chord Ctrl+Alt+Shift+Escape turns the engine off while CapsLock is held (no key stays down).
+8. **Mouse**: mouse button X1 goes back in a browser (Alt+Left); `ddalgak rule disable x1`, then
+   `ddalgak status` shows the mouse hook removed; X1 works normally again.
+9. **Elevated window**: open an administrator cmd yourself, hold CapsLock and click into it, let
+   go, click back into Notepad and type: Ctrl must not be stuck.
+10. **Lock**: hold CapsLock, press Win+L, unlock, type in Notepad: Ctrl must not be stuck.
+11. **Kill** (known limit, Step 73): hold CapsLock and end `ddalgak-gui.exe` in Task Manager; if
+    Ctrl then acts stuck, one press of a physical Ctrl clears it. Report what you see.
+12. Remove the rules: `ddalgak rule delete caps hangul jdown x1 noins z --yes`, then quit the app.

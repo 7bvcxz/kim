@@ -1,11 +1,14 @@
 # Ddalgak Requirements
 
 Status: **current** (Step 65, specification; the engine rows of D2 are implemented since Step 66
-and the rule-store rows `DDALGAK-FR-005…007`, `DDALGAK-FR-009` since Step 67, see
-[DDALGAK_ENGINE](DDALGAK_ENGINE.md) §8 and §10 for what was verified; the GUI half of
-`DDALGAK-FR-007` and undo arrive with the editor, Step 74) · Owner: mouv ·
+and the rule-store rows `DDALGAK-FR-005…007`, `DDALGAK-FR-009` since Step 67; remap and block
+(`DDALGAK-FR-010`) and mouse-button triggers (`DDALGAK-FR-071`, middle and X buttons) since Step
+68, whose real-keyboard and mouse checks are still manual; see [DDALGAK_ENGINE](DDALGAK_ENGINE.md)
+§8, §10 and §11 for what was verified; the GUI half of `DDALGAK-FR-007` and undo arrive with the
+editor, Step 74) · Owner: mouv ·
 Derived from [DDALGAK_PHILOSOPHY](DDALGAK_PHILOSOPHY.md) · Decisions:
-[ADR 0022](adr/0022-ddalgak-rule-model-and-safety.md), [ADR 0028](adr/0028-ddalgak-rule-store-validation-and-reload.md)
+[ADR 0022](adr/0022-ddalgak-rule-model-and-safety.md), [ADR 0028](adr/0028-ddalgak-rule-store-validation-and-reload.md),
+[ADR 0031](adr/0031-ddalgak-remap-execution-and-mouse-hook.md)
 
 ## 0. How to read this document
 
@@ -116,7 +119,7 @@ Until D6 ships, the Kim catalog lists Ddalgak as *planned* (`KIM-FR-051`).
 | ID | Requirement | Pri | MS | Verify |
 | --- | --- | --- | --- | --- |
 | DDALGAK-FR-070 | Hotstrings: typed abbreviations as triggers, with word boundaries, case options and replacement, never in password fields and without keeping typing history. | P1 | D3 | T, M |
-| DDALGAK-FR-071 | Mouse buttons as triggers (needs a low-level mouse hook, disclosed in the catalog before it ships). | P1 | D3 | T, M |
+| DDALGAK-FR-071 | Mouse buttons as triggers (needs a low-level mouse hook, disclosed in the catalog before it ships). Step 68: the middle and X buttons, through a mouse hook that exists only while such a rule is active; the primary and secondary buttons are never triggers (ADR 0031). | P1 | D3 | T, M |
 | DDALGAK-FR-072 | Window actions (activate, minimize, maximize, move, resize) under the `window-control` permission. | P2 | D5 | T, M |
 | DDALGAK-FR-073 | Clipboard actions (set, paste, transform) under the `clipboard` permission, never logging contents. | P2 | D5 | T, M |
 | DDALGAK-FR-074 | Macro recorder: explicit start and stop with a visible banner, password fields and secure contexts excluded, every recorded event reviewable and removable before saving. | P2 | D5 | T, M |

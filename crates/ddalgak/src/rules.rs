@@ -915,6 +915,113 @@ mod tests {
     }
 
     #[test]
+    fn mouse_rules_compile_and_mixed_or_misplaced_holds_stay_inactive() {
+        use crate::inject::Button;
+        use crate::mouse::{MotionKind, MouseStep, Unit};
+        let r = |id: &str, keys: &str, steps: Value| {
+            json!({ "id": id, "title": id, "enabled": true, "trigger": { "keys": keys },
+                    "steps": steps,
+                    "consent": { "input-injection": { "granted_at": "2026-11-04T09:00:00Z", "via": "cli" } } })
+        };
+        let mut repeat_hold = r(
+            "repeat-hold",
+            "F20",
+            json!([{"type":"mouse_click","button":"left","op":"hold"}]),
+        );
+        repeat_hold["trigger"]["repeat"] = json!(true);
+        let l = parse(&doc(json!([
+            r(
+                "plan",
+                "F13",
+                json!([{"type":"mouse_move","mode":"absolute","to":{"x":1,"y":2}},
+                       {"type":"mouse_click","button":"left","op":"double_click"}])
+            ),
+            r(
+                "drag",
+                "Ctrl+F14",
+                json!([{"type":"mouse_click","button":"x2","op":"hold"}])
+            ),
+            r(
+                "glide",
+                "F15",
+                json!([{"type":"mouse_move","mode":"relative","dx":1,"dy":0,"while_held":{"speed":600}}])
+            ),
+            r(
+                "cells",
+                "F16",
+                json!([{"type":"mouse_move","mode":"relative","dx":1,"dy":0,"unit":"grid",
+                        "grid":{"columns":8,"rows":8},"while_held":{"repeat_ms":100}}])
+            ),
+            r(
+                "wheel",
+                "F17",
+                json!([{"type":"mouse_scroll","direction":"right","notches":3}])
+            ),
+            r(
+                "mixed",
+                "F18",
+                json!([{"type":"mouse_scroll","direction":"down"},{"type":"engine","op":"pause"}])
+            ),
+            r(
+                "grid-glide",
+                "F19",
+                json!([{"type":"mouse_move","mode":"relative","dx":1,"dy":0,"unit":"grid",
+                        "grid":{"columns":8,"rows":8},"while_held":{"speed":600}}])
+            ),
+            repeat_hold,
+        ])));
+        let active: Vec<&str> = l.bindings.iter().map(|b| b.rule.as_str()).collect();
+        assert_eq!(active, ["plan", "drag", "glide", "cells", "wheel"]);
+        assert!(l.bindings.iter().all(|b| b.injects && !b.widen));
+        let Action::Mouse(p) = &l.bindings[0].action else {
+            panic!("{:?}", l.bindings[0].action)
+        };
+        assert_eq!(p.steps.len(), 2);
+        assert!(p.stop_on_error);
+        assert!(matches!(
+            p.steps[1],
+            MouseStep::Click {
+                button: Button::Left,
+                double: true,
+                at: None
+            }
+        ));
+        let Action::MouseHold { spec, at: None } = &l.bindings[1].action else {
+            panic!("{:?}", l.bindings[1].action)
+        };
+        assert_eq!(spec.to, Output::button(Button::X2));
+        assert!(matches!(
+            l.bindings[2].action,
+            Action::Motion(m) if matches!(m.kind, MotionKind::Continuous { speed: 600, acceleration: 0 })
+        ));
+        assert!(matches!(
+            l.bindings[3].action,
+            Action::Motion(m) if matches!(m.unit, Unit::Grid(_)) && matches!(m.kind, MotionKind::Stepped { repeat_ms: 100, .. })
+        ));
+        // The compiled table knows which bindings hold a button or a motion.
+        let t = crate::table::Table::compile(l.bindings.clone(), 20);
+        assert!(t.remap(1).is_some() && t.remap(2).is_none());
+        let codes: Vec<(&str, &str)> = l
+            .inactive
+            .iter()
+            .map(|i| (i.rule.as_str(), i.code))
+            .collect();
+        assert_eq!(
+            codes,
+            [
+                ("mixed", "step_unsupported"),
+                ("grid-glide", "step_invalid"),
+                ("repeat-hold", "step_invalid"),
+            ]
+        );
+        assert!(
+            l.inactive[0].reason.contains("Step 78"),
+            "{:?}",
+            l.inactive[0]
+        );
+    }
+
+    #[test]
     fn precedence_is_mode_scope_then_priority_then_order() {
         let mut low = engine_rule("low", "F13", "pause");
         low["priority"] = json!(-5);

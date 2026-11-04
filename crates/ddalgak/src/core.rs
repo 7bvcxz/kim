@@ -3136,4 +3136,224 @@ mod tests {
             })
         );
     }
+
+    // ---- Step 71: held buttons and moves while held (DDALGAK_RULE_MODEL §5.7, §5.9;
+    // DDALGAK-FR-015, DDALGAK-SEC-005). Decisions only: nothing is injected.
+
+    fn motion(rule: &str, keys: &str, dx: i32, dy: i32) -> Binding {
+        let mut b = binding(rule, keys);
+        b.injects = true;
+        b.action = Action::Motion(crate::mouse::MotionSpec {
+            dx,
+            dy,
+            unit: crate::mouse::Unit::Pixels,
+            kind: crate::mouse::MotionKind::Continuous {
+                speed: 600,
+                acceleration: 0,
+            },
+        });
+        b
+    }
+
+    fn hold(rule: &str, keys: &str, button: Button) -> Binding {
+        let mut b = binding(rule, keys);
+        b.injects = true;
+        b.action = Action::MouseHold {
+            spec: RemapSpec {
+                to: Output::button(button),
+                tap: None,
+                tap_ms: 200,
+            },
+            at: None,
+        };
+        b
+    }
+
+    fn left() -> Option<OutCode> {
+        Some(OutCode::Button(Button::Left))
+    }
+
+    #[test]
+    fn a_move_while_held_lasts_exactly_as_long_as_its_trigger() {
+        let mut t = T::new(vec![
+            motion("up", "Up", 0, -1),
+            motion("right", "Right", 1, 0),
+        ]);
+        let d = t.ev("Up", false);
+        assert!(d.consume, "the trigger never reaches the application");
+        assert_eq!(fired(&d), Some((0, FireKind::Press)));
+        assert_eq!(t.core.active_motions(), 1);
+        // Auto-repeat (a held key, a game's input storm) is consumed and fires nothing: the
+        // motion goes on by itself.
+        for _ in 0..50 {
+            let r = t.ev("Up", false);
+            assert!(r.consume && r.signal.is_none());
+        }
+        // Right while Up is held: two motions, the worker adds them up (a diagonal).
+        assert_eq!(fired(&t.ev("Right", false)), Some((1, FireKind::Press)));
+        assert_eq!(t.core.active_motions(), 2);
+        let u = t.ev("Up", true);
+        assert!(u.consume, "consumed down, consumed up");
+        assert_eq!(u.signal, Some(Signal::MotionEnd { binding: 0 }));
+        assert_eq!(
+            t.ev("Right", true).signal,
+            Some(Signal::MotionEnd { binding: 1 })
+        );
+        assert_eq!(t.core.active_motions(), 0);
+        // Moves while held match exactly: Shift+Up is not Up.
+        let s = t.down(&["LShift", "Up"]);
+        assert!(!s.consume && s.signal.is_none());
+        t.up(&["LShift", "Up"]);
+    }
+
+    #[test]
+    fn a_held_button_is_a_shared_reference_counted_output() {
+        let mut t = T::new(vec![
+            hold("drag", "Space", Button::Left),
+            hold("drag-too", "D", Button::Left),
+            hold("pan", "Ctrl+M", Button::Middle),
+        ]);
+        let d = t.ev("Space", false);
+        assert!(d.consume);
+        assert_eq!(op(&d), Some(press(&[], &[], left())));
+        // Buttons never auto-repeat: a held key's repeats send nothing.
+        for _ in 0..5 {
+            assert_eq!(op(&t.ev("Space", false)), None);
+        }
+        // A second hold of the same button shares it: it goes up when the last one lets go.
+        assert_eq!(op(&t.ev("D", false)), Some(press(&[], &[], None)));
+        assert_eq!(op(&t.ev("Space", true)), Some(release(None, &[], &[])));
+        assert_eq!(op(&t.ev("D", true)), Some(release(left(), &[], &[])));
+        // A chord trigger's modifiers are released while the button is held (a plain middle
+        // drag, not Ctrl+drag) and restored afterwards when still held.
+        t.down(&["LCtrl"]);
+        let m = t.ev("M", false);
+        assert_eq!(
+            op(&m),
+            Some(press(
+                &[ModKey::LCtrl],
+                &[],
+                Some(OutCode::Button(Button::Middle))
+            ))
+        );
+        assert_eq!(
+            op(&t.ev("M", true)),
+            Some(release(
+                Some(OutCode::Button(Button::Middle)),
+                &[],
+                &[ModKey::LCtrl]
+            ))
+        );
+        t.up(&["LCtrl"]);
+        assert_eq!(t.core.active_remaps(), 0);
+    }
+
+    #[test]
+    fn pause_lock_desktop_switches_and_reloads_never_leave_a_button_or_a_motion_held() {
+        // 0: pause, stop or session lock (cancel_pending); 1: a desktop switch, an unlock or an
+        // elevated window taking focus (reset_keys); 2: a reload.
+        for path in 0..3 {
+            let rules = || {
+                vec![
+                    motion("up", "Up", 0, -1),
+                    hold("drag", "Space", Button::Left),
+                ]
+            };
+            let mut t = T::new(rules());
+            t.ev("Up", false);
+            assert_eq!(op(&t.ev("Space", false)), Some(press(&[], &[], left())));
+            let signals = match path {
+                0 => t.core.cancel_pending(),
+                1 => t.core.reset_keys(),
+                _ => {
+                    t.core.set_table(Table::compile(rules(), 20));
+                    Vec::new()
+                }
+            };
+            if path < 2 {
+                assert!(signals.contains(&Signal::ReleaseAll), "{path}: {signals:?}");
+                assert_eq!((t.core.active_motions(), t.core.active_remaps()), (0, 0));
+                // The trigger-ups that come later change nothing more.
+                assert_eq!(t.ev("Up", true).signal, None, "{path}");
+                assert_eq!(op(&t.ev("Space", true)), None, "{path}");
+            } else {
+                // A reload: the worker stops every motion when it gets the new rules; the held
+                // button stays until its trigger goes up and is then released.
+                assert_eq!(t.core.active_motions(), 0);
+                let u = t.ev("Up", true);
+                assert!(u.consume && u.signal.is_none(), "its up stays consumed");
+                assert_eq!(op(&t.ev("Space", true)), Some(release(left(), &[], &[])));
+            }
+        }
+        // Only a motion: a release-all still goes to the worker so it stops.
+        let mut t = T::new(vec![motion("up", "Up", 0, -1)]);
+        t.ev("Up", false);
+        assert_eq!(t.core.reset_keys(), vec![Signal::ReleaseAll]);
+        assert!(t.core.reset_keys().is_empty(), "nothing left to release");
+    }
+
+    #[test]
+    fn mouse_rules_step_aside_and_storms_are_rate_limited() {
+        let mut t = T::new(vec![
+            motion("up", "Up", 0, -1),
+            hold("drag", "Space", Button::Left),
+        ]);
+        t.flags.elevated_foreground = true;
+        for k in ["Up", "Space"] {
+            let d = t.ev(k, false);
+            assert!(!d.consume, "{k} passes unchanged");
+            assert!(matches!(
+                d.signal,
+                Some(Signal::Skipped {
+                    code: Skip::ElevatedTarget,
+                    ..
+                })
+            ));
+            t.ev(k, true);
+        }
+        t.flags.elevated_foreground = false;
+        t.flags.secure_desktop = true;
+        assert!(!t.ev("Up", false).consume);
+        t.ev("Up", true);
+        t.flags.secure_desktop = false;
+        t.mode = Mode::Paused;
+        assert!(matches!(
+            t.ev("Up", false).signal,
+            Some(Signal::Skipped {
+                code: Skip::Paused,
+                ..
+            })
+        ));
+        t.ev("Up", true);
+        t.mode = Mode::Running;
+        assert_eq!(t.core.active_motions(), 0);
+        // Hammering the trigger (a repeated hotkey, high-frequency input): beyond 20 a second the
+        // presses are rate limited, start no motion, and their ups end nothing.
+        let mut limited = 0;
+        for _ in 0..30 {
+            let d = t.ev("Up", false);
+            if matches!(d.signal, Some(Signal::RateLimited { .. })) {
+                limited += 1;
+                assert_eq!(t.core.active_motions(), 0);
+                assert_eq!(t.ev("Up", true).signal, None);
+            } else {
+                assert_eq!(
+                    t.ev("Up", true).signal,
+                    Some(Signal::MotionEnd { binding: 0 })
+                );
+            }
+        }
+        assert!(limited >= 10, "{limited}");
+        // More moves while held than the core keeps: the extra key passes unchanged.
+        let many: Vec<Binding> = (13..=21)
+            .map(|n| motion(&format!("f{n}"), &format!("F{n}"), 1, 0))
+            .collect();
+        let mut t = T::new(many);
+        for n in 13..=20 {
+            assert!(t.ev(&format!("F{n}"), false).consume);
+        }
+        assert_eq!(t.core.active_motions(), MOTIONS);
+        let extra = t.ev("F21", false);
+        assert!(!extra.consume && extra.signal.is_none());
+    }
 }

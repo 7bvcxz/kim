@@ -573,3 +573,133 @@ fn a_send_keys_run_reaches_send_input_with_an_obscure_key_only() {
         t.elapsed()
     );
 }
+
+/// Step 71: the trigger path of mouse actions with the real hook and real injected obscure keys
+/// (F13–F15 as "another program"; these bindings accept injected input, which a rules file never
+/// allows for injecting rules, to stand in for physical keys). The mouse output goes to a
+/// **simulated pointer** only: the worker's backend and screen are a `SimPointer`, so the real
+/// pointer is never moved, scrolled or clicked (the maintainer uses it). The hook consumes only
+/// F13–F15 and passes every other event on.
+#[test]
+fn mouse_rules_on_obscure_keys_reach_only_a_simulated_pointer() {
+    use ddalgak::mouse::{
+        Layout, MotionKind, MotionSpec, MousePlan, MouseStep, Point, ScrollDir, SimPointer, Unit,
+    };
+    let _turn = serial();
+    if !ddalgak::win::input_desktop_available() {
+        eprintln!(
+            "skipped (locked): no interactive input desktop; mouse actions are covered by the mouse, core and worker unit tests"
+        );
+        return;
+    }
+    let mouse = |rule: &str, keys: &str, action: Action| {
+        let mut b = binding(rule, keys, Injected::Accept, EngineOp::Pause);
+        b.injects = true;
+        b.action = action;
+        b
+    };
+    let bindings = vec![
+        mouse(
+            "f13-drags",
+            "F13",
+            Action::MouseHold {
+                spec: RemapSpec {
+                    to: Output::button(ddalgak::inject::Button::Left),
+                    tap: None,
+                    tap_ms: 200,
+                },
+                at: None,
+            },
+        ),
+        mouse(
+            "f14-glides",
+            "F14",
+            Action::Motion(MotionSpec {
+                dx: 1,
+                dy: 0,
+                unit: Unit::Pixels,
+                kind: MotionKind::Continuous {
+                    speed: 2000,
+                    acceleration: 0,
+                },
+            }),
+        ),
+        mouse(
+            "f15-scrolls",
+            "F15",
+            Action::Mouse(Arc::new(MousePlan {
+                steps: vec![MouseStep::Scroll {
+                    dir: ScrollDir::Down,
+                    notches: 2,
+                }],
+                stop_on_error: true,
+            })),
+        ),
+    ];
+    let sim = SimPointer::new(Layout::single(1920, 1080), Point::new(500, 500));
+    let stats = Arc::new(Stats::default());
+    let shared = Shared::new(Arc::clone(&stats));
+    let worker = Worker::start(
+        Arc::clone(&stats),
+        Box::new(|_| {}),
+        Arc::new(Mutex::new(Activity::default())),
+        Box::new(sim.backend()),
+        ddalgak::run::Env {
+            screen: Box::new(sim.screen()),
+            ..ddalgak::run::Env::inert()
+        },
+    );
+    worker.queue().send(Msg::Rules(Rules {
+        generation: 1,
+        bindings: Arc::new(bindings.clone()),
+        profile: "default".into(),
+        mode: "base".into(),
+    }));
+    shared.set_state(STATE_RUNNING);
+    let hook = HookThread::start(
+        Table::compile(bindings, 20),
+        1,
+        &shared,
+        worker.queue(),
+        hook::Options {
+            observe_only: false,
+            max_lifetime: Some(Duration::from_secs(10)),
+        },
+    )
+    .expect("Windows installs a low-level keyboard hook for a normal user process");
+    let mut verified: Vec<&str> = Vec::new();
+    // 1. F15: two wheel notches down on the simulated pointer.
+    let t = Instant::now();
+    inject_or_skip!(tap_other(VK_F15) == 2, "F15 tap", verified);
+    let scrolled = eventually(2000, || sim.with(|s| s.wheel) == (-2, 0));
+    if !scrolled && !ddalgak::win::input_desktop_available() {
+        eprintln!("skipped (locked during the run): verified before: {verified:?}");
+        return;
+    }
+    assert!(scrolled, "the wheel rule ran: {:?}", sim.events());
+    eprintln!("F15 → two simulated wheel notches in {:?}", t.elapsed());
+    verified.push("a scroll rule fires on a real key event and scrolls the simulated pointer");
+    // 2. F13 held: the left button is down exactly as long.
+    inject_or_skip!(send_other(VK_F13, false), "F13 down", verified);
+    assert!(eventually(2000, || sim.with(|s| s.buttons.len()) == 1));
+    inject_or_skip!(send_other(VK_F13, true), "F13 up", verified);
+    assert!(eventually(2000, || sim.with(|s| s.buttons.is_empty())));
+    verified.push("a held button goes down and up with its real trigger key");
+    // 3. F14 held: the pointer glides right; F14 up stops it.
+    inject_or_skip!(send_other(VK_F14, false), "F14 down", verified);
+    assert!(eventually(2000, || sim.cursor().x >= 600));
+    inject_or_skip!(send_other(VK_F14, true), "F14 up", verified);
+    std::thread::sleep(Duration::from_millis(50));
+    let stopped = sim.cursor();
+    std::thread::sleep(Duration::from_millis(100));
+    assert_eq!(sim.cursor(), stopped, "the motion stopped with the trigger");
+    verified.push("a move while held glides until its real trigger key goes up");
+    // The triggers were consumed: none of them is left pressed for applications.
+    for vk in [VK_F13, VK_F14, VK_F15] {
+        assert!(!key_down(vk), "{vk:#x}");
+    }
+    drop(hook);
+    drop(worker);
+    assert!(sim.with(|s| s.buttons.is_empty()));
+    eprintln!("verified with real hook events: {verified:?}");
+}

@@ -1656,4 +1656,354 @@ mod tests {
             [("open-0".into(), "launch_failed".into())]
         );
     }
+
+    // Mouse actions (Step 71): the real worker thread with a simulated pointer as both the screen
+    // and the injection backend, on a synthetic layout; the real pointer is never touched.
+    use crate::mouse::{
+        Anchor, Layout, Monitor, MotionKind, MotionSpec, MouseStep, MoveTo, Point, PointSpec, Rect,
+        ScrollDir, SimPointer, Unit,
+    };
+
+    fn sim_layout() -> Layout {
+        Layout::new(vec![
+            Monitor::new(Rect::sized(-1920, 0, 1920, 1080), 144, false),
+            Monitor::new(Rect::sized(0, 0, 1920, 1080), 96, true),
+        ])
+        .unwrap()
+    }
+
+    fn mouse_binding(id: &str, action: Action) -> Binding {
+        Binding {
+            rule: id.into(),
+            trigger: Trigger::parse("F13").unwrap(),
+            on: On::Press,
+            repeat: false,
+            pass_through: false,
+            injected: Injected::Ignore,
+            widen: false,
+            injects: true,
+            action,
+            hotstring: None,
+        }
+    }
+
+    fn continuous(dx: i32, dy: i32, speed: u32) -> Action {
+        Action::Motion(MotionSpec {
+            dx,
+            dy,
+            unit: Unit::Pixels,
+            kind: MotionKind::Continuous {
+                speed,
+                acceleration: 0,
+            },
+        })
+    }
+
+    /// Rules: 0 a plan (move to the primary's middle, double click, scroll), 1 a hold of the
+    /// left button at a point, 2 a continuous move right, 3 a continuous move up, 4 a stepped
+    /// move left.
+    fn mouse_rules(generation: u32) -> Rules {
+        let plan = Action::Mouse(Arc::new(mouse::MousePlan {
+            steps: vec![
+                MouseStep::Move(MoveTo::At(PointSpec {
+                    x: 960,
+                    y: 540,
+                    anchor: Anchor::PrimaryMonitor,
+                })),
+                MouseStep::Click {
+                    button: Button::Left,
+                    double: true,
+                    at: None,
+                },
+                MouseStep::Scroll {
+                    dir: ScrollDir::Down,
+                    notches: 2,
+                },
+            ],
+            stop_on_error: true,
+        }));
+        let hold = Action::MouseHold {
+            spec: crate::table::RemapSpec {
+                to: crate::remap::Output::button(Button::Left),
+                tap: None,
+                tap_ms: 200,
+            },
+            at: Some(PointSpec {
+                x: -100,
+                y: 100,
+                anchor: Anchor::VirtualScreen,
+            }),
+        };
+        let stepped = Action::Motion(MotionSpec {
+            dx: -10,
+            dy: 0,
+            unit: Unit::Pixels,
+            kind: MotionKind::Stepped {
+                repeat_ms: 30,
+                delay_ms: 60,
+            },
+        });
+        Rules {
+            generation,
+            bindings: Arc::new(vec![
+                mouse_binding("centre-click", plan),
+                mouse_binding("drag", hold),
+                mouse_binding("glide-right", continuous(1, 0, 2000)),
+                mouse_binding("glide-up", continuous(0, -1, 2000)),
+                mouse_binding("step-left", stepped),
+            ]),
+            profile: "default".into(),
+            mode: "base".into(),
+        }
+    }
+
+    fn mouse_worker(sim: &SimPointer) -> Worker {
+        Worker::start(
+            Arc::new(Stats::default()),
+            Box::new(|_| {}),
+            Arc::new(Mutex::new(Activity::default())),
+            Box::new(sim.backend()),
+            Env {
+                screen: Box::new(sim.screen()),
+                ..Env::inert()
+            },
+        )
+    }
+
+    fn eventually(cond: impl Fn() -> bool) -> bool {
+        let t = Instant::now();
+        while !cond() && t.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        cond()
+    }
+
+    #[test]
+    fn a_mouse_rule_runs_its_steps_at_once_with_exactly_these_events() {
+        let sim = SimPointer::new(sim_layout(), Point::new(-500, 500));
+        let w = mouse_worker(&sim);
+        let q = w.queue();
+        q.send(Msg::Rules(mouse_rules(1)));
+        q.signal(1, fire(0));
+        assert_eq!(wait_outcomes(&w, 1), [("centre-click".into(), "ok".into())]);
+        let l = sim_layout();
+        let (x, y) = l.normalize(Point::new(960, 540));
+        let mut want = vec![OutEvent::down(OutCode::MoveTo { x, y })];
+        want.extend(mouse::click_events(Button::Left, true));
+        want.extend(mouse::wheel_events(ScrollDir::Down, 2));
+        assert_eq!(sim.events(), want);
+        assert_eq!(sim.cursor(), Point::new(960, 540));
+        // The secure desktop and an elevated window at the point step aside: nothing is sent.
+        sim.clear();
+        sim.with(|s| s.target.elevated = true);
+        q.signal(1, fire(0));
+        assert_eq!(
+            wait_outcomes(&w, 2)[1],
+            ("centre-click".into(), "skipped_elevated_target".into())
+        );
+        assert!(sim.events().is_empty());
+    }
+
+    #[test]
+    fn a_held_button_moves_to_its_point_and_is_released_on_every_path() {
+        let sim = SimPointer::new(sim_layout(), Point::new(500, 500));
+        let w = mouse_worker(&sim);
+        let q = w.queue();
+        q.send(Msg::Rules(mouse_rules(1)));
+        let press = Signal::Remap {
+            binding: 1,
+            op: RemapOp::Press {
+                lift: 0,
+                mods: 0,
+                key: Some(OutCode::Button(Button::Left)),
+            },
+        };
+        let held = || sim.with(|s| s.buttons.clone());
+        // Trigger down: the pointer goes to the point, then the button goes down, in one call.
+        q.signal(1, press);
+        assert!(eventually(|| held() == [Button::Left]));
+        let (x, y) = sim_layout().normalize(Point::new(-100, 100));
+        assert_eq!(
+            sim.events(),
+            [
+                OutEvent::down(OutCode::MoveTo { x, y }),
+                OutEvent::down(OutCode::Button(Button::Left))
+            ]
+        );
+        // Trigger up.
+        q.signal(
+            1,
+            Signal::Remap {
+                binding: 1,
+                op: RemapOp::Release {
+                    key: Some(OutCode::Button(Button::Left)),
+                    mods: 0,
+                    restore: 0,
+                },
+            },
+        );
+        assert!(eventually(|| held().is_empty()));
+        // Pause/stop/lock, a release-all (desktop switch, elevated window), the emergency chord
+        // and the worker's end each release a held button.
+        for path in [
+            Msg::Cancel,
+            Msg::Signal {
+                generation: 1,
+                signal: Signal::ReleaseAll,
+            },
+            Msg::Signal {
+                generation: 1,
+                signal: Signal::Emergency,
+            },
+        ] {
+            q.signal(1, press);
+            assert!(eventually(|| held() == [Button::Left]));
+            q.send(path);
+            assert!(eventually(|| held().is_empty()));
+        }
+        q.signal(1, press);
+        assert!(eventually(|| held() == [Button::Left]));
+        drop(q);
+        drop(w);
+        assert!(held().is_empty(), "stopping the worker releases the button");
+        // An elevated window at the point: the button never goes down, and its release later
+        // sends no unmatched up.
+        let sim = SimPointer::new(sim_layout(), Point::new(500, 500));
+        sim.with(|s| s.target.elevated = true);
+        let w = mouse_worker(&sim);
+        let q = w.queue();
+        q.send(Msg::Rules(mouse_rules(1)));
+        q.signal(1, press);
+        assert_eq!(
+            wait_outcomes(&w, 1),
+            [("drag".into(), "skipped_elevated_target".into())]
+        );
+        q.signal(
+            1,
+            Signal::Remap {
+                binding: 1,
+                op: RemapOp::Release {
+                    key: Some(OutCode::Button(Button::Left)),
+                    mods: 0,
+                    restore: 0,
+                },
+            },
+        );
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(sim.events().is_empty(), "{:?}", sim.events());
+    }
+
+    #[test]
+    fn a_move_while_held_glides_until_its_trigger_goes_up() {
+        let sim = SimPointer::new(sim_layout(), Point::new(100, 500));
+        let w = mouse_worker(&sim);
+        let q = w.queue();
+        q.send(Msg::Rules(mouse_rules(1)));
+        q.signal(1, fire(2));
+        // 2000 px/s: about 200 px in 100 ms.
+        assert!(eventually(|| sim.cursor().x >= 200));
+        q.signal(1, Signal::MotionEnd { binding: 2 });
+        std::thread::sleep(Duration::from_millis(30));
+        let stopped = sim.cursor();
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(sim.cursor(), stopped, "released: it stops");
+        assert_eq!(stopped.y, 500);
+        // Every move went right, one pixel row, never off the desktop.
+        let moves = sim.moves();
+        assert!(moves.windows(2).all(|p| p[1].x > p[0].x && p[1].y == 500));
+        assert_eq!(outcomes(&w), [("glide-right".into(), "ok".into())]);
+        // Up and right together: a diagonal, stopped at the top edge (no teleport above it).
+        q.signal(1, fire(2));
+        q.signal(1, fire(3));
+        assert!(eventually(|| sim.cursor().y == 0));
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(sim.cursor().y, 0, "the top edge holds");
+        assert!(sim.moves().iter().all(|p| p.y >= 0 && p.x < 1920));
+        q.send(Msg::Cancel);
+        let n = sim.moves().len();
+        std::thread::sleep(Duration::from_millis(60));
+        assert_eq!(sim.moves().len(), n, "a cancellation stops every motion");
+        let o = outcomes(&w);
+        assert_eq!(
+            o[o.len() - 2..],
+            [
+                ("glide-right".into(), "cancelled".into()),
+                ("glide-up".into(), "cancelled".into())
+            ]
+        );
+    }
+
+    #[test]
+    fn every_path_stops_a_motion_and_the_idle_worker_has_no_timer_again() {
+        for path in 0..5 {
+            let sim = SimPointer::new(sim_layout(), Point::new(1000, 500));
+            let stats = Arc::new(Stats::default());
+            let w = Worker::start(
+                Arc::clone(&stats),
+                Box::new(|_| {}),
+                Arc::new(Mutex::new(Activity::default())),
+                Box::new(sim.backend()),
+                Env {
+                    screen: Box::new(sim.screen()),
+                    ..Env::inert()
+                },
+            );
+            let q = w.queue();
+            q.send(Msg::Rules(mouse_rules(1)));
+            q.signal(1, fire(2));
+            assert!(eventually(|| sim.moves().len() >= 3), "{path}");
+            match path {
+                0 => q.send(Msg::Cancel),
+                1 => q.signal(1, Signal::ReleaseAll),
+                2 => q.signal(1, Signal::Emergency),
+                3 => q.send(Msg::Rules(mouse_rules(2))), // a reload
+                _ => sim.with(|s| s.target.secure_desktop = true), // a lock seen at the next tick
+            }
+            let code = if path == 4 {
+                "skipped_secure_desktop"
+            } else {
+                "cancelled"
+            };
+            assert!(
+                eventually(|| outcomes(&w).last().is_some_and(|(_, c)| c == code)),
+                "{path}: {:?}",
+                outcomes(&w)
+            );
+            let n = sim.moves().len();
+            let wakeups = stats.worker_wakeups.load(Ordering::Relaxed);
+            std::thread::sleep(Duration::from_millis(100));
+            assert_eq!(sim.moves().len(), n, "{path}: stopped");
+            assert!(
+                stats.worker_wakeups.load(Ordering::Relaxed) <= wakeups + 1,
+                "{path}: no timer once nothing moves"
+            );
+        }
+    }
+
+    #[test]
+    fn a_stepped_move_repeats_after_its_delay_and_a_signal_of_an_old_table_starts_nothing() {
+        let sim = SimPointer::new(sim_layout(), Point::new(500, 500));
+        let w = mouse_worker(&sim);
+        let q = w.queue();
+        q.send(Msg::Rules(mouse_rules(1)));
+        q.signal(1, fire(4));
+        // At once 10 px left, after 60 ms again, then every 30 ms.
+        assert!(eventually(|| sim.cursor().x <= 490));
+        assert!(eventually(|| sim.cursor().x <= 460));
+        q.signal(1, Signal::MotionEnd { binding: 4 });
+        std::thread::sleep(Duration::from_millis(30));
+        let at = sim.cursor();
+        assert!(
+            sim.moves().iter().all(|p| (500 - p.x) % 10 == 0),
+            "{:?}",
+            sim.moves()
+        );
+        std::thread::sleep(Duration::from_millis(100));
+        assert_eq!(sim.cursor(), at);
+        // A fire of an older generation (a reload came in between) does nothing.
+        q.send(Msg::Rules(mouse_rules(2)));
+        q.signal(1, fire(2));
+        std::thread::sleep(Duration::from_millis(60));
+        assert_eq!(sim.cursor(), at);
+    }
 }

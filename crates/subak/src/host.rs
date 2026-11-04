@@ -36,7 +36,7 @@ use crate::proto::{
     self, ClientKind, ErrorCode, FLAG_INPUT, FLAG_SNAPSHOT, Frame, IpcError, Refusal, Request,
 };
 use crate::pty::{self, EnvOverrides, Pty};
-use crate::redact::Redactor;
+use crate::redact::{self, Redactor};
 use crate::screen::{self, HistoryRange, Limits, Pos, Screen};
 use crate::session::{self, Command, EndCause, LastExit, Level, Registry, Spec, Transition};
 use crate::win::pipe::{self, Listener, Pipe};
@@ -1546,8 +1546,8 @@ impl Host {
         let live = st.live(p);
         let running = t.state.is_live() && live.running;
         let pid = p.pid.or_else(|| t.last_exit.as_ref().and_then(|e| e.pid));
-        let line = std::iter::once(p.command.program.clone())
-            .chain(session::redact_args(&p.command.args))
+        let line = std::iter::once(redact::program(&p.command.program))
+            .chain(redact::args(&p.command.args))
             .collect::<Vec<_>>()
             .join(" ");
         json!({
@@ -2476,8 +2476,8 @@ impl Host {
             .map_err(|e| spawn_failed(&e, &command.program, false, None))?;
             return Ok(json!({"dry_run": true, "would_create": {
                 "name": name,
-                "command": {"program": command.program, "args": session::redact_args(&command.args)},
-                "command_line": raw_line.as_deref().map(session::redact_line),
+                "command": {"program": redact::program(&command.program), "args": redact::args(&command.args)},
+                "command_line": raw_line.as_deref().map(redact::command_line),
                 "executable": executable.display().to_string(),
                 "cwd": cwd,
                 "env": session::env_json(&env.names()),
@@ -2542,7 +2542,7 @@ impl Host {
                 && session::busy(&pane.command.program, live.processes);
             let plan = json!({
                 "terminal_id": t.id, "name": t.name.display, "state": t.state.as_str(),
-                "pane_id": pane.id, "pid": pane.pid, "program": pane.command.program,
+                "pane_id": pane.id, "pid": pane.pid, "program": redact::program(&pane.command.program),
                 "processes": live.processes, "busy": busy,
                 "ends_processes": t.state.is_live() && !(op == Op::Remove && !force),
                 "removes_terminal": op != Op::Stop,

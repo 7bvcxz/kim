@@ -1,14 +1,18 @@
-//! Redaction of secret-looking text in captured terminal output (Step 13, docs/SCROLLBACK.md §6).
+//! The one secret detector of Subak (`KIM-SEC-013`, docs/CLI_CONTRACT.md §10): captured terminal
+//! output (Step 13, docs/SCROLLBACK.md §6) and every command a client is shown — the `command`
+//! (`program`, `args`) and the verbatim `command_line` of panes in `new`, `info`, `ls`,
+//! `status`, `host status`, dry runs, events and error details — go through the same rules, so
+//! a value hidden in a capture is also hidden in a command (and the reverse).
 //!
 //! `pane.capture` (and so `subak capture`) redacts by default: a capture is often read by
-//! scripts and agents, and `KIM-SEC-013` keeps secrets out of JSON output. The rules are
-//! heuristic and over-eager on purpose, and they never claim completeness — what a program
-//! printed in a form no rule knows stays visible, and `redact: false` (`--no-redact`) shows the
-//! exact text. Portable: no OS calls.
+//! scripts and agents, and `KIM-SEC-013` keeps secrets out of JSON output. Commands are always
+//! redacted. The rules are heuristic and over-eager on purpose, and they never claim
+//! completeness — what a program printed in a form no rule knows stays visible, and
+//! `redact: false` (`--no-redact`) shows the exact capture. Portable: no OS calls.
 //!
 //! Rules, per line:
 //! 1. the value of a secret-looking `name=value` or `name: value` (the names of
-//!    [`crate::session::secret_name`]: token, secret, pass, pwd, key, auth, credential, cookie);
+//!    [`secret_name`]: token, secret, pass, pwd, key, auth, credential, cookie);
 //!    after `:` the value needs 4 characters or quotes, so `Passed: 10` stays; an HTTP scheme
 //!    word (`Bearer`, `Basic`, `Token`) keeps its name and hides the word after it;
 //! 2. `Bearer <credential>` anywhere;
@@ -17,7 +21,110 @@
 //!    `sk-` and `sk_live_`/`rk_live_`, npm (`npm_`), AWS access key ids (`AKIA`/`ASIA`), Google
 //!    API keys (`AIza`), and JSON Web Tokens (`eyJ….eyJ….…`);
 //! 4. the password of a URL (`scheme://user:password@host`);
-//! 5. every line between `-----BEGIN … PRIVATE KEY-----` and its `-----END` line.
+//! 5. every line between `-----BEGIN … PRIVATE KEY-----` and its `-----END` line;
+//! 6. commands only, where word boundaries are known ([`args`], [`command_line`]): a whole word
+//!    `name=value` or `name:value` with a secret-looking name hides its value whatever its
+//!    length (`/Auth:x`), and the word after a secret-looking option is hidden
+//!    (`--password hunter2`, `/Token x`). Rules 1–5 then run over every argument and over the
+//!    whole command line.
+
+/// Words that mark a secret-looking option, setting or variable name (docs/CLI_CONTRACT.md §10).
+const SECRET_WORDS: &[&str] = &[
+    "token",
+    "secret",
+    "pass",
+    "pwd",
+    "key",
+    "auth",
+    "credential",
+    "cookie",
+];
+
+/// Whether `name` (an option like `--api-key`, a variable like `GITHUB_TOKEN`) looks secret.
+pub fn secret_name(name: &str) -> bool {
+    let n = name.trim_start_matches(['-', '/']).to_ascii_lowercase();
+    !n.is_empty() && SECRET_WORDS.iter().any(|w| n.contains(w))
+}
+
+/// Any shown text (one or more lines) with rules 1–5 applied.
+pub fn text(s: &str) -> String {
+    let mut r = Redactor::default();
+    s.split('\n')
+        .map(|l| r.line(l))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Rule 6 for one word of a command; `hide_next` carries "the previous word was a secret
+/// option" to the next word. Surrounding double quotes are kept and ignored for the decision.
+fn command_word(word: &str, hide_next: &mut bool) -> String {
+    if std::mem::take(hide_next) {
+        return MASK.to_string();
+    }
+    let bare = word.trim_matches('"');
+    match bare.split_once(['=', ':']) {
+        // A word, not a phrase: an argument with blanks (`Authorization: Bearer …`, a whole
+        // `cmd /c` command) is left to rules 1–5, and an empty value (`Authorization:` before
+        // `Bearer …` in a command line) too.
+        Some((name, value))
+            if secret_name(name)
+                && !value.is_empty()
+                && !name.contains(char::is_whitespace)
+                && !value.contains(char::is_whitespace) =>
+        {
+            let lead = word.len() - word.trim_start_matches('"').len();
+            let trail = word.len() - word.trim_end_matches('"').len();
+            format!(
+                "{}{}{MASK}{}",
+                &word[..lead],
+                &bare[..=name.len()],
+                &word[word.len().saturating_sub(trail).max(lead)..]
+            )
+        }
+        _ => {
+            *hide_next = bare.starts_with(['-', '/']) && secret_name(bare);
+            word.to_string()
+        }
+    }
+}
+
+/// A command's arguments as they may be shown: rule 6 per argument, then rules 1–5 inside each
+/// (an argument often holds a whole command, as with `cmd.exe /c "…"`).
+pub fn args(args: &[String]) -> Vec<String> {
+    let mut hide_next = false;
+    args.iter()
+        .map(|a| text(&command_word(a, &mut hide_next)))
+        .collect()
+}
+
+/// A program path as it may be shown (rules 1–5; a normal path is unchanged).
+pub fn program(p: &str) -> String {
+    text(p)
+}
+
+/// A verbatim command line as it may be shown: rule 6 per blank-separated word (the blanks
+/// between words are kept, so the line reads exactly as given otherwise), then rules 1–5 over
+/// the whole line.
+pub fn command_line(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut hide_next = false;
+    let mut word = String::new();
+    for c in line.chars() {
+        if c.is_whitespace() {
+            if !word.is_empty() {
+                out.push_str(&command_word(&word, &mut hide_next));
+                word.clear();
+            }
+            out.push(c);
+        } else {
+            word.push(c);
+        }
+    }
+    if !word.is_empty() {
+        out.push_str(&command_word(&word, &mut hide_next));
+    }
+    text(&out)
+}
 
 /// What replaces a hidden value.
 pub const MASK: &str = "***";
@@ -200,7 +307,7 @@ fn assignment_masks(line: &str, b: &[u8], masks: &mut Vec<(usize, usize)>) {
         while k > 0 && name_byte(b[k - 1]) {
             k -= 1;
         }
-        if k == name_end || !crate::session::secret_name(&line[k..name_end]) {
+        if k == name_end || !secret_name(&line[k..name_end]) {
             continue;
         }
         let mut v = j + 1;
@@ -354,6 +461,146 @@ mod tests {
             ]
         );
         assert_eq!(red.hidden, 2);
+    }
+
+    fn a(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    #[test]
+    fn secret_looking_arguments_are_redacted() {
+        assert_eq!(
+            args(&a(&[
+                "--token=abc",
+                "-p",
+                "x",
+                "--password",
+                "hunter2",
+                "API_KEY=1",
+                "/Auth:secret",
+                "build"
+            ])),
+            a(&[
+                "--token=***",
+                "-p",
+                "x",
+                "--password",
+                "***",
+                "API_KEY=***",
+                "/Auth:***",
+                "build"
+            ])
+        );
+    }
+
+    #[test]
+    fn verbatim_command_lines_are_redacted_word_by_word_and_keep_their_blanks() {
+        assert_eq!(
+            command_line(r#"cmd.exe /d /s /c "echo "a  b" & ver""#),
+            r#"cmd.exe /d /s /c "echo "a  b" & ver""#,
+            "nothing secret: the line is shown exactly"
+        );
+        assert_eq!(
+            command_line(r#"tool.exe  --token=abc "--password" hunter2 /Auth:x "API_KEY=1" C:\x"#),
+            r#"tool.exe  --token=*** "--password" *** /Auth:*** "API_KEY=***" C:\x"#
+        );
+        assert_eq!(command_line(""), "");
+        assert_eq!(command_line("  a\tb "), "  a\tb ");
+    }
+
+    /// The e2e case of Step 13 (run 2): a GitHub token inside `cmd.exe /c "…"` was shown verbatim
+    /// by `new` and `info` because commands used a weaker rule set than captures.
+    #[test]
+    fn token_shapes_inside_commands_are_hidden_like_in_captures() {
+        let gh = "ghp_e2e13e2e13e2e13e2e13e2e13e2e13e2e13e2e13";
+        let line = format!(r#"cmd.exe /d /c "echo {gh}& echo password=x""#);
+        let shown = command_line(&line);
+        assert!(!shown.contains("e2e13e2e13"), "{shown}");
+        assert_eq!(shown, r#"cmd.exe /d /c "echo ghp_***& echo password=***""#);
+        let split = a(&["/d", "/c", &format!("echo {gh}& echo password=x")]);
+        assert_eq!(
+            args(&split),
+            a(&["/d", "/c", "echo ghp_***& echo password=***"])
+        );
+        // The same value is hidden the same way in a capture.
+        assert_eq!(
+            Redactor::default().line(&format!("{gh}& echo password=x")),
+            "ghp_***& echo password=***"
+        );
+    }
+
+    #[test]
+    fn every_token_family_and_credential_form_is_hidden_in_arguments_and_lines() {
+        let cases: [(String, &str); 12] = [
+            (format!("ghp_{}", "A1b2".repeat(9)), "ghp_***"),
+            (
+                format!("github_pat_{}", "11ABCDEFG0".repeat(4)),
+                "github_pat_***",
+            ),
+            (format!("gho_{}", "z".repeat(36)), "gho_***"),
+            (
+                format!("sk-{}", "proj-".to_string() + &"x".repeat(40)),
+                "sk-***",
+            ),
+            (format!("sk-ant-api03-{}", "Q".repeat(40)), "sk-***"),
+            (format!("xoxb-{}", "1234-5678-abcdef"), "xoxb-***"),
+            (format!("xoxp-{}", "9876543210-abc"), "xoxp-***"),
+            ("AKIAIOSFODNN7EXAMPLE".to_string(), "AKIA***"),
+            (format!("glpat-{}", "a".repeat(20)), "glpat-***"),
+            (format!("npm_{}", "b".repeat(36)), "npm_***"),
+            (format!("AIza{}", "c".repeat(35)), "AIza***"),
+            (
+                "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.c2lnbmF0dXJl".to_string(),
+                "***",
+            ),
+        ];
+        for (secret, shown) in &cases {
+            // As a whole argument, inside an argument, and in a command line.
+            assert_eq!(args(&a(&[secret])), a(&[shown]), "{secret}");
+            assert_eq!(
+                args(&a(&["/c", &format!("echo {secret}")])),
+                a(&["/c", &format!("echo {shown}")]),
+                "{secret}"
+            );
+            assert_eq!(
+                command_line(&format!("tool.exe {secret} --verbose")),
+                format!("tool.exe {shown} --verbose"),
+                "{secret}"
+            );
+        }
+        // Bearer, token, password and URL forms.
+        assert_eq!(
+            args(&a(&["-H", "Authorization: Bearer abcdefghijkl"])),
+            a(&["-H", "Authorization: Bearer ***"])
+        );
+        assert_eq!(
+            command_line(r#"curl -H "Authorization: Bearer abcdefghijkl" https://x"#),
+            r#"curl -H "Authorization: Bearer ***" https://x"#
+        );
+        assert_eq!(
+            command_line("tool --token abc123 --auth-token=zz /Password secret"),
+            "tool --token *** --auth-token=*** /Password ***"
+        );
+        assert_eq!(
+            args(&a(&["clone", "https://me:p4ss@github.com/x.git"])),
+            a(&["clone", "https://me:***@github.com/x.git"])
+        );
+        assert_eq!(
+            args(&a(&["-c", "set GITHUB_TOKEN=xyz && run"])),
+            a(&["-c", "set GITHUB_TOKEN=*** && run"])
+        );
+        assert_eq!(
+            program(r"C:\Windows\System32\cmd.exe"),
+            r"C:\Windows\System32\cmd.exe"
+        );
+        // Ordinary commands are shown exactly.
+        for line in [
+            r#"pwsh.exe -NoLogo -Command "Get-ChildItem C:\ | Select -First 3""#,
+            "cmd.exe /d /q /k prompt $G",
+            "git log --oneline -n 5",
+        ] {
+            assert_eq!(command_line(line), line);
+        }
     }
 
     #[test]

@@ -123,7 +123,9 @@ block, and never stored, logged or shown**. Panes report only the names
 `terminal.created`, and dry runs); error messages name a variable but never echo a value. Measured:
 17 documents and streams (create, info, list, `host status`, `host.stats`, dry runs, a failed start,
 `-v` diagnostics, every event) contained neither an explicit nor a copied value (§10). Arguments
-keep the Step 10 redaction (`--token=***`). Subak writes no log files.
+keep the Step 10 redaction (`--token=***`) and, since Step 16, go through the same detector as
+captures, so token shapes inside an argument or a verbatim command line (`cmd.exe /c "echo
+ghp_…"`) are hidden too (CLI_CONTRACT §10). Subak writes no log files.
 
 ## 4. Terminal I/O
 

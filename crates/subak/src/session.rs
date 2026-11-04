@@ -11,6 +11,7 @@
 
 use crate::proto::{ErrorCode, IpcError};
 use crate::pty::EnvNames;
+use crate::redact;
 use crate::screen::HistoryInfo;
 use serde_json::{Value, json};
 use std::collections::HashSet;
@@ -316,92 +317,6 @@ pub fn split_command_line(line: &str) -> Command {
         program: it.next().unwrap_or_default(),
         args: it.collect(),
     }
-}
-
-/// Words that mark a secret-looking option or setting (docs/CLI_CONTRACT.md §10).
-const SECRET_WORDS: &[&str] = &[
-    "token",
-    "secret",
-    "pass",
-    "pwd",
-    "key",
-    "auth",
-    "credential",
-    "cookie",
-];
-
-pub fn secret_name(name: &str) -> bool {
-    let n = name.trim_start_matches(['-', '/']).to_ascii_lowercase();
-    !n.is_empty() && SECRET_WORDS.iter().any(|w| n.contains(w))
-}
-
-/// Arguments as they may be shown: the value of a secret-looking `name=value` argument, or the
-/// argument after a secret-looking option, becomes `***` (over-eager on purpose).
-pub fn redact_args(args: &[String]) -> Vec<String> {
-    let mut out = Vec::with_capacity(args.len());
-    let mut hide_next = false;
-    for a in args {
-        if hide_next {
-            out.push("***".to_string());
-            hide_next = false;
-            continue;
-        }
-        match a.split_once(['=', ':']) {
-            Some((name, _)) if secret_name(name) => {
-                out.push(format!("{name}{}***", &a[name.len()..=name.len()]));
-            }
-            _ => {
-                hide_next = a.starts_with(['-', '/']) && secret_name(a);
-                out.push(a.clone());
-            }
-        }
-    }
-    out
-}
-
-/// A verbatim command line as it may be shown: each blank-separated word goes through the rules
-/// of [`redact_args`] (a word's surrounding quotes are ignored for the decision), and the blanks
-/// between words are kept, so the rest of the line reads exactly as given.
-pub fn redact_line(line: &str) -> String {
-    let mut out = String::with_capacity(line.len());
-    let mut hide_next = false;
-    let mut word = String::new();
-    let mut flush = |word: &mut String, out: &mut String| {
-        if word.is_empty() {
-            return;
-        }
-        let bare = word.trim_matches('"');
-        if hide_next {
-            out.push_str("***");
-            hide_next = false;
-        } else {
-            match bare.split_once(['=', ':']) {
-                Some((name, _)) if secret_name(name) => {
-                    let lead = word.len() - word.trim_start_matches('"').len();
-                    let trail = word.len() - word.trim_end_matches('"').len();
-                    out.push_str(&word[..lead]);
-                    out.push_str(&bare[..=name.len()]);
-                    out.push_str("***");
-                    out.push_str(&word[word.len() - trail..]);
-                }
-                _ => {
-                    hide_next = bare.starts_with(['-', '/']) && secret_name(bare);
-                    out.push_str(word);
-                }
-            }
-        }
-        word.clear();
-    };
-    for c in line.chars() {
-        if c.is_whitespace() {
-            flush(&mut word, &mut out);
-            out.push(c);
-        } else {
-            word.push(c);
-        }
-    }
-    flush(&mut word, &mut out);
-    out
 }
 
 /// Why a start failed (`spawn_failed`, IPC_PROTOCOL §6).
@@ -842,7 +757,7 @@ pub fn window_name(program: &str) -> String {
 }
 
 fn command_json(c: &Command) -> Value {
-    json!({"program": c.program, "args": redact_args(&c.args)})
+    json!({"program": redact::program(&c.program), "args": redact::args(&c.args)})
 }
 
 /// The names of a pane's environment overrides (values are never shown, CLI_CONTRACT §10).
@@ -882,7 +797,7 @@ pub fn terminal_json(t: &Terminal, live: &dyn Fn(&Pane) -> Live) -> Value {
                         "index": p.index,
                         "cwd": p.cwd,
                         "command": command_json(&p.command),
-                        "command_line": p.command_line.as_deref().map(redact_line),
+                        "command_line": p.command_line.as_deref().map(redact::command_line),
                         "executable": p.executable,
                         "env": env_json(&p.env),
                         "title": Value::Null,
@@ -944,7 +859,7 @@ pub fn summary_json(t: &Terminal, live: &dyn Fn(&Pane) -> Live) -> Value {
         "windows": t.windows.len(),
         "panes": t.panes().count(),
         "pid": p.pid.filter(|_| running),
-        "program": p.command.program,
+        "program": redact::program(&p.command.program),
     })
 }
 
@@ -1240,48 +1155,6 @@ mod tests {
         assert_eq!(split_command_line("").program, "");
         assert_eq!(window_name(r"C:\Windows\system32\cmd.exe"), "cmd");
         assert_eq!(window_name("pwsh"), "pwsh");
-    }
-
-    #[test]
-    fn secret_looking_arguments_are_redacted() {
-        let a = |v: &[&str]| v.iter().map(|s| (*s).to_string()).collect::<Vec<_>>();
-        assert_eq!(
-            redact_args(&a(&[
-                "--token=abc",
-                "-p",
-                "x",
-                "--password",
-                "hunter2",
-                "API_KEY=1",
-                "/Auth:secret",
-                "build"
-            ])),
-            a(&[
-                "--token=***",
-                "-p",
-                "x",
-                "--password",
-                "***",
-                "API_KEY=***",
-                "/Auth:***",
-                "build"
-            ])
-        );
-    }
-
-    #[test]
-    fn verbatim_command_lines_are_redacted_word_by_word_and_keep_their_blanks() {
-        assert_eq!(
-            redact_line(r#"cmd.exe /d /s /c "echo "a  b" & ver""#),
-            r#"cmd.exe /d /s /c "echo "a  b" & ver""#,
-            "nothing secret: the line is shown exactly"
-        );
-        assert_eq!(
-            redact_line(r#"tool.exe  --token=abc "--password" hunter2 /Auth:x "API_KEY=1" C:\x"#),
-            r#"tool.exe  --token=*** "--password" *** /Auth:*** "API_KEY=***" C:\x"#
-        );
-        assert_eq!(redact_line(""), "");
-        assert_eq!(redact_line("  a\tb "), "  a\tb ");
     }
 
     #[test]

@@ -157,8 +157,8 @@ fn plan_without_host(a: &Args, params: &Value) -> Result<Value, CliError> {
     Ok(
         json!({"dry_run": true, "would_start_host": !a.no_start, "would_create": {
             "name": name,
-            "command": {"program": command.program, "args": session::redact_args(&command.args)},
-            "command_line": a.command_line.as_deref().map(session::redact_line),
+            "command": {"program": crate::redact::program(&command.program), "args": crate::redact::args(&command.args)},
+            "command_line": a.command_line.as_deref().map(crate::redact::command_line),
             "executable": executable.display().to_string(),
             "cwd": cwd.display().to_string(),
             "env": session::env_json(&env.names()),

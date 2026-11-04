@@ -172,7 +172,9 @@ where echo was not disabled, keys printed by mistake). The rules:
    URL passwords, and the lines of a `-----BEGIN … PRIVATE KEY-----` block. `redacted` counts the
    hidden values, and the CLI says so on stderr. The rules are heuristic: a secret in a form they
    do not know, or one split over two rows, stays visible. `--no-redact` / `redact: false` shows
-   the exact text and is the caller's explicit choice.
+   the exact text and is the caller's explicit choice. The same detector redacts every command
+   a client is shown (CLI_CONTRACT §10; since Step 16, after e2e run 2 found a `ghp_…` token
+   shown verbatim in a pane's `command_line`).
 6. **Not redacted:** what an attached client sees (attach is the terminal itself, as before
    Step 13), including the title the program set. Pane titles are therefore not reported in any
    JSON document (cmd.exe puts whole command lines into its title).

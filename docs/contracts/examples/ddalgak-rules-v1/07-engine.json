@@ -8,7 +8,7 @@
     {
       "id": "default",
       "title": "Engine control",
-      "description": "Rules that pause, resume or turn off Ddalgak itself. Pause-control rules keep working while paused; after `disable` only the tray, the GUI, the CLI or the engine.toggle shortcut turn the engine on again.",
+      "description": "Rules that pause, resume or turn off Ddalgak itself. Engine-control rules keep working while paused; after `disable` only the tray, the GUI, the CLI or the engine.toggle shortcut turn the engine on again.",
       "default_mode": "base",
       "modes": [{"id": "base", "title": "Base"}],
       "rules": [

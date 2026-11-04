@@ -62,7 +62,7 @@ Until D6 ships, the Kim catalog lists Ddalgak as *planned* (`KIM-FR-051`).
 | DDALGAK-FR-014 | **Open a website**: an `http` or `https` URL opens in the user's default browser. | P0 | D3 | T, M |
 | DDALGAK-FR-015 | **Mouse**: move relative, absolute or continuously while held (speed, acceleration), scroll by notches in four directions, click, double-click or hold any of five buttons, across monitors with negative coordinates, clamped to the visible desktop. | P0 | D3 | T, M |
 | DDALGAK-FR-016 | **Modes**: users create, rename, duplicate and delete modes per profile; rules can be limited to modes; actions set, toggle, cycle, hold (while the trigger is held), return to the previous and to the default mode. The active mode is shown (optional compact indicator) and readable headlessly. | P0 | D3 | T, M |
-| DDALGAK-FR-017 | **Engine control** actions pause, resume, toggle pause and turn the engine off. Pause-control rules keep working while paused. | P0 | D2 | T |
+| DDALGAK-FR-017 | **Engine control** actions pause, resume, toggle pause and turn the engine off. Rules made only of engine-control steps keep working while paused. | P0 | D2 | T |
 | DDALGAK-FR-018 | **Ordered steps**: a rule runs up to 32 steps in order with delays (total at most 60 s) and a stop-or-continue error policy. One run per rule at a time; a trigger during a run is reported as `busy`. | P1 | D3 | T |
 
 ### 2.3 Selection, modes and conditions

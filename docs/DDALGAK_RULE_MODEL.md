@@ -335,13 +335,13 @@ button pressed. `input-injection`.
 
 | `op` | Effect |
 | --- | --- |
-| `pause` | All rules stop except pause-control rules; held keys are released; the hook stays. |
+| `pause` | All rules stop except engine-control rules; held keys are released; the hook stays. |
 | `resume` | Rules run again. |
 | `toggle_pause` | Pause if running, resume if paused. |
 | `disable` | The engine turns off: the hook is removed, held keys are released, runs are cancelled. |
 
-Rules whose steps are only `pause`, `resume` or `toggle_pause` keep working while paused (like
-AutoHotkey's `#SuspendExempt`). **No rule turns the engine on**: without the hook no rule can
+**Engine-control rules**, whose steps are all `engine` steps, keep working while paused (like
+AutoHotkey's `#SuspendExempt`), so a paused engine can still be resumed or turned off by key. **No rule turns the engine on**: without the hook no rule can
 see a key. Turning on is done from the tray, the GUI, the `engine.toggle` shortcut (registered
 with `RegisterHotKey`, independent of the hook) or the CLI (`DDALGAK-FR-004`). Preview
 `{ "from", "to" }`. No consent needed.
@@ -420,7 +420,7 @@ approves the new target. `cargo xtask schema-check` recomputes every fingerprint
 3. **Stepping aside**: secure desktop, an elevated foreground window (for injecting rules), a
    password field, an IME composition. The affected rules are skipped and the key passes
    unchanged (`skipped_*`).
-4. **Paused**: only pause-control rules remain.
+4. **Paused**: only engine-control rules remain.
 5. **Candidates**: enabled, valid rules of the active profile whose trigger matches, whose
    `modes` include the active mode (or that have none), and whose `when` holds.
 6. **Precedence** among candidates, first difference wins:
@@ -499,7 +499,7 @@ and needs a guaranteed way out of that mode.
 | `duplicate_trigger` | error | semantic | §7.1. The later rule is the subject. |
 | `consent_stale` | error | semantic | A launch fingerprint no longer matches (§6.2). |
 | `run_too_long` | error | semantic | Delays of one run exceed 60 s. |
-| `step_unsupported`, `condition_unsupported` | info | runtime | Inactive in this version (§9). |
+| `step_unsupported`, `condition_unsupported`, `rule_unsupported` | info | runtime | Inactive in this version: an unknown step type, a condition not evaluated yet, or an unknown field inside the rule (§9). |
 | `altgr_collision`, `ime_toggle`, `os_shortcut`, `hook_overrides_global` | warning | semantic | §3.1. |
 
 Errors make the rule inactive; warnings and infos do not change behavior. Like hotkey conflicts,
@@ -566,7 +566,7 @@ The same logic answers `ddalgak test --dry-run --json` and `ddalgak explain --js
 active rules and the real engine are never affected (`DDALGAK-FR-041`). The schema itself
 enforces the table's safety properties: a `simulate` result with a performed effect, an
 injected event or an opened program is invalid, as is a live launch without confirmation or a
-live target other than the playground. Twenty-two examples cover all seven action categories,
+live target other than the playground. Twenty-three examples cover all seven action categories,
 stepping aside, pausing, precedence and live tests; `schema-check` also proves that each traces
 rules that exist in the rules example it names.
 
@@ -633,7 +633,7 @@ implements them; existing codes such as `hotkey_invalid`, `hotkey_reserved`, `us
 | --- | --- |
 | [ddalgak-rules-v1](contracts/schemas/ddalgak-rules-v1.schema.json) + `contracts/examples/ddalgak-rules-v1/` | Ten valid documents (remaps and swaps, text, programs, websites, mouse, modes, engine control, profiles and conditions, an export, a future step type). Thirty-nine invalid ones, including recursive remaps (`recursive-remap-accepts-injected`, `recursive-send-keys-accepts-injected`), the emergency chord as trigger and output, reserved OS chords (`Win+L`, `Alt+Tab`, `Ctrl+Shift+Escape`, the Secure Attention Sequence), missing consent for programs, websites, injection and clipboard, shell hosts, `file:` URLs and newer versions. |
 | `contracts/examples/ddalgak-rules-v1/semantic-invalid/` | Eleven schema-valid documents named `<code>--<what>.json`, each producing exactly that semantic error: `output_is_trigger` (the recursive remap `F13` → `F13`, and `send_keys` to its own trigger), duplicate IDs and triggers, unknown modes and profiles, a stale launch consent, a run over 60 s. |
-| [ddalgak-simulation-v1](contracts/schemas/ddalgak-simulation-v1.schema.json) + examples | Twenty-two playground results named `<rules example>--<what>.json` and fourteen invalid ones (effects performed or input injected in `simulate`, live launches without confirmation, live input outside the playground, previews that echo text, paths, arguments or URL paths). |
+| [ddalgak-simulation-v1](contracts/schemas/ddalgak-simulation-v1.schema.json) + examples | Twenty-three playground results named `<rules example>--<what>.json` and fourteen invalid ones (effects performed or input injected in `simulate`, live launches without confirmation, live input outside the playground, previews that echo text, paths, arguments or URL paths). |
 | [kim-hotkey-manifest-v1/ddalgak.json](contracts/examples/kim-hotkey-manifest-v1/ddalgak.json) | Ddalgak's final GUI actions: four global ones (matching the Kim catalog) and the `rules` and `playground` contexts. |
 
 **Not tested on Windows in Step 65.** Everything about real input (hook timing, `SendInput`,

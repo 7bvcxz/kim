@@ -60,8 +60,9 @@ The documents that make this concrete:
 - **No AutoHotkey runtime, no Electron, no resident Kim daemon, no account, no cloud.** Ddalgak
   is not a script interpreter. It needs no other Kim tool, and Kim never starts it.
 - **Frugal when idle.** The engine waits on OS events; no polling, no timers while nothing
-  happens. The hook callback decides in microseconds and hands work to a worker thread, far
-  below the system's hook timeout.
+  happens. The hook callback is designed to decide in well under a millisecond and hands all
+  work to a worker thread, far below the system's hook timeout (`DDALGAK-NFR-002`; measured
+  from Step 66 on).
 - **Local-first.** Rules, profiles and history stay in the user's profile. Ddalgak opens no
   network connection. "Open a website" hands an `https` link to the user's browser.
 

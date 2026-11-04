@@ -33,7 +33,7 @@
       "step": 0,
       "type": "engine",
       "performed": false,
-      "summary": "Resumes every rule (pause controls keep working while paused).",
+      "summary": "Resumes every rule (engine-control rules keep working while paused).",
       "preview": {
         "from": "paused",
         "to": "running"

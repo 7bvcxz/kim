@@ -126,11 +126,11 @@ title and a one-line example:
 │ └──────────────────────────────────────────────────────────────┘                           │
 │ ✓ This rule would fire: types 13 characters on 2 lines.                                    │
 │ Permission: Ddalgak will type for you in other programs.  [Allow]                          │
-│                                                     [◂ Back]  [Save as draft]  [Save and turn on] │
+│                                                     [◂ Back]  [Save as draft]  [Save and enable] │
 └────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **Save and turn on** writes the rule, waits until the engine has loaded it, then shows
+- **Save and enable** writes the rule, waits until the engine has loaded it, then shows
   "saved and active". If the engine is off, the rule is saved and the status line says
   "saved; the engine is off".
 - A rule that needs a permission cannot be enabled without **Allow** (the consent dialog of

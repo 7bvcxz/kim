@@ -90,7 +90,7 @@ Where a page did not state something, the row says so instead of filling the gap
 | 1.18 | Hotkeys by scan code or virtual key (`SC159::`, `vk24::`) | KL | Physical keys by W3C name (`code:KeyQ`) and named keys; raw numbers are never stored (`KIM-NFR-022`) | partial | 66 | — |
 | 1.19 | Media and browser keys (`Media_Play_Pause`, `Volume_Up`, `Browser_Back`, `Launch_App1`) | KL | The contract's media and volume keys; browser and launch keys are an additive key-name change | partial | 66 | — |
 | 1.20 | Lock keys as hotkeys; forcing a lock state on or off | KL, KH | `CapsLock` and `NumLock` (and `ScrollLock`) as triggers and outputs; forcing a lock state is not in v1 | partial | 68 | — |
-| 1.21 | `Suspend` with `#SuspendExempt` hotkeys | SU | Engine `pause`; pause-control rules stay active | supported | 73 | — |
+| 1.21 | `Suspend` with `#SuspendExempt` hotkeys | SU | Engine `pause`; engine-control rules (pause, resume, turn off) stay active | supported | 73 | — |
 | 1.22 | Pausing running threads (`Pause`) | SU | Pausing cancels running rules; no thread suspension | partial | 73 | — |
 | 1.23 | `ListHotkeys` | H, KH | Rule list, `ddalgak rule list --json`, `ddalgak hotkeys list --json` | supported | 67 | — |
 | 1.24 | `KeyHistory`: the last keystrokes, for debugging | KH | Never: no keystroke is kept (`DDALGAK-SEC-001`). The playground explains decisions instead | not intended | — | — |

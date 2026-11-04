@@ -1,0 +1,35 @@
+{
+  "schema": "ddalgak.simulation",
+  "schema_version": 1,
+  "kind": "simulate",
+  "profile": "default",
+  "revision": 7,
+  "context": {
+    "mode": "base",
+    "engine": "paused",
+    "focus": "normal",
+    "app": null,
+    "ime_composing": false
+  },
+  "event": {
+    "keys": "CapsLock",
+    "on": "press",
+    "source": "physical"
+  },
+  "decision": {
+    "outcome": "skipped",
+    "code": "skipped_paused",
+    "rule": "caps-to-ctrl",
+    "key_reaches_app": true,
+    "candidates": [
+      {
+        "rule": "caps-to-ctrl",
+        "result": "inactive",
+        "reason": "The engine is paused; only engine-control rules run, so CapsLock works as usual."
+      }
+    ]
+  },
+  "effects": [],
+  "injected_events": 0,
+  "opened": []
+}

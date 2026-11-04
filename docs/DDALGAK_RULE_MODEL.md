@@ -2,10 +2,12 @@
 
 Status: **current** · Rules document **v1** · Step 65 (specification); the engine since Step 66, the
 rule store, validation and rule commands since Step 67, remaps, blocks and mouse-button triggers
-since Step 68, `send_keys`, `type_text` and hotstrings since Step 69 (§14) · Decisions:
+since Step 68, `send_keys`, `type_text` and hotstrings since Step 69, `open_program` (with the
+additive `env` overrides) and `open_url` since Step 70 (§14) · Decisions:
 [ADR 0022](adr/0022-ddalgak-rule-model-and-safety.md), [ADR 0028](adr/0028-ddalgak-rule-store-validation-and-reload.md),
 [ADR 0031](adr/0031-ddalgak-remap-execution-and-mouse-hook.md),
-[ADR 0034](adr/0034-ddalgak-typing-runs-hotstrings-and-clipboard.md) · Schemas:
+[ADR 0034](adr/0034-ddalgak-typing-runs-hotstrings-and-clipboard.md),
+[ADR 0037](adr/0037-ddalgak-program-and-website-launches.md) · Schemas:
 [ddalgak-rules-v1](contracts/schemas/ddalgak-rules-v1.schema.json),
 [ddalgak-simulation-v1](contracts/schemas/ddalgak-simulation-v1.schema.json) · Requirements:
 `DDALGAK-FR-005…042`, `DDALGAK-SEC-001…013`
@@ -370,22 +372,44 @@ never blocks the emergency chord. A rule of `block` and `engine` steps is an eng
 | `app_id` | Instead of `path`: the AppUserModelID of a packaged app (`Microsoft.WindowsCalculator_8wekyb3d8bbwe!App`). No `args` or `working_dir` with it. |
 | `args` | Up to 32 separate arguments, each quoted by Ddalgak by the Windows command-line rules. Never one shell string. |
 | `working_dir` | Absolute folder (same tokens); default: the program's folder. |
-| `window` | `normal` (default), `maximized`, `minimized`. |
+| `env` | Step 70, additive: explicit environment overrides for this program only, `[{ "name": "TOOL_MODE", "value": "portable" }]`; at most 32, names `[A-Za-z_][A-Za-z0-9_]*` (up to 64) and unique ignoring case, values up to 4096 characters without control characters. Not with `app_id`. Without `env` the program inherits Ddalgak's environment unchanged. |
+| `window` | `normal` (default), `maximized`, `minimized`. There is no hidden state: a program the user cannot see is silent execution. |
 | `if_running` | `start_new` (default) or `activate`: bring an existing window of the same program to the front instead. |
 
-- **Behavior.** `CreateProcessW` with the resolved path and the quoted argument list, as the
-  current user, without shell verbs; packaged apps through the shell's activation API. A
-  program whose manifest requires elevation fails with `program_requires_elevation`; Ddalgak
-  never asks for elevation (`DDALGAK-SEC-007`, `KIM-SEC-004`).
+- **Behavior** (Step 70, [ADR 0037](adr/0037-ddalgak-program-and-website-launches.md)). Just
+  before the start the path is expanded (the six tokens only; nothing is searched: no `PATH`, no
+  current folder) and checked again: it exists and is a file, the real file behind links is an
+  `.exe` and not a shell host, and there is no `:` after the drive (an alternate data stream; the
+  schema's pattern allows it, so the check is a runtime `step_invalid`). Then `CreateProcessW` with
+  the expanded path as the application name (never split at a space), a command line with each
+  argument quoted by the `CommandLineToArgvW` rules, no inherited handles, the working folder, the
+  window state and, with `env`, Ddalgak's environment with those variables replaced; as the
+  current user, without shell verbs. Packaged apps go to the shell's `open` on
+  `shell:AppsFolder\<app_id>`. A program whose manifest requires elevation fails with
+  `program_requires_elevation`; Ddalgak never asks for elevation and never retries elevated
+  (`DDALGAK-SEC-007`, `KIM-SEC-004`). `if_running: activate` looks for a visible, unowned
+  top-level window of a process started from the same file, restores it and asks Windows to
+  bring it to the front; without one the program starts. Whether a new or activated window comes
+  to the front is decided by Windows' foreground lock (ADR 0037 §8). A launch rule runs on its own
+  short-lived thread; one run per rule at a time (`busy`) and one start per rule per second
+  (`rate_limited`).
 - **Outputs.** Preview `{ "program": "notepad.exe", "found": true, "arguments": 0 }`: file name,
-  whether it exists, the number of arguments. Never the full path or the arguments.
+  whether it exists, the number of arguments. Never the full path, the arguments or the
+  environment values.
 - **Errors.** Validation (schema): relative path, non-`.exe`, command interpreters and script
   hosts (`cmd.exe`, `powershell.exe`, `pwsh.exe`, `wscript.exe`, `cscript.exe`, `mshta.exe`,
   `rundll32.exe`, `regsvr32.exe`, `wsl.exe`, `bash.exe`, `conhost.exe`), which belong to Step 79's
-  separately consented command action. Semantic: `consent_stale` when the target changed after
-  consent. Runtime: `program_not_found`, `program_requires_elevation`, `launch_failed`.
+  separately consented command action; an `env` entry with a bad name, or `env` with `app_id`.
+  Since Step 70 also at compile time (`step_invalid`, reported by `rule check`): a `:` after the
+  drive, an override name given twice, a quoted command line longer than Windows' 32 766
+  characters. Semantic: `consent_stale` when the target (path, argument, folder, window state,
+  override) changed after consent. Runtime: `program_not_found` (missing, moved, a folder, a
+  missing working folder, an unset known folder, an app that is not installed),
+  `program_requires_elevation`, `launch_failed` (not a program, a shell host behind a link,
+  access denied).
 - **Safety.** `launch-programs` with a fingerprint (§6.2). An imported rule arrives disabled and
-  without consent (`DDALGAK-SEC-013`).
+  without consent (`DDALGAK-SEC-013`). Loading, checking, reloading or importing rules never
+  starts anything; only a fired trigger does.
 
 ### 5.6 `open_url`: open a website
 
@@ -394,12 +418,23 @@ never blocks the emergency chord. A rule of `block` and `engine` steps is an eng
 | `url` | Required. `http://` or `https://`, a host, optional port, path, query and fragment; no spaces, no user name or password; at most 2048 characters. |
 
 - **Behavior.** The URL is handed to the user's default browser through the shell's `open`
-  association for `http`/`https` only. Ddalgak itself makes no network connection
-  (`DDALGAK-SEC-014`).
+  association for `http`/`https` only (`ShellExecuteExW`, verb `open`, no error dialog; Step 70).
+  Ddalgak itself makes no network connection (`DDALGAK-SEC-014`).
+- **Input normalization** (the editor and the CLI, before consent; the stored URL is what the
+  fingerprint covers): surrounding spaces removed; `https://` added when no scheme is given
+  (`github.com`, `localhost:3000/x`); scheme and host in lower case; a non-ASCII host label in its
+  `xn--` Punycode form (no full IDNA mapping); `/` added when there is no path; spaces, `"`, `<`,
+  `>`, `\`, `^`, `` ` ``, `{`, `}`, `|`, non-ASCII characters and a `%` that starts no escape
+  percent-encoded in the path, query and fragment.
 - **Outputs.** Preview `{ "scheme": "https", "host": "github.com" }`. The path and query are never
-  shown or logged: they can carry tokens.
-- **Errors.** Validation: other schemes (`file:`, `javascript:`, `ms-settings:`, custom
-  protocols) and credentials. Runtime: `browser_unavailable`, `launch_failed`.
+  shown or logged: they can carry tokens. `rule show` shows `https://github.com/…` unless
+  `--show-targets`.
+- **Errors.** Validation: other schemes (`file:`, `javascript:`, `vbscript:`, `data:`, `ms-*:`
+  such as `ms-settings:`, `search-ms:`, `shell:` and custom protocols such as `mailto:` or
+  `zoommtg:` — none can be allowed in rules v1) and credentials. Since Step 70 also at compile time
+  (`step_invalid`): control or whitespace characters, `"`, `<`, `>`, `\`, a port outside 1–65535,
+  a malformed host. Runtime: `browser_unavailable` (no association for the scheme),
+  `launch_failed`.
 - **Safety.** `launch-programs` with a fingerprint (§6.2).
 
 ### 5.7 `mouse_move`
@@ -495,9 +530,11 @@ the rule is inactive (`step_unsupported`, §9).
 
 Trigger kinds planned additively: mouse wheel notches (Step 71). Mouse buttons arrived in Step 68
 (§3.1; the `mouse-hook` permission, §6.1) and hotstrings in Step 69 (§3.4). `send_keys` and
-`type_text` run from Step 69, each as the rule's only step, and `delay`, with ordered multi-step
-runs, from Step 78 ([ADR 0031](adr/0031-ddalgak-remap-execution-and-mouse-hook.md),
-[ADR 0034](adr/0034-ddalgak-typing-runs-hotstrings-and-clipboard.md)); until then they are
+`type_text` run from Step 69, each as the rule's only step; `open_program` and `open_url` from
+Step 70, together and in order but not mixed with other step types; and `delay`, with ordered
+multi-step runs, from Step 78 ([ADR 0031](adr/0031-ddalgak-remap-execution-and-mouse-hook.md),
+[ADR 0034](adr/0034-ddalgak-typing-runs-hotstrings-and-clipboard.md),
+[ADR 0037](adr/0037-ddalgak-program-and-website-launches.md)); until then they are
 `step_unsupported`.
 
 ## 6. Permissions and consent
@@ -625,7 +662,7 @@ and needs a guaranteed way out of that mode.
 | `output_reserved` | error | schema | An output contains the Secure Attention Sequence or the emergency chord. |
 | `consent_missing` | error | schema | An enabled rule lacks a consent of §6.1. |
 | `recursion_risk` | error | schema | `injected: accept` with an injecting step (§7.4). |
-| `step_invalid` | error | schema | A step's inputs break §5 (relative path, shell host, URL scheme, missing mode target, …). |
+| `step_invalid` | error | schema | A step's inputs break §5 (relative path, shell host, URL scheme, missing mode target, …). Since Step 70 also the launch checks the schema cannot express (§5.5, §5.6: a `:` after the drive, an override name given twice, a command line over Windows' limit, a URL with characters a browser's command line could misread), found when the rule is compiled; messages never quote the target. |
 | `duplicate_profile_id`, `duplicate_mode_id`, `duplicate_rule_id` | error | semantic | An ID appears twice. |
 | `unknown_profile`, `unknown_mode` | error | semantic | A reference to a profile or mode that does not exist. |
 | `output_is_trigger` | error | semantic | §7.4 3. |
@@ -738,8 +775,8 @@ Every trigger event that reaches a candidate produces one outcome:
 | `skipped_disabled_field` | Typing (Step 69): the focused control was disabled or a read-only edit (when the application reports no focused control, as UWP apps do, a disabled or missing foreground window); nothing was typed. |
 | `focus_changed` | Typing (Step 69): another window or control took focus during the run; it stopped, and nothing was typed into the new window. |
 | `skipped_injected_input` | Injected input and the rule accepts only physical input. |
-| `busy` | The rule is still running. |
-| `rate_limited` | §7.4 4. |
+| `busy` | The rule is still running (a launch rule's thread, Step 70, included). |
+| `rate_limited` | §7.4 4; a launch rule also within one second of its last start (Step 70: a double press never opens a program twice). |
 | `injection_failed` | `SendInput` inserted fewer events than requested. UIPI failures are silent (*documented*), so the elevated-target check runs first. |
 | `program_not_found`, `program_requires_elevation`, `launch_failed`, `browser_unavailable`, `clipboard_busy` | §5. |
 | `clipboard_not_restorable`, `clipboard_restore_failed` | Paste (Step 69, §5.4): the clipboard held content that cannot be copied faithfully, so nothing was pasted and it was left alone; or the previous content could not be put back after the paste. |
@@ -763,8 +800,8 @@ behavior may not get weaker.
 
 | Command | Effect |
 | --- | --- |
-| `ddalgak rule list [--profile p] [--mode m]` · `rule show <id> [--show-text]` · `rule check` (each `[--draft]`) | read (snippet text only with `--show-text`) |
-| `ddalgak rule add (--trigger <keys> \| --hotstring <abbreviation> [--case c] [--inside-words] [--immediate] [--end-chars s] [--omit-end] [--keep-abbreviation]) (--action <type> [inputs] \| --step <json>…) [--allow <permission>]…` (text inputs: `--text`, `--escapes`, `--variables`, `--method`, `--key-delay-ms`; Step 69) · `rule edit <id> … [--patch <json>]` · `rule duplicate <id>` · `rule enable/disable <id>…` · `rule move <id> --before <id> \| --after <id> \| --to start\|end\|<n>` | write, `--dry-run`, `--draft`, `--if-revision <n>` |
+| `ddalgak rule list [--profile p] [--mode m]` · `rule show <id> [--show-text] [--show-targets]` · `rule check` (each `[--draft]`) | read (snippet text only with `--show-text`, launch targets only with `--show-targets`) |
+| `ddalgak rule add (--trigger <keys> \| --hotstring <abbreviation> [--case c] [--inside-words] [--immediate] [--end-chars s] [--omit-end] [--keep-abbreviation]) (--action <type> [inputs] \| --step <json>…) [--allow <permission>]…` (text inputs: `--text`, `--escapes`, `--variables`, `--method`, `--key-delay-ms`; Step 69; launch inputs: `--path` or `--app-id`, `--arg`…, `--working-dir`, `--window`, `--if-running`, `--env NAME=VALUE`…, `--url`; Step 70) · `rule edit <id> … [--patch <json>]` · `rule duplicate <id>` · `rule enable/disable <id>…` · `rule move <id> --before <id> \| --after <id> \| --to start\|end\|<n>` | write, `--dry-run`, `--draft`, `--if-revision <n>` |
 | `ddalgak rule delete <id>…` | destructive: `--dry-run`, `--yes` |
 | `ddalgak rule revoke <id> <permission>` | write (the rule is disabled when it needs the permission) |
 | `ddalgak rules history` · `rules draft [show]` | read |
@@ -797,13 +834,27 @@ as `hotkey_invalid`, `hotkey_reserved`, `usage`, `confirmation_required`, `busy`
 
 | Artifact | Pins down |
 | --- | --- |
-| [ddalgak-rules-v1](contracts/schemas/ddalgak-rules-v1.schema.json) + `contracts/examples/ddalgak-rules-v1/` | Twelve valid documents (remaps and swaps, text, programs, websites, mouse, modes, engine control, profiles and conditions, an export, a future step type, since Step 68 mouse-button remaps, pass-through and a physical-position trigger in `11-remap-mouse-and-pass-through.json`, and since Step 69 hotstrings, variables and the insertion point in `12-hotstrings-and-snippets.json`). Forty-seven invalid ones (Step 69 added a hotstring with keys, with a space, `immediate` with end characters, a hotstring remap, an unknown and a second-cursor template), including recursive remaps (`recursive-remap-accepts-injected`, `recursive-send-keys-accepts-injected`), a dual role that also passes the key through (`remap-tap-with-pass-through`), the primary button and a mouse button in a sequence as triggers, the emergency chord as trigger and output, reserved OS chords (`Win+L`, `Alt+Tab`, `Ctrl+Shift+Escape`, the Secure Attention Sequence), missing consent for programs, websites, injection and clipboard, shell hosts, `file:` URLs and newer versions. |
+| [ddalgak-rules-v1](contracts/schemas/ddalgak-rules-v1.schema.json) + `contracts/examples/ddalgak-rules-v1/` | Twelve valid documents (remaps and swaps, text, programs, websites, mouse, modes, engine control, profiles and conditions, an export, a future step type, since Step 68 mouse-button remaps, pass-through and a physical-position trigger in `11-remap-mouse-and-pass-through.json`, and since Step 69 hotstrings, variables and the insertion point in `12-hotstrings-and-snippets.json`, and since Step 70 environment overrides, activation and websites in order in `13-launch-options.json`). Fifty-two invalid ones (Step 70 added `javascript:`, `ms-settings:` and custom-protocol URLs, `env` with an app ID and a bad variable name; Step 69 added a hotstring with keys, with a space, `immediate` with end characters, a hotstring remap, an unknown and a second-cursor template), including recursive remaps (`recursive-remap-accepts-injected`, `recursive-send-keys-accepts-injected`), a dual role that also passes the key through (`remap-tap-with-pass-through`), the primary button and a mouse button in a sequence as triggers, the emergency chord as trigger and output, reserved OS chords (`Win+L`, `Alt+Tab`, `Ctrl+Shift+Escape`, the Secure Attention Sequence), missing consent for programs, websites, injection and clipboard, shell hosts, `file:` URLs and newer versions. |
 | `contracts/examples/ddalgak-rules-v1/semantic-invalid/` | Thirteen schema-valid documents named `<code>--<what>.json`, each producing exactly that semantic error: `output_is_trigger` (the recursive remap `F13` → `F13`, and `send_keys` to its own trigger), duplicate IDs and triggers (since Step 69 also two hotstrings `btw`/`BTW`), unknown modes and profiles, a stale launch consent, a run over 60 s (delays, and since Step 69 slow typing). |
 | [ddalgak-simulation-v1](contracts/schemas/ddalgak-simulation-v1.schema.json) + examples | Twenty-three playground results named `<rules example>--<what>.json` and fourteen invalid ones (effects performed or input injected in `simulate`, live launches without confirmation, live input outside the playground, previews that echo text, paths, arguments or URL paths). |
 | [kim-hotkey-manifest-v1/ddalgak.json](contracts/examples/kim-hotkey-manifest-v1/ddalgak.json) | Ddalgak's final GUI actions: four global ones (matching the Kim catalog) and the `rules` and `playground` contexts. |
 
 **Step 66** implements the engine for engine-control rules ([DDALGAK_ENGINE](DDALGAK_ENGINE.md));
 every other step type is inactive with `step_unsupported` until its Step.
+
+**Step 70** runs `open_program` (§5.5) and `open_url` (§5.6) and adds the `env` overrides
+([ADR 0037](adr/0037-ddalgak-program-and-website-launches.md), [DDALGAK_ENGINE §13](DDALGAK_ENGINE.md)).
+The CLI writes them, normalizing a pasted path (quotes removed, `/` as `\`) and a typed address
+(§5.6): `ddalgak rule add --trigger Ctrl+Shift+F6 --action open_program --path "%SystemRoot%\System32\notepad.exe" --allow launch-programs`,
+`… --action open_program --path "C:\Tools\tool.exe" --arg --profile --arg "C:\My Files" --env TOOL_MODE=portable --window minimized --if-running activate`,
+`… --action open_program --app-id Microsoft.WindowsCalculator_8wekyb3d8bbwe!App`,
+`… --action open_url --url github.com`. `rule show` redacts launch targets unless
+`--show-targets` (`targets_redacted`). The editor's program picker and website field are
+`crates/ddalgak/src/launch.rs` (`ProgramDraft`, `UrlDraft`, `OPEN_PROGRAM_FIELDS`,
+`OPEN_URL_FIELDS`; an icon preview read from the file on Windows), checked against this schema
+([GUI_JOURNEYS J4](DDALGAK_GUI_JOURNEYS.md)). Fixture `13-launch-options.json` shows overrides,
+a minimized window, activation, two websites in order with `on_error: continue` and an imported
+rule waiting for review.
 
 **Step 69** runs `send_keys` (§5.3) and `type_text` (§5.4) and adds hotstring triggers (§3.4),
 the variable whitelist with the insertion point, and the paste method with clipboard restore

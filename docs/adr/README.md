@@ -38,6 +38,7 @@ the requirements it serves. ADRs are immutable once **Accepted**; a later ADR ma
 | [0031](0031-ddalgak-remap-execution-and-mouse-hook.md) | Ddalgak remaps: decided in the hook, sent by the worker, a mouse hook only on demand | Accepted (Step 68; catalog disclosure of `mouse-hook` pending) |
 | [0032](0032-noeul-double-click-pin-and-outputs.md) | Noeul double-click to pin: press counting, the toolbar, separate outputs and gesture settings | Accepted (Step 51) |
 | [0034](0034-ddalgak-typing-runs-hotstrings-and-clipboard.md) | Ddalgak typing: worker runs, hotstrings from untouched key translation, a clipboard always given back | Accepted (Step 69; real-application checks manual) |
+| [0037](0037-ddalgak-program-and-website-launches.md) | Ddalgak launches: CreateProcessW without a shell, the shell's `open` for websites and apps, a launch thread per run | Accepted (Step 70; installed programs, the default browser, elevation and focus checks manual) |
 
 "Accepted (validated in Step N)" means the decision is made, but the named Step must confirm it
 on real Windows; if validation fails, that Step writes a superseding ADR.

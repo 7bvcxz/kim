@@ -1,6 +1,6 @@
 # Ddalgak GUI journeys and wireframes
 
-Status: **current** (Step 65, design; implemented in Steps 73–76; the type-text, shortcut and hotstring forms and the text editor's data model are machine-checked since Step 69) · Requirements:
+Status: **current** (Step 65, design; implemented in Steps 73–76; the type-text, shortcut and hotstring forms and the text editor's data model are machine-checked since Step 69, the program picker and website field since Step 70) · Requirements:
 `DDALGAK-FR-050…053`, `DDALGAK-FR-030…042`, `DDALGAK-NFR-007` · Visual language:
 [DESIGN_SYSTEM](DESIGN_SYSTEM.md) · Model: [DDALGAK_RULE_MODEL](DDALGAK_RULE_MODEL.md)
 
@@ -241,6 +241,26 @@ playground contract; the visible editor is Step 74):
 when a plain trigger combines with held modifiers ("Shift+CapsLock sends Shift+Escape") and, for
 a mouse-button trigger, that Ddalgak then uses a mouse hook while the engine is on. Choosing
 `MouseLeft` or `MouseRight` as the trigger is not offered.
+
+**The "Open a program" and "Open a website" forms** (Step 70 fixed their data;
+`crates/ddalgak/src/launch.rs` `OPEN_PROGRAM_FIELDS`, `OPEN_URL_FIELDS`, `ProgramDraft`,
+`UrlDraft`, `summary` and the previews, whose tests check every field against the rules schema;
+the icon is read from the file by `win::launch::icon_preview`; the visible editor is Step 74):
+
+| Field (rule document) | Input | Required | Default | Label and help |
+| --- | --- | --- | --- | --- |
+| `steps[0].path` | program picker (`.exe` only) or typed path | one of path or app | — | **Program**: quotes from *Copy as path* are removed, `/` becomes `\`, a file in a known folder is written with its token (`%LocalAppData%\Programs\…`: portable, no user name); checked as typed (absolute, `.exe`, not cmd/PowerShell/script hosts, no `:` stream); the preview shows the icon, the file name, *found* and whether it is really a program |
+| `steps[0].app_id` | app ID | one of path or app | — | **Or an app**: `PackageFamilyName!AppId`; installed apps are not listed yet (the picker needs the shell's COM enumeration), so the ID is pasted and checked by form |
+| `steps[0].args` | list | no | — | **Arguments**: one per line, up to 32, each quoted by Ddalgak; the details show the exact command line |
+| `steps[0].working_dir` | folder picker | no | the program's folder | **Start in** |
+| `steps[0].window` | choice | no | normal | **Window**: normal, maximized, minimized; never hidden |
+| `steps[0].if_running` | toggle | no | start new | **Bring it to the front if it is already running**: "Windows may only flash its taskbar button" |
+| `steps[0].env` | name/value pairs (advanced) | no | — | **Environment**: for this program only; shown in the consent dialog, never in lists or logs |
+| `steps[0].url` | URL field | yes | — | **Website**: `https://` added when missing, scheme and host in lower case, an international host in its `xn--` form, spaces encoded; only `http`/`https`, no user name or password; the summary reads "Opens github.com in your browser" |
+
+- **Nothing opens by itself.** Picking a file reads it (exists, `MZ` header, icon) but never runs
+  it; Save writes only a valid, changed draft after the consent dialog names the exact target;
+  Test opens it only after its own confirmation (J5, RULE_MODEL §11).
 
 **Advanced** (folded): *Only in modes…*, *Only in apps… / except in…*, *Window title contains…*,
 *Priority*, *If a step fails: stop / continue*, *Accept input from other programs* (shown only

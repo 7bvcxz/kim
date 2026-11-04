@@ -8,10 +8,18 @@
 //! Ddalgak brings its own (hidden) window to the foreground, as Windows requires for a popup menu
 //! the user asked for with a click; nothing else ever takes focus.
 //!
+//! **Modes** (Step 72, ADR 0043): when the mode indicator is visible (`settings.mode_indicator`:
+//! by default only for a profile with more than one mode), the tooltip names the active mode
+//! ("Ddalgak: engine on · mode N Navigation"), a running engine outside its default mode has its
+//! own icon shape (the disc with a notch), and the menu has a `Mode` submenu with every mode (the
+//! active one checked) and "Back to <default>", the safe reset. The tray is never shown by the
+//! automated tests (the test host has no tray); its texts and shapes are unit-tested.
+//!
 //! Step 73 refines the indicator (optional compact indicator, notices); Step 74 adds the editor.
 
 use super::wide;
 use crate::lifecycle::State;
+use crate::modes::{self, Indicator, MenuEntry};
 use std::io;
 use windows_sys::Win32::Foundation::{HWND, POINT};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -21,17 +29,46 @@ use windows_sys::Win32::UI::Shell::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreateIcon, CreatePopupMenu, DestroyIcon, DestroyMenu, GetCursorPos, HICON,
-    MF_GRAYED, MF_SEPARATOR, MF_STRING, PostMessageW, SetForegroundWindow, TPM_RETURNCMD,
-    TPM_RIGHTBUTTON, TrackPopupMenu, WM_NULL,
+    MF_CHECKED, MF_GRAYED, MF_POPUP, MF_SEPARATOR, MF_STRING, PostMessageW, SetForegroundWindow,
+    TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, WM_NULL,
 };
 
 /// A menu choice.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum MenuCmd {
     ToggleEngine,
     TogglePause,
     Quit,
+    /// Switch to this mode (Step 72).
+    Mode(String),
+    /// Back to the default mode (the safe reset).
+    ResetMode,
 }
+
+/// The menu IDs of mode entries start here (one per mode, at most 32).
+const MODE_ID: usize = 100;
+const RESET_MODE_ID: usize = 99;
+
+/// The running engine outside its default mode: the disc with a notch at the top right, so the
+/// state is visible by shape, not by color (Step 72).
+const ON_MODE: [&str; 16] = [
+    "................",
+    ".....++++++.....",
+    "...++#####+.....",
+    "..+######+..+...",
+    "..+#####+..+#+..",
+    ".+######+.+##+..",
+    ".+#######+###+..",
+    ".+############+.",
+    ".+############+.",
+    ".+############+.",
+    ".+############+.",
+    "..+##########+..",
+    "..+##########+..",
+    "...++######++...",
+    ".....++++++.....",
+    "................",
+];
 
 const ON: [&str; 16] = [
     "................",
@@ -128,9 +165,9 @@ fn make_icon(art: &[&str; 16]) -> io::Result<HICON> {
     }
 }
 
-/// The three state icons.
+/// The state icons (off, on, paused, on outside the default mode).
 #[derive(Debug)]
-pub struct Icons([HICON; 3]);
+pub struct Icons([HICON; 4]);
 
 impl Icons {
     pub fn new() -> io::Result<Icons> {
@@ -138,12 +175,19 @@ impl Icons {
             make_icon(&OFF)?,
             make_icon(&ON)?,
             make_icon(&PAUSED)?,
+            make_icon(&ON_MODE)?,
         ]))
     }
 
     pub fn for_state(&self, s: State) -> HICON {
+        self.for_state_in_mode(s, false)
+    }
+
+    /// `away`: a mode other than the default mode is active and the indicator is visible.
+    pub fn for_state_in_mode(&self, s: State, away: bool) -> HICON {
         match s {
             State::Off => self.0[0],
+            State::Running if away => self.0[3],
             State::Running => self.0[1],
             State::Paused => self.0[2],
         }
@@ -181,6 +225,8 @@ pub struct Tray {
     callback: u32,
     icons: Icons,
     state: State,
+    /// The mode indicator (Step 72); `None` while the engine is off.
+    mode: Option<Indicator>,
     added: bool,
 }
 
@@ -194,6 +240,7 @@ impl Tray {
             callback,
             icons: Icons::new()?,
             state,
+            mode: None,
             added: false,
         };
         t.add()?;
@@ -201,17 +248,32 @@ impl Tray {
     }
 
     fn data(&self) -> NOTIFYICONDATAW {
+        let away = self.mode.as_ref().is_some_and(|m| m.visible && m.away);
         let mut d = NOTIFYICONDATAW {
             cbSize: u32::try_from(size_of::<NOTIFYICONDATAW>()).expect("small"),
             hWnd: self.hwnd,
             uID: ID,
             uFlags: NIF_MESSAGE | NIF_ICON | NIF_TIP,
             uCallbackMessage: self.callback,
-            hIcon: self.icons.for_state(self.state),
+            hIcon: self.icons.for_state_in_mode(self.state, away),
             ..Default::default()
         };
-        copy_into(&mut d.szTip, tooltip(self.state));
+        copy_into(
+            &mut d.szTip,
+            &modes::tooltip(self.state, self.mode.as_ref()),
+        );
         d
+    }
+
+    /// Shows the active mode (or none) in the tooltip and the icon shape (Step 72).
+    pub fn set_mode(&mut self, mode: Option<Indicator>) {
+        if self.mode == mode {
+            return;
+        }
+        self.mode = mode;
+        let d = self.data();
+        // SAFETY: as in `add`.
+        unsafe { Shell_NotifyIconW(NIM_MODIFY, &raw const d) };
     }
 
     fn add(&mut self) -> io::Result<()> {
@@ -248,8 +310,14 @@ impl Tray {
         unsafe { Shell_NotifyIconW(NIM_MODIFY, &raw const d) };
     }
 
-    /// Shows the menu at the pointer and returns the choice.
-    pub(crate) fn menu(hwnd: HWND, state: State) -> Option<MenuCmd> {
+    /// Shows the menu at the pointer and returns the choice. `modes`: the mode menu entries and
+    /// the default mode's title, when the engine is on and the indicator is visible (Step 72).
+    pub(crate) fn menu(
+        hwnd: HWND,
+        state: State,
+        title: &str,
+        modes: Option<(&[MenuEntry], &str)>,
+    ) -> Option<MenuCmd> {
         // SAFETY: a new popup menu, destroyed below.
         let menu = unsafe { CreatePopupMenu() };
         if menu.is_null() {
@@ -261,7 +329,31 @@ impl Tray {
             // SAFETY: valid menu; NUL-terminated text copied by the call.
             unsafe { AppendMenuW(menu, flags, id, w.as_ptr()) };
         };
-        item(9, tooltip(state), false);
+        item(9, title, false);
+        if let Some((entries, default_title)) = modes
+            && !entries.is_empty()
+        {
+            // SAFETY: a new popup menu; owned by `menu` once appended, destroyed with it.
+            let sub = unsafe { CreatePopupMenu() };
+            if !sub.is_null() {
+                for (i, e) in entries.iter().enumerate().take(32) {
+                    let w = wide(&e.label);
+                    let flags = MF_STRING | if e.checked { MF_CHECKED } else { 0 };
+                    // SAFETY: valid submenu; NUL-terminated text copied by the call.
+                    unsafe { AppendMenuW(sub, flags, MODE_ID + i, w.as_ptr()) };
+                }
+                let w = wide("Mode");
+                // SAFETY: valid menus; the submenu handle is passed as the item ID (MF_POPUP).
+                unsafe { AppendMenuW(menu, MF_STRING | MF_POPUP, sub as usize, w.as_ptr()) };
+            }
+            item(
+                RESET_MODE_ID,
+                &format!("Back to {default_title}"),
+                entries
+                    .iter()
+                    .any(|e| e.checked && !e.label.ends_with("(default)")),
+            );
+        }
         // SAFETY: valid menu; a separator has no text.
         unsafe { AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null()) };
         item(
@@ -304,10 +396,15 @@ impl Tray {
             DestroyMenu(menu);
             c
         };
+        let cmd = usize::try_from(cmd).unwrap_or(0);
         match cmd {
             1 => Some(MenuCmd::ToggleEngine),
             2 => Some(MenuCmd::TogglePause),
             3 => Some(MenuCmd::Quit),
+            RESET_MODE_ID => Some(MenuCmd::ResetMode),
+            n if n >= MODE_ID => modes
+                .and_then(|(e, _)| e.get(n - MODE_ID))
+                .map(|e| MenuCmd::Mode(e.id.clone())),
             _ => None,
         }
     }
@@ -329,7 +426,7 @@ mod tests {
 
     #[test]
     fn icons_differ_by_shape_and_are_created_without_showing_anything() {
-        let shapes = [masks(&ON), masks(&PAUSED), masks(&OFF)];
+        let shapes = [masks(&ON), masks(&PAUSED), masks(&OFF), masks(&ON_MODE)];
         for (i, a) in shapes.iter().enumerate() {
             for b in &shapes[i + 1..] {
                 assert_ne!(a, b, "each state has its own shape");
@@ -337,12 +434,21 @@ mod tests {
             // Every icon has transparent, white and black pixels.
             assert!(a.0.iter().any(|b| *b != 0) && a.1.iter().any(|b| *b != 0));
         }
-        for art in [ON, PAUSED, OFF] {
+        for art in [ON, PAUSED, OFF, ON_MODE] {
             assert!(art.iter().all(|r| r.len() == 16));
         }
         // CreateIcon only builds the images; no icon is added to the notification area here.
         let icons = Icons::new().unwrap();
         assert_ne!(icons.for_state(State::Off), icons.for_state(State::Running));
+        assert_ne!(
+            icons.for_state_in_mode(State::Running, true),
+            icons.for_state(State::Running),
+            "outside the default mode the running icon has its own shape"
+        );
+        assert_eq!(
+            icons.for_state_in_mode(State::Paused, true),
+            icons.for_state(State::Paused)
+        );
         assert_eq!(tooltip(State::Paused), "Ddalgak: engine paused");
     }
 }

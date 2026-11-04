@@ -30,7 +30,7 @@ pub type Notify<'a> = &'a dyn Fn(bool) -> Result<Value, CliError>;
 type Outcome = crate::Outcome;
 
 /// What the checks know beyond the file: Ddalgak's own shortcuts, and missing program files.
-fn context(paths: &Paths) -> Context {
+pub(crate) fn context(paths: &Paths) -> Context {
     Context {
         shortcuts: Shortcuts::load(paths, false)
             .list
@@ -42,7 +42,7 @@ fn context(paths: &Paths) -> Context {
 }
 
 #[allow(clippy::needless_pass_by_value)] // a `map_err` adapter
-fn store_err(e: StoreError) -> CliError {
+pub(crate) fn store_err(e: StoreError) -> CliError {
     let msg = e.to_string();
     match e {
         StoreError::PermissionDenied(_) => CliError::new(Code::PermissionDenied, msg)
@@ -61,7 +61,7 @@ fn store_err(e: StoreError) -> CliError {
     }
 }
 
-fn problem_line(p: &Problem) -> String {
+pub(crate) fn problem_line(p: &Problem) -> String {
     let who = p
         .rule
         .as_deref()
@@ -82,9 +82,12 @@ fn problem_line(p: &Problem) -> String {
 }
 
 #[allow(clippy::needless_pass_by_value)] // a `map_err` adapter
-fn edit_err(e: EditError) -> CliError {
+pub(crate) fn edit_err(e: EditError) -> CliError {
     let code = Code::parse(e.code()).unwrap_or(Code::Internal);
-    let details: Vec<String> = e.problems().iter().map(problem_line).collect();
+    let mut details: Vec<String> = e.problems().iter().map(problem_line).collect();
+    if let EditError::ModeInUse { users, .. } = &e {
+        details.extend(users.iter().map(|u| format!("used by: {u}")));
+    }
     let mut err = CliError::new(code, e.message()).details(details);
     err.hint = Some(match &e {
         EditError::Conflict { .. } => {
@@ -99,9 +102,13 @@ fn edit_err(e: EditError) -> CliError {
                 .join(" ")
         ),
         EditError::RuleNotFound(_) => "see `ddalgak rule list`".into(),
-        EditError::ModeNotFound(_) | EditError::ProfileNotFound(_) => {
-            "modes and profiles are created in the editor (Steps 72 and 75) or in rules.json".into()
+        EditError::ModeNotFound(_) => {
+            "see `ddalgak mode list`; `ddalgak mode add --title <name>` creates one".into()
         }
+        EditError::ProfileNotFound(_) => {
+            "profiles are created in the editor (Step 75) or in rules.json".into()
+        }
+        EditError::ModeInUse { .. } => "nothing was written".into(),
         _ => "see `ddalgak --help`".into(),
     });
     err
@@ -117,7 +124,7 @@ fn trigger_err(e: &TriggerError) -> CliError {
 }
 
 /// The saved file, which must be usable.
-fn saved(files: &Files, ctx: &Context) -> Result<store::Loaded, CliError> {
+pub(crate) fn saved(files: &Files, ctx: &Context) -> Result<store::Loaded, CliError> {
     let l = store::read(files, ctx);
     match &l.state {
         FileState::Invalid(why) => Err(store_err(StoreError::Invalid(why.clone()))),
@@ -132,7 +139,7 @@ fn analyze(doc: &Document, ctx: &Context) -> store::Loaded {
 }
 
 /// What a read command looks at: the saved file, or the draft with `--draft`.
-fn source(
+pub(crate) fn source(
     a: &Args,
     files: &Files,
     ctx: &Context,
@@ -167,7 +174,7 @@ fn steps_of(e: &RuleEntry) -> Vec<String> {
     }
 }
 
-fn counts(r: &validate::Report) -> Value {
+pub(crate) fn counts(r: &validate::Report) -> Value {
     json!({
         "errors": r.count(Severity::Error),
         "warnings": r.count(Severity::Warning),
@@ -197,8 +204,15 @@ fn list(a: &Args, files: &Files, ctx: &Context) -> Outcome {
         let e = &p.rules[s.position];
         let r = e.rule();
         if let Some(m) = a.get("--mode") {
-            let modes = r.and_then(|r| r.modes.as_ref());
-            if modes.is_some_and(|ms| !ms.iter().any(|x| x == m)) {
+            // The rules that work in mode `m`: its own, its parents' (Step 72 layers) and those
+            // for every mode.
+            let set = ddalgak::modes::ModeSet::from_profile(p);
+            let works = match (r.and_then(|r| r.modes.as_ref()), set.index(m)) {
+                (None, _) => true,
+                (Some(ms), Some(mi)) => set.mask(ms).is_some_and(|k| set.rank(mi, k).is_some()),
+                (Some(ms), None) => ms.iter().any(|x| x == m),
+            };
+            if !works {
                 continue;
             }
         }
@@ -373,7 +387,7 @@ fn check(a: &Args, files: &Files, ctx: &Context) -> Outcome {
     Ok((data, Vec::new()))
 }
 
-fn num<T: std::str::FromStr>(a: &Args, name: &str) -> Result<Option<T>, CliError> {
+pub(crate) fn num<T: std::str::FromStr>(a: &Args, name: &str) -> Result<Option<T>, CliError> {
     a.get(name)
         .map(|v| {
             v.parse()
@@ -891,7 +905,7 @@ fn no_input_env() -> bool {
 }
 
 /// Confirms a destructive change (CLI_CONTRACT §4): `--yes`, or a prompt when one is allowed.
-fn confirm(a: &Args, question: &str) -> Result<(), CliError> {
+pub(crate) fn confirm(a: &Args, question: &str) -> Result<(), CliError> {
     if a.yes || a.dry_run {
         return Ok(());
     }
@@ -956,7 +970,7 @@ fn file_name(p: &std::path::Path) -> String {
 }
 
 /// One rule change: lock, read (saved or draft), change, review, save, ask the app to reload.
-fn write(
+pub(crate) fn write(
     cmd: Cmd,
     a: &Args,
     files: &Files,
@@ -987,10 +1001,19 @@ fn write(
     let before = validate::check(&doc.to_value(), ctx);
     let change = op(&mut doc).map_err(edit_err)?;
     let after = validate::check(&doc.to_value(), ctx);
-    edit::review(&before, &after).map_err(edit_err)?;
+    // Mode commands (Step 72) refuse introduced mode problems with `mode_invalid`.
+    let mode_cmd = cmd.name().starts_with("mode.");
+    if mode_cmd {
+        ddalgak::mode_edit::review(&before, &after).map_err(edit_err)?;
+    } else {
+        edit::review(&before, &after).map_err(edit_err)?;
+    }
     let touched: Vec<Value> = after
         .all()
-        .filter(|p| p.rule.as_ref().is_some_and(|r| change.rules.contains(r)))
+        .filter(|p| {
+            p.rule.as_ref().is_some_and(|r| change.rules.contains(r))
+                || (mode_cmd && p.rule.is_none() && p.at.contains(".modes"))
+        })
         .map(Problem::to_json)
         .collect();
     let mut warnings: Vec<String> = after
@@ -1020,6 +1043,10 @@ fn write(
         "snapshot": null,
         "app": null,
     });
+    if mode_cmd {
+        data["modes"] = json!(change.modes);
+        data["created"] = json!(change.created_mode);
+    }
     if !a.dry_run && change.changed {
         let lock = lock.as_ref().expect("locked");
         if draft_mode {

@@ -15,15 +15,22 @@
 //!   (§5.3) step, with a keys or a hotstring trigger (§3.4), and since Step 70 rules made only of
 //!   `open_program` (§5.5) and `open_url` (§5.6) steps with a keys trigger, and since Step 71
 //!   rules made only of `mouse_move`, `mouse_scroll` and `mouse_click` steps (§5.7–§5.9; a held
-//!   button or a move while held as the only step), become bindings. Every other action type, a
-//!   typing step among other steps, and launches or mouse steps mixed with other steps are
-//!   inactive with `step_unsupported` until their Step (72, 78).
-//! - Modes: there is no mode switching before Step 72, so the profile's `default_mode` is active;
-//!   rules limited to other modes are counted, not run.
-//! - Precedence (§7.1): mode-scoped rules first, then higher `priority`, then file order.
+//!   button or a move while held as the only step), and since Step 72 a single `mode` step (§5.10),
+//!   become bindings. Every other action type (`delay`), a typing or mode step among other steps,
+//!   and launches or mouse steps mixed with other steps are inactive with `step_unsupported` until
+//!   ordered multi-step runs (Step 78).
+//! - Modes (Step 72, [`crate::modes`]): every valid rule of the active profile becomes a binding
+//!   with the bit set of the modes it is limited to; the table compiles one precedence list per
+//!   mode. The engine starts in the profile's `default_mode`; `other_modes` counts the rules that
+//!   do not work in it (they work after a mode switch).
+//! - Precedence (§7.1): in the active mode, rules of that mode first, then of its parent and the
+//!   parent's parents, then rules without `modes`; within each, higher `priority`, then file
+//!   order. The bindings here are in priority and file order; [`crate::table::Table`] ranks them
+//!   per mode.
 
 use crate::hotstring;
-use crate::model::Rule;
+use crate::model::{ModeIndicator, Rule};
+use crate::modes::{ModeAction, ModeSet};
 use crate::remap::Output;
 use crate::run::{KeysSpec, TextSpec};
 use crate::store::{self, MIGRATIONS};
@@ -50,14 +57,19 @@ pub struct Loaded {
     pub state: FileState,
     pub revision: Option<u64>,
     pub profile: String,
+    /// The default mode (the mode the engine starts in).
     pub mode: String,
+    /// The active profile's modes (Step 72).
+    pub modes: ModeSet,
+    /// `settings.mode_indicator` (Step 72).
+    pub mode_indicator: Option<ModeIndicator>,
     pub engine_on_start: bool,
     pub max_runs_per_second: u32,
-    /// Active bindings in precedence order.
+    /// Active bindings (every mode) in priority and file order; the table ranks them per mode.
     pub bindings: Vec<Binding>,
     pub inactive: Vec<Inactive>,
     pub disabled: usize,
-    /// Enabled rules limited to modes other than the active one.
+    /// Active rules that do not work in the default mode (only after a mode switch).
     pub other_modes: usize,
     /// Rules in the active profile.
     pub total: usize,
@@ -75,6 +87,8 @@ impl Loaded {
             revision,
             profile: "default".into(),
             mode: "base".into(),
+            modes: ModeSet::single(),
+            mode_indicator: None,
             engine_on_start: false,
             max_runs_per_second: 20,
             bindings: Vec::new(),
@@ -95,8 +109,8 @@ impl Loaded {
 /// rule (a `block` step adds nothing to a rule that consumes its key anyway); a `remap`, a held
 /// button and a move while held are always the rule's only step (schema `holds_trigger`); a
 /// typing step runs alone until ordered multi-step runs (Step 78); launch steps run together, in
-/// order, without other steps, and so do mouse steps.
-pub const RUNNABLE_STEPS: [&str; 10] = [
+/// order, without other steps, and so do mouse steps; a `mode` step (Step 72) runs alone.
+pub const RUNNABLE_STEPS: [&str; 11] = [
     "engine",
     "remap",
     "block",
@@ -107,7 +121,10 @@ pub const RUNNABLE_STEPS: [&str; 10] = [
     "mouse_move",
     "mouse_scroll",
     "mouse_click",
+    "mode",
 ];
+
+const MODE_ALONE: &str = "a `mode` step runs alone in this version; with other steps (keys, launches, a second mode step) it waits for ordered multi-step runs (Step 78)";
 
 const TYPING_ALONE: &str = "a `type_text` or `send_keys` step runs alone in this version; ordered multi-step runs arrive in Step 78";
 const HOTSTRING_STEPS: &str = "a hotstring runs one `type_text` or `send_keys` step in this version; other steps after a hotstring arrive with ordered multi-step runs (Step 78)";
@@ -150,6 +167,11 @@ pub fn later_step(rule: &Rule) -> Option<(usize, String)> {
         && let Some(i) = rule.steps.iter().position(|s| !is_mouse(s.kind()))
     {
         return Some((i, MOUSE_ALONE.into()));
+    }
+    if rule.steps.len() > 1
+        && let Some(i) = rule.steps.iter().position(|s| s.kind() == "mode")
+    {
+        return Some((if i == 0 { 1 } else { i }, MODE_ALONE.into()));
     }
     None
 }
@@ -304,7 +326,6 @@ fn compile_run(s: &Value, ty: &str) -> Result<Action, (&'static str, String)> {
 
 struct Candidate {
     binding: Binding,
-    scoped: bool,
     priority: i64,
     order: usize,
 }
@@ -319,12 +340,15 @@ pub fn from_store(l: &store::Loaded) -> Loaded {
         .profile_index(&doc.active_profile)
         .expect("a usable document has its active profile");
     let profile = &doc.profiles[pi];
-    let mode = profile.default_mode.clone();
+    let modes = ModeSet::from_profile(profile);
+    let base = modes.default_mode();
     let mut out = Loaded {
         state: l.state.clone(),
         revision: doc.revision.or(l.revision),
         profile: profile.id.clone(),
-        mode: mode.clone(),
+        mode: profile.default_mode.clone(),
+        modes: modes.clone(),
+        mode_indicator: settings.and_then(|s| s.mode_indicator),
         engine_on_start: settings.and_then(|s| s.engine_on_start) == Some(crate::model::OnOff::On),
         max_runs_per_second: settings
             .and_then(|s| s.max_runs_per_second)
@@ -352,22 +376,35 @@ pub fn from_store(l: &store::Loaded) -> Loaded {
         let Some(rule) = entry.rule() else {
             continue; // a raw rule always has a schema problem (above)
         };
-        if let Some(m) = &rule.modes
-            && !m.contains(&mode)
-        {
-            out.other_modes += 1;
-            continue;
-        }
+        let mask = match &rule.modes {
+            None => 0,
+            Some(m) => match modes.mask(m) {
+                Some(mask) => mask,
+                None => {
+                    out.inactive.push(Inactive {
+                        rule: id,
+                        code: "unknown_mode",
+                        reason: "the rule names a mode that does not exist in this profile".into(),
+                    });
+                    continue;
+                }
+            },
+        };
         let Some(map) = rule.to_value().as_object().cloned() else {
             continue;
         };
-        match compile(&map) {
-            Ok((binding, priority)) => candidates.push(Candidate {
-                binding,
-                scoped: rule.modes.is_some(),
-                priority,
-                order: ri,
-            }),
+        match compile(&map, &modes) {
+            Ok((mut binding, priority)) => {
+                binding.modes = mask;
+                if modes.rank(base, mask).is_none() {
+                    out.other_modes += 1;
+                }
+                candidates.push(Candidate {
+                    binding,
+                    priority,
+                    order: ri,
+                });
+            }
             Err((code, reason)) => out.inactive.push(Inactive {
                 rule: id,
                 code,
@@ -375,14 +412,20 @@ pub fn from_store(l: &store::Loaded) -> Loaded {
             }),
         }
     }
-    candidates.sort_by(|a, b| {
-        b.scoped
-            .cmp(&a.scoped)
-            .then(b.priority.cmp(&a.priority))
-            .then(a.order.cmp(&b.order))
-    });
+    candidates.sort_by(|a, b| b.priority.cmp(&a.priority).then(a.order.cmp(&b.order)));
     out.bindings = candidates.into_iter().map(|c| c.binding).collect();
     out
+}
+
+impl Loaded {
+    /// The compiled table of these rules for the hook.
+    pub fn table(&self) -> crate::table::Table {
+        crate::table::Table::compile_modes(
+            self.bindings.clone(),
+            self.modes.clone(),
+            self.max_runs_per_second,
+        )
+    }
 }
 
 fn unknown_field(o: &Map<String, Value>, known: &[&str]) -> Option<String> {
@@ -391,7 +434,10 @@ fn unknown_field(o: &Map<String, Value>, known: &[&str]) -> Option<String> {
 
 /// Compiles one checked rule into a binding; `Err` keeps it inactive. The validation already
 /// refused everything below; these checks are the last line of defense ("never broader").
-fn compile(r: &Map<String, Value>) -> Result<(Binding, i64), (&'static str, String)> {
+fn compile(
+    r: &Map<String, Value>,
+    modes: &ModeSet,
+) -> Result<(Binding, i64), (&'static str, String)> {
     if let Some(f) = unknown_field(r, RULE_FIELDS) {
         return Err(("rule_unsupported", format!("unknown field `{f}`")));
     }
@@ -472,6 +518,9 @@ fn compile(r: &Map<String, Value>) -> Result<(Binding, i64), (&'static str, Stri
     if kinds.iter().any(|k| is_mouse(k)) && !kinds.iter().all(|k| is_mouse(k)) {
         return Err(("step_unsupported", MOUSE_ALONE.into()));
     }
+    if kinds.len() > 1 && kinds.contains(&"mode") {
+        return Err(("step_unsupported", MODE_ALONE.into()));
+    }
     if let Some(c) = trigger.single()
         && matches!(c.key, TKey::Modifier(_))
         && on != On::Release
@@ -488,6 +537,7 @@ fn compile(r: &Map<String, Value>) -> Result<(Binding, i64), (&'static str, Stri
     let mut targets = Vec::new();
     let mut mouse = Vec::new();
     let mut held = None;
+    let mut mode = None;
     // Steps that last while the trigger is held: the rule's only step, on a single chord pressed
     // without repeat or pass-through (schema `holds_trigger`; checked again here).
     let holds_ok =
@@ -523,6 +573,24 @@ fn compile(r: &Map<String, Value>) -> Result<(Binding, i64), (&'static str, Stri
                 ops.push(op);
             }
             "block" => {}
+            "mode" => {
+                let a = ModeAction::compile(s, modes).map_err(|e| {
+                    let code = if e.starts_with("no mode") {
+                        "unknown_mode"
+                    } else {
+                        "step_invalid"
+                    };
+                    (code, format!("step {i}: {e}"))
+                })?;
+                if a.holds() && !holds_ok {
+                    return Err((
+                        "step_invalid",
+                        "a mode hold is the rule's only step, on a single chord pressed without repeat or pass-through"
+                            .into(),
+                    ));
+                }
+                mode = Some(a);
+            }
             "type_text" | "send_keys" => run = Some(compile_run(s, ty)?),
             "remap" => {
                 if steps.len() != 1 || trigger.is_sequence() || on != On::Press || repeat {
@@ -563,7 +631,9 @@ fn compile(r: &Map<String, Value>) -> Result<(Binding, i64), (&'static str, Stri
     }
     // Remaps and blocks are wildcards: a plain trigger matches with modifiers held (§3.2).
     let plain = trigger.single().is_some_and(|c| c.mods.is_empty());
-    let (action, widen, injects) = match (remap, run) {
+    let (action, widen, injects) = match (remap, run, mode) {
+        // A mode switch injects nothing and matches exactly (Step 72).
+        (_, _, Some(m)) => (Action::Mode(m), false, false),
         // Mouse steps inject; they match exactly (no widening, §3.2).
         _ if !mouse.is_empty() => (
             Action::Mouse(Arc::new(crate::mouse::MousePlan {
@@ -598,10 +668,10 @@ fn compile(r: &Map<String, Value>) -> Result<(Binding, i64), (&'static str, Stri
             false,
             false,
         ),
-        (Some(spec), _) => (Action::Remap(spec), plain, true),
-        (None, Some(a)) => (a, false, true),
-        (None, None) if ops.is_empty() => (Action::Block, plain, false),
-        (None, None) => (Action::Engine(ops), false, false),
+        (Some(spec), _, None) => (Action::Remap(spec), plain, true),
+        (None, Some(a), None) => (a, false, true),
+        (None, None, None) if ops.is_empty() => (Action::Block, plain, false),
+        (None, None, None) => (Action::Engine(ops), false, false),
     };
     Ok((
         Binding {
@@ -615,6 +685,7 @@ fn compile(r: &Map<String, Value>) -> Result<(Binding, i64), (&'static str, Stri
             injects,
             action,
             hotstring: hotstring.map(Arc::new),
+            modes: 0,
         },
         priority,
     ))
@@ -656,6 +727,8 @@ pub fn rule_states(l: &store::Loaded) -> Vec<RuleState> {
     let mut out = Vec::new();
     for (pi, p) in doc.profiles.iter().enumerate() {
         let active_profile = p.id == doc.active_profile;
+        let modes = ModeSet::from_profile(p);
+        let base = modes.default_mode();
         for (ri, e) in p.rules.iter().enumerate() {
             let problem = l.report.inactive((pi, ri));
             let (state, code, reason) = if e.enabled() != Some(true) {
@@ -667,8 +740,9 @@ pub fn rule_states(l: &store::Loaded) -> Vec<RuleState> {
             } else if e
                 .rule()
                 .and_then(|r| r.modes.as_ref())
-                .is_some_and(|m| !m.contains(&p.default_mode))
+                .is_some_and(|m| modes.mask(m).is_none_or(|k| modes.rank(base, k).is_none()))
             {
+                // Works only after a switch to one of its modes (Step 72).
                 ("other_mode", None, None)
             } else {
                 ("active", None, None)
@@ -881,12 +955,22 @@ mod tests {
         assert_eq!(l.max_runs_per_second, 5);
         assert_eq!(l.total, 10);
         assert_eq!(l.disabled, 1);
-        assert_eq!(l.other_modes, 1);
-        assert_eq!(l.bindings.len(), 2);
+        assert_eq!(
+            l.other_modes, 1,
+            "nav-only works only after a switch to nav"
+        );
+        assert_eq!(l.bindings.len(), 3);
         assert_eq!(l.bindings[0].rule, "pause-key");
         assert_eq!(
             l.bindings[0].action,
             Action::Engine(vec![EngineOp::TogglePause])
+        );
+        assert_eq!(l.bindings[2].rule, "nav-only");
+        assert_eq!(l.bindings[2].modes, 0b10, "limited to the second mode");
+        assert_eq!(
+            l.table().order(0).len(),
+            2,
+            "the base mode's list leaves nav-only out"
         );
         assert_eq!(l.bindings[1].rule, "caps");
         assert!(matches!(l.bindings[1].action, Action::Remap(_)));
@@ -1035,8 +1119,83 @@ mod tests {
             high,
             scoped
         ])));
+        // The loader keeps priority and file order; the table ranks per mode, mode-scoped first.
         let order: Vec<&str> = l.bindings.iter().map(|b| b.rule.as_str()).collect();
-        assert_eq!(order, ["scoped", "high", "plain", "low"]);
+        assert_eq!(order, ["high", "plain", "scoped", "low"]);
+        let t = l.table();
+        let base: Vec<&str> = t
+            .order(0)
+            .iter()
+            .map(|i| t.binding(usize::from(*i)).unwrap().rule.as_str())
+            .collect();
+        assert_eq!(base, ["scoped", "high", "plain", "low"]);
+        let nav: Vec<&str> = t
+            .order(1)
+            .iter()
+            .map(|i| t.binding(usize::from(*i)).unwrap().rule.as_str())
+            .collect();
+        assert_eq!(
+            nav,
+            ["high", "plain", "low"],
+            "a base-only rule is not in nav"
+        );
+    }
+
+    #[test]
+    fn mode_rules_compile_with_their_masks_and_combinations_wait_for_step_78() {
+        let l = load(
+            &Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../docs/contracts/examples/ddalgak-rules-v1/15-mode-layers.json"),
+        );
+        assert_eq!((l.errors, l.inactive.len()), (0, 0), "{:?}", l.inactive);
+        assert_eq!(l.modes.len(), 6);
+        let b = |id: &str| l.bindings.iter().find(|b| b.rule == id).unwrap();
+        assert!(matches!(&b("hold-nav").action, Action::Mode(a) if a.holds()));
+        assert!(
+            !b("hold-nav").injects && !b("hold-nav").widen,
+            "modes inject nothing"
+        );
+        assert_eq!(b("hold-symbols").modes, 1 << l.modes.index("nav").unwrap());
+        assert!(matches!(&b("cycle").action, Action::Mode(ModeAction::Cycle(m)) if m.len() == 2));
+        // Rules that need a switch first: hold-symbols, home, nav-h, symbols-h, accent-e, numpad-j.
+        assert_eq!(l.other_modes, 6);
+        // The table ranks the nearest layer first: in Symbols, H types `#`, in Navigation it is
+        // Left; in Base, H is neither.
+        let t = l.table();
+        let first_h = |m: &str| {
+            t.order(l.modes.index(m).unwrap())
+                .iter()
+                .map(|i| t.binding(usize::from(*i)).unwrap().rule.as_str())
+                .find(|r| r.ends_with("-h"))
+        };
+        assert_eq!(first_h("symbols"), Some("symbols-h"));
+        assert_eq!(first_h("nav"), Some("nav-h"));
+        assert_eq!(first_h("base"), None);
+        assert_eq!(
+            first_h("gaming"),
+            None,
+            "an exclusive mode keeps no other mode's rules"
+        );
+        // A mode step with other steps waits for ordered runs; an unknown target is inactive.
+        let l = parse(&doc(json!([
+            { "id": "two", "title": "two", "enabled": true, "trigger": { "keys": "F13" },
+              "steps": [ { "type": "mode", "op": "set", "mode": "nav" },
+                         { "type": "engine", "op": "pause" } ] },
+            { "id": "ghost", "title": "ghost", "enabled": true, "trigger": { "keys": "F14" },
+              "steps": [ { "type": "mode", "op": "set", "mode": "ghost" } ] },
+            { "id": "ok", "title": "ok", "enabled": true, "trigger": { "keys": "F15" },
+              "steps": [ { "type": "mode", "op": "toggle", "mode": "nav" } ] }
+        ])));
+        let codes: Vec<(&str, &str)> = l
+            .inactive
+            .iter()
+            .map(|i| (i.rule.as_str(), i.code))
+            .collect();
+        assert_eq!(
+            codes,
+            [("two", "step_unsupported"), ("ghost", "unknown_mode")]
+        );
+        assert_eq!(l.bindings.len(), 1);
     }
 
     #[test]
@@ -1093,6 +1252,10 @@ mod tests {
                             | Action::Type(_)
                             | Action::Keys(_)
                             | Action::Launch(_)
+                            | Action::Mode(_)
+                            | Action::Mouse(_)
+                            | Action::MouseHold { .. }
+                            | Action::Motion(_)
                     ),
                     "{}: {}",
                     p.display(),

@@ -46,6 +46,7 @@
 use crate::core::{RemapOp, Signal};
 use crate::inject::{Backend, Injector, OutCode, OutEvent};
 use crate::launch;
+use crate::modes::{ModeSet, ModeStatus};
 use crate::mouse::{self, HeldMotion};
 use crate::run::{self, Env, HotstringFire, Next, Run, RunShared};
 use crate::stats::Stats;
@@ -123,6 +124,14 @@ pub enum Control {
     Engine { op: EngineOp, rule: String },
     /// The emergency chord fired.
     Emergency,
+    /// A mode rule whose trigger the worker timed (`on: hold`) fired (Step 72): the controller
+    /// asks the hook thread to run its step, so the mode state stays in one place.
+    ModeRequest { binding: u16, generation: u32 },
+    /// The mode changed (Step 72): for `status` and the tray indicator.
+    Mode {
+        generation: u32,
+        status: Box<ModeStatus>,
+    },
 }
 
 /// The rules the worker runs, with the generation the hook's table has.
@@ -131,7 +140,10 @@ pub struct Rules {
     pub generation: u32,
     pub bindings: Arc<Vec<Binding>>,
     pub profile: String,
+    /// The active mode (activity entries name it); it follows [`Signal::Mode`].
     pub mode: String,
+    /// The profile's modes, to name them (Step 72).
+    pub modes: ModeSet,
 }
 
 /// Messages to the worker.
@@ -765,6 +777,36 @@ fn run(rx: &Receiver<Msg>, control: &Sink, stats: &Stats, ctx: &mut Ctx<'_>) {
                     ctx.stop_motions("cancelled");
                 }
                 Signal::MotionEnd { binding } => ctx.end_motion(generation, binding),
+                Signal::Mode {
+                    binding,
+                    view,
+                    switched,
+                    restore,
+                } => {
+                    // A switch releases everything the old mode held, whatever the rules'
+                    // generation (DDALGAK-SEC-005), and ends the hold triggers armed in it.
+                    if switched {
+                        holds.clear();
+                        ctx.inj.release_all();
+                        ctx.stop_motions("cancelled");
+                        if restore != 0 {
+                            let mut ev = Vec::new();
+                            mod_events(restore, false, false, &mut ev);
+                            ctx.inj.send_mixed(&ev);
+                        }
+                    }
+                    // The rule ran in the mode it was decided in; later entries name the new one.
+                    record(rules.as_ref(), generation, binding, "ok", activity);
+                    if let Some(r) = rules.as_mut().filter(|r| r.generation == generation) {
+                        let names = |b: u16| r.bindings.get(usize::from(b)).map(|b| b.rule.clone());
+                        let status = r.modes.status(&view, &names);
+                        r.mode = status.active.clone();
+                        control(Control::Mode {
+                            generation,
+                            status: Box::new(status),
+                        });
+                    }
+                }
                 Signal::Restore { mods } => {
                     let mut ev = Vec::new();
                     mod_events(mods, false, false, &mut ev);
@@ -847,6 +889,15 @@ fn fire(
         return false;
     };
     match &b.action {
+        // A mode rule fired by the worker's hold timer (`on: hold`, Step 72): the hook thread runs
+        // the step and records the outcome with its [`Signal::Mode`].
+        Action::Mode(_) => {
+            control(Control::ModeRequest {
+                binding,
+                generation,
+            });
+            return false;
+        }
         Action::Engine(ops) => {
             for op in ops {
                 control(Control::Engine {
@@ -890,6 +941,7 @@ mod tests {
             injects: false,
             action: Action::Engine(vec![op]),
             hotstring: None,
+            modes: 0,
         };
         Rules {
             generation,
@@ -899,6 +951,7 @@ mod tests {
             ]),
             profile: "default".into(),
             mode: "base".into(),
+            modes: ModeSet::single(),
         }
     }
 
@@ -1281,6 +1334,7 @@ mod tests {
             injects: true,
             action,
             hotstring: None,
+            modes: 0,
         };
         Rules {
             generation,
@@ -1304,6 +1358,7 @@ mod tests {
             ]),
             profile: "default".into(),
             mode: "base".into(),
+            modes: ModeSet::single(),
         }
     }
 
@@ -1505,6 +1560,7 @@ mod tests {
                 stop_on_error: true,
             })),
             hotstring: None,
+            modes: 0,
         };
         Rules {
             generation,
@@ -1516,6 +1572,7 @@ mod tests {
             ),
             profile: "default".into(),
             mode: "base".into(),
+            modes: ModeSet::single(),
         }
     }
 
@@ -1684,6 +1741,7 @@ mod tests {
             injects: true,
             action,
             hotstring: None,
+            modes: 0,
         }
     }
 
@@ -1754,6 +1812,7 @@ mod tests {
             ]),
             profile: "default".into(),
             mode: "base".into(),
+            modes: ModeSet::single(),
         }
     }
 
@@ -2005,5 +2064,195 @@ mod tests {
         q.signal(1, fire(2));
         std::thread::sleep(Duration::from_millis(60));
         assert_eq!(sim.cursor(), at);
+    }
+
+    // ---- Step 72: modes ------------------------------------------------------------------------
+
+    use crate::model::{Mode as ModeDoc, Profile};
+    use crate::modes::{ModeAction, ModeState, NO_RULE};
+
+    fn two_modes() -> ModeSet {
+        ModeSet::from_profile(&Profile {
+            id: "p".into(),
+            title: "P".into(),
+            description: None,
+            default_mode: "base".into(),
+            modes: vec![
+                ModeDoc::new("base", "Base"),
+                ModeDoc::new("nav", "Navigation"),
+            ],
+            rules: Vec::new(),
+            extra: serde_json::Map::new(),
+        })
+    }
+
+    fn mode_rules(generation: u32) -> Rules {
+        let mut r = remap_rules(generation);
+        let b = Arc::make_mut(&mut r.bindings);
+        b[1].rule = "to-nav".into();
+        b[1].action = Action::Mode(ModeAction::Set(1));
+        r.modes = two_modes();
+        r
+    }
+
+    #[test]
+    fn a_mode_switch_releases_every_output_records_the_rule_and_tells_the_host() {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let (tx, rx) = channel();
+        let tx = Mutex::new(tx);
+        let w = Worker::start(
+            Arc::new(Stats::default()),
+            Box::new(move |c| {
+                let _ = tx.lock().unwrap().send(c);
+            }),
+            Arc::new(Mutex::new(Activity::default())),
+            Box::new(SharedRecorder(Arc::clone(&log))),
+            Env::inert(),
+        );
+        let q = w.queue();
+        q.send(Msg::Rules(mode_rules(1)));
+        let s = two_modes();
+        let mut st = ModeState::new(&s);
+        let change = st.apply(&s, &ModeAction::Set(1), 0x7C, 1, 0).unwrap();
+        // F16 held by a remap, the user's Shift lifted by it; then the switch.
+        q.signal(
+            1,
+            Signal::Remap {
+                binding: 0,
+                op: RemapOp::Press {
+                    lift: 0,
+                    mods: 0,
+                    key: Some(F16),
+                },
+            },
+        );
+        q.signal(
+            1,
+            Signal::Mode {
+                binding: 1,
+                view: st.view(),
+                switched: change.active,
+                restore: ModKey::LShift.bit(),
+            },
+        );
+        // F16 is released, the still-held Shift pressed again (not recorded as held).
+        assert_eq!(
+            wait_for(&log, 3),
+            [ev(F16, false), ev(F16, true), ev(LSHIFT, false)]
+        );
+        let c = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let Control::Mode { generation, status } = c else {
+            panic!("{c:?}")
+        };
+        assert_eq!(generation, 1);
+        assert_eq!(status.active, "nav");
+        assert_eq!(status.origin, "rule:to-nav");
+        // The rule ran in Base; later entries name Navigation.
+        let entries: Vec<Entry> = w.activity.lock().unwrap().entries().cloned().collect();
+        let to_nav = entries.iter().find(|e| e.rule == "to-nav").unwrap();
+        assert_eq!(
+            (to_nav.outcome.as_str(), to_nav.mode.as_str()),
+            ("ok", "base")
+        );
+        q.signal(1, Signal::RateLimited { binding: 0 });
+        let t = Instant::now();
+        while w.activity.lock().unwrap().len() < 3 && t.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let last = w
+            .activity
+            .lock()
+            .unwrap()
+            .entries()
+            .last()
+            .cloned()
+            .unwrap();
+        assert_eq!(last.mode, "nav");
+        // A change that keeps the active mode releases nothing.
+        q.signal(
+            1,
+            Signal::Remap {
+                binding: 0,
+                op: RemapOp::Press {
+                    lift: 0,
+                    mods: 0,
+                    key: Some(F16),
+                },
+            },
+        );
+        q.signal(
+            1,
+            Signal::Mode {
+                binding: NO_RULE,
+                view: st.view(),
+                switched: false,
+                restore: 0,
+            },
+        );
+        std::thread::sleep(Duration::from_millis(50));
+        assert_eq!(log.lock().unwrap().len(), 4, "F16 stays held");
+        // A switch decided under an older table still releases (safety first), but the host is
+        // not told about modes it no longer knows.
+        while rx.try_recv().is_ok() {}
+        q.signal(
+            0,
+            Signal::Mode {
+                binding: NO_RULE,
+                view: st.view(),
+                switched: true,
+                restore: 0,
+            },
+        );
+        assert_eq!(wait_for(&log, 5)[4], ev(F16, true));
+        std::thread::sleep(Duration::from_millis(30));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn a_mode_rule_on_a_held_trigger_asks_the_host_and_a_switch_ends_armed_holds() {
+        let (w, rx, _) = worker();
+        let q = w.queue();
+        let mut r = mode_rules(3);
+        Arc::make_mut(&mut r.bindings)[1].on = On::Hold(200);
+        q.send(Msg::Rules(r));
+        q.signal(
+            3,
+            Signal::HoldArmed {
+                binding: 1,
+                hold_ms: 200,
+            },
+        );
+        let c = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(
+            c,
+            Control::ModeRequest {
+                binding: 1,
+                generation: 3
+            }
+        );
+        // A switch while another hold trigger is armed ends that hold: it never fires.
+        q.signal(
+            3,
+            Signal::HoldArmed {
+                binding: 1,
+                hold_ms: 200,
+            },
+        );
+        let s = two_modes();
+        q.signal(
+            3,
+            Signal::Mode {
+                binding: NO_RULE,
+                view: ModeState::new(&s).view(),
+                switched: true,
+                restore: 0,
+            },
+        );
+        let next = rx.recv_timeout(Duration::from_millis(600));
+        assert!(
+            matches!(next, Ok(Control::Mode { .. })),
+            "only the mode notice: {next:?}"
+        );
+        assert!(rx.recv_timeout(Duration::from_millis(400)).is_err());
     }
 }

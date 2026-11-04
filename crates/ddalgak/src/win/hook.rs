@@ -29,6 +29,7 @@
 use crate::core::{Core, Decision, Flags, Mode, Signal};
 use crate::event::{RawKey, Source};
 use crate::inject::Button;
+use crate::modes::{ModeAction, ModeOrigin, ModeStatus};
 use crate::stats::Stats;
 use crate::table::Table;
 use crate::worker::Queue;
@@ -60,6 +61,33 @@ const WM_SWAP: u32 = WM_APP + 0x10;
 const WM_UNHOOK: u32 = WM_APP + 0x11;
 const WM_CANCEL: u32 = WM_APP + 0x12;
 const WM_RESET: u32 = WM_APP + 0x13;
+const WM_MODE: u32 = WM_APP + 0x14;
+
+/// A mode request for the hook thread, which owns the mode state (Step 72).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ModeRequest {
+    /// Only read the state.
+    Query,
+    /// Switch to this mode (the CLI's `mode set`, the tray's mode menu).
+    Set { mode: String, origin: ModeOrigin },
+    /// Toggle this mode (`mode toggle`).
+    Toggle { mode: String, origin: ModeOrigin },
+    /// The safe reset to the default mode (`mode reset`, the tray's "back to" item).
+    Reset { origin: ModeOrigin },
+    /// Run the mode step of binding `binding` of the table `generation` (a rule whose `on: hold`
+    /// trigger the worker timed); ignored for an older table.
+    Rule { binding: u16, generation: u32 },
+}
+
+/// The hook thread's answer: the state afterwards and whether the active mode changed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ModeReply {
+    pub from: String,
+    pub status: ModeStatus,
+    pub changed: bool,
+}
+
+type ModeResult = Result<ModeReply, (&'static str, String)>;
 
 const F_SECURE: u32 = 1;
 const F_PASSWORD: u32 = 2;
@@ -80,6 +108,8 @@ pub struct Shared {
     thread_id: AtomicU32,
     pub stats: Arc<Stats>,
     pending: Mutex<Option<(u32, Table)>>,
+    /// A mode request and where to answer it (Step 72).
+    mode_req: Mutex<Option<(ModeRequest, Sender<ModeResult>)>>,
 }
 
 impl Shared {
@@ -196,6 +226,66 @@ impl Ctx {
             unsafe { KillTimer(std::ptr::null_mut(), self.timer) };
             self.timer = 0;
         }
+    }
+
+    /// Arms the timer for whatever the core waits for next (an undecided dual role, the end of
+    /// a timed mode), or leaves it off: an idle engine has no timer.
+    fn rearm(&mut self) {
+        // SAFETY: no preconditions.
+        let now = unsafe { GetTickCount() };
+        match self.core.next_timer(now) {
+            Some(ms) => self.arm(ms),
+            None => self.disarm(),
+        }
+    }
+
+    /// Runs a mode request on this thread (Step 72): the state changes exactly as a mode rule
+    /// would change it, and the worker gets the same signal (releases, activity, the host).
+    fn mode(&mut self, req: ModeRequest) -> ModeResult {
+        let from = self.core.mode_status().active;
+        // SAFETY: no preconditions.
+        let now = unsafe { GetTickCount() };
+        let modes = self.core.table().modes().clone();
+        let index = |id: &str| {
+            modes.index(id).ok_or((
+                "mode_not_found",
+                format!("no mode `{id}` in the active profile"),
+            ))
+        };
+        let signal = match req {
+            ModeRequest::Query => None,
+            ModeRequest::Set { mode, origin } => {
+                let a = ModeAction::Set(index(&mode)?);
+                self.core.request_mode(&a, origin, now)
+            }
+            ModeRequest::Toggle { mode, origin } => {
+                let a = ModeAction::Toggle(index(&mode)?);
+                self.core.request_mode(&a, origin, now)
+            }
+            ModeRequest::Reset { origin } => self.core.reset_mode(origin),
+            ModeRequest::Rule {
+                binding,
+                generation,
+            } => {
+                let action = (generation == self.generation)
+                    .then(|| self.core.table().mode_action(usize::from(binding)).cloned())
+                    .flatten();
+                match action {
+                    Some(a) => self.core.request_mode(&a, ModeOrigin::Rule(binding), now),
+                    None => None,
+                }
+            }
+        };
+        if let Some(s) = signal {
+            self.queue.signal(self.generation, s);
+        }
+        self.rearm();
+        let status = self.core.mode_status();
+        Ok(ModeReply {
+            changed: status.active != from,
+            from,
+            status,
+        })
     }
 }
 
@@ -474,6 +564,25 @@ impl HookThread {
         unsafe { PostThreadMessageW(self.thread_id, WM_CANCEL, 0, 0) };
     }
 
+    /// Like [`HookThread::cancel_pending`], and the mode returns to the default mode (a pause:
+    /// the safe reset, Step 72).
+    pub fn cancel_and_reset_mode(&self) {
+        // SAFETY: posts a message without pointers to the hook thread.
+        unsafe { PostThreadMessageW(self.thread_id, WM_CANCEL, 1, 0) };
+    }
+
+    /// Asks the hook thread, which owns the mode state, to read or change it (Step 72). Waits at
+    /// most one second; `None` when the thread did not answer.
+    pub fn mode(&self, req: ModeRequest) -> Option<ModeResult> {
+        let (tx, rx) = channel();
+        if let Ok(mut m) = self.shared.mode_req.lock() {
+            *m = Some((req, tx));
+        }
+        // SAFETY: posts a message without pointers to the hook thread.
+        unsafe { PostThreadMessageW(self.thread_id, WM_MODE, 0, 0) };
+        rx.recv_timeout(Duration::from_secs(1)).ok()
+    }
+
     /// Whether the thread still runs and its hook is installed.
     pub fn alive(&self) -> bool {
         self.join.as_ref().is_some_and(|j| !j.is_finished())
@@ -574,9 +683,12 @@ fn run(
                     let wants_mouse = table.has_mouse();
                     CTX.with(|c| {
                         if let Some(ctx) = c.borrow_mut().as_mut() {
-                            ctx.core.set_table(table);
+                            let mode = ctx.core.set_table(table);
                             ctx.generation = generation;
                             ctx.disarm();
+                            // The worker and the host learn the modes of the new rules.
+                            ctx.queue.signal(generation, mode);
+                            ctx.rearm();
                         }
                     });
                     match (wants_mouse, mouse.is_some()) {
@@ -592,17 +704,35 @@ fn run(
                         ctx.disarm();
                         let signals = ctx.core.reset_keys();
                         ctx.send_all(&signals);
+                        ctx.rearm();
                     }
                 });
             }
             WM_CANCEL => {
+                let reset = msg.wParam == 1;
                 CTX.with(|c| {
                     if let Some(ctx) = c.borrow_mut().as_mut() {
                         ctx.disarm();
                         let signals = ctx.core.cancel_pending();
                         ctx.send_all(&signals);
+                        if reset && let Some(s) = ctx.core.reset_mode(ModeOrigin::Pause) {
+                            ctx.queue.signal(ctx.generation, s);
+                        }
+                        ctx.rearm();
                     }
                 });
+            }
+            WM_MODE => {
+                let req = shared.mode_req.lock().ok().and_then(|mut m| m.take());
+                if let Some((req, reply)) = req {
+                    let answer = CTX.with(|c| {
+                        c.borrow_mut()
+                            .as_mut()
+                            .map(|ctx| ctx.mode(req))
+                            .unwrap_or(Err(("engine_off", "the engine is off".into())))
+                    });
+                    let _ = reply.send(answer);
+                }
             }
             WM_TIMER if msg.hwnd.is_null() => {
                 CTX.with(|c| {
@@ -613,13 +743,15 @@ fn run(
                         ctx.disarm();
                         // SAFETY: no preconditions.
                         let now = unsafe { GetTickCount() };
-                        let (signal, again) = ctx.core.tick(now);
+                        let (signal, _) = ctx.core.tick(now);
                         if let Some(s) = signal {
                             ctx.queue.signal(ctx.generation, s);
                         }
-                        if let Some(ms) = again {
-                            ctx.arm(ms);
+                        // A mode with a timeout that saw no key for that long ends (Step 72).
+                        if let Some(s) = ctx.core.mode_tick(now) {
+                            ctx.queue.signal(ctx.generation, s);
                         }
+                        ctx.rearm();
                     }
                 });
             }

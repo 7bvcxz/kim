@@ -1,0 +1,27 @@
+{
+  "command": "mode.add",
+  "data": {
+    "app": {
+      "running": false
+    },
+    "backup": null,
+    "changed": true,
+    "created": "nav",
+    "dry_run": false,
+    "modes": [
+      "nav"
+    ],
+    "notes": [],
+    "problems": [],
+    "revision": {
+      "from": 0,
+      "to": 1
+    },
+    "rules": [],
+    "snapshot": "20261104T101043Z-r1.json",
+    "target": "saved"
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

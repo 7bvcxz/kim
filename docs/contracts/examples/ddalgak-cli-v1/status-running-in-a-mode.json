@@ -1,0 +1,131 @@
+{
+  "command": "status",
+  "data": {
+    "activity": [
+      {
+        "at": "2026-11-04T10:10:44Z",
+        "mode": "base",
+        "outcome": "ok",
+        "profile": "default",
+        "rule": "to-game"
+      },
+      {
+        "at": "2026-11-04T10:10:44Z",
+        "mode": "game",
+        "outcome": "ok",
+        "profile": "default",
+        "rule": "hold-nav"
+      }
+    ],
+    "app": {
+      "elevated": false,
+      "launched_by": "user",
+      "pid": 99220,
+      "running": true,
+      "started_at": "2026-11-04T10:10:44Z",
+      "test_mode": true,
+      "tray": false,
+      "uptime_s": 0,
+      "version": "0.0.1"
+    },
+    "engine": {
+      "hook": {
+        "installed": true,
+        "mouse_installed": false,
+        "observe_only": true
+      },
+      "last_change": {
+        "origin": "cli",
+        "request": "start"
+      },
+      "off_reason": null,
+      "state": "running"
+    },
+    "profile": {
+      "id": "default",
+      "mode": "game",
+      "mode_state": {
+        "active": "game",
+        "chain": [
+          "game"
+        ],
+        "color": null,
+        "default": "base",
+        "held": [],
+        "icon": null,
+        "indicator": {
+          "away_from_default": true,
+          "color": null,
+          "icon": null,
+          "label": "Gaming",
+          "title": "Gaming",
+          "visible": true
+        },
+        "latched": "game",
+        "live": true,
+        "origin": "released:hold-nav",
+        "previous": "base",
+        "since": "2026-11-04T10:10:44Z",
+        "title": "Gaming"
+      }
+    },
+    "rules": {
+      "active": 3,
+      "active_rules": [
+        "hold-nav",
+        "to-game",
+        "nav-h"
+      ],
+      "active_set": {
+        "loaded_at": "2026-11-04T10:10:44Z",
+        "revision": 12
+      },
+      "disabled": 0,
+      "draft": null,
+      "engine_on_start": "off",
+      "file": "loaded",
+      "in_sync": true,
+      "inactive": [],
+      "last_reload": {
+        "at": "2026-11-04T10:10:44Z",
+        "code": null,
+        "origin": "watcher",
+        "outcome": "applied",
+        "reason": null,
+        "revision": 12
+      },
+      "other_modes": 1,
+      "problem": null,
+      "revision": 12,
+      "saved": {
+        "file": "loaded",
+        "interrupted_save": false,
+        "problem": null,
+        "revision": 12
+      },
+      "total": 3
+    },
+    "session": {
+      "locked": false
+    },
+    "shortcuts": {
+      "config": "default",
+      "global": [],
+      "off": false,
+      "problem": null
+    },
+    "start": {
+      "off_reason": "default"
+    },
+    "startup": {
+      "command": null,
+      "enabled": false,
+      "foreign": false,
+      "location": "HKCU\\Software\\mouv-test\\ddalgak-cli-modes\\Run\\mouv.ddalgak",
+      "program": "C:\\Users\\you\\AppData\\Local\\Programs\\mouv\\ddalgak\\versions\\0.0.1\\ddalgak-gui.exe"
+    }
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

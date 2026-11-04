@@ -9,7 +9,9 @@ IME and clipboard checks are manual; program and website launches (`DDALGAK-FR-0
 `DDALGAK-FR-014`, `DDALGAK-SEC-008`) since Step 70, whose real installed-program, browser,
 elevation and focus checks are manual; mouse moves, wheel, clicks and holds
 (`DDALGAK-FR-015`) since Step 71, whose real-pointer, monitor, scaling and game checks are
-manual; see [DDALGAK_ENGINE](DDALGAK_ENGINE.md) §8, §10, §11, §12, §13 and §14 for what was
+manual; modes and layers (`DDALGAK-FR-016`) since Step 72, whose real-typing and tray-indicator
+checks are
+manual; see [DDALGAK_ENGINE](DDALGAK_ENGINE.md) §8, §10, §11, §12, §13, §14 and §15 for what was
 verified; the GUI half of `DDALGAK-FR-007` and undo arrive with the
 editor, Step 74) · Owner: mouv ·
 Derived from [DDALGAK_PHILOSOPHY](DDALGAK_PHILOSOPHY.md) · Decisions:
@@ -76,7 +78,7 @@ Until D6 ships, the Kim catalog lists Ddalgak as *planned* (`KIM-FR-051`).
 | DDALGAK-FR-013 | **Open a program** by absolute path or packaged-app ID, with an argument list, working folder, window state and "bring to front if running". | P0 | D3 | T, M |
 | DDALGAK-FR-014 | **Open a website**: an `http` or `https` URL opens in the user's default browser. | P0 | D3 | T, M |
 | DDALGAK-FR-015 | **Mouse**: move relative, absolute or continuously while held (speed, acceleration), scroll by notches in four directions, click, double-click or hold any of five buttons, across monitors with negative coordinates, clamped to the visible desktop. Step 71: implemented with per-monitor DPI scaling, normalized absolute moves, grid units and stepped holds (ADR 0040); real-pointer checks manual. | P0 | D3 | T, M |
-| DDALGAK-FR-016 | **Modes**: users create, rename, duplicate and delete modes per profile; rules can be limited to modes; actions set, toggle, cycle, hold (while the trigger is held), return to the previous and to the default mode. The active mode is shown (optional compact indicator) and readable headlessly. | P0 | D3 | T, M |
+| DDALGAK-FR-016 | **Modes**: users create, rename, duplicate and delete modes per profile; rules can be limited to modes; actions set, toggle, cycle, hold (while the trigger is held), return to the previous and to the default mode. The active mode is shown (optional compact indicator) and readable headlessly. Step 72: implemented with layers over a parent, one-shot and timed exits, `ddalgak mode …` and the tray indicator; the active mode is never restored (ADR 0043); real-typing and tray checks manual. | P0 | D3 | T, M |
 | DDALGAK-FR-017 | **Engine control** actions pause, resume, toggle pause and turn the engine off. Rules made only of engine-control steps keep working while paused. | P0 | D2 | T |
 | DDALGAK-FR-018 | **Ordered steps**: a rule runs up to 32 steps in order with delays (total at most 60 s) and a stop-or-continue error policy. One run per rule at a time; a trigger during a run is reported as `busy`. | P1 | D3 | T |
 

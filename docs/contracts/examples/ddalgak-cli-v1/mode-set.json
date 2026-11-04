@@ -1,0 +1,52 @@
+{
+  "command": "mode.set",
+  "data": {
+    "change": {
+      "changed": true,
+      "from": "base",
+      "op": "set",
+      "to": "game"
+    },
+    "dry_run": false,
+    "engine": {
+      "hook": {
+        "installed": true,
+        "mouse_installed": false,
+        "observe_only": true
+      },
+      "last_change": {
+        "origin": "cli",
+        "request": "start"
+      },
+      "off_reason": null,
+      "state": "running"
+    },
+    "mode": {
+      "active": "game",
+      "chain": [
+        "game"
+      ],
+      "color": null,
+      "default": "base",
+      "held": [],
+      "icon": null,
+      "indicator": {
+        "away_from_default": true,
+        "color": null,
+        "icon": null,
+        "label": "Gaming",
+        "title": "Gaming",
+        "visible": true
+      },
+      "latched": "game",
+      "live": true,
+      "origin": "cli",
+      "previous": "base",
+      "since": "2026-11-04T10:10:44Z",
+      "title": "Gaming"
+    }
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

@@ -16,7 +16,31 @@
     },
     "profile": {
       "id": "default",
-      "mode": "base"
+      "mode": "base",
+      "mode_state": {
+        "active": "base",
+        "chain": [
+          "base"
+        ],
+        "color": null,
+        "default": "base",
+        "held": [],
+        "icon": null,
+        "indicator": {
+          "away_from_default": false,
+          "color": null,
+          "icon": null,
+          "label": "Base",
+          "title": "Base",
+          "visible": false
+        },
+        "latched": "base",
+        "live": false,
+        "origin": "start",
+        "previous": "base",
+        "since": null,
+        "title": "Base"
+      }
     },
     "rules": {
       "active": 0,

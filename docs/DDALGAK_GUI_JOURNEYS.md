@@ -353,6 +353,25 @@ running engine (RULE_MODEL §11).
   are listed first and must be moved or deleted). Switching the active mode from the header
   menu is immediate; the optional compact mode indicator (off by default) shows title and
   color chip near the tray.
+- **Step 72 data model** (machine-checked, drawn by Steps 73–74): the Modes page form is
+  `mode_edit::MODE_FIELDS` — *Name* (required), *Badge* (1–8 characters, never instead of the
+  name), *Color*, *Layer over* (none: exclusive; a mode: keys this mode does not change keep that
+  mode's rules), *Only for the next key* (one-shot), *Return to the default mode after (ms)*;
+  `ModeDraft` gives field problems (the same checks as `ddalgak mode add/edit`: a parent cycle or
+  a default mode with a parent is shown under *Layer over* before Save), the summary line
+  ("Navigation: a layer over Base: keys it does not change keep their rules there") and Save
+  gating. Each row shows the policy, the chain, the rules limited to the mode, the rules that
+  switch to it and its layers (`mode_edit::row`). Delete is refused, with the reason, for the
+  default mode, a mode other modes are layers over and a mode a rule switches to; rules limited to
+  it are offered for deletion. The **Switch mode** action form is `SWITCH_FIELDS` (*Switch*: to,
+  toggle, cycle, hold, back, default; *Mode*; *Modes, in order*); its sentence is
+  `modes::summary` ("Navigation is active while CapsLock is held, then the previous mode
+  returns"). The header switcher and the tray's `Mode` submenu are `modes::menu` (every mode, the
+  active one checked, "(default)" and "(layer over …)" in words) plus **Back to <default>**; the
+  header and the compact indicator show `modes::Indicator` (badge and title, color chip; shown in
+  the tray only for a profile with more than one mode unless `settings.mode_indicator` says
+  `tray` or `off`). Every control is reachable from the keyboard; the mode is never told by color
+  alone.
 - **Roll back**: History lists applied changes with revision, time and origin (GUI, CLI, import,
   restore). *Compare* shows a side-by-side diff; *Restore* applies that state as a new change,
   so a restore can itself be undone.

@@ -56,8 +56,22 @@ pub struct Settings {
     pub activity: Option<Value>,
     #[serde(default, skip_serializing_if = "none")]
     pub max_runs_per_second: Option<u32>,
+    /// Step 72: where the active mode is shown besides `status` and the editor's header.
+    #[serde(default, skip_serializing_if = "none")]
+    pub mode_indicator: Option<ModeIndicator>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
+}
+
+/// `settings.mode_indicator` (Step 72, ADR 0043): `auto` (default) names the mode in the tray
+/// only when the active profile has more than one mode; `tray` always; `off` never (the editor's
+/// header and `status` still show it).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModeIndicator {
+    Auto,
+    Tray,
+    Off,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -81,15 +95,42 @@ pub struct Profile {
     pub extra: Map<String, Value>,
 }
 
-/// A user-defined named state of a profile (§7.3).
+/// A user-defined named state of a profile (§7.3). Step 72 adds, additively, a short `icon`, a
+/// `parent` (the mode is then a layer over it: keys without a rule of its own fall back to the
+/// parent's rules), `one_shot` (the mode ends after the next key) and `timeout_ms` (the mode
+/// ends after that long without a key press).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Mode {
     pub id: String,
     pub title: String,
     #[serde(default, skip_serializing_if = "none")]
     pub color: Option<String>,
+    #[serde(default, skip_serializing_if = "none")]
+    pub icon: Option<String>,
+    #[serde(default, skip_serializing_if = "none")]
+    pub parent: Option<String>,
+    #[serde(default, skip_serializing_if = "none")]
+    pub one_shot: Option<bool>,
+    #[serde(default, skip_serializing_if = "none")]
+    pub timeout_ms: Option<u32>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
+}
+
+impl Mode {
+    /// A mode with only an ID and a title.
+    pub fn new(id: impl Into<String>, title: impl Into<String>) -> Mode {
+        Mode {
+            id: id.into(),
+            title: title.into(),
+            color: None,
+            icon: None,
+            parent: None,
+            one_shot: None,
+            timeout_ms: None,
+            extra: Map::new(),
+        }
+    }
 }
 
 /// One rule of a profile: typed when it fits the v1 types and the schema, otherwise kept exactly
@@ -934,12 +975,7 @@ impl Document {
                 title: "Default".into(),
                 description: None,
                 default_mode: "base".into(),
-                modes: vec![Mode {
-                    id: "base".into(),
-                    title: "Base".into(),
-                    color: None,
-                    extra: Map::new(),
-                }],
+                modes: vec![Mode::new("base", "Base")],
                 rules: Vec::new(),
                 extra: Map::new(),
             }],

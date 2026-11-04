@@ -1,0 +1,38 @@
+{
+  "command": "mode.show",
+  "data": {
+    "mode": {
+      "active": null,
+      "chain": [
+        "nav",
+        "base"
+      ],
+      "color": "#B7A6F5",
+      "default": false,
+      "icon": "N",
+      "id": "nav",
+      "layers": [
+        "symbols"
+      ],
+      "one_shot": false,
+      "parent": "base",
+      "policy": "layer",
+      "problems": [],
+      "rule_ids": [
+        "nav-h"
+      ],
+      "rules": 1,
+      "switched_by": [
+        "hold-nav"
+      ],
+      "timeout_ms": null,
+      "title": "Navigation"
+    },
+    "profile": "default",
+    "revision": 6,
+    "source": "saved"
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

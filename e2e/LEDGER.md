@@ -34,6 +34,7 @@ Run with `cargo xtask e2e`, which refuses unless the counter below has reached 1
 | 21 | #72 Step 67 – Ddalgak rules CRUD, validation and persistence | `step67_ddalgak_rules.rs` (3 tests): an agent manages rules headlessly with the real `ddalgak` CLI; eight agents writing at once lose nothing; a killed writer and a corrupt file never cost the last good rules | 6 |
 | 22 | #58 Step 53 – Noeul native floating pin window engine (merged; issue open for the maintainer's on-desktop check, `NOEUL_UX_SPEC.md` §4.6) | `step53_noeul_pins.rs` (2 tests): the pin engine is discoverable headlessly; scripts drive independent off-screen pins (create/hide/show/close via the real CLI) and a restart restores nothing | 7 |
 | 23 | #13 Step 13 – Scrollback and terminal replay | `step13_scrollback_replay.rs` (2 tests): reattach replays the screen and history exactly once and the CLI reads and clears it (`capture`/`history`/`clear-history`); captures hide secrets and stopped Terminals can still be captured | 8 |
+| 24 | #73 Step 68 – Ddalgak key and mouse button remapping actions (merged; issue open for the maintainer's physical keyboard/IME/mouse checks, `DDALGAK_ENGINE.md` §11) | `step68_ddalgak_remap.rs` (2 tests): an agent builds remaps headlessly and is refused unsafe ones; the running app holds remaps and the mouse hook only while needed | 9 |
 
 ## E2E runs
 

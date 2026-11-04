@@ -1,0 +1,13 @@
+{
+  "command": "profile.save",
+  "data": {
+    "dry_run": false,
+    "label": "before the experiment",
+    "profile": "work",
+    "revision": 8,
+    "save_point": "20261104T141419Z-r8-save.json"
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

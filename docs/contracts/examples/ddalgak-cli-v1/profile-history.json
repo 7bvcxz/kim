@@ -1,0 +1,56 @@
+{
+  "command": "profile.history",
+  "data": {
+    "exists": true,
+    "profile": "work",
+    "revision": 9,
+    "rollback_to": "20261104T141419Z-r8-save.json",
+    "versions": [
+      {
+        "at": "2026-11-04T14:14:19Z",
+        "command": "rules.backup",
+        "current": true,
+        "errors": 1,
+        "kind": "snapshot",
+        "label": null,
+        "modes": 2,
+        "name": "20261104T141419Z-r9-backup.json",
+        "origin": "backup",
+        "revision": 9,
+        "rules": 3,
+        "working": false
+      },
+      {
+        "at": "2026-11-04T14:14:19Z",
+        "command": "profile.save",
+        "current": false,
+        "errors": 0,
+        "kind": "save_point",
+        "label": "before the experiment",
+        "modes": 2,
+        "name": "20261104T141419Z-r8-save.json",
+        "origin": "save_point",
+        "revision": 8,
+        "rules": 3,
+        "working": true
+      },
+      {
+        "at": "2026-11-04T14:14:18Z",
+        "command": "profile.add",
+        "current": false,
+        "errors": 0,
+        "kind": "snapshot",
+        "label": null,
+        "modes": 2,
+        "name": "20261104T141418Z-r2.json",
+        "origin": "cli",
+        "revision": 2,
+        "rules": 3,
+        "working": true
+      }
+    ]
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

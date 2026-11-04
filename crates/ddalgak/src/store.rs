@@ -9,6 +9,7 @@
 //! | `rules.json.lock` | the writers' lock (an OS file lock, released when the process ends) |
 //! | `rules.draft.json` | an unsaved draft (`--draft`), based on one saved revision |
 //! | `history/<UTC time>-r<revision>.json` | a snapshot of every applied change, the last 50 kept |
+//! | `savepoints/<UTC time>-r<revision>-save.json` | Step 75: a save point the user made (`ddalgak profile save`), with its label and profile; the last 100 kept, never pruned by the history |
 //! | `rules.corrupt-<UTC time>.json` | an unusable file that a restore replaced, kept as it was |
 //!
 //! - **Reading never writes.** A missing file is one empty profile; a file that is not JSON, not
@@ -35,6 +36,8 @@ use std::time::{Duration, Instant};
 
 /// Snapshots kept in `history/` (§10).
 pub const HISTORY_KEEP: usize = 50;
+/// Save points kept in `savepoints/` (Step 75); the automatic history never prunes them.
+pub const SAVEPOINTS_KEEP: usize = 100;
 /// How long a writer waits for another writer before giving up with `busy`.
 pub const LOCK_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -87,6 +90,11 @@ impl Files {
 
     pub fn history(&self) -> PathBuf {
         self.dir().join("history")
+    }
+
+    /// Step 75: the user's save points (`ddalgak profile save`).
+    pub fn savepoints(&self) -> PathBuf {
+        self.dir().join("savepoints")
     }
 }
 
@@ -607,6 +615,9 @@ pub struct Snapshot {
     pub at: Option<String>,
     pub origin: Option<String>,
     pub command: Option<String>,
+    /// Step 75: a save point's label and the profile it was made for.
+    pub label: Option<String>,
+    pub profile: Option<String>,
 }
 
 fn sort_key(name: &str) -> (String, u64) {
@@ -622,7 +633,16 @@ fn sort_key(name: &str) -> (String, u64) {
 
 /// The snapshots, newest first.
 pub fn history(files: &Files) -> Vec<Snapshot> {
-    let mut out: Vec<Snapshot> = std::fs::read_dir(files.history())
+    list_snapshots(&files.history())
+}
+
+/// Step 75: the save points, newest first.
+pub fn save_points(files: &Files) -> Vec<Snapshot> {
+    list_snapshots(&files.savepoints())
+}
+
+fn list_snapshots(dir: &Path) -> Vec<Snapshot> {
+    let mut out: Vec<Snapshot> = std::fs::read_dir(dir)
         .into_iter()
         .flatten()
         .flatten()
@@ -643,6 +663,8 @@ pub fn history(files: &Files) -> Vec<Snapshot> {
                 at: s["at"].as_str().map(str::to_string),
                 origin: s["origin"].as_str().map(str::to_string),
                 command: s["command"].as_str().map(str::to_string),
+                label: s["label"].as_str().map(str::to_string),
+                profile: s["profile"].as_str().map(str::to_string),
                 path,
             })
         })
@@ -652,12 +674,63 @@ pub fn history(files: &Files) -> Vec<Snapshot> {
 }
 
 fn prune(dir: &Path) {
-    let files = Files {
-        rules: dir.parent().unwrap_or(dir).join("rules.json"),
-    };
-    for old in history(&files).into_iter().skip(HISTORY_KEEP) {
+    prune_to(dir, HISTORY_KEEP);
+}
+
+fn prune_to(dir: &Path, keep: usize) {
+    for old in list_snapshots(dir).into_iter().skip(keep) {
         let _ = std::fs::remove_file(old.path);
     }
+}
+
+/// Step 75 (`ddalgak profile save`): a save point of the saved file as it is, labelled and named
+/// after the profile it was made for (origin `save_point`). It lives in `savepoints/`, apart
+/// from the automatic history, so later changes never push it out. `None` when nothing was
+/// saved yet.
+pub fn save_point(
+    files: &Files,
+    _lock: &Lock,
+    profile: &str,
+    label: Option<&str>,
+) -> Result<Option<(PathBuf, u64)>, StoreError> {
+    let bytes = match std::fs::read(&files.rules) {
+        Ok(b) => b,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(io_err("cannot read", &files.rules, &e)),
+    };
+    let l = interpret(&bytes, &Context::default(), MIGRATIONS);
+    match l.state {
+        FileState::NewerVersion(v) => return Err(StoreError::Newer(v)),
+        FileState::Invalid(why) => return Err(StoreError::Invalid(why)),
+        _ => {}
+    }
+    let revision = l.revision();
+    let dir = files.savepoints();
+    std::fs::create_dir_all(&dir).map_err(|e| io_err("cannot create", &dir, &e))?;
+    let mut doc: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+    if let Some(o) = doc.as_object_mut() {
+        o.insert(
+            "snapshot".into(),
+            json!({
+                "at": crate::time::now_rfc3339(),
+                "origin": "save_point",
+                "command": "profile.save",
+                "label": label,
+                "profile": profile,
+            }),
+        );
+    }
+    let stem = format!("{}-r{revision}-save", compact_time());
+    let mut path = dir.join(format!("{stem}.json"));
+    let mut n = 2;
+    while path.exists() {
+        path = dir.join(format!("{stem}{n}.json"));
+        n += 1;
+    }
+    let text = serde_json::to_string_pretty(&doc).unwrap_or_default();
+    write_atomic(&path, format!("{text}\n").as_bytes())?;
+    prune_to(&dir, SAVEPOINTS_KEEP);
+    Ok(Some((path, revision)))
 }
 
 /// What a restore brings back.
@@ -679,7 +752,14 @@ pub fn restore_source(files: &Files, source: &Source) -> Result<(PathBuf, Docume
                     "`{name}` is not a snapshot name (see `ddalgak rules history`)"
                 )));
             }
-            files.history().join(name)
+            // Step 75: a save point is restorable by its name like a history snapshot.
+            let in_history = files.history().join(name);
+            let saved = files.savepoints().join(name);
+            if !in_history.exists() && saved.exists() {
+                saved
+            } else {
+                in_history
+            }
         }
     };
     let bytes = std::fs::read(&path).map_err(|e| {
@@ -1027,5 +1107,48 @@ mod tests {
         assert_eq!(back.doc.profiles[0].rules.len(), 1);
         assert!(remove_draft(&f, &lock).unwrap());
         assert!(!remove_draft(&f, &lock).unwrap());
+    }
+
+    /// Step 75: save points are labelled, listed apart from the history, never pruned by it, and
+    /// restorable by name.
+    #[test]
+    fn save_points_are_kept_apart_from_the_history() {
+        let (f, _cleanup) = sandbox("savepoints");
+        let lock = lock(&f, LOCK_TIMEOUT).unwrap();
+        assert_eq!(
+            save_point(&f, &lock, "default", None).unwrap(),
+            None,
+            "nothing saved yet"
+        );
+        let mut doc = Document::empty();
+        save(&f, &lock, &mut doc, 0, &cli("rule.add")).unwrap();
+        let (a, rev) = save_point(&f, &lock, "default", Some("before games"))
+            .unwrap()
+            .unwrap();
+        let (b, _) = save_point(&f, &lock, "default", None).unwrap().unwrap();
+        assert_ne!(a, b, "two save points in one second keep both");
+        assert_eq!(rev, 1);
+        let points = save_points(&f);
+        assert_eq!(points.len(), 2);
+        let labelled = points.iter().find(|p| p.path == a).unwrap();
+        assert_eq!(labelled.label.as_deref(), Some("before games"));
+        assert_eq!(labelled.profile.as_deref(), Some("default"));
+        assert_eq!(labelled.origin.as_deref(), Some("save_point"));
+        // The automatic history never prunes them.
+        for _ in 0..HISTORY_KEEP + 3 {
+            let r = doc.revision();
+            save(&f, &lock, &mut doc, r, &cli("rule.edit")).unwrap();
+        }
+        assert_eq!(history(&f).len(), HISTORY_KEEP);
+        assert_eq!(save_points(&f).len(), 2);
+        // Restorable by name like a snapshot; names never leave the folders.
+        let name = labelled.name.clone();
+        let (path, restored) = restore_source(&f, &Source::Snapshot(name)).unwrap();
+        assert_eq!(path, a);
+        assert_eq!(restored.revision(), 1);
+        assert!(matches!(
+            restore_source(&f, &Source::Snapshot("../rules.json".into())),
+            Err(StoreError::NotFound(_))
+        ));
     }
 }

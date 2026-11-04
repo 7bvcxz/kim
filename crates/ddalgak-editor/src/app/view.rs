@@ -128,6 +128,7 @@ impl EditorApp {
             )
             .show(ui, |ui| match self.page {
                 Page::Modes => self.modes_page(ui),
+                Page::Profiles => self.profiles_page(ui),
                 Page::Rules if narrow && self.form.is_some() => {
                     egui::ScrollArea::vertical()
                         .id_salt("detail-scroll")
@@ -214,10 +215,22 @@ impl EditorApp {
             let ptitle = self
                 .profile(&pid)
                 .map_or_else(|| pid.clone(), |p| p.title.clone());
-            ui.label(small(
-                format!("{}: {ptitle}", self.t("header.profile")),
-                c.text_secondary,
-            ));
+            // Step 75: a switch shows as pending until the running app confirmed it.
+            let ptitle = if self.switching_to() == Some(pid.as_str()) {
+                format!("{ptitle} ({})", self.t("profiles.switching"))
+            } else {
+                ptitle
+            };
+            if ui
+                .button(small(
+                    format!("{}: {ptitle}", self.t("header.profile")),
+                    c.text_secondary,
+                ))
+                .on_hover_text(self.t("profiles.open"))
+                .clicked()
+            {
+                self.acts.push(Act::Page(Page::Profiles));
+            }
             let mode = match &self.engine {
                 EngineView::Running {
                     mode: Some(m),
@@ -234,7 +247,11 @@ impl EditorApp {
             }
             if narrow {
                 ui.separator();
-                for (p, key) in [(Page::Rules, "nav.rules"), (Page::Modes, "nav.modes")] {
+                for (p, key) in [
+                    (Page::Rules, "nav.rules"),
+                    (Page::Modes, "nav.modes"),
+                    (Page::Profiles, "nav.profiles"),
+                ] {
                     if ui.selectable_label(self.page == p, self.t(key)).clicked() {
                         self.acts.push(Act::Page(p));
                     }
@@ -258,9 +275,13 @@ impl EditorApp {
 
     fn nav(&mut self, ui: &mut egui::Ui) {
         ui.vertical(|ui| {
-            for (i, (p, key)) in [(Page::Rules, "nav.rules"), (Page::Modes, "nav.modes")]
-                .into_iter()
-                .enumerate()
+            for (i, (p, key)) in [
+                (Page::Rules, "nav.rules"),
+                (Page::Modes, "nav.modes"),
+                (Page::Profiles, "nav.profiles"),
+            ]
+            .into_iter()
+            .enumerate()
             {
                 let r = ui.add_sized(
                     [96.0, 28.0],
@@ -340,7 +361,7 @@ impl EditorApp {
         });
     }
 
-    fn banner_ui(&mut self, ui: &mut egui::Ui) {
+    pub(super) fn banner_ui(&mut self, ui: &mut egui::Ui) {
         let c = Colors::get();
         let Some(b) = self.banner.clone() else {
             return;
@@ -1497,6 +1518,12 @@ impl EditorApp {
                         *er = next_error;
                     }
                 }
+                d @ (Dialog::SwitchProfile { .. }
+                | Dialog::EditProfile { .. }
+                | Dialog::DeleteProfile { .. }
+                | Dialog::ExportProfile { .. }
+                | Dialog::ImportProfile { .. }
+                | Dialog::History { .. }) => self.profile_dialog(ui, d, focus),
                 Dialog::Help => {
                     ui.label(
                         egui::RichText::new(lang.t("dialog.help"))

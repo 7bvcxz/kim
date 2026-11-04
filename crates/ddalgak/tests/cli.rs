@@ -19,7 +19,20 @@
 //! save, a corrupt file (safe mode, file kept), read-only file and folder, and the reload of a
 //! running app that keeps its hook installed. Every sandbox is its own `%APPDATA%`, so the user's
 //! real rules are never read or written.
+//!
+//! Step 75 adds the profile commands (CRUD, search and sort, switch with its preview and the
+//! running app's acknowledgement, save points, history, rollback, export and import with corrupt,
+//! newer and tricky files) and an app or CLI that ends in the middle of a switch.
+//!
+//! Step 75 also: every real-input step whose result a person's input on this desktop can change (a
+//! held modifier keeps an exact trigger such as `F13` from matching) runs as attempts
+//! (`common/quiet.rs`), judged with the test host's own count of physical events (`health`
+//! counters): only an attempt without physical input may fail the test, a disturbed one is
+//! retried and reported.
 #![cfg(windows)]
+
+#[path = "common/quiet.rs"]
+mod quiet;
 
 #[path = "../../../xtask/src/jsonschema.rs"]
 #[allow(dead_code)]
@@ -158,7 +171,7 @@ impl Sandbox {
         // Rule changes ask a running app to reload: always this sandbox's app, never the user's.
         let talks_to_app = [
             "status", "health", "engine", "pause", "resume", "quit", "rule", "rules", "mode",
-            "enable", "disable", "release",
+            "enable", "disable", "release", "profile",
         ]
         .iter()
         .any(|c| args.first() == Some(c));
@@ -387,6 +400,15 @@ fn hotkeys_doc() -> Value {
 
 fn elevated() -> bool {
     ddalgak::win::is_elevated()
+}
+
+/// Taps an obscure key as another program would (no Ddalgak marker); `false` when `SendInput`
+/// refused it.
+fn tap_other(vk: u16) -> bool {
+    ddalgak::win::inject::send_as_other_program(&[
+        OutKey { vk, up: false },
+        OutKey { vk, up: true },
+    ]) == 2
 }
 
 #[test]
@@ -738,37 +760,19 @@ fn injected_input_reaches_only_accepting_rules_in_the_real_app() {
     let (_, d) = sb.json(&["engine", "start"]);
     assert_eq!(d["data"]["engine"]["state"], "running");
     // Injected as another program would (no Ddalgak marker), obscure keys only, always released.
-    let tap = |vk: u16| {
-        ddalgak::win::inject::send_as_other_program(&[
-            OutKey { vk, up: false },
-            OutKey { vk, up: true },
-        ])
-    };
-    let wait_state = |want: &str| {
-        let until = Instant::now() + Duration::from_secs(5);
-        loop {
-            let (_, st) = sb.json(&["status"]);
-            if st["data"]["engine"]["state"] == want {
-                return st;
-            }
-            assert!(Instant::now() < until, "engine never became {want}: {st:#}");
-            std::thread::sleep(Duration::from_millis(50));
-        }
-    };
     // The desktop can lock between the check and any call, and UIPI refuses input while an
     // elevated window has focus: a refused SendInput ends the test with what was verified so far.
-    let refused = |step: &str| {
-        eprintln!(
-            "skipped (SendInput refused) at `{step}`: locked desktop or an elevated window has focus"
-        );
-    };
+    // F13 and F14 are exact triggers: a modifier a person holds keeps them from matching, so each
+    // tap runs as attempts (Step 75).
+    let state = |want: &'static str| move |d: &Value| d["engine"]["state"] == want;
     let mut verified = Vec::new();
     'steps: {
-        if tap(VK_F13) != 2 {
-            refused("F13 pauses");
+        let Some(st) = sb
+            .tap_until("F13 pauses", VK_F13, state("paused"))
+            .verified("F13 pauses")
+        else {
             break 'steps;
-        }
-        let st = wait_state("paused");
+        };
         let activity = st["data"]["activity"].as_array().unwrap();
         assert!(
             activity
@@ -782,17 +786,20 @@ fn injected_input_reaches_only_accepting_rules_in_the_real_app() {
         );
         bless("status-paused-by-rule", &st);
         verified.push("an injected F13 reached the accepting rule; the real app paused");
-        if tap(VK_F13) != 2 {
-            refused("F13 resumes while paused");
+        if sb
+            .tap_until("F13 resumes while paused", VK_F13, state("running"))
+            .verified("F13 resumes while paused")
+            .is_none()
+        {
             break 'steps;
         }
-        wait_state("running");
         verified.push("engine-control rules keep working while paused");
-        if tap(VK_F14) != 2 {
-            refused("F14 turns the engine off");
+        let Some(st) = sb
+            .tap_until("F14 turns the engine off", VK_F14, state("off"))
+            .verified("F14 turns the engine off")
+        else {
             break 'steps;
-        }
-        let st = wait_state("off");
+        };
         assert_eq!(st["data"]["engine"]["hook"]["installed"], false);
         assert_eq!(st["data"]["engine"]["off_reason"], "stopped");
         verified.push("a rule turned the engine off and the hook was removed");
@@ -1693,37 +1700,16 @@ fn a_running_app_reloads_valid_rules_and_keeps_its_hook() {
     // through the swapped table in the same, still installed hook.
     if hook_on && ddalgak::win::input_desktop_available() {
         add_engine(&sb, "live-key", "F17", "toggle_pause");
-        let tap = |vk: u16| {
-            ddalgak::win::inject::send_as_other_program(&[
-                OutKey { vk, up: false },
-                OutKey { vk, up: true },
-            ])
-        };
-        if tap(VK_F17) == 2 {
-            let until = Instant::now() + Duration::from_secs(5);
-            loop {
-                let (_, st) = sb.json(&["status"]);
-                if st["data"]["engine"]["state"] == "paused" {
-                    assert_eq!(
-                        st["data"]["engine"]["last_change"]["origin"],
-                        "rule:live-key"
-                    );
-                    eprintln!(
-                        "verified with real SendInput: a reloaded rule fired in the running hook"
-                    );
-                    break;
-                }
-                assert!(
-                    Instant::now() < until,
-                    "the reloaded rule did not fire: {st:#}"
-                );
-                std::thread::sleep(Duration::from_millis(50));
-            }
-            let _ = tap(VK_F17);
-        } else {
-            eprintln!(
-                "skipped (SendInput refused): locked desktop or an elevated window has focus"
+        let paused = sb.tap_until("the reloaded rule fires", VK_F17, |d| {
+            d["engine"]["state"] == "paused"
+        });
+        if let Some(st) = paused.verified("the reloaded rule fires") {
+            assert_eq!(
+                st["data"]["engine"]["last_change"]["origin"],
+                "rule:live-key"
             );
+            eprintln!("verified with real SendInput: a reloaded rule fired in the running hook");
+            let _ = tap_other(VK_F17);
         }
     } else if hook_on {
         eprintln!("skipped (locked): no interactive input desktop for the live part");
@@ -2254,21 +2240,25 @@ fn launch_rules_through_the_cli_and_the_real_test_host() {
         assert_eq!(host.wait_exit(Duration::from_secs(10)), Some(0));
         return;
     }
-    let tap = |vk: u16| {
-        ddalgak::win::inject::send_as_other_program(&[
-            OutKey { vk, up: false },
-            OutKey { vk, up: true },
-        ])
-    };
     let mut verified: Vec<String> = Vec::new();
+    // F15 and F16 are exact triggers: a modifier a person holds keeps them from matching, so
+    // each launch runs as attempts judged with the physical input the host saw (Step 75).
     'steps: {
         let t = Instant::now();
-        if tap(VK_F15) != 2 {
-            eprintln!("skipped (SendInput refused) at F15: locked desktop or an elevated window");
+        let started = quiet::attempts(
+            "an injected F15 starts the hidden test program",
+            || sb.physical(),
+            |_| {
+                quiet::sent(tap_other(VK_F15), "F15")?;
+                marker::wait(&marker_file, Duration::from_secs(10)).ok_or_else(|| {
+                    quiet::Fail::Failed("the hidden marker program did not run".into())
+                })
+            },
+            || {},
+        );
+        let Some(m) = started.verified("F15 starts the test program") else {
             break 'steps;
-        }
-        let m = marker::wait(&marker_file, Duration::from_secs(20))
-            .expect("the hidden marker program ran");
+        };
         marker::kill_if_running(m.pid, &exe);
         assert_eq!(m.args, ["첫 번째 인자"]);
         assert_eq!(m.env, SECRET);
@@ -2276,31 +2266,68 @@ fn launch_rules_through_the_cli_and_the_real_test_host() {
             "an injected F15 started the hidden test program from a path with spaces and Korean characters ({:?} to its marker)",
             t.elapsed()
         ));
-        if tap(VK_F16) != 2 {
-            eprintln!("skipped (SendInput refused) at F16");
+        // A double press: the second one opens nothing (rate_limited, or busy while running).
+        // A disturbed attempt (a held modifier dropped one press) starts over with an empty
+        // record once the one-second rate limit has run out.
+        let read_opened = || -> Vec<Value> {
+            std::fs::read_to_string(&record)
+                .unwrap_or_default()
+                .lines()
+                .map(|l| serde_json::from_str(l).unwrap())
+                .collect()
+        };
+        let site_outcomes = || -> Vec<String> {
+            let (_, st) = sb.json(&["status"]);
+            st["data"]["activity"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|a| a["rule"] == "open-site")
+                .map(|a| a["outcome"].as_str().unwrap().to_string())
+                .collect()
+        };
+        let double = quiet::attempts(
+            "an injected F16 double press hands the URL off once",
+            || sb.physical(),
+            |_| {
+                let before = site_outcomes().len();
+                quiet::sent(tap_other(VK_F16), "F16")?;
+                let _ = tap_other(VK_F16);
+                quiet::check(
+                    quiet::eventually(10_000, || !read_opened().is_empty()),
+                    || "no hand-off was recorded".into(),
+                )?;
+                std::thread::sleep(Duration::from_millis(300));
+                let opened = read_opened();
+                // Physical input can only keep a press from matching: more than one hand-off
+                // is always a failure.
+                assert!(opened.len() <= 1, "more than one hand-off: {opened:?}");
+                assert_eq!(
+                    opened,
+                    [json!({ "verb": "open", "target": normalized, "show": "normal" })],
+                    "the verb open on the normalized URL, no browser opened"
+                );
+                let mut outcomes = site_outcomes();
+                let until = Instant::now() + Duration::from_secs(5);
+                while outcomes.len() < before + 2 && Instant::now() < until {
+                    std::thread::sleep(Duration::from_millis(50));
+                    outcomes = site_outcomes();
+                }
+                let new = outcomes[before.min(outcomes.len())..].to_vec();
+                quiet::check(
+                    new.iter().any(|o| o == "ok")
+                        && new.iter().any(|o| o == "rate_limited" || o == "busy"),
+                    || format!("one press ran, the other was dropped: {new:?}"),
+                )
+            },
+            || {
+                let _ = std::fs::remove_file(&record);
+                std::thread::sleep(Duration::from_millis(1100));
+            },
+        );
+        if double.verified("F16 double press").is_none() {
             break 'steps;
         }
-        // A double press: the second one opens nothing (rate_limited, or busy while running).
-        let _ = tap(VK_F16);
-        let until = Instant::now() + Duration::from_secs(10);
-        let lines = loop {
-            let text = std::fs::read_to_string(&record).unwrap_or_default();
-            if !text.is_empty() || Instant::now() > until {
-                break text;
-            }
-            std::thread::sleep(Duration::from_millis(25));
-        };
-        std::thread::sleep(Duration::from_millis(300));
-        let lines = std::fs::read_to_string(&record).unwrap_or(lines);
-        let opened: Vec<Value> = lines
-            .lines()
-            .map(|l| serde_json::from_str(l).unwrap())
-            .collect();
-        assert_eq!(
-            opened,
-            [json!({ "verb": "open", "target": normalized, "show": "normal" })],
-            "exactly one hand-off, the verb open on the normalized URL, no browser opened"
-        );
         verified.push(
             "an injected F16 handed the normalized URL to the recording shell with the verb open, once"
                 .into(),
@@ -2595,37 +2622,27 @@ fn mouse_rules_through_the_cli_and_the_real_test_host() {
         st["data"]["engine"]["hook"]["mouse_installed"], false,
         "mouse actions never install the mouse hook (no pointer tracking)"
     );
-    if ddalgak::win::input_desktop_available()
-        && ddalgak::win::inject::send_as_other_program(&[
-            OutKey {
-                vk: VK_F13,
-                up: false,
-            },
-            OutKey {
-                vk: VK_F13,
-                up: true,
-            },
-        ]) == 2
-    {
-        let until = Instant::now() + Duration::from_secs(5);
-        let outcome = loop {
-            let (_, st) = sb.json(&["status"]);
-            let last = st["data"]["activity"]
+    if ddalgak::win::input_desktop_available() {
+        // An exact trigger: a modifier a person holds keeps it from matching (Step 75).
+        let what = "mouse rules refuse another program's key";
+        let seen = sb.tap_until(what, VK_F13, |d| {
+            d["activity"].as_array().is_some_and(|a| !a.is_empty())
+        });
+        if let Some(st) = seen.verified(what) {
+            let outcome = st["data"]["activity"]
                 .as_array()
-                .and_then(|a| a.last().cloned());
-            if let Some(l) = last {
-                break l;
-            }
-            assert!(Instant::now() < until, "no activity: {st:#}");
-            std::thread::sleep(Duration::from_millis(25));
-        };
-        assert_eq!(
-            (outcome["rule"].as_str(), outcome["outcome"].as_str()),
-            (Some("glide-right"), Some("skipped_injected_input")),
-            "mouse rules accept physical keys only"
-        );
+                .unwrap()
+                .last()
+                .unwrap()
+                .clone();
+            assert_eq!(
+                (outcome["rule"].as_str(), outcome["outcome"].as_str()),
+                (Some("glide-right"), Some("skipped_injected_input")),
+                "mouse rules accept physical keys only"
+            );
+        }
     } else {
-        eprintln!("skipped (locked or SendInput refused): the injected-input check");
+        eprintln!("skipped (locked): the injected-input check");
     }
     sb.json(&["quit"]);
     assert_eq!(host.wait_exit(Duration::from_secs(10)), Some(0));
@@ -2903,38 +2920,65 @@ fn modes_through_the_cli_and_the_real_test_host() {
     err(&["mode", "set", "game"], "engine_off");
     ok(&["engine", "start"]);
     assert_eq!(mode(&sb)["active"], "base");
-    // Mode rules on obscure keys through the real hook, as another program's input.
-    let wait = |want: &str| {
+    // Mode rules on obscure keys through the real hook, as another program's input. Exact
+    // triggers: a modifier a person holds keeps them from matching, so each step runs as
+    // attempts judged with the physical input the host saw (Step 75).
+    let wait = |want: &str| -> quiet::Step<Value> {
         let until = Instant::now() + Duration::from_secs(5);
         loop {
             let m = mode(&sb);
             if m["active"] == want {
-                return m;
+                return Ok(m);
             }
-            assert!(Instant::now() < until, "never {want}: {m:#}");
+            if Instant::now() >= until {
+                return Err(quiet::Fail::Failed(format!("never {want}: {m:#}")));
+            }
             std::thread::sleep(Duration::from_millis(25));
         }
     };
     let send =
         |vk: u16, up: bool| ddalgak::win::inject::send_as_other_program(&[OutKey { vk, up }]) == 1;
-    if ddalgak::win::input_desktop_available() && send(VK_F14, false) && send(VK_F14, true) {
-        let m = wait("game");
-        assert_eq!(m["origin"], "rule:to-game");
-        if send(VK_F13, false) {
-            let m = wait("nav");
-            assert_eq!(m["held"], json!(["nav"]));
-            assert_eq!(m["latched"], "game");
-            assert!(send(VK_F13, true), "F13 must be released");
-            let m = wait("game");
-            assert_eq!(m["origin"], "released:hold-nav");
-            eprintln!("verified with real SendInput: a set and a held layer through the hook");
-        } else {
-            let _ = send(VK_F13, true);
-            eprintln!("skipped (SendInput refused) at F13");
+    if ddalgak::win::input_desktop_available() {
+        'modes: {
+            let set = quiet::attempts(
+                "F14 sets the game mode",
+                || sb.physical(),
+                |_| {
+                    quiet::sent(send(VK_F14, false), "F14 down")?;
+                    quiet::sent(send(VK_F14, true), "F14 up")?;
+                    wait("game")
+                },
+                || {},
+            );
+            let Some(m) = set.verified("F14 sets the game mode") else {
+                let _ = send(VK_F14, true);
+                break 'modes;
+            };
+            assert_eq!(m["origin"], "rule:to-game");
+            let held = quiet::attempts(
+                "F13 holds the nav layer until its key-up",
+                || sb.physical(),
+                |_| {
+                    quiet::sent(send(VK_F13, false), "F13 down")?;
+                    let during = wait("nav");
+                    assert!(send(VK_F13, true), "F13 must be released");
+                    let during = during?;
+                    let after = wait("game")?;
+                    quiet::check(after["origin"] == "released:hold-nav", || {
+                        format!("the layer ended with its key-up: {after:#}")
+                    })?;
+                    Ok(during)
+                },
+                || {},
+            );
+            if let Some(m) = held.verified("F13 holds the nav layer") {
+                assert_eq!(m["held"], json!(["nav"]));
+                assert_eq!(m["latched"], "game");
+                eprintln!("verified with real SendInput: a set and a held layer through the hook");
+            }
         }
     } else {
-        let _ = send(VK_F14, true);
-        eprintln!("skipped (locked or SendInput refused): mode rules through the real hook");
+        eprintln!("skipped (locked): mode rules through the real hook");
     }
     let (_, st) = sb.json(&["status"]);
     bless("status-running-in-a-mode", &st);
@@ -3041,6 +3085,52 @@ impl Sandbox {
             assert!(Instant::now() < until, "the test host did not answer");
             std::thread::sleep(Duration::from_millis(100));
         }
+    }
+
+    /// Step 75: the physical (not injected) input events the test host's hook has seen.
+    fn physical(&self) -> u64 {
+        let (_, h) = self.json(&["health"]);
+        h["data"]["counters"]["physical"].as_u64().unwrap_or(0)
+    }
+
+    /// Polls `status` until `cond` holds (at most `ms`): the status, or the last one as a failed
+    /// attempt.
+    fn status_within(
+        &self,
+        ms: u64,
+        what: &str,
+        cond: impl Fn(&Value) -> bool,
+    ) -> quiet::Step<Value> {
+        let until = Instant::now() + Duration::from_millis(ms);
+        loop {
+            let (_, st) = self.json(&["status"]);
+            if cond(&st["data"]) {
+                return Ok(st);
+            }
+            if Instant::now() >= until {
+                return Err(quiet::Fail::Failed(format!("never {what}: {st:#}")));
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// Step 75: taps `vk` as another program until `status` satisfies `cond`, as attempts judged
+    /// with the physical input the host saw (`quiet::attempts`).
+    fn tap_until(
+        &self,
+        what: &str,
+        vk: u16,
+        cond: impl Fn(&Value) -> bool,
+    ) -> quiet::Outcome<Value> {
+        quiet::attempts(
+            what,
+            || self.physical(),
+            |_| {
+                quiet::sent(tap_other(vk), what)?;
+                self.status_within(5000, what, &cond)
+            },
+            || {},
+        )
     }
 
     /// Waits until `status` satisfies `cond` (5 s at most) and returns it.
@@ -3281,26 +3371,33 @@ fn crash_lock_logoff_and_reboot_recover_without_re_enabling() {
     let send =
         |vk: u16, up: bool| ddalgak::win::inject::send_as_other_program(&[OutKey { vk, up }]) == 1;
     let desktop = ddalgak::win::input_desktop_available();
-    if desktop && send(VK_F13, false) && send(VK_F13, true) {
-        let st = sb.status_until("the rule skipped", |d| {
+    // F13 is an exact trigger: a modifier a person holds keeps it from matching (Step 75).
+    if desktop {
+        let what = "a rule waits while the session is locked";
+        let skipped = sb.tap_until(what, VK_F13, |d| {
             d["activity"]
                 .as_array()
                 .is_some_and(|a| a.iter().any(|e| e["outcome"] == "skipped_secure_desktop"))
         });
-        assert_eq!(
-            st["data"]["engine"]["state"], "running",
-            "nothing fired while locked"
-        );
-        eprintln!("verified with real SendInput: a rule waits while the session is locked");
+        if let Some(st) = skipped.verified(what) {
+            assert_eq!(
+                st["data"]["engine"]["state"], "running",
+                "nothing fired while locked"
+            );
+            eprintln!("verified with real SendInput: {what}");
+        }
     } else {
-        eprintln!("skipped (locked or SendInput refused): a key while locked");
+        eprintln!("skipped (locked): a key while locked");
     }
     assert!(post(hwnd, WM_WTSSESSION_CHANGE, 0x8)); // WTS_SESSION_UNLOCK
     sb.status_until("unlocked", |d| d["session"]["locked"] == false);
-    if desktop && send(VK_F13, false) && send(VK_F13, true) {
-        sb.status_until("paused by the rule", |d| d["engine"]["state"] == "paused");
-        sb.json(&["resume"]);
-        eprintln!("verified with real SendInput: rules run again after the unlock");
+    if desktop {
+        let what = "rules run again after the unlock";
+        let paused = sb.tap_until(what, VK_F13, |d| d["engine"]["state"] == "paused");
+        if paused.verified(what).is_some() {
+            sb.json(&["resume"]);
+            eprintln!("verified with real SendInput: {what}");
+        }
     }
     // A crash: the test kills its own host while the engine is on.
     host.child.kill().unwrap();
@@ -3566,6 +3663,533 @@ fn a_hook_that_reaches_the_timeout_turns_the_engine_off() {
     // Turning it on again installs a fresh hook (never by itself).
     let (_, d) = sb.json(&["engine", "start"]);
     assert_eq!(d["data"]["engine"]["hook"]["installed"], true);
+    sb.json(&["quit"]);
+    assert_eq!(host.wait_exit(Duration::from_secs(10)), Some(0));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Step 75: profiles (DDALGAK-FR-030…032, DDALGAK-SEC-005, DDALGAK-SEC-006, DDALGAK-SEC-011,
+// DDALGAK-SEC-013, DDALGAK-NFR-005, DDALGAK-NFR-008). Every file lives in the sandbox; every
+// write names the sandbox's own endpoint, so the maintainer's app is never asked to reload. No
+// key is injected: the switch's real-input behavior is covered by the core tests, and the app
+// here only reloads and reports.
+// ---------------------------------------------------------------------------------------------
+
+const PROFILE_SECRET: &str = "Step75-SECRET-토큰";
+
+/// Two profiles with obscure keys: `work` (active) and `gaming`, a launch rule with an
+/// environment value that must never leave the computer unasked.
+fn profiles_doc(on_start: &str, program: &Path) -> Value {
+    let mut launch = json!({ "id": "w-tool", "title": "F16 opens the tool", "enabled": true,
+        "trigger": { "keys": "Ctrl+Alt+Shift+F16" },
+        "steps": [ { "type": "open_program", "path": program.display().to_string(),
+                     "env": [ { "name": "TOOL_TOKEN", "value": PROFILE_SECRET } ] } ] });
+    let fp = ddalgak::validate::launch_fingerprint(&launch);
+    launch["consent"] = json!({ "launch-programs": { "granted_at": "2026-11-04T09:00:00Z", "via": "gui", "fingerprint": fp } });
+    json!({
+        "schema": "ddalgak.rules", "schema_version": 1, "hotkey_contract": 1,
+        "revision": 1, "active_profile": "work",
+        "settings": { "engine_on_start": on_start },
+        "profiles": [
+            { "id": "work", "title": "Work", "description": "Office keyboard", "default_mode": "base",
+              "modes": [ { "id": "base", "title": "Base" }, { "id": "nav", "title": "Navigation", "parent": "base" } ],
+              "rules": [
+                { "id": "w-pause", "title": "F13 pauses", "enabled": true,
+                  "trigger": { "keys": "F13", "injected": "accept" },
+                  "steps": [ { "type": "engine", "op": "toggle_pause" } ] },
+                { "id": "w-nav", "title": "F14 holds Navigation", "enabled": true,
+                  "trigger": { "keys": "F14" }, "steps": [ { "type": "mode", "op": "hold", "mode": "nav" } ] },
+                launch
+              ] },
+            { "id": "gaming", "title": "Gaming", "description": "Games, no launches", "default_mode": "base",
+              "modes": [ { "id": "base", "title": "Base" }, { "id": "nav", "title": "Arrows" } ],
+              "rules": [
+                { "id": "g-off", "title": "F13 turns the engine off", "enabled": true,
+                  "trigger": { "keys": "F13", "injected": "accept" },
+                  "steps": [ { "type": "engine", "op": "disable" } ] }
+              ] }
+        ]
+    })
+}
+
+fn no_profile_secret(what: &str, text: &str) {
+    assert!(
+        !text.contains(PROFILE_SECRET),
+        "{what} shows the environment value: {text}"
+    );
+}
+
+/// `--json` of a command that must fail with `code`.
+fn fails(sb: &Sandbox, args: &[&str], code: &str) -> Value {
+    let (exit, d) = sb.json(args);
+    assert_ne!(exit, 0, "{args:?}: {d:#}");
+    assert_eq!(d["error"]["code"], code, "{args:?}: {d:#}");
+    d
+}
+
+#[test]
+fn profiles_are_managed_switched_versioned_and_transferred_through_the_cli() {
+    let sb = Sandbox::new("profiles");
+    let program = sb.root.join("Programs").join("도구 app").join("tool.exe");
+    std::fs::create_dir_all(program.parent().unwrap()).unwrap();
+    std::fs::write(&program, b"not run by any test").unwrap();
+    sb.write_rules(&profiles_doc("off", &program));
+    let ok = |args: &[&str]| -> Value {
+        let (code, d) = sb.json(args);
+        assert_eq!(code, 0, "{args:?}: {d:#}");
+        no_profile_secret(&args.join(" "), &d.to_string());
+        d
+    };
+    // --- Browse: search and sort.
+    let d = ok(&["profile", "list"]);
+    assert_eq!(d["data"]["active"], "work");
+    assert_eq!(d["data"]["total"], 2);
+    assert_eq!(d["data"]["profiles"][0]["rules"], 3);
+    bless("profile-list", &d);
+    let d = ok(&["profile", "list", "--search", "GAMES", "--sort", "title"]);
+    assert_eq!(d["data"]["profiles"].as_array().unwrap().len(), 1);
+    assert_eq!(d["data"]["profiles"][0]["id"], "gaming");
+    fails(&sb, &["profile", "list", "--sort", "size"], "usage");
+    // --- Show: modes, rules (no target, no environment value) and the switch preview.
+    let d = ok(&["profile", "show", "gaming"]);
+    assert_eq!(d["data"]["profile"]["active"], false);
+    assert_eq!(d["data"]["switch_preview"]["align"], "trigger");
+    let rows = d["data"]["switch_preview"]["rows"].as_array().unwrap();
+    assert!(
+        rows.iter()
+            .any(|r| r["key"] == "F13" && r["status"] == "changed"),
+        "{rows:?}"
+    );
+    assert!(rows.iter().any(|r| r["status"] == "only_left"), "{rows:?}");
+    assert!(
+        !d.to_string().contains("tool.exe"),
+        "no launch target in show"
+    );
+    bless("profile-show", &d);
+    fails(&sb, &["profile", "show", "nope"], "profile_not_found");
+    // --- CRUD.
+    let d = ok(&[
+        "profile",
+        "add",
+        "--title",
+        "개발 Development",
+        "--description",
+        "Rust",
+    ]);
+    assert_eq!(d["data"]["created"], "development");
+    bless("profile-add", &d);
+    ok(&["profile", "rename", "development", "Dev"]);
+    ok(&["profile", "edit", "development", "--no-description"]);
+    let d = ok(&["profile", "duplicate", "work", "--id", "work-copy"]);
+    assert_eq!(
+        d["data"]["rules"],
+        json!(["w-pause-2", "w-nav-2", "w-tool-2"])
+    );
+    let d = fails(
+        &sb,
+        &["profile", "delete", "work", "--yes"],
+        "profile_in_use",
+    );
+    assert_eq!(d["error"]["exit_code"], 7);
+    bless("failure-profile-in-use", &d);
+    fails(
+        &sb,
+        &["profile", "delete", "work-copy"],
+        "confirmation_required",
+    );
+    ok(&["profile", "delete", "work-copy", "--yes"]);
+    fails(
+        &sb,
+        &["profile", "add", "--title", "X", "--id", "Bad Id"],
+        "usage",
+    );
+    fails(
+        &sb,
+        &["profile", "add", "--title", "X", "--id", "gaming"],
+        "rule_conflict",
+    );
+    // A draft change leaves the saved file alone.
+    let before = sb.rules_bytes();
+    let d = ok(&["profile", "add", "--title", "Draft only", "--draft"]);
+    assert_eq!(d["data"]["target"], "draft");
+    assert_eq!(sb.rules_bytes(), before);
+    sb.run(&["rules", "draft", "discard", "--yes"]);
+    // --- Apply: the preview changes nothing; the switch changes only active_profile.
+    let before = sb.rules_bytes();
+    let d = ok(&["profile", "apply", "gaming", "--dry-run"]);
+    assert_eq!(
+        (d["data"]["from"].as_str(), d["data"]["to"].as_str()),
+        (Some("work"), Some("gaming"))
+    );
+    assert_eq!(d["data"]["switched"], Value::Null);
+    assert_eq!(sb.rules_bytes(), before, "a preview writes nothing");
+    bless("profile-apply-dry-run", &d);
+    let d = ok(&["profile", "apply", "gaming"]);
+    assert_eq!(d["data"]["changed"], true);
+    assert_eq!(
+        d["data"]["app"]["running"], false,
+        "no app: it starts with the saved profile"
+    );
+    assert_eq!(d["data"]["mode"], "base");
+    let (_, st) = sb.json(&["status"]);
+    assert_eq!(
+        st["data"]["rules"]["active_rules"],
+        json!(["g-off"]),
+        "{st:#}"
+    );
+    // An outdated --if-revision is refused before anything is written.
+    fails(
+        &sb,
+        &["profile", "apply", "work", "--if-revision", "1"],
+        "rule_conflict",
+    );
+    ok(&["profile", "apply", "work"]);
+    // --- Save points, history and rollback to the last working version.
+    let d = ok(&[
+        "profile",
+        "save",
+        "work",
+        "--label",
+        "before the experiment",
+    ]);
+    let save_point = d["data"]["save_point"].as_str().unwrap().to_string();
+    bless("profile-save", &d);
+    // A broken change by hand (a rule limited to a mode that does not exist), kept in the
+    // history by `rules backup`.
+    let mut doc: Value = serde_json::from_slice(&sb.rules_bytes()).unwrap();
+    doc["profiles"][0]["rules"][0]["modes"] = json!(["deleted-mode"]);
+    doc["revision"] = json!(doc["revision"].as_u64().unwrap() + 1);
+    sb.write_rules(&doc);
+    ok(&["rules", "backup"]);
+    let d = ok(&["profile", "history", "work"]);
+    assert_eq!(d["data"]["versions"][0]["working"], false, "{d:#}");
+    assert_eq!(d["data"]["rollback_to"], save_point.as_str(), "{d:#}");
+    bless("profile-history", &d);
+    fails(
+        &sb,
+        &["profile", "rollback", "work"],
+        "confirmation_required",
+    );
+    let d = ok(&["profile", "rollback", "work", "--yes"]);
+    assert_eq!(d["data"]["source"], save_point.as_str());
+    assert_eq!(d["data"]["preview"]["align"], "rule_id");
+    bless("profile-rollback", &d);
+    let (_, chk) = sb.json(&["rule", "check"]);
+    assert_eq!(
+        chk["data"]["ok"], true,
+        "the rollback removed the error: {chk:#}"
+    );
+    // Restore by name is the same, for any version.
+    let d = ok(&[
+        "profile",
+        "restore",
+        "work",
+        &save_point,
+        "--yes",
+        "--dry-run",
+    ]);
+    assert_eq!(d["data"]["dry_run"], true);
+    fails(
+        &sb,
+        &["profile", "restore", "work", "../rules.json", "--yes"],
+        "snapshot_not_found",
+    );
+    // --- Export: portable, inert, no secrets (environment values left out).
+    let file = sb.root.join("내보내기 export.json");
+    let file_s = file.display().to_string();
+    let (code, d) = sb.json(&["profile", "export", "work", "gaming", "--output", &file_s]);
+    assert_eq!(code, 0, "{d:#}");
+    assert_eq!(d["data"]["env_values_removed"], 1);
+    assert!(d["warnings"][0].as_str().unwrap().contains("left out"));
+    bless("profile-export", &d);
+    let text = std::fs::read_to_string(&file).unwrap();
+    no_profile_secret("the export file", &text);
+    let v: Value = serde_json::from_str(&text).unwrap();
+    assert!(v.get("revision").is_none() && v.get("settings").is_none());
+    assert!(!text.contains("consent"));
+    assert!(v["exported"]["by_version"].is_string());
+    assert!(
+        v["profiles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|p| p["rules"].as_array().unwrap())
+            .all(|r| r["enabled"] == false),
+        "every exported rule is off"
+    );
+    fails(
+        &sb,
+        &["profile", "export", "work", "--output", &file_s],
+        "confirmation_required",
+    );
+    fails(&sb, &["profile", "export", "--output", &file_s], "usage");
+    // --- Import: the preview, then the import (never active, rules off, no consent).
+    let d = ok(&["profile", "import", &file_s, "--dry-run"]);
+    let p0 = &d["data"]["profiles"][0];
+    assert_eq!(
+        (p0["id"].as_str(), p0["renamed_from"].as_str()),
+        (Some("work-2"), Some("work"))
+    );
+    let tool = p0["rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == "w-tool-2")
+        .unwrap();
+    assert_eq!(tool["permissions"], json!(["launch-programs"]));
+    assert_eq!(tool["targets"], json!({ "redacted": true, "count": 1 }));
+    bless("profile-import-dry-run", &d);
+    let d = ok(&["profile", "import", &file_s, "--dry-run", "--show-targets"]);
+    assert!(d.to_string().contains("tool.exe"), "targets on request");
+    let before_active = sb.json(&["profile", "list"]).1["data"]["active"].clone();
+    let d = ok(&["profile", "import", &file_s]);
+    assert_eq!(d["data"]["changed"], true);
+    bless("profile-import", &d);
+    let d = ok(&["profile", "list"]);
+    assert_eq!(
+        d["data"]["active"], before_active,
+        "an import never switches"
+    );
+    assert_eq!(d["data"]["total"], 5);
+    let saved: Value = serde_json::from_slice(&sb.rules_bytes()).unwrap();
+    for p in saved["profiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|p| p["id"].as_str().unwrap().ends_with("-2"))
+    {
+        for r in p["rules"].as_array().unwrap() {
+            assert_eq!(r["enabled"], false, "{r}");
+            assert!(r.get("consent").is_none(), "{r}");
+        }
+    }
+    // --- Corrupt, foreign and newer files are refused; nothing is written.
+    let before = sb.rules_bytes();
+    for (name, bytes) in [
+        ("empty.json", b"".to_vec()),
+        ("torn.json", text.as_bytes()[..text.len() / 2].to_vec()),
+        (
+            "hotkeys.json",
+            br#"{"schema":"kim.hotkeys","schema_version":1}"#.to_vec(),
+        ),
+    ] {
+        let f = sb.root.join(name);
+        std::fs::write(&f, bytes).unwrap();
+        let d = fails(
+            &sb,
+            &["profile", "import", &f.display().to_string()],
+            "import_invalid",
+        );
+        assert_eq!(d["error"]["exit_code"], 4);
+        if name == "torn.json" {
+            bless("failure-import-invalid", &d);
+        }
+    }
+    let newer = sb.root.join("newer.json");
+    std::fs::write(
+        &newer,
+        text.replace("\"schema_version\": 1", "\"schema_version\": 7"),
+    )
+    .unwrap();
+    let d = fails(
+        &sb,
+        &["profile", "import", &newer.display().to_string()],
+        "rules_from_newer_version",
+    );
+    assert_eq!(d["error"]["exit_code"], 5);
+    fails(
+        &sb,
+        &[
+            "profile",
+            "import",
+            &sb.root.join("missing.json").display().to_string(),
+        ],
+        "io",
+    );
+    assert_eq!(sb.rules_bytes(), before, "refused imports write nothing");
+    // --- A missing program, a deleted mode and duplicate conflicting hotkeys in one file.
+    let tricky = json!({
+        "schema": "ddalgak.rules", "schema_version": 1, "hotkey_contract": 1, "active_profile": "dev",
+        "exported": { "exported_at": "2026-11-04T11:00:00Z", "by_version": "0.0.1" },
+        "profiles": [ { "id": "dev", "title": "Development", "default_mode": "base",
+            "modes": [ { "id": "base", "title": "Base" } ],
+            "rules": [
+                { "id": "d-build", "title": "F17 builds", "enabled": false, "trigger": { "keys": "Ctrl+Alt+Shift+F17" },
+                  "steps": [ { "type": "open_program", "path": r"C:\Ddalgak-Step75-Missing\build.exe" } ] },
+                { "id": "d-again", "title": "F17 again", "enabled": false, "trigger": { "keys": "Ctrl+Alt+Shift+F17" },
+                  "steps": [ { "type": "engine", "op": "pause" } ] },
+                { "id": "d-vim", "title": "F18 in a deleted mode", "enabled": false, "modes": ["vim"],
+                  "trigger": { "keys": "Ctrl+Alt+Shift+F18" }, "steps": [ { "type": "engine", "op": "pause" } ] }
+            ] } ]
+    });
+    let tf = sb.root.join("tricky.json");
+    std::fs::write(&tf, tricky.to_string()).unwrap();
+    let tf_s = tf.display().to_string();
+    let d = ok(&["profile", "import", &tf_s, "--dry-run"]);
+    let p = &d["data"]["profiles"][0];
+    assert_eq!(p["restored_modes"], json!(["vim"]));
+    let rule = |id: &str| {
+        p["rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == id)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(rule("d-build")["missing_programs"], 1);
+    assert_eq!(rule("d-again")["conflicts"], json!([{ "rule": "d-build" }]));
+    assert_eq!(d["data"]["counts"]["conflicts"], 1);
+    ok(&["profile", "import", &tf_s, "--id", "dev", "--title", "개발"]);
+    // Turning both F17 rules on is refused like any duplicate trigger.
+    let d = fails(
+        &sb,
+        &[
+            "rule",
+            "enable",
+            "d-again",
+            "d-build",
+            "--allow",
+            "launch-programs",
+        ],
+        "rule_conflict",
+    );
+    let _ = d;
+    // --- The help names every profile command and no output carried the secret.
+    let help = String::from_utf8_lossy(&sb.run(&["--help"]).stdout).to_string();
+    for c in [
+        "profile apply",
+        "profile export",
+        "profile import",
+        "profile history | restore | rollback",
+    ] {
+        assert!(help.contains(c), "{c}");
+    }
+    let human = sb.run(&["profile", "import", &file_s, "--dry-run"]);
+    no_profile_secret(
+        "human import preview",
+        &String::from_utf8_lossy(&human.stdout),
+    );
+}
+
+/// The real test host switches when a profile is applied (the reload acknowledges the profile and
+/// the revision), starts the new profile in its default mode, and an app or a CLI that ends in
+/// the middle of a switch leaves either the old or the new profile — never a torn file, never an
+/// engine that turned itself back on.
+#[test]
+fn a_running_app_switches_profiles_atomically_and_survives_an_exit_during_a_switch() {
+    if elevated() {
+        eprintln!("skipped (elevated): the app refuses to turn its engine on as administrator");
+        return;
+    }
+    let sb = Sandbox::new("switch");
+    let program = sb.root.join("tool.exe");
+    std::fs::write(&program, b"never started").unwrap();
+    sb.write_rules(&profiles_doc("on", &program));
+    let mut host = sb.host();
+    let (_, st) = sb.json(&["status"]);
+    assert_eq!(st["data"]["engine"]["state"], "running", "{st:#}");
+    assert_eq!(st["data"]["profile"]["id"], "work");
+    // Apply: the app acknowledges the new profile and the saved revision.
+    let (code, d) = sb.json(&["profile", "apply", "gaming"]);
+    assert_eq!(code, 0, "{d:#}");
+    assert_eq!(d["data"]["switched"], true, "{d:#}");
+    assert_eq!(d["data"]["app"]["active_profile"], "gaming");
+    assert_eq!(d["data"]["app"]["in_sync"], true);
+    bless("profile-apply", &d);
+    let (_, st) = sb.json(&["status"]);
+    assert_eq!(st["data"]["profile"]["id"], "gaming");
+    assert_eq!(st["data"]["rules"]["active_rules"], json!(["g-off"]));
+    assert_eq!(
+        st["data"]["engine"]["state"], "running",
+        "a switch keeps the engine state"
+    );
+    assert_eq!(
+        st["data"]["engine"]["hook"]["installed"], true,
+        "and the same hook"
+    );
+    let (_, m) = sb.json(&["mode", "status"]);
+    assert_eq!(
+        m["data"]["mode"]["active"], "base",
+        "the new profile's default mode"
+    );
+    // Back to work, with Navigation latched first: the switch never carries a mode over.
+    sb.json(&["profile", "apply", "work"]);
+    sb.json(&["mode", "set", "nav"]);
+    let (_, d) = sb.json(&["profile", "apply", "gaming"]);
+    assert_eq!(d["data"]["switched"], true);
+    let (_, m) = sb.json(&["mode", "status"]);
+    assert_eq!(
+        m["data"]["mode"]["active"], "base",
+        "gaming has a `nav` too, never carried"
+    );
+    // A CLI killed in the middle of saving a switch: the old profile stays, file intact.
+    let before = sb.rules_bytes();
+    let marker = sb.root.join("switch.marker");
+    let mut writer = sb.spawn_cli(
+        &["profile", "apply", "work"],
+        &[("DDALGAK_TEST_CRASH_IN_SAVE", marker.as_os_str())],
+    );
+    let until = Instant::now() + Duration::from_secs(30);
+    while !marker.exists() {
+        if let Ok(Some(s)) = writer.try_wait() {
+            panic!("the writer ended before the crash point: {s}");
+        }
+        assert!(
+            Instant::now() < until,
+            "the writer never reached the crash point"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    writer.kill().unwrap();
+    let _ = writer.wait();
+    assert_eq!(
+        sb.rules_bytes(),
+        before,
+        "rules.json is exactly the previous version"
+    );
+    let (_, st) = sb.json(&["status"]);
+    assert_eq!(st["data"]["profile"]["id"], "gaming");
+    assert_eq!(st["data"]["rules"]["in_sync"], true, "{st:#}");
+    assert_eq!(st["data"]["rules"]["saved"]["interrupted_save"], true);
+    // The app killed right after a switch was saved: the next start runs the new profile with
+    // the engine off (an unclean exit), never re-enabled by itself; the stale-key check ran.
+    let (_, d) = sb.json(&["profile", "apply", "work"]);
+    assert_eq!(d["data"]["changed"], true);
+    host.child.kill().unwrap();
+    let _ = host.child.wait();
+    drop(host);
+    let mut host = sb.host();
+    let (_, st) = sb.json(&["status"]);
+    assert_eq!(st["data"]["profile"]["id"], "work");
+    assert_eq!(
+        st["data"]["engine"]["state"], "off",
+        "never back on after a crash"
+    );
+    assert_eq!(st["data"]["start"]["off_reason"], "unclean_exit");
+    assert!(
+        st["data"]["start"]["recovered"]["checked"]
+            .as_u64()
+            .is_some(),
+        "{st:#}"
+    );
+    assert_eq!(
+        st["data"]["rules"]["saved"]["interrupted_save"], false,
+        "the next save replaced the leftover"
+    );
+    // Importing a profile into a running app never activates it.
+    let file = sb.root.join("export.json");
+    sb.json(&[
+        "profile",
+        "export",
+        "gaming",
+        "--output",
+        &file.display().to_string(),
+    ]);
+    let (_, d) = sb.json(&["profile", "import", &file.display().to_string()]);
+    assert_eq!(d["data"]["changed"], true, "{d:#}");
+    let (_, st) = sb.json(&["status"]);
+    assert_eq!(st["data"]["profile"]["id"], "work", "{st:#}");
     sb.json(&["quit"]);
     assert_eq!(host.wait_exit(Duration::from_secs(10)), Some(0));
 }

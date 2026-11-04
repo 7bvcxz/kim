@@ -1,10 +1,10 @@
-# Ddalgak engine (Steps 66–73)
+# Ddalgak engine (Steps 66–75)
 
 Status: **current** (engine implemented in Step 66 for Windows, the rule store and live reload in
 Step 67, §10; remaps, blocks and mouse-button triggers in Step 68, §11; sent keys, typed text,
 paste and hotstrings in Step 69, §12; program and website launches in Step 70, §13; mouse moves,
 wheel, clicks and holds in Step 71, §14; modes and layers in Step 72, §15; enable, disable, pause
-and recovery in Step 73, §16) · Decisions:
+and recovery in Step 73, §16; profile switches in Step 75, §17) · Decisions:
 [ADR 0022](adr/0022-ddalgak-rule-model-and-safety.md),
 [ADR 0024](adr/0024-ddalgak-windows-input-apis-and-permissions.md),
 [ADR 0028](adr/0028-ddalgak-rule-store-validation-and-reload.md),
@@ -995,3 +995,42 @@ unticked when you could not do it.
     note whether the local engine turns off.
 14. [ ] Clean up: `ddalgak rule delete caps esc ralt --yes`, `ddalgak enable`, remove
     `hotkeys.json`, quit the app.
+
+## 17. Profile switches (Step 75)
+
+[ADR 0052](adr/0052-ddalgak-profiles-switch-versions-and-transfer.md),
+[DDALGAK_RULE_MODEL §10](DDALGAK_RULE_MODEL.md). `ddalgak profile apply <id>` (or the editor's
+*Switch to this profile*) writes only `active_profile` through the rule store; the app's reload
+(file notification or `rules.reload`) sees a different profile and switches instead of reloading:
+
+1. The worker gets `Msg::Cancel` (runs of the old profile end as `cancelled`, every output it holds
+   is released, motions stop), then the new profile's rules.
+2. The hook thread gets `WM_SWAP` with the switch flag and calls `Core::switch_table` between two
+   callbacks: pending taps, holds, sequences and undecided dual roles are dropped, the worker is
+   told `ReleaseAll` under the old generation, lifted trigger modifiers still held are restored,
+   held layers end; then the new table applies and the mode becomes the new profile's **default
+   mode**, never one carried over by ID. Keys whose down was consumed keep their up consumed, so an
+   application never sees half a key press across the switch.
+3. `rules.reload` (and `status`) answer with `active_set.profile`; `profile apply` reports
+   `switched: true` when the app runs the new profile and the saved revision.
+
+The engine state and the hook stay as they are (a switch while off only changes what the next
+start loads). A crash in the middle leaves the old or the new file (atomic write); an app killed
+after the switch starts with the new profile and the engine off (`unclean_exit`, §16).
+
+**Verification.** `core::tests::a_profile_switch_releases_everything_keeps_pairs_and_starts_in_the_default_mode`
+(a held remap, an undecided dual role and a held layer across a switch; consumed ups stay
+consumed; the default mode even with a mode of the same ID); `tests/cli.rs`
+`a_running_app_switches_profiles_atomically_and_survives_an_exit_during_a_switch` (the real test
+host: `switched`, the same hook, the default mode after a latched mode, a CLI killed in the middle
+of saving a switch, the app killed right after one); `e2e/tests/step75_ddalgak_profiles.rs`. Real
+keys held by a person during a switch on the visible app are **not tested** here (no new input is
+synthesized on this machine); GUI_JOURNEYS §8 has the manual check.
+
+**Real-input tests on a shared desktop (Step 75).** The real-input tests of `hook_windows.rs` and
+`cli.rs` run each input-sensitive step as attempts (`tests/common/quiet.rs`) judged with the
+hook's own count of physical events — the new `physical` counter of `health` (a count only) — and
+the held modifiers: a failure with physical input is retried (at most five times) and reported, a
+failure without is a real failure, and all-disturbed is reported as skipped. Key states are awaited
+instead of read once: the hook counts an event before Windows updates the async key state, which
+is what failed the Step 74 merge gate.

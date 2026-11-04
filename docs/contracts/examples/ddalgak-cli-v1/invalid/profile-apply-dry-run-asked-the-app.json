@@ -1,0 +1,118 @@
+{
+  "command": "profile.apply",
+  "data": {
+    "app": {
+      "running": true,
+      "outcome": "applied",
+      "in_sync": true,
+      "active_revision": 3
+    },
+    "backup": null,
+    "changed": true,
+    "created": null,
+    "dry_run": true,
+    "from": "work",
+    "mode": "base",
+    "notes": [],
+    "preview": {
+      "align": "trigger",
+      "counts": {
+        "changed": 1,
+        "only_left": 2,
+        "only_right": 0,
+        "same": 0
+      },
+      "left": {
+        "default_mode": "base",
+        "id": "work",
+        "modes": [
+          "base",
+          "nav"
+        ],
+        "title": "Work"
+      },
+      "right": {
+        "default_mode": "base",
+        "id": "gaming",
+        "modes": [
+          "base",
+          "nav"
+        ],
+        "title": "Gaming"
+      },
+      "rows": [
+        {
+          "key": "F13",
+          "left": {
+            "enabled": true,
+            "id": "w-pause",
+            "modes": [],
+            "steps": [
+              "engine"
+            ],
+            "title": "F13 pauses",
+            "trigger": "F13"
+          },
+          "right": {
+            "enabled": true,
+            "id": "g-off",
+            "modes": [],
+            "steps": [
+              "engine"
+            ],
+            "title": "F13 turns the engine off",
+            "trigger": "F13"
+          },
+          "status": "changed"
+        },
+        {
+          "key": "F14",
+          "left": {
+            "enabled": true,
+            "id": "w-nav",
+            "modes": [],
+            "steps": [
+              "mode"
+            ],
+            "title": "F14 holds Navigation",
+            "trigger": "F14"
+          },
+          "right": null,
+          "status": "only_left"
+        },
+        {
+          "key": "Ctrl+Alt+Shift+F16",
+          "left": {
+            "enabled": true,
+            "id": "w-tool",
+            "modes": [],
+            "steps": [
+              "open_program"
+            ],
+            "title": "F16 opens the tool",
+            "trigger": "Ctrl+Alt+Shift+F16"
+          },
+          "right": null,
+          "status": "only_left"
+        }
+      ]
+    },
+    "problems": [],
+    "profiles": [
+      "work",
+      "gaming"
+    ],
+    "revision": {
+      "from": 6,
+      "to": null
+    },
+    "rules": [],
+    "snapshot": null,
+    "switched": null,
+    "target": "saved",
+    "to": "gaming"
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

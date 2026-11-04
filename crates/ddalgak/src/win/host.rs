@@ -380,6 +380,7 @@ impl Host {
             "active_set": self.loaded.state.usable().then(|| json!({
                 "revision": self.loaded.revision,
                 "loaded_at": self.loaded_at,
+                "profile": self.loaded.profile,
             })),
             "in_sync": in_sync,
         })
@@ -452,9 +453,32 @@ impl Host {
     }
 
     /// Makes `next` the active rules; with the engine on, the running hook gets the new table.
+    /// When the active profile changed (Step 75, `ddalgak profile apply`), it is a **switch**:
+    /// runs are cancelled and everything held is released before the new profile's rules apply
+    /// in its default mode, all between two hook callbacks (DDALGAK_RULE_MODEL §10).
     fn apply_rules(&mut self, next: rules::Loaded) {
+        let switch = next.profile != self.loaded.profile;
         self.loaded = next;
         self.loaded_at = crate::time::now_rfc3339();
+        if switch && let Some(h) = &self.hook {
+            self.generation = self.generation.wrapping_add(1);
+            // Runs of the old profile end and every output the worker holds is released first.
+            self.worker.queue().send(Msg::Cancel);
+            let bindings = self.loaded.bindings.clone();
+            self.worker.queue().send(Msg::Rules(Rules {
+                generation: self.generation,
+                bindings: Arc::new(bindings),
+                profile: self.loaded.profile.clone(),
+                mode: self.loaded.mode.clone(),
+                modes: self.loaded.modes.clone(),
+            }));
+            h.switch_table(self.generation, self.loaded.table());
+            // Never a mode carried over from the old profile: its default mode, until the hook
+            // thread's signal arrives.
+            let fresh = self.loaded.modes.initial();
+            self.set_mode(Some(fresh));
+            return;
+        }
         if let Some(h) = &self.hook {
             self.generation = self.generation.wrapping_add(1);
             // Timers of the old rules end; signals of the old table are dropped by generation.

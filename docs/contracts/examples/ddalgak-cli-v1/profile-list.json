@@ -1,0 +1,40 @@
+{
+  "command": "profile.list",
+  "data": {
+    "active": "work",
+    "profiles": [
+      {
+        "active": true,
+        "default_mode": "base",
+        "description": "Office keyboard",
+        "enabled": true,
+        "errors": 0,
+        "id": "work",
+        "modes": 2,
+        "rules": 3,
+        "rules_on": 3,
+        "title": "Work"
+      },
+      {
+        "active": false,
+        "default_mode": "base",
+        "description": "Games, no launches",
+        "enabled": true,
+        "errors": 0,
+        "id": "gaming",
+        "modes": 2,
+        "rules": 1,
+        "rules_on": 1,
+        "title": "Gaming"
+      }
+    ],
+    "revision": 1,
+    "search": null,
+    "sort": "order",
+    "source": "saved",
+    "total": 2
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

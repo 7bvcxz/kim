@@ -1,0 +1,12 @@
+{
+  "command": "profile.import",
+  "error": {
+    "code": "import_invalid",
+    "details": [],
+    "exit_code": 4,
+    "hint": "nothing was imported; export the profile again (`ddalgak profile export`) or check the file",
+    "message": "the file cannot be imported: not valid JSON: EOF while parsing a value at line 61 column 6"
+  },
+  "ok": false,
+  "schema_version": 1
+}

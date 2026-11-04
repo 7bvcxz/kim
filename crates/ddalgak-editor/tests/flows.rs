@@ -975,3 +975,266 @@ fn modes_page() {
             .any(|m| m["title"] == "Symbols")
     );
 }
+
+/// Step 75 (J6, `DDALGAK-FR-030…032`, `DDALGAK-SEC-013`): two complete profiles for the browser.
+fn two_profiles() -> Value {
+    let site = json!({ "steps": [ { "type": "open_url", "url": "https://example.com/" } ] });
+    json!({
+        "schema": "ddalgak.rules", "schema_version": 1, "hotkey_contract": 1, "revision": 1,
+        "active_profile": "work",
+        "profiles": [
+            { "id": "work", "title": "Work", "description": "Office keyboard", "default_mode": "base",
+              "modes": [ { "id": "base", "title": "Base" }, { "id": "nav", "title": "Navigation" } ],
+              "rules": [
+                { "id": "caps", "title": "CapsLock acts as Ctrl", "enabled": true,
+                  "trigger": { "keys": "CapsLock" }, "steps": [ { "type": "remap", "to": "LCtrl" } ],
+                  "consent": { "input-injection": { "granted_at": GRANT, "via": "gui" } } },
+                { "id": "site", "title": "Open example", "enabled": true,
+                  "trigger": { "keys": "Ctrl+Alt+Shift+F17" }, "steps": [ { "type": "open_url", "url": "https://example.com/" } ],
+                  "consent": { "launch-programs": { "granted_at": GRANT, "via": "gui",
+                      "fingerprint": ddalgak::validate::launch_fingerprint(&site) } } }
+              ] },
+            { "id": "gaming", "title": "Gaming", "default_mode": "base",
+              "modes": [ { "id": "base", "title": "Base" } ],
+              "rules": [
+                { "id": "g-caps", "title": "CapsLock is blocked", "enabled": true,
+                  "trigger": { "keys": "CapsLock" }, "steps": [ { "type": "block" } ] }
+              ] }
+        ]
+    })
+}
+
+fn profile_ids(d: &Value) -> Vec<String> {
+    d["profiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["id"].as_str().unwrap().to_string())
+        .collect()
+}
+
+/// J6: the profile browser (search, sort), a switch only after its side-by-side diff (Cancel
+/// first), duplicate, rename, delete with undo, history with a restore, and an export imported
+/// into another store through the validation preview: never active, rules off, no consent.
+#[test]
+fn j6_profiles_browse_switch_with_a_diff_history_export_and_import() {
+    let sb = Sandbox::new("profiles");
+    sb.write_rules(&two_profiles());
+    let fake = sb.fake();
+    let mut h = harness(app(&sb, fake.clone()));
+    settle(&mut h);
+    click(&mut h, "Profiles");
+    assert_eq!(h.state().page(), ddalgak_editor::app::Page::Profiles);
+    assert_eq!(h.state().profile_rows().len(), 2);
+    assert!(
+        h.query_by_label("● Active").is_some(),
+        "the active profile in words"
+    );
+    // Search and sort.
+    h.get_by_label("Search profiles")
+        .set_text_value_accesskit("gam");
+    h.run();
+    let shown: Vec<String> = h.state().profile_rows().into_iter().map(|r| r.id).collect();
+    assert_eq!(shown, ["gaming"]);
+    h.get_by_label("Search profiles")
+        .set_text_value_accesskit("");
+    h.run();
+    // Switch: the diff first, Cancel changes nothing.
+    click(&mut h, "Switch…");
+    assert!(h.query_by_label("Now: Work").is_some());
+    assert!(h.query_by_label("After: Gaming").is_some());
+    assert!(
+        h.query_all_by_label_contains("CapsLock is blocked")
+            .next()
+            .is_some(),
+        "the right side names what the key does after the switch"
+    );
+    assert!(
+        h.query_all_by_label_contains("example.com")
+            .next()
+            .is_none(),
+        "the diff shows no launch target"
+    );
+    click_last_button(&mut h, "Cancel");
+    assert_eq!(sb.rules()["active_profile"], "work");
+    click(&mut h, "Switch…");
+    click(&mut h, "Switch to this profile");
+    assert_eq!(sb.rules()["active_profile"], "gaming");
+    settle(&mut h);
+    assert!(
+        h.query_all_by_label_contains("Switched; the running app confirmed it")
+            .next()
+            .is_some(),
+        "the switch is confirmed only after the app's reload"
+    );
+    assert_eq!(h.state().switching_to(), None);
+    // Duplicate (rules get new IDs), rename, delete with undo.
+    h.get_all_by_role_and_label(Role::Button, "Duplicate")
+        .next()
+        .unwrap()
+        .click();
+    h.run();
+    let d = sb.rules();
+    assert_eq!(profile_ids(&d), ["work", "gaming", "work-2"]);
+    assert_eq!(d["profiles"][2]["rules"][0]["id"], "caps-2");
+    h.get_all_by_role_and_label(Role::Button, "Rename…")
+        .last()
+        .unwrap()
+        .click();
+    h.run();
+    h.get_by_label("Profile name")
+        .set_text_value_accesskit("Work at home");
+    h.run();
+    click_last_button(&mut h, "Save");
+    assert_eq!(sb.rules()["profiles"][2]["title"], "Work at home");
+    h.get_all_by_role_and_label(Role::Button, "Delete profile")
+        .last()
+        .unwrap()
+        .click();
+    h.run();
+    click_last_button(&mut h, "Delete profile");
+    assert_eq!(profile_ids(&sb.rules()), ["work", "gaming"]);
+    click(&mut h, "Undo");
+    assert_eq!(profile_ids(&sb.rules()), ["work", "gaming", "work-2"]);
+    settle(&mut h);
+    // History of `work`: rename it, then restore the earlier version side by side.
+    h.get_all_by_role_and_label(Role::Button, "Rename…")
+        .next()
+        .unwrap()
+        .click();
+    h.run();
+    h.get_by_label("Profile name")
+        .set_text_value_accesskit("Office");
+    h.run();
+    click_last_button(&mut h, "Save");
+    assert_eq!(sb.rules()["profiles"][0]["title"], "Office");
+    h.get_all_by_role_and_label(Role::Button, "History…")
+        .next()
+        .unwrap()
+        .click();
+    h.run();
+    let older = h
+        .query_all_by_label_contains("profile.apply")
+        .next()
+        .expect("a version from before the rename");
+    older.click();
+    h.run();
+    assert!(
+        h.query_by_label("Now").is_some(),
+        "the side-by-side comparison"
+    );
+    click(&mut h, "Restore this version");
+    assert_eq!(
+        sb.rules()["profiles"][0]["title"],
+        "Work",
+        "restored as a new change"
+    );
+    assert_eq!(
+        sb.rules()["active_profile"],
+        "gaming",
+        "a restore never switches"
+    );
+    settle(&mut h);
+    // A save point from the history.
+    h.get_all_by_role_and_label(Role::Button, "History…")
+        .next()
+        .unwrap()
+        .click();
+    h.run();
+    h.get_by_label("Label for a saved version")
+        .set_text_value_accesskit("before games");
+    h.run();
+    click(&mut h, "Save this version");
+    assert!(
+        h.query_all_by_label_contains("“before games”")
+            .next()
+            .is_some()
+    );
+    click_last_button(&mut h, "Close");
+    // Export `work` and import it into another, empty store.
+    h.get_all_by_role_and_label(Role::Button, "Export…")
+        .next()
+        .unwrap()
+        .click();
+    h.run();
+    let file = sb.root.join("work.json");
+    h.get_by_label("File")
+        .set_text_value_accesskit(&file.display().to_string());
+    h.run();
+    click_last_button(&mut h, "Export…");
+    let exported: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+    assert!(!exported.to_string().contains("consent"));
+    assert_eq!(exported["profiles"][0]["rules"][0]["enabled"], false);
+    click_last_button(&mut h, "Close");
+    let other = Sandbox::new("profiles-target");
+    let other_fake = other.fake();
+    let mut h2 = harness(app(&other, other_fake.clone()));
+    settle(&mut h2);
+    click(&mut h2, "Profiles");
+    click(&mut h2, "Import profile…");
+    h2.get_by_label("File")
+        .set_text_value_accesskit(&file.display().to_string());
+    h2.run();
+    click(&mut h2, "Check the file");
+    assert!(
+        h2.query_all_by_label_contains("https://example.com/")
+            .next()
+            .is_some(),
+        "the preview names the exact target"
+    );
+    assert!(
+        h2.query_all_by_label_contains("needs your consent")
+            .next()
+            .is_some()
+    );
+    click(&mut h2, "Add them, not active");
+    let d = other.rules();
+    assert_eq!(profile_ids(&d), ["default", "work"]);
+    assert_eq!(
+        d["active_profile"], "default",
+        "an import is never switched to"
+    );
+    for r in d["profiles"][1]["rules"].as_array().unwrap() {
+        assert_eq!(r["enabled"], false);
+        assert!(r.get("consent").is_none());
+    }
+    // A corrupt file is refused in the preview with the reason.
+    let bad = other.root.join("bad.json");
+    std::fs::write(&bad, b"{ \"schema\": \"ddalgak.rules\", ").unwrap();
+    click(&mut h2, "Import profile…");
+    h2.get_by_label("File")
+        .set_text_value_accesskit(&bad.display().to_string());
+    h2.run();
+    click(&mut h2, "Check the file");
+    assert!(
+        h2.query_all_by_label_contains("cannot be imported")
+            .next()
+            .is_some()
+    );
+    assert!(h2.query_by_label("Add them, not active").is_none());
+    // Nothing was opened or run: the apps only saw status requests and reloads.
+    for f in [&fake, &other_fake] {
+        assert!(f.with(|s| s.calls.iter().all(|c| c == "status" || c == "rules.reload")));
+    }
+}
+
+/// The active profile cannot be deleted from the window either, and the Korean labels exist.
+#[test]
+fn the_active_profile_is_never_deleted_and_the_page_speaks_korean() {
+    let sb = Sandbox::new("profiles-ko");
+    sb.write_rules(&two_profiles());
+    let mut h = harness(app(&sb, sb.fake()));
+    settle(&mut h);
+    click(&mut h, "Profiles");
+    let first = h
+        .get_all_by_role_and_label(Role::Button, "Delete profile")
+        .next()
+        .unwrap();
+    assert!(
+        first.accesskit_node().is_disabled(),
+        "the active profile's Delete is disabled"
+    );
+    click(&mut h, "한국어");
+    assert!(h.query_by_label("● 사용 중").is_some());
+    assert!(h.query_by_label("프로필 가져오기…").is_some());
+}

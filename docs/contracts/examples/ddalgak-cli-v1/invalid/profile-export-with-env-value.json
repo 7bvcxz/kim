@@ -1,0 +1,28 @@
+{
+  "command": "profile.export",
+  "data": {
+    "bytes": 2514,
+    "consent_removed": 1,
+    "dry_run": false,
+    "env_values_removed": 1,
+    "file": "C:\\Users\\you\\AppData\\Local\\Temp\\ddalgak-cli-profiles\\내보내기 export.json",
+    "portable_paths": 1,
+    "profiles": [
+      "work",
+      "gaming"
+    ],
+    "rules": 4,
+    "written": true,
+    "env": [
+      {
+        "name": "TOOL_TOKEN",
+        "value": "secret"
+      }
+    ]
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": [
+    "1 environment value(s) were left out because they may be secrets (the names stay); --include-env-values keeps them"
+  ]
+}

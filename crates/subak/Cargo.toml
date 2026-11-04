@@ -24,7 +24,7 @@ serde_json = "1.0.154"
 unicode-normalization = "0.1.25"
 # The terminal model of every pane (ADR 0030): parser, screen, scrollback, snapshot and capture,
 # shared with Subak's client views (ADR 0036). Built without its `render` feature.
-subak-term = { path = "../subak-term" }
+subak-term = { path = "../subak-term", default-features = false }
 
 [target."cfg(windows)".dependencies]
 # The Host and its clients: pseudo console, job objects, named pipes and peer identity, detached

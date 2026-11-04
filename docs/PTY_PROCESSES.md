@@ -171,7 +171,13 @@ Every pane's root process is created suspended, assigned to a new kill-on-close 
 resumed (ADR 0004). Descendants stay in the job: the job does not allow breakaway, so a child
 asking for `CREATE_BREAKAWAY_FROM_JOB` is refused with access denied (measured from inside a pane).
 When the root exits by itself, whatever it left in the job is terminated during teardown
-(`forced: true`); killing a Terminal ends its whole tree and nothing of the others. Each shell is
+(`forced: true`); killing a Terminal ends its whole tree and nothing of the others. The job may
+first take up to 1 s to empty: Windows takes an exiting process out of its job only after it has
+woken the threads that wait for its exit, so right after the root's exit the job still counts it
+(measured: in 300 of 300 runs of `cmd /c exit 42`, for up to 3.8 ms on an idle machine, longer
+under load). Checking at once reported a program that ended by itself as `forced: true` under a
+parallel build (found in Step 73's run, fixed in Step 19; `host::tests::a_job_that_empties_just_after_its_root_exits_ended_by_itself`,
+`pty_shells.rs::programs_that_end_by_themselves_are_never_reported_forced`). Each shell is
 a direct child of the Host with its own `conhost.exe` (the pseudo console host, which is not in
 the job and ends with `ClosePseudoConsole`). Measured with cmd and Windows PowerShell side by
 side, each with a background `ping` (§10).

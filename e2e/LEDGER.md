@@ -53,6 +53,8 @@ a recorded justification.
 | 37 | #59 Step 54 – Noeul pin transforms and advanced interaction controls | `step54_noeul_pin_transform.rs` (2 tests): transforms, groups and recovery are discoverable headlessly; scripts transform, recover and group off-screen pins. `step53_noeul_pins.rs` updated (the transform keys are no longer planned) | 7 |
 | 38 | #18 Step 18 – Subak floating icon and terminal manager (merged; issue open for the maintainer's visible icon/manager check, `SUBAK_GUI.md` §11.9) | `step18_floating_manager.rs` (2 tests): the floating manager follows the Host and manages Terminals without ending others; the icon is dragged, snaps, keeps its place and comes back when a monitor goes | 8 |
 | 39 | #78 Step 73 – Ddalgak enable/disable and emergency recovery (merged; issue open for the maintainer's physical-keyboard checks, `DDALGAK_ENGINE.md` §16) | `step73_ddalgak_recovery.rs` (2 tests): an agent switches rules, modes and profiles off and on headlessly; the running app recovers and never turns itself back on | 9 |
+| 40 | #60 Step 55 – Noeul clipboard paste for every format | `step55_noeul_clipboard.rs` (2 tests): paste commands are discoverable headlessly; the user pastes every source off screen without touching the clipboard | 10 |
+| 41 | #19 Step 19 – Subak terminal search, clipboard and links (merged; issue open for the maintainer's visible-window, real-clipboard and real-browser checks, `SUBAK_GUI.md` §12.9) | `step19_search_clipboard.rs` (2 tests): a later window searches output kept by the Host; paste, copy, links and save output ask first and stay local | 11 |
 
 ## E2E runs
 

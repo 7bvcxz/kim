@@ -75,6 +75,13 @@ const CAPTURE_BYTES: usize = 192 * 1024;
 const WRITE_BATCH: usize = 256 * 1024;
 /// How long a graceful stop waits for the processes after `ClosePseudoConsole`.
 const GRACE: Duration = Duration::from_secs(5);
+/// How long a pane's job may take to empty after its root process exited before what is left is
+/// terminated. Windows takes an exiting process out of its job only after it has woken the
+/// threads waiting for its exit, so right after the root's exit the job's active-process count
+/// still includes it: on this machine in 300 of 300 runs of `cmd /c exit 42`, for up to 3.8 ms
+/// idle, longer under load (Step 19). Checking at once made a program that ended by itself look
+/// forced (`last_exit.forced`); a job that empties within this bound ended by itself.
+const JOB_SETTLE: Duration = Duration::from_secs(1);
 /// How long a second party waits for a teardown someone else performs.
 const TEARDOWN_WAIT: Duration = Duration::from_secs(30);
 /// Longest command line `CreateProcessW` accepts.
@@ -694,6 +701,22 @@ fn join_bounded(t: JoinHandle<()>, limit: Duration) {
     }
 }
 
+/// Waits up to `limit` for the pane's job to hold no process; whether it emptied. Polls the
+/// count (a cheap query) every 2 ms: it settles within milliseconds when nothing is left, and
+/// the bound only ever delays the end of a pane whose job really still runs something.
+fn job_drained(pty: &dyn Pty, limit: Duration) -> bool {
+    let until = Instant::now() + limit;
+    loop {
+        if pty.processes() == 0 {
+            return true;
+        }
+        if Instant::now() >= until {
+            return false;
+        }
+        thread::sleep(Duration::from_millis(2));
+    }
+}
+
 fn flag(params: &Value, name: &str) -> Result<bool, IpcError> {
     match &params[name] {
         Value::Null => Ok(false),
@@ -1056,6 +1079,10 @@ impl Host {
             move || pty.close()
         });
         let mut exit = rt.pty.wait_exit(Some(GRACE));
+        if exit.is_some() {
+            // The job's count lags the root's exit (see JOB_SETTLE): let it settle first.
+            job_drained(&*rt.pty, JOB_SETTLE);
+        }
         if exit.is_none() || rt.pty.processes() > 0 {
             rt.terminate();
             exit = rt.pty.wait_exit(Some(GRACE));
@@ -2645,4 +2672,88 @@ enum Op {
     Stop,
     Kill,
     Remove,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicU32;
+
+    /// A pane whose root has exited but whose job still counts it for the next `lag` queries, as
+    /// the kernel does for a moment (it takes an exiting process out of its job only after
+    /// waking the threads that wait for its exit). `u32::MAX`: a process stays.
+    #[derive(Debug)]
+    struct Lagging {
+        lag: AtomicU32,
+        queries: AtomicU32,
+    }
+
+    impl Lagging {
+        fn new(lag: u32) -> Self {
+            Self {
+                lag: AtomicU32::new(lag),
+                queries: AtomicU32::new(0),
+            }
+        }
+    }
+
+    impl Pty for Lagging {
+        fn pid(&self) -> u32 {
+            1
+        }
+        fn take_output(&self) -> Option<Box<dyn Read + Send>> {
+            None
+        }
+        fn write_input(&self, _: &[u8]) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn resize(&self, _: u16, _: u16) -> std::io::Result<()> {
+            Ok(())
+        }
+        fn close(&self) {}
+        fn wait_exit(&self, _: Option<Duration>) -> Option<u32> {
+            Some(42)
+        }
+        fn processes(&self) -> u32 {
+            self.queries.fetch_add(1, Ordering::SeqCst);
+            let left = self.lag.load(Ordering::SeqCst);
+            if left == u32::MAX {
+                return 1;
+            }
+            if left > 0 {
+                self.lag.store(left - 1, Ordering::SeqCst);
+                1
+            } else {
+                0
+            }
+        }
+        fn kill_tree(&self, _: u32) {}
+    }
+
+    /// The Step 73 CI failure (`last_exit.forced` true for `cmd /c exit 42`): a job that still
+    /// counts the exited root for a moment empties within the bound, so the pane ended by
+    /// itself; one that keeps a process does not, and the bound holds.
+    #[test]
+    fn a_job_that_empties_just_after_its_root_exits_ended_by_itself() {
+        let p = Lagging::new(5);
+        assert_eq!(
+            p.processes(),
+            1,
+            "right after the exit the job still counts the root"
+        );
+        assert!(job_drained(&p, JOB_SETTLE));
+        assert_eq!(p.queries.load(Ordering::SeqCst), 6);
+        let busy = Lagging::new(u32::MAX);
+        let t = Instant::now();
+        assert!(!job_drained(&busy, Duration::from_millis(60)));
+        let took = t.elapsed();
+        assert!(
+            took >= Duration::from_millis(60) && took < Duration::from_secs(2),
+            "{took:?}"
+        );
+        assert!(
+            JOB_SETTLE < GRACE,
+            "the settle stays well inside a graceful stop"
+        );
+    }
 }

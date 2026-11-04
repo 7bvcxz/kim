@@ -241,6 +241,87 @@ pub fn encode_paste(text: &str, bracketed: bool) -> Vec<u8> {
     out
 }
 
+/// Pastes larger than this ask first (Windows Terminal's large-paste threshold).
+pub const LARGE_PASTE_BYTES: usize = 5 * 1024;
+
+/// What a paste would do, so the window can ask before sending text that would run commands or
+/// that carries hidden control sequences (Step 19, docs/SUBAK_GUI.md §12.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PasteCheck {
+    /// Line breaks (`CR LF`, `LF` or `CR`): each becomes Enter.
+    pub breaks: usize,
+    /// The text ends with a line break (its last line runs as soon as it is pasted).
+    pub ends_with_break: bool,
+    /// Control characters that [`encode_paste`] removes (C0 except tab and line breaks, DEL,
+    /// C1), of which `escapes` are `ESC` or `CSI` — the start of an escape sequence.
+    pub controls: usize,
+    pub escapes: usize,
+    /// The size of the text in UTF-8.
+    pub bytes: usize,
+    /// The program asked for bracketed paste (mode 2004): it receives the text as one paste
+    /// and does not run lines as they arrive.
+    pub bracketed: bool,
+}
+
+impl PasteCheck {
+    pub fn of(text: &str, bracketed: bool) -> Self {
+        let mut c = Self {
+            bytes: text.len(),
+            bracketed,
+            ..Self::default()
+        };
+        let mut it = text.chars().peekable();
+        while let Some(ch) = it.next() {
+            match ch {
+                '\r' => {
+                    if it.peek() == Some(&'\n') {
+                        it.next();
+                    }
+                    c.breaks += 1;
+                }
+                '\n' => c.breaks += 1,
+                '\t' => {}
+                '\x1b' | '\u{9b}' => {
+                    c.controls += 1;
+                    c.escapes += 1;
+                }
+                ch if ch.is_control() => c.controls += 1,
+                _ => {}
+            }
+        }
+        c.ends_with_break = text.ends_with(['\r', '\n']);
+        c
+    }
+
+    /// Line breaks that a program would run as commands (none under bracketed paste).
+    pub fn runs_lines(&self) -> bool {
+        self.breaks > 0 && !self.bracketed
+    }
+
+    /// Whether the window asks before pasting: lines that would run, control characters that
+    /// are removed (a sign of a disguised command), or a large paste.
+    pub fn needs_confirmation(&self) -> bool {
+        self.runs_lines() || self.controls > 0 || self.bytes > LARGE_PASTE_BYTES
+    }
+}
+
+/// The "paste as one line" clean-up: surrounding blanks trimmed and every line break (with the
+/// blanks around it) turned into one space, so nothing runs before the user presses Enter.
+pub fn one_line(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for part in text.trim().split(['\r', '\n']) {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push_str(part);
+    }
+    out
+}
+
 /// A mouse button, including the wheel directions xterm reports as buttons 4–7.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MouseButton {

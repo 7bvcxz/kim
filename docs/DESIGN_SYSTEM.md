@@ -51,7 +51,10 @@ declared pair drops below its minimum (WCAG 2.2: 4.5:1 text, 3:1 non-text UI and
 
 ### 2.2 Terminal palette
 
-Foreground `#D8D6E0` on `#0E0E12` (13.4:1), cursor lilac, selection `#3A3460`. The 16 ANSI
+Foreground `#D8D6E0` on `#0E0E12` (13.4:1), cursor lilac, selection `#3A3460`. Search matches
+(Step 19) are tinted `terminal.search-match` `#4D3F1C` (the foreground stays ≥ 7:1 on it); the
+current match is dark text on `terminal.search-current` `#E8C27A` (≥ 7:1), so it differs from the
+others in lightness, not hue alone, and the search bar says "3 of 17" in words. The 16 ANSI
 colors are tuned for the near-black background; all foreground colors except ANSI black are
 ≥ 4.5:1, and bright black (used for comments/dim text) stays readable. Programs that set 24-bit
 colors are rendered exactly; the palette only maps the 16 indexed colors.

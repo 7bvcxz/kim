@@ -221,6 +221,77 @@ pub fn edit(
     Ok(c)
 }
 
+/// `mode enable|disable` (Step 73): a disabled mode's own rules do not run and nothing switches
+/// to it; the default mode is never disabled. Enabling stores no field (absent means enabled).
+pub fn set_enabled(
+    doc: &mut Document,
+    profile: Option<&str>,
+    id: &str,
+    on: bool,
+) -> Result<Change, EditError> {
+    let pi = profile_index(doc, profile)?;
+    let p = &mut doc.profiles[pi];
+    let mi = mode_index(p, id)?;
+    if !on && p.default_mode == id {
+        return Err(EditError::Invalid {
+            code: "mode_invalid",
+            message: format!(
+                "`{id}` is the default mode of profile `{}`: every mode returns there, so it is never disabled",
+                p.id
+            ),
+            problems: Vec::new(),
+        });
+    }
+    let want = if on { None } else { Some(false) };
+    let mut c = Change::default();
+    if p.modes[mi].enabled == want {
+        c.modes.push(id.to_string());
+        c.notes.push(format!(
+            "mode `{id}` is already {}",
+            if on { "enabled" } else { "disabled" }
+        ));
+        return Ok(c);
+    }
+    p.modes[mi].enabled = want;
+    let (alone, _) = scoped(p, id);
+    let mut c = changed(c, id);
+    c.rules = alone;
+    if !on {
+        c.notes.push(format!(
+            "rules limited to `{id}` alone do not run, and nothing switches to it, until `ddalgak enable --mode {id}`"
+        ));
+    }
+    Ok(c)
+}
+
+/// `ddalgak enable|disable --profile <id>` (Step 73): a disabled profile runs none of its rules
+/// while it is active; each rule keeps its own `enabled`. Enabling stores no field.
+pub fn set_profile_enabled(doc: &mut Document, id: &str, on: bool) -> Result<Change, EditError> {
+    let pi = doc
+        .profiles
+        .iter()
+        .position(|p| p.id == id)
+        .ok_or_else(|| EditError::ProfileNotFound(id.to_string()))?;
+    let p = &mut doc.profiles[pi];
+    let want = if on { None } else { Some(false) };
+    let mut c = Change::default();
+    if p.enabled == want {
+        c.notes.push(format!(
+            "profile `{id}` is already {}",
+            if on { "enabled" } else { "disabled" }
+        ));
+        return Ok(c);
+    }
+    p.enabled = want;
+    c.changed = true;
+    if !on {
+        c.notes.push(format!(
+            "no rule of profile `{id}` runs until `ddalgak enable --profile {id}`; each rule keeps its own setting"
+        ));
+    }
+    Ok(c)
+}
+
 /// `mode rename`: a new title (the ID stays: rules refer to it).
 pub fn rename(
     doc: &mut Document,

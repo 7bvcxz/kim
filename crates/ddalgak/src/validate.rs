@@ -673,6 +673,8 @@ fn extend(
                 (m.parent.is_some(), "a parent"),
                 (m.one_shot == Some(true), "`one_shot`"),
                 (m.timeout_ms.is_some(), "`timeout_ms`"),
+                // Step 73: the default mode is where every exit ends; it is never disabled.
+                (m.enabled == Some(false), "`enabled: false`"),
             ]
             .into_iter()
             .filter_map(|(on, w)| on.then_some(w))

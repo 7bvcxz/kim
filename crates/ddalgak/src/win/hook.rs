@@ -35,11 +35,11 @@ use crate::table::Table;
 use crate::worker::Queue;
 use std::cell::RefCell;
 use std::io;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use windows_sys::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
+use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Performance::{QueryPerformanceCounter, QueryPerformanceFrequency};
 use windows_sys::Win32::System::SystemInformation::GetTickCount;
@@ -47,7 +47,7 @@ use windows_sys::Win32::System::Threading::GetCurrentThreadId;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetMessageW, HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, KillTimer, LLKHF_EXTENDED,
     LLKHF_INJECTED, LLKHF_LOWER_IL_INJECTED, LLKHF_UP, LLMHF_INJECTED, LLMHF_LOWER_IL_INJECTED,
-    MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, PeekMessageW, PostThreadMessageW, SetTimer,
+    MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, PeekMessageW, PostMessageW, PostThreadMessageW, SetTimer,
     SetWindowsHookExW, UnhookWindowsHookEx, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_APP, WM_MBUTTONDOWN,
     WM_MBUTTONUP, WM_QUIT, WM_TIMER, WM_XBUTTONDOWN, WM_XBUTTONUP, XBUTTON1, XBUTTON2,
 };
@@ -110,7 +110,18 @@ pub struct Shared {
     pending: Mutex<Option<(u32, Table)>>,
     /// A mode request and where to answer it (Step 72).
     mode_req: Mutex<Option<(ModeRequest, Sender<ModeResult>)>>,
+    /// Step 73: the window told when the hook may have been removed ([`WM_HOOK_LOST`]).
+    host_window: AtomicIsize,
+    /// Step 73: a callback this long, or a physical event that waited this long, means Windows
+    /// may have removed the hook (`LowLevelHooksTimeout`); 0 turns the check off.
+    timeout_us: AtomicU64,
+    /// Step 73: the loss was reported for the current hook (once per hook).
+    lost: AtomicBool,
 }
+
+/// Step 73: posted to the host window when a callback reached the hook timeout
+/// ([`crate::recovery::hook_lost`]).
+pub const WM_HOOK_LOST: u32 = WM_APP + 0x20;
 
 impl Shared {
     pub fn new(stats: Arc<Stats>) -> Arc<Shared> {
@@ -122,6 +133,38 @@ impl Shared {
 
     pub fn set_state(&self, s: u8) {
         self.state.store(s, Ordering::SeqCst);
+    }
+
+    /// Step 73: where a lost hook is reported ([`WM_HOOK_LOST`]).
+    pub fn set_host_window(&self, hwnd: isize) {
+        self.host_window.store(hwnd, Ordering::SeqCst);
+    }
+
+    /// Step 73: the hook-timeout threshold in µs (0: no check).
+    pub fn set_hook_timeout_us(&self, us: u64) {
+        self.timeout_us.store(us, Ordering::SeqCst);
+    }
+
+    pub fn hook_timeout_us(&self) -> u64 {
+        self.timeout_us.load(Ordering::SeqCst)
+    }
+
+    /// Step 73: whether the current hook was reported lost.
+    pub fn lost(&self) -> bool {
+        self.lost.load(Ordering::SeqCst)
+    }
+
+    /// Reports a lost hook to the host once (counted; a posted message, nothing blocks).
+    fn report_lost(&self) {
+        if self.lost.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        self.stats.hook_timeouts.fetch_add(1, Ordering::Relaxed);
+        let hwnd = self.host_window.load(Ordering::SeqCst);
+        if hwnd != 0 {
+            // SAFETY: posts a plain message to the host window (harmless once it is gone).
+            unsafe { PostMessageW(hwnd as HWND, WM_HOOK_LOST, 0, 0) };
+        }
     }
 
     pub fn state(&self) -> u8 {
@@ -304,7 +347,7 @@ fn qpc() -> i64 {
 fn handle(raw: &RawKey) -> bool {
     let start = qpc();
     let mut ticks_per_us = 1;
-    let mut stats: Option<Arc<Stats>> = None;
+    let mut shared: Option<Arc<Shared>> = None;
     let consume = CTX.with(|cell| {
         // A re-entrant call (should not happen) passes the event on.
         let Ok(mut guard) = cell.try_borrow_mut() else {
@@ -314,7 +357,7 @@ fn handle(raw: &RawKey) -> bool {
             return false;
         };
         ticks_per_us = ctx.ticks_per_us;
-        stats = Some(Arc::clone(&ctx.shared.stats));
+        shared = Some(Arc::clone(&ctx.shared));
         let state = ctx.shared.state();
         if state == STATE_OFF {
             return false;
@@ -357,13 +400,21 @@ fn handle(raw: &RawKey) -> bool {
         }
         consume
     });
-    if let Some(st) = stats {
-        let us = (qpc() - start) / ticks_per_us.max(1);
-        st.record_callback(u64::try_from(us).unwrap_or(0));
+    if let Some(sh) = shared {
+        let st = &sh.stats;
+        let us = u64::try_from((qpc() - start) / ticks_per_us.max(1)).unwrap_or(0);
+        st.record_callback(us);
         // SAFETY: no preconditions.
         let now = unsafe { GetTickCount() };
-        st.record_delay(u64::from(now.wrapping_sub(raw.time_ms)).min(3_600_000));
+        let delay = u64::from(now.wrapping_sub(raw.time_ms)).min(3_600_000);
+        st.record_delay(delay);
         st.last_callback_tick.store(now, Ordering::Relaxed);
+        // Step 73: Windows removes a hook that does not answer within `LowLevelHooksTimeout`
+        // without telling anyone; a callback (or a physical event's wait) that long means the
+        // hook may be gone, so the host turns the engine off and says so.
+        if crate::recovery::hook_lost(us, delay, !raw.injected, sh.hook_timeout_us()) {
+            sh.report_lost();
+        }
     }
     consume
 }
@@ -657,6 +708,8 @@ fn run(
         return;
     }
     shared.installed.store(true, Ordering::SeqCst);
+    // A fresh hook: a loss of the previous one is history (counted in the stats).
+    shared.lost.store(false, Ordering::SeqCst);
     let installed = Installed(hook, Arc::clone(shared));
     // The mouse hook only while a mouse-button rule exists (installed after the keyboard hook;
     // a refusal leaves the keyboard rules working and is visible in `health`).

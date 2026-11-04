@@ -1,6 +1,6 @@
 # Ddalgak and AutoHotkey v2: feature matrix
 
-Status: **current** (inventory) · **Matrix v2, 2026-11-04** (Step 68: remap rows; Step 69: hotstring and sending rows; Step 70: `Run` rows; Step 71: mouse rows; Step 72: mode rows) · Reference: AutoHotkey **v2.0.31**
+Status: **current** (inventory) · **Matrix v2, 2026-11-04** (Step 68: remap rows; Step 69: hotstring and sending rows; Step 70: `Run` rows; Step 71: mouse rows; Step 72: mode rows; Step 73: suspend, pause and tray rows) · Reference: AutoHotkey **v2.0.31**
 (the newest v2 entry of the official changelog, dated 2026-10-25) · Owner: mouv · Applies to:
 Ddalgak · Created in Step 65
 
@@ -12,8 +12,9 @@ names its source.
 
 **Most of this matrix is not implemented yet.** A row marked `supported` is a commitment backed
 by the specification in [DDALGAK_RULE_MODEL](DDALGAK_RULE_MODEL.md), to be implemented by the Step
-named; it is usable today only when its Evidence names a Step that shipped it (Steps 66–70 so far:
-the engine, the rule store, remaps and blocks, sending and hotstrings, launches). Every Step that implements a row updates its
+named; it is usable today only when its Evidence names a Step that shipped it (Steps 66–73 so far:
+the engine, the rule store, remaps and blocks, sending and hotstrings, launches, mouse actions,
+modes, enable/disable and recovery). Every Step that implements a row updates its
 Evidence, and the matrix version and date go up with every change of a status.
 
 ## Sources and method
@@ -90,8 +91,8 @@ Where a page did not state something, the row says so instead of filling the gap
 | 1.18 | Hotkeys by scan code or virtual key (`SC159::`, `vk24::`) | KL | Physical keys by W3C name (`code:KeyQ`) and named keys; raw numbers are never stored (`KIM-NFR-022`) | partial | 66 | — |
 | 1.19 | Media and browser keys (`Media_Play_Pause`, `Volume_Up`, `Browser_Back`, `Launch_App1`) | KL | The contract's media and volume keys; browser and launch keys are an additive key-name change | partial | 66 | — |
 | 1.20 | Lock keys as hotkeys; forcing a lock state on or off | KL, KH | `CapsLock` and `NumLock` (and `ScrollLock`) as triggers and outputs (a remapped CapsLock never toggles); forcing a lock state is not in v1 | partial | 68 | Step 68: core tests (DDALGAK_ENGINE §11) |
-| 1.21 | `Suspend` with `#SuspendExempt` hotkeys | SU | Engine `pause`; engine-control rules (pause, resume, turn off) stay active | supported | 73 | — |
-| 1.22 | Pausing running threads (`Pause`) | SU | Pausing cancels running rules; no thread suspension | partial | 73 | — |
+| 1.21 | `Suspend` with `#SuspendExempt` hotkeys | SU | Engine `pause`; engine-control rules (pause, resume, turn off) stay active. Since Step 73 also `ddalgak disable` (remembered across restarts) and per-rule, per-mode and per-profile `enabled` | supported | 66, 73 | Step 73: real test host through the CLI (pause, disable, scopes, restarts), core and loader tests (DDALGAK_ENGINE §16) |
+| 1.22 | Pausing running threads (`Pause`) | SU | Pausing cancels running rules and releases held keys and buttons; no thread suspension | partial | 66, 73 | Step 73: worker tests (cancellation), real test host (DDALGAK_ENGINE §16) |
 | 1.23 | `ListHotkeys` | H, KH | Rule list, `ddalgak rule list --json`, `ddalgak hotkeys list --json` | supported | 67 | — |
 | 1.24 | `KeyHistory`: the last keystrokes, for debugging | KH | Never: no keystroke is kept (`DDALGAK-SEC-001`). The playground explains decisions instead | not intended | — | — |
 
@@ -184,7 +185,7 @@ Where a page did not state something, the row says so instead of filling the gap
 | # | AutoHotkey v2 behavior | Src | Ddalgak | Status | Step | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
 | 7.1 | Scripts build their own windows with the `Gui` object (controls, events, menus) | G | Ddalgak's own editor manages rules; users do not build windows | not intended | — | — |
-| 7.2 | A script's tray icon, with suspend and pause | SU | Ddalgak's tray icon with the engine states and the rule editor | supported | 73 | — |
+| 7.2 | A script's tray icon, with suspend and pause | SU | Ddalgak's tray icon with the engine states (shape and words; struck through after an emergency or a lost hook), turn on/off, pause/resume, release stuck keys; the rule editor in Step 74 | partial | 66, 73, 74 | Step 73: the indicator model is tested (`indicator::tests`, `status.indicator`); the real tray icon is a manual check (DDALGAK_ENGINE §16) |
 | 7.3 | Writing hotkeys requires a text editor and the script syntax | SC | A visual editor with key capture, effect tiles and a test playground | supported | 74, 76 | — |
 
 ## 8. Scripting language
@@ -230,3 +231,4 @@ Where a page did not state something, the row says so instead of filling the gap
 | Matrix | Date | AutoHotkey reference | Change |
 | --- | --- | --- | --- |
 | v1 | 2026-11-04 | v2.0.31 | First inventory (Step 65). Nothing implemented. |
+| v2 | 2026-11-04 | v2.0.31 | Steps 68–73 filled in the evidence of the rows they implemented; Step 73: `Suspend`, `Pause` and the tray row (7.2 is `partial` until the editor of Step 74). |

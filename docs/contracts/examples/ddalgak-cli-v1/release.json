@@ -1,0 +1,28 @@
+{
+  "command": "release",
+  "data": {
+    "dry_run": false,
+    "engine": {
+      "hook": {
+        "installed": true,
+        "mouse_installed": false,
+        "observe_only": true
+      },
+      "last_change": {
+        "origin": "cli",
+        "request": "resume"
+      },
+      "off_reason": null,
+      "state": "running"
+    },
+    "held_by_ddalgak": 0,
+    "key_state_reset": true,
+    "stale": {
+      "checked": 0,
+      "released": 0
+    }
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

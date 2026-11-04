@@ -136,13 +136,58 @@ fn tap_other(vk: u16) -> usize {
     send_as_other_program(&[OutKey { vk, up: false }, OutKey { vk, up: true }])
 }
 
-/// The two tests inject into the whole session and watch the same obscure keys: they take turns.
+/// The tests inject into the whole session and watch the same obscure keys: they take turns.
 static SERIAL: Mutex<()> = Mutex::new(());
 
-fn serial() -> std::sync::MutexGuard<'static, ()> {
-    SERIAL
+/// A turn of a real-input test: this process's lock and a session-wide named mutex, so the same
+/// tests running at the same time from another checkout (parallel builds on this machine) never
+/// inject into each other's hooks (Step 73: that is what made a dual role resolve early once).
+struct Turn {
+    _local: std::sync::MutexGuard<'static, ()>,
+    session: windows_sys::Win32::Foundation::HANDLE,
+}
+
+impl Drop for Turn {
+    #[allow(unsafe_code)]
+    fn drop(&mut self) {
+        use windows_sys::Win32::Foundation::CloseHandle;
+        use windows_sys::Win32::System::Threading::ReleaseMutex;
+        if !self.session.is_null() {
+            // SAFETY: a mutex this thread owns (acquired in `serial`), released and closed once.
+            unsafe {
+                ReleaseMutex(self.session);
+                CloseHandle(self.session);
+            }
+        }
+    }
+}
+
+#[allow(unsafe_code)]
+fn serial() -> Turn {
+    use windows_sys::Win32::Foundation::{CloseHandle, WAIT_ABANDONED, WAIT_OBJECT_0};
+    use windows_sys::Win32::System::Threading::{CreateMutexW, WaitForSingleObject};
+    let local = SERIAL
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let name = ddalgak::win::wide("Local\\mouv-ddalgak-real-input-tests");
+    // SAFETY: NUL-terminated name, default security, not initially owned.
+    let h = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
+    let mut session = std::ptr::null_mut();
+    if !h.is_null() {
+        // SAFETY: a valid mutex handle; waits at most three minutes for another checkout's test.
+        match unsafe { WaitForSingleObject(h, 180_000) } {
+            WAIT_OBJECT_0 | WAIT_ABANDONED => session = h,
+            _ => {
+                eprintln!("note: another real-input test kept its turn for 3 minutes; going ahead");
+                // SAFETY: closes the handle opened above (not owned).
+                unsafe { CloseHandle(h) };
+            }
+        }
+    }
+    Turn {
+        _local: local,
+        session,
+    }
 }
 
 #[test]
@@ -485,24 +530,60 @@ fn real_remap_block_and_dual_role_with_obscure_keys() {
         "the tap output F20 went down and up"
     );
     assert!(!key_down(VK_F20) && !key_down(VK_F19) && !key_down(VK_F18));
-    let t = Instant::now();
-    inject_or_skip!(send_other(VK_F18, false), "F18 down (hold)", verified);
-    assert!(
-        eventually(1500, || key_down(VK_F19)),
-        "the timer pressed F19"
-    );
-    let waited = t.elapsed();
-    assert!(
-        waited >= Duration::from_millis(150),
-        "not before the tap time: {waited:?}"
-    );
-    inject_or_skip!(send_other(VK_F18, true), "F18 up (hold)", verified);
-    assert!(
-        eventually(1000, || !key_down(VK_F19)),
-        "F19 released with F18"
-    );
-    eprintln!("dual role: F19 pressed {waited:?} after F18 went down (tap time 200 ms)");
-    verified.push("dual role F18: tap sends F20, hold presses F19 after the tap time");
+    // The hold. By design any other key that goes down while the dual role is undecided decides
+    // it at once (the target first, DDALGAK_RULE_MODEL §5.1) — the user typing, or another
+    // program's (or another checkout's test's) injected key. This machine is shared, so the
+    // hook's own counters tell a clean attempt from a disturbed one: in a clean attempt this hook
+    // saw exactly two key events (F18 down, then its own F19 down) and its thread woke for the
+    // one-shot timer. Only a clean attempt is held to the tap time; a disturbed one is retried.
+    let mut clean = None;
+    for attempt in 1..=3 {
+        let events0 = s.callbacks.load(Ordering::Relaxed);
+        let wakeups0 = s.hook_wakeups.load(Ordering::Relaxed);
+        let t = Instant::now();
+        inject_or_skip!(send_other(VK_F18, false), "F18 down (hold)", verified);
+        assert!(
+            eventually(1500, || key_down(VK_F19)),
+            "the dual role pressed F19"
+        );
+        let waited = t.elapsed();
+        let events = s.callbacks.load(Ordering::Relaxed) - events0;
+        let timer = s.hook_wakeups.load(Ordering::Relaxed) - wakeups0;
+        inject_or_skip!(send_other(VK_F18, true), "F18 up (hold)", verified);
+        assert!(
+            eventually(1000, || !key_down(VK_F19)),
+            "F19 released with F18"
+        );
+        if events <= 2 {
+            clean = Some((waited, timer));
+            break;
+        }
+        eprintln!(
+            "dual role attempt {attempt}: {events} key events reached the hook instead of 2 \
+             (other input during the tap time decided it after {waited:?}); trying again"
+        );
+        std::thread::sleep(Duration::from_millis(300));
+    }
+    match clean {
+        Some((waited, timer)) => {
+            // Undisturbed, only the hook thread's timer decides the hold: never before the tap
+            // time (200 ms on GetTickCount, which has ~16 ms steps; load only adds to it).
+            assert!(
+                waited >= Duration::from_millis(150),
+                "not before the tap time: {waited:?}"
+            );
+            assert!(
+                timer >= 1,
+                "the hook thread's one-shot timer decided the hold"
+            );
+            eprintln!("dual role: F19 pressed {waited:?} after F18 went down (tap time 200 ms)");
+            verified.push("dual role F18: tap sends F20, hold presses F19 after the tap time");
+        }
+        None => eprintln!(
+            "dual role hold: not observed undisturbed in 3 attempts (other key input on the \
+             shared desktop); the timer path is covered by core::tests and worker::tests"
+        ),
+    }
     let p99 = s.p99_us().unwrap_or(0);
     eprintln!(
         "remap smoke: callbacks {}, consumed {}, own events {}, max {} µs, p99 ≤ {} µs",

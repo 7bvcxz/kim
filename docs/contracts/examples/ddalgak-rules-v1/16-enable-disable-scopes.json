@@ -1,0 +1,68 @@
+{
+  "schema": "ddalgak.rules",
+  "schema_version": 1,
+  "hotkey_contract": 1,
+  "revision": 12,
+  "active_profile": "work",
+  "settings": {"engine_on_start": "on", "mode_indicator": "auto", "floating_indicator": "paused"},
+  "profiles": [
+    {
+      "id": "work",
+      "title": "Work",
+      "description": "Step 73: the Gaming mode is disabled (its own rules stop, nothing switches to it, the toggle rule is inactive with mode_disabled) and one rule is disabled on its own; the floating badge shows while the engine is paused.",
+      "default_mode": "base",
+      "modes": [
+        {"id": "base", "title": "Base"},
+        {"id": "game", "title": "Gaming", "icon": "🎮", "enabled": false}
+      ],
+      "rules": [
+        {
+          "id": "pause-toggle",
+          "title": "Ctrl+Alt+Shift+Pause pauses or resumes every rule",
+          "enabled": true,
+          "trigger": {"keys": "Ctrl+Alt+Shift+Pause"},
+          "steps": [{"type": "engine", "op": "toggle_pause"}]
+        },
+        {
+          "id": "game-toggle",
+          "title": "Ctrl+Alt+Shift+F9 toggles the Gaming mode",
+          "enabled": true,
+          "trigger": {"keys": "Ctrl+Alt+Shift+F9"},
+          "steps": [{"type": "mode", "op": "toggle", "mode": "game"}]
+        },
+        {
+          "id": "game-no-win",
+          "title": "In Gaming, Ctrl+Alt+Shift+F10 pauses",
+          "enabled": true,
+          "modes": ["game"],
+          "trigger": {"keys": "Ctrl+Alt+Shift+F10"},
+          "steps": [{"type": "engine", "op": "pause"}]
+        },
+        {
+          "id": "off-for-now",
+          "title": "Ctrl+Alt+Shift+F11 turns the engine off (disabled for now)",
+          "enabled": false,
+          "trigger": {"keys": "Ctrl+Alt+Shift+F11"},
+          "steps": [{"type": "engine", "op": "disable"}]
+        }
+      ]
+    },
+    {
+      "id": "travel",
+      "title": "Travel",
+      "description": "A disabled profile: while it is the active profile none of its rules run (profile_disabled); each rule keeps its own `enabled`. Nothing turns it on again but the user.",
+      "enabled": false,
+      "default_mode": "base",
+      "modes": [{"id": "base", "title": "Base"}],
+      "rules": [
+        {
+          "id": "travel-pause",
+          "title": "Ctrl+Alt+Shift+F8 pauses",
+          "enabled": true,
+          "trigger": {"keys": "Ctrl+Alt+Shift+F8"},
+          "steps": [{"type": "engine", "op": "pause"}]
+        }
+      ]
+    }
+  ]
+}

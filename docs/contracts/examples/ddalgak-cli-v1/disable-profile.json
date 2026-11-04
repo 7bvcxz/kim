@@ -1,0 +1,28 @@
+{
+  "command": "disable",
+  "data": {
+    "app": {
+      "running": false
+    },
+    "backup": "rules.json.bak",
+    "changed": true,
+    "created": null,
+    "dry_run": false,
+    "notes": [
+      "no rule of profile `default` runs until `ddalgak enable --profile default`; each rule keeps its own setting"
+    ],
+    "problems": [],
+    "profile": "default",
+    "revision": {
+      "from": 5,
+      "to": 6
+    },
+    "rules": [],
+    "scope": "profile",
+    "snapshot": "20261104T112927Z-r6.json",
+    "target": "saved"
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

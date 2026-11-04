@@ -40,6 +40,9 @@ pub struct Stats {
     pub host_wakeups: AtomicU64,
     /// Tick (ms) of the last callback.
     pub last_callback_tick: AtomicU32,
+    /// Step 73: callbacks (or physical events' waits) that reached the hook timeout, after which
+    /// Windows may have removed the hook (each turned the engine off).
+    pub hook_timeouts: AtomicU64,
 }
 
 impl Stats {
@@ -104,6 +107,7 @@ impl Stats {
             },
             "late_events": l(&self.late),
             "max_delay_ms": l(&self.max_delay_ms),
+            "hook_timeouts": l(&self.hook_timeouts),
             "wakeups": {
                 "hook_thread": l(&self.hook_wakeups),
                 "worker": l(&self.worker_wakeups),

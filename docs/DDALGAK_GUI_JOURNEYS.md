@@ -416,6 +416,15 @@ running engine (RULE_MODEL §11).
   offers *Open rule editor* and *Turn on again*. Ddalgak never turns itself back on.
 - If the rules file is invalid, the editor opens on a repair view listing each problem with
   its code and line, and the engine cannot be turned on until the file loads.
+- **Step 73 data model** (machine-checked, drawn by Step 74): the header and the tray show
+  `indicator::Status` — the shape (ring, struck ring after an emergency, a lost hook or an unclean
+  exit, disc, notched disc outside the default mode, bars), the tooltip in words and one attention
+  code (`profile_disabled`, `rules_kept_previous`, `shortcut_taken`, `session_locked`, …). The
+  optional floating badge (Settings → *Show a small status badge*: off, while paused, always;
+  `settings.floating_indicator`) never takes focus and uses `indicator.floating.label`. The tray
+  menu has *Release stuck keys*. *Turn off* is remembered after a restart until *Turn on*; the
+  Profiles page and the Modes page offer *Disable*/*Enable* (`enabled`), and a disabled mode is
+  not offered in the mode menu.
 
 ## 4. Keyboard map (editor)
 

@@ -2,7 +2,7 @@
 //! ADR 0017, ADR 0021 §5, NOEUL-FR-100, NOEUL-FR-114, NOEUL-SEC-012).
 //!
 //! - **Manifest.** The final manifest of every Noeul action is the contract example
-//!   `docs/contracts/examples/kim-hotkey-manifest-v1/noeul.json` (73 actions). A build ships only
+//!   `docs/contracts/examples/kim-hotkey-manifest-v1/noeul.json` (80 actions). A build ships only
 //!   the actions it implements, under the same IDs and defaults (NOEUL-FR-114); this build's
 //!   subset is [`MANIFEST_JSON`] (`hotkeys.manifest.json`, shipped next to `capabilities.json`). A
 //!   test keeps it equal to the final manifest filtered by [`IMPLEMENTED`].
@@ -12,9 +12,10 @@
 //!   background (`KIM-SEC-020`). No hook, no polling, no keystroke is ever seen except a
 //!   registered chord (`KIM-SEC-022`). `--no-hotkeys`, `KIM_NO_HOTKEYS`, `"enabled": false` and
 //!   safe mode register nothing (§8.3, §12.4).
-//! - **Context keys.** The `pin` and `capture-overlay` contexts (and `app` bindings) are matched
-//!   from the pin and overlay windows' own key messages ([`ContextKeys`], backend `focus`
-//!   semantics inside Noeul's windows). The overlay also always leaves on the reserved
+//! - **Context keys.** The `pin`, `capture-overlay` and `annotate` contexts (and `app` bindings)
+//!   are matched from the pin and overlay windows' own key messages ([`ContextKeys`], backend
+//!   `focus` semantics inside Noeul's windows); `annotate` is inside `capture-overlay`, so its keys
+//!   win there while a selection is confirmed (Step 56). The overlay also always leaves on the reserved
 //!   navigation key `Escape` (`nav.cancel`, §3.5), even with its shortcuts off.
 //! - **Reload.** A running instance re-reads `hotkeys.json` when the file changes (a blocking
 //!   change notification, §8.3 5) and when `noeul hotkeys …` tells it to over IPC. A valid file is
@@ -28,7 +29,12 @@
 //! of the overlay: `selection.mark` (`Space`), `pointer.move-*` (`code:KeyW` `code:KeyA`
 //! `code:KeyS` `code:KeyD`, matched by the key's physical position from its scan code,
 //! [`physical_chord`]), `detect.cycle` (`E`), `magnifier.toggle` (`M`), `history.previous`
-//! (`Comma`) and `history.next` (`Period`).
+//! (`Comma`) and `history.next` (`Period`). Step 56 added the `annotate` context — `annotate.done`
+//! (`Escape`), `annotate.undo` (`Ctrl+Z`), `annotate.redo` (`Ctrl+Y`, `Ctrl+Shift+Z`),
+//! `annotate.width-down`/`-up` (`char:[`/`char:]`, matched from the typed character), the seven
+//! tools and `annotate.clear-all` (bindable, no default), and the object keys `annotate.delete`
+//! (`Delete`), `annotate.select-next`/`-previous` (`N`/`Shift+N`) and the order keys (`PageUp`,
+//! `PageDown`, `Shift+PageUp`, `Shift+PageDown`) — and `pin.annotate` (`Space`).
 
 use crate::paths::Paths;
 use kim_hotkeys::check::{Conflict, Severity, ToolState, analyze};
@@ -78,6 +84,26 @@ pub const IMPLEMENTED: &[&str] = &[
     "magnifier.toggle",
     "history.previous",
     "history.next",
+    "annotate.done",
+    "annotate.undo",
+    "annotate.redo",
+    "annotate.width-down",
+    "annotate.width-up",
+    "annotate.rectangle",
+    "annotate.ellipse",
+    "annotate.line",
+    "annotate.arrow",
+    "annotate.pen",
+    "annotate.marker",
+    "annotate.text",
+    "annotate.clear-all",
+    "annotate.delete",
+    "annotate.select-next",
+    "annotate.select-previous",
+    "annotate.bring-forward",
+    "annotate.send-backward",
+    "annotate.bring-to-front",
+    "annotate.send-to-back",
     "pin.close",
     "pin.destroy",
     "pin.copy",
@@ -91,6 +117,7 @@ pub const IMPLEMENTED: &[&str] = &[
     "pin.move-left",
     "pin.move-right",
     "pin.hide",
+    "pin.annotate",
 ];
 
 /// Global actions of the final manifest that later Steps add, for `--help` and the docs (none
@@ -101,6 +128,8 @@ pub const PLANNED_GLOBAL: &[(&str, &str, u32)] = &[];
 pub const OVERLAY_CONTEXT: &str = "capture-overlay";
 /// The pins' context.
 pub const PIN_CONTEXT: &str = "pin";
+/// The annotation context, inside the overlay's (Step 56).
+pub const ANNOTATE_CONTEXT: &str = "annotate";
 
 pub fn manifest() -> Manifest {
     Manifest::parse(MANIFEST_JSON.as_bytes()).expect("the compiled-in hotkey manifest is valid")
@@ -334,6 +363,20 @@ impl ContextKeys {
         self.lookup_any(&[*pressed], repeat)
     }
 
+    /// The action of a key press among the context's own bindings only (not `app` bindings): an
+    /// inner context that falls through to its outer one when nothing matches (Step 56).
+    pub fn lookup_context(&self, pressed: &[Chord], repeat: bool) -> Option<&str> {
+        pressed.iter().find_map(|chord| {
+            let step = Step::Chord(*chord);
+            self.active
+                .iter()
+                .filter(|(_, _, _, inside)| *inside)
+                .find(|(_, s, _, _)| steps_overlap(&step, s))
+                .filter(|(_, _, r, _)| *r || !repeat)
+                .map(|(a, _, _, _)| a.as_str())
+        })
+    }
+
     /// The same for a key press that has several identities — its logical key and its physical
     /// position (`code:`, HOTKEY_CONTRACT §6.1) — tried in this order inside each precedence
     /// level, so the context still beats `app` bindings.
@@ -459,6 +502,7 @@ pub struct Manager {
     pub problem: Option<String>,
     pin_keys: ContextKeys,
     overlay_keys: ContextKeys,
+    annotate_keys: ContextKeys,
     /// The effective keys of each active binding of an implemented action (`action`, `keys`).
     keys: Vec<(String, String)>,
 }
@@ -485,6 +529,7 @@ impl Manager {
             conflicts: Vec::new(),
             pin_keys: ContextKeys::default(),
             overlay_keys: ContextKeys::default(),
+            annotate_keys: ContextKeys::default(),
             keys: Vec::new(),
         };
         if off.is_none() {
@@ -509,6 +554,7 @@ impl Manager {
         let off = self.off.is_some();
         self.pin_keys = ContextKeys::from_state(&st, off, PIN_CONTEXT);
         self.overlay_keys = ContextKeys::from_state(&st, off, OVERLAY_CONTEXT);
+        self.annotate_keys = ContextKeys::from_state(&st, off, ANNOTATE_CONTEXT);
         self.keys = if off {
             Vec::new()
         } else {
@@ -628,6 +674,22 @@ impl Manager {
             .map(str::to_string)
     }
 
+    /// The `annotate` action of a key press in the overlay or the pin editor (Step 56): its
+    /// logical chord, then its physical one; only the context's own bindings, so the outer
+    /// context gets the key when none matches.
+    pub fn annotate_action(
+        &self,
+        chord: &Chord,
+        code: Option<&Chord>,
+        repeat: bool,
+    ) -> Option<String> {
+        let mut pressed = vec![*chord];
+        pressed.extend(code.copied());
+        self.annotate_keys
+            .lookup_context(&pressed, repeat)
+            .map(str::to_string)
+    }
+
     /// The first active keys of `action` (for the overlay's keyboard help), if it has any.
     pub fn keys_for(&self, action: &str) -> Option<&str> {
         self.keys
@@ -684,6 +746,18 @@ impl Manager {
                 "action": a, "default": k, "step": step,
             })).collect::<Vec<_>>(),
         })
+    }
+}
+
+/// The chord of a typed character (`char:[`), for `char:` bindings (Step 56); `None` for
+/// characters a binding cannot name.
+pub fn char_chord(c: char) -> Option<Chord> {
+    if c.is_control() || c.is_whitespace() {
+        return None;
+    }
+    match Sequence::parse(&format!("char:{c}")).ok()?.steps() {
+        [Step::Chord(chord)] => Some(*chord),
+        _ => None,
     }
 }
 

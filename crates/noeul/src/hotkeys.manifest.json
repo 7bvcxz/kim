@@ -7,6 +7,7 @@
   "backend": "register",
   "contexts": [
     { "id": "capture-overlay", "title": "Region capture overlay" },
+    { "id": "annotate", "title": "Annotation tool (in the overlay or on a pin)" },
     { "id": "pin", "title": "Floating pinned image" }
   ],
   "actions": [
@@ -40,6 +41,26 @@
     { "id": "magnifier.toggle", "title": "Show or hide the magnifier", "context": "capture-overlay", "defaults": ["M"] },
     { "id": "history.previous", "title": "Previous captured rectangle", "context": "capture-overlay", "defaults": ["Comma"] },
     { "id": "history.next", "title": "Next captured rectangle", "context": "capture-overlay", "defaults": ["Period"] },
+    { "id": "annotate.done", "title": "Leave the tool and keep the drawing", "context": "annotate", "defaults": ["Escape"] },
+    { "id": "annotate.undo", "title": "Undo", "context": "annotate", "defaults": ["Ctrl+Z"] },
+    { "id": "annotate.redo", "title": "Redo", "context": "annotate", "defaults": ["Ctrl+Y", "Ctrl+Shift+Z"] },
+    { "id": "annotate.width-down", "title": "Thinner line", "context": "annotate", "defaults": [{ "keys": "char:[", "repeat": true }] },
+    { "id": "annotate.width-up", "title": "Thicker line", "context": "annotate", "defaults": [{ "keys": "char:]", "repeat": true }] },
+    { "id": "annotate.rectangle", "title": "Rectangle tool", "context": "annotate", "defaults": [] },
+    { "id": "annotate.ellipse", "title": "Ellipse tool", "context": "annotate", "defaults": [] },
+    { "id": "annotate.line", "title": "Line tool", "context": "annotate", "defaults": [] },
+    { "id": "annotate.arrow", "title": "Arrow tool", "context": "annotate", "defaults": [] },
+    { "id": "annotate.pen", "title": "Pen tool", "context": "annotate", "defaults": [] },
+    { "id": "annotate.marker", "title": "Marker tool", "context": "annotate", "defaults": [] },
+    { "id": "annotate.text", "title": "Text tool", "context": "annotate", "defaults": [] },
+    { "id": "annotate.clear-all", "title": "Remove all annotations (can be undone)", "context": "annotate", "defaults": [] },
+    { "id": "annotate.delete", "title": "Delete the selected annotation", "context": "annotate", "defaults": ["Delete"] },
+    { "id": "annotate.select-next", "title": "Select the next annotation", "context": "annotate", "defaults": ["N"] },
+    { "id": "annotate.select-previous", "title": "Select the previous annotation", "context": "annotate", "defaults": ["Shift+N"] },
+    { "id": "annotate.bring-forward", "title": "Bring the selected annotation forward", "context": "annotate", "defaults": ["PageUp"] },
+    { "id": "annotate.send-backward", "title": "Send the selected annotation backward", "context": "annotate", "defaults": ["PageDown"] },
+    { "id": "annotate.bring-to-front", "title": "Bring the selected annotation to the front", "context": "annotate", "defaults": ["Shift+PageUp"] },
+    { "id": "annotate.send-to-back", "title": "Send the selected annotation to the back", "context": "annotate", "defaults": ["Shift+PageDown"] },
     { "id": "pin.close", "title": "Close the pin (can be reopened)", "context": "pin", "defaults": ["Escape", "Ctrl+W"] },
     { "id": "pin.destroy", "title": "Destroy the pin (cannot be reopened)", "context": "pin", "defaults": ["Shift+Escape"], "destructive": true },
     { "id": "pin.copy", "title": "Copy the pinned image", "context": "pin", "defaults": ["Ctrl+C"] },
@@ -52,6 +73,7 @@
     { "id": "pin.move-down", "title": "Move the pin down one pixel", "context": "pin", "defaults": [{ "keys": "Down", "repeat": true }] },
     { "id": "pin.move-left", "title": "Move the pin left one pixel", "context": "pin", "defaults": [{ "keys": "Left", "repeat": true }] },
     { "id": "pin.move-right", "title": "Move the pin right one pixel", "context": "pin", "defaults": [{ "keys": "Right", "repeat": true }] },
-    { "id": "pin.hide", "title": "Hide the pin (show it again from the tray)", "context": "pin", "defaults": ["H"] }
+    { "id": "pin.hide", "title": "Hide the pin (show it again from the tray)", "context": "pin", "defaults": ["H"] },
+    { "id": "pin.annotate", "title": "Annotate the pin", "context": "pin", "defaults": ["Space"] }
   ]
 }

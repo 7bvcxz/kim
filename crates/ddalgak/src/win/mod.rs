@@ -7,6 +7,7 @@ pub mod hook;
 pub mod host;
 pub mod inject;
 pub mod instance;
+pub mod launch;
 pub mod pipe;
 pub mod startup;
 pub mod tray;

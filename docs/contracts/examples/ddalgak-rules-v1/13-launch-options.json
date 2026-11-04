@@ -1,0 +1,101 @@
+{
+  "schema": "ddalgak.rules",
+  "schema_version": 1,
+  "hotkey_contract": 1,
+  "active_profile": "default",
+  "profiles": [
+    {
+      "id": "default",
+      "title": "Launch options",
+      "default_mode": "base",
+      "modes": [
+        {
+          "id": "base",
+          "title": "Base"
+        }
+      ],
+      "rules": [
+        {
+          "id": "tool-portable",
+          "title": "Open the portable tool with its own settings, or bring it to the front",
+          "description": "Step 70: explicit environment overrides for this program only, a minimized window and an argument with spaces (quoted by Ddalgak).",
+          "enabled": true,
+          "trigger": {
+            "keys": "Ctrl+Shift+F5"
+          },
+          "steps": [
+            {
+              "type": "open_program",
+              "path": "%LocalAppData%\\Programs\\Tool\\tool.exe",
+              "args": [
+                "--profile",
+                "C:\\Users\\Public\\Documents\\work notes"
+              ],
+              "working_dir": "%UserProfile%\\Documents",
+              "env": [
+                {
+                  "name": "TOOL_MODE",
+                  "value": "portable"
+                },
+                {
+                  "name": "TOOL_HOME",
+                  "value": "C:\\Users\\Public\\tool"
+                }
+              ],
+              "window": "minimized",
+              "if_running": "activate"
+            }
+          ],
+          "consent": {
+            "launch-programs": {
+              "granted_at": "2026-11-04T10:00:00Z",
+              "via": "cli",
+              "fingerprint": "sha256:1c6d5779e106a6101e0e0859f5f54ebaea7f45c9a62158f389590c23391c5332"
+            }
+          }
+        },
+        {
+          "id": "dev-server-and-docs",
+          "title": "Open the local dev server and the Korean docs, in order",
+          "enabled": true,
+          "trigger": {
+            "keys": "Ctrl+Alt+F5"
+          },
+          "steps": [
+            {
+              "type": "open_url",
+              "url": "http://localhost:8080/"
+            },
+            {
+              "type": "open_url",
+              "url": "https://ko.wikipedia.org/wiki/%EA%B9%80%EC%B9%98"
+            }
+          ],
+          "on_error": "continue",
+          "consent": {
+            "launch-programs": {
+              "granted_at": "2026-11-04T10:01:00Z",
+              "via": "cli",
+              "fingerprint": "sha256:cc77be80d6b364a542377ccace78e77830080bb89cf233d47ff33d4dd6c82d4f"
+            }
+          }
+        },
+        {
+          "id": "imported-site",
+          "title": "A website from an imported profile (waiting for review)",
+          "description": "Imported rules arrive disabled and without consent; nothing opens until the user reviews the address and turns the rule on.",
+          "enabled": false,
+          "trigger": {
+            "keys": "Ctrl+Shift+F3"
+          },
+          "steps": [
+            {
+              "type": "open_url",
+              "url": "https://example.com/welcome?ref=import"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

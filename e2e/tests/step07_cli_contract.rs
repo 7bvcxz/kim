@@ -262,7 +262,8 @@ fn agent_discovers_negotiates_and_probes_an_installed_subak() {
     );
     assert_eq!(code, 0, "{doc}");
     assert_eq!(doc["data"]["capabilities"]["implementation"], "implemented");
-    // Subak implements `terminal.list` since Step 10, so requiring it succeeds...
+    // Subak lists Terminals (`ls`, top-level since Step 12; `terminal.list` before), so requiring
+    // it succeeds...
     let (code, doc) = run_debug(
         p,
         &[
@@ -270,7 +271,7 @@ fn agent_discovers_negotiates_and_probes_an_installed_subak() {
             "describe",
             "subak",
             "--require-command",
-            "terminal.list",
+            "ls",
             "--json",
         ],
     );

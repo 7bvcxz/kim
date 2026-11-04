@@ -19,7 +19,9 @@
         "visible": true,
         "on_screen": true,
         "source": "capture",
-        "created_at": "2026-11-04T10:16:01Z"
+        "created_at": "2026-11-04T10:16:01Z",
+        "annotations": 3,
+        "editing": false
       },
       {
         "id": "pin-3",
@@ -37,7 +39,9 @@
         "visible": true,
         "on_screen": true,
         "source": "clipboard",
-        "created_at": "2026-11-04T10:17:42Z"
+        "created_at": "2026-11-04T10:17:42Z",
+        "annotations": 0,
+        "editing": false
       },
       {
         "id": "pin-4",
@@ -55,7 +59,9 @@
         "visible": false,
         "on_screen": false,
         "source": "capture",
-        "created_at": "2026-11-04T10:18:30Z"
+        "created_at": "2026-11-04T10:18:30Z",
+        "annotations": 0,
+        "editing": false
       }
     ],
     "reopenable": "pin-2"

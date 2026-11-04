@@ -824,7 +824,10 @@ but it never skips consent (`KIM-SEC-001`). The tool ID for its shortcuts is `ki
   rectangle selection; `paste.float` `F3` (global) pins the clipboard image as a floating
   window. These are its primary entry actions, the only allowed kind of global default (§7.5).
 - Overlay and pin keys are **contexts** (`capture-overlay`, `pin`): `Escape` cancels, `Ctrl+C`
-  copies, `Ctrl+S` saves, arrow keys nudge. They exist only while that window is focused.
+  copies, `Ctrl+S` saves, arrow keys nudge. They exist only while that window is focused. The
+  `annotate` context lies inside the overlay's (and the pin editor's): its `Ctrl+Z`, `[`/`]` and
+  object keys win there, and its `Escape` (`annotate.done`) applies only while there is a tool or
+  a label to end (Step 56, ADR 0038).
 - Backend `register`: no hook, nothing resident beyond Noeul itself while it runs, nothing at
   all when it is not running. Double-click to pin is a gesture with a keyboard alternative
   (Steps 48, 51, 61 decide the exact keys).

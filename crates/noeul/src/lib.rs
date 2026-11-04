@@ -1,8 +1,9 @@
 //! Noeul (노을): a small native screenshot and floating-pin tool for Windows (pre-alpha:
 //! Step 49 foundation, Step 50 region selection overlay, Step 51 double-click to pin, Step 52
-//! smart selection and pixel precision, Step 53 floating pin engine). See
+//! smart selection and pixel precision, Step 53 floating pin engine, Step 56 annotation). See
 //! docs/NOEUL_PHILOSOPHY.md, docs/NOEUL_REQUIREMENTS.md, docs/adr/0023-noeul-app-foundation.md,
-//! docs/adr/0026-noeul-capture-overlay.md and docs/adr/0029-noeul-pin-engine.md.
+//! docs/adr/0026-noeul-capture-overlay.md, docs/adr/0029-noeul-pin-engine.md and
+//! docs/adr/0038-noeul-annotation.md.
 //!
 //! Modules, from the bottom up:
 //!
@@ -17,7 +18,7 @@
 //! | [`output`] | Copy and save of a selection: PNG and `CF_DIBV5` in memory, files only where the user asked |
 //! | [`pins`] | The pin engine's model: stable IDs, placement, zoom, hide/show, close/reopen/destroy, the window trait |
 //! | [`zoom`] | Pin zoom levels, sizes, fitting and the premultiplying scaler |
-//! | [`annotation`] | **Placeholder**: annotation is Step 56 |
+//! | [`annotation`] | Annotation (Step 56): editable vector objects, undo/redo, the editor (tools, text, IME), the rasterizer and the export |
 //! | [`settings`], [`paths`] | `config.toml` and the stable per-user folders |
 //! | [`hotkeys`] | The shipped manifest subset, global registration, pin keys |
 //! | [`ipc`] | Noeul IPC v1: framing and messages between the CLI and the instance |

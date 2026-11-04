@@ -23,18 +23,32 @@
 //!   `lParam`, its physical chord (`code:KeyW`…), so `W A S D` keep their position on every
 //!   layout. A pointer key moves the real cursor with `SetCursorPos` only while this window is
 //!   the foreground window and never under the test placement (NOEUL-SEC-012).
+//! - **Annotation** (Step 56): typed characters (`WM_CHAR`, surrogate pairs joined), input-method
+//!   messages (`WM_IME_STARTCOMPOSITION`, `WM_IME_COMPOSITION` with the composition and result
+//!   strings read from the window's input context, `WM_IME_ENDCOMPOSITION`) and the wheel become
+//!   events; the composition window of the IME is hidden because the label shows the composition
+//!   inline. The input method is associated with the window only while a label is edited
+//!   ([`OverlayWindow::set_ime`]), with its candidate window at the caret; it is never switched
+//!   for the user. Labels are typeset with GDI and font fallback (`win::typeset`). The pin editor
+//!   uses a **layered** window (`UpdateLayeredWindow` with per-pixel alpha), so the canvas around
+//!   the pin is transparent and passes clicks to what is behind.
 
+use crate::annotation::{Glyphs, Ime, Typesetter};
 use crate::app::{OverlayEvent, OverlayWindow};
 use crate::frame::{Frame, Rect};
 use crate::hotkeys::{chord_of, physical_chord};
 use crate::overlay::{self, Button, Cursor, Font, Input, Measure, Mods, Scene, color};
 use crate::win::pinwnd::vk_name;
+use crate::win::typeset::GdiType;
 use crate::win::wide;
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::ffi::c_void;
 use std::sync::OnceLock;
 use windows_sys::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
+use windows_sys::Win32::Graphics::Gdi::{
+    AC_SRC_ALPHA, AC_SRC_OVER, BLENDFUNCTION, GetDC, ReleaseDC,
+};
 use windows_sys::Win32::Graphics::Gdi::{
     BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BeginPaint, BitBlt, CLEARTYPE_QUALITY,
     CLIP_DEFAULT_PRECIS, CreateCompatibleDC, CreateDIBSection, CreateFontW, CreateRectRgn,
@@ -44,7 +58,11 @@ use windows_sys::Win32::Graphics::Gdi::{
     SetBkMode, SetTextColor, TRANSPARENT, TextOutW, UpdateWindow, VARIABLE_PITCH,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows_sys::Win32::UI::Input::Ime::ImmAssociateContextEx;
+use windows_sys::Win32::UI::Input::Ime::{
+    CANDIDATEFORM, CFS_CANDIDATEPOS, CFS_POINT, COMPOSITIONFORM, GCS_COMPSTR, GCS_RESULTSTR,
+    IACE_DEFAULT, ISC_SHOWUICOMPOSITIONWINDOW, ImmAssociateContextEx, ImmGetCompositionStringW,
+    ImmGetContext, ImmReleaseContext, ImmSetCandidateWindow, ImmSetCompositionWindow,
+};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     GetDoubleClickTime, GetKeyState, ReleaseCapture, SetCapture, SetFocus, VK_APPS, VK_CONTROL,
     VK_F10, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
@@ -62,6 +80,11 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, SetCursorPos};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    ULW_ALPHA, UpdateLayeredWindow, WM_CHAR, WM_IME_CHAR, WM_IME_COMPOSITION,
+    WM_IME_ENDCOMPOSITION, WM_IME_SETCONTEXT, WM_IME_STARTCOMPOSITION, WM_MOUSEWHEEL,
+    WS_EX_LAYERED,
+};
 
 const CLASS: &str = "NoeulOverlay";
 
@@ -77,6 +100,69 @@ thread_local! {
     static RELEASING: Cell<bool> = const { Cell::new(false) };
     /// The open overlay window (the owner of its context menu and of the save dialog).
     static CURRENT: Cell<usize> = const { Cell::new(0) };
+    /// The first half of a character outside the BMP (`WM_CHAR` sends UTF-16 units).
+    static HIGH: Cell<u16> = const { Cell::new(0) };
+}
+
+#[cfg(test)]
+thread_local! {
+    /// What a test's stand-in input context holds: `(composition, result)` (tests never use the
+    /// user's input method).
+    pub(crate) static IME_TEST: RefCell<Option<(String, String)>> = const { RefCell::new(None) };
+}
+
+/// The composition (`GCS_COMPSTR`) or result (`GCS_RESULTSTR`) string of the window's input
+/// context.
+fn comp_string(hwnd: HWND, which: u32) -> Option<String> {
+    #[cfg(test)]
+    if let Some((comp, result)) = IME_TEST.with(|t| t.borrow().clone()) {
+        return Some(if which == GCS_RESULTSTR { result } else { comp });
+    }
+    // SAFETY: the input context of our own window, released below; the buffer has the byte
+    // length the first call reported.
+    unsafe {
+        let himc = ImmGetContext(hwnd);
+        if himc.is_null() {
+            return None;
+        }
+        let bytes = ImmGetCompositionStringW(himc, which, std::ptr::null_mut(), 0);
+        let out = if bytes > 0 {
+            let mut buf = vec![0u16; usize::try_from(bytes).unwrap_or(0) / 2];
+            let got = ImmGetCompositionStringW(
+                himc,
+                which,
+                buf.as_mut_ptr().cast(),
+                u32::try_from(bytes).unwrap_or(0),
+            );
+            buf.truncate(usize::try_from(got.max(0)).unwrap_or(0) / 2);
+            Some(String::from_utf16_lossy(&buf))
+        } else {
+            Some(String::new())
+        };
+        ImmReleaseContext(hwnd, himc);
+        out
+    }
+}
+
+/// A UTF-16 unit of a typed character: whole characters are pushed, surrogate pairs joined.
+fn char_unit(unit: u16, repeat: bool) {
+    match unit {
+        0xD800..=0xDBFF => HIGH.set(unit),
+        0xDC00..=0xDFFF => {
+            let high = HIGH.replace(0);
+            if high != 0
+                && let Some(Ok(c)) = char::decode_utf16([high, unit]).next()
+            {
+                push(OverlayEvent::Char(c, repeat));
+            }
+        }
+        _ => {
+            HIGH.set(0);
+            if let Some(c) = char::from_u32(u32::from(unit)) {
+                push(OverlayEvent::Char(c, repeat));
+            }
+        }
+    }
 }
 
 /// The open overlay window, if any (same thread).
@@ -294,6 +380,42 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             }
             return 0;
         }
+        WM_CHAR | WM_IME_CHAR => {
+            char_unit((wp & 0xFFFF) as u16, (lp >> 30) & 1 == 1);
+            return 0;
+        }
+        WM_MOUSEWHEEL => {
+            let delta = i32::from(((wp >> 16) & 0xFFFF) as u16 as i16);
+            push(OverlayEvent::Wheel(delta));
+            return 0;
+        }
+        WM_IME_SETCONTEXT => {
+            // The label shows the composition itself: no composition window of the IME.
+            let lp = lp & !(ISC_SHOWUICOMPOSITIONWINDOW as LPARAM);
+            // SAFETY: default processing of a message of our own window.
+            return unsafe { DefWindowProcW(hwnd, msg, wp, lp) };
+        }
+        WM_IME_STARTCOMPOSITION => {
+            push(OverlayEvent::Ime(Ime::Start));
+            return 0;
+        }
+        WM_IME_COMPOSITION => {
+            let flags = lp as u32;
+            if flags & GCS_RESULTSTR != 0
+                && let Some(text) = comp_string(hwnd, GCS_RESULTSTR)
+            {
+                push(OverlayEvent::Ime(Ime::Commit(text)));
+            }
+            if flags & GCS_COMPSTR != 0 {
+                let text = comp_string(hwnd, GCS_COMPSTR).unwrap_or_default();
+                push(OverlayEvent::Ime(Ime::Compose(text)));
+            }
+            return 0;
+        }
+        WM_IME_ENDCOMPOSITION => {
+            push(OverlayEvent::Ime(Ime::End));
+            return 0;
+        }
         // The frozen picture no longer matches the monitors: end the capture.
         WM_DISPLAYCHANGE | WM_CLOSE => {
             input(Input::Leave);
@@ -359,6 +481,9 @@ pub struct WinOverlay {
     hwnd: HWND,
     picture: Rect,
     placement: Placement,
+    /// A layered window (the pin editor, Step 56).
+    layered: bool,
+    typeset: GdiType,
     mem: HDC,
     bitmap: HBITMAP,
     old: *mut c_void,
@@ -382,8 +507,13 @@ fn rgb(c: [u8; 3]) -> COLORREF {
 }
 
 impl WinOverlay {
-    /// Creates the (hidden) window over `picture` with a back buffer of its size.
-    pub fn create(picture: Rect, placement: Placement) -> Result<WinOverlay, String> {
+    /// Creates the (hidden) window over `picture` with a back buffer of its size; `layered`
+    /// for the pin editor (per-pixel alpha, Step 56).
+    pub fn create(
+        picture: Rect,
+        placement: Placement,
+        layered: bool,
+    ) -> Result<WinOverlay, String> {
         let class = class()?;
         let (w, h) = (
             i32::try_from(picture.width).map_err(|_| "too wide")?,
@@ -396,7 +526,14 @@ impl WinOverlay {
         if !placement.activate {
             ex |= WS_EX_NOACTIVATE;
         }
-        let title = wide("Noeul capture");
+        if layered {
+            ex |= WS_EX_LAYERED;
+        }
+        let title = wide(if layered {
+            "Noeul pin annotation"
+        } else {
+            "Noeul capture"
+        });
         // SAFETY: registered class; plain values; no parent, menu or creation data.
         let hwnd = unsafe {
             CreateWindowExW(
@@ -424,6 +561,8 @@ impl WinOverlay {
             hwnd,
             picture,
             placement,
+            layered,
+            typeset: GdiType::new(),
             mem: std::ptr::null_mut(),
             bitmap: std::ptr::null_mut(),
             old: std::ptr::null_mut(),
@@ -612,7 +751,7 @@ impl WinOverlay {
         {
             self.clip(area, &mut clipped);
             let f = self.font(Font::Ui, bar.dpi);
-            for b in &bar.buttons {
+            for b in bar.buttons.iter().filter(|b| !b.label.is_empty()) {
                 let text: Vec<u16> = b.label.encode_utf16().collect();
                 let (tw, th) = self.text(Font::Ui, bar.dpi, b.label);
                 let x = b.rect.x
@@ -712,21 +851,102 @@ impl Measure for WinOverlay {
     }
 }
 
+impl Typesetter for WinOverlay {
+    fn typeset(&self, text: &str, size: u32) -> Glyphs {
+        self.typeset.typeset(text, size)
+    }
+}
+
+impl WinOverlay {
+    /// GDI leaves the alpha of the pixels it draws text on at 0: a layered window makes the
+    /// label boxes and the toolbar opaque again.
+    fn opaque_labels(&mut self, scene: &Scene, dirty: &[Rect]) {
+        let pic = self.picture;
+        let mut boxes: Vec<Rect> = scene
+            .chip
+            .iter()
+            .chain(scene.help.iter())
+            .map(|l| l.rect)
+            .collect();
+        boxes.extend(scene.toolbar.iter().map(|t| t.rect));
+        boxes.extend(scene.magnifier.iter().map(|m| m.rect));
+        let stride = pic.width as usize * 4;
+        let buf = self.buffer_mut();
+        for b in boxes {
+            for d in dirty {
+                let Some(r) =
+                    overlay::intersection(b, *d).and_then(|r| overlay::intersection(r, pic))
+                else {
+                    continue;
+                };
+                for y in r.y..r.y + r.height as i32 {
+                    let row = (i64::from(y) - i64::from(pic.y)) as usize * stride;
+                    for x in r.x..r.x + r.width as i32 {
+                        let i = row + (i64::from(x) - i64::from(pic.x)) as usize * 4 + 3;
+                        buf[i] = 0xFF;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Hands the whole back buffer to the layered window (it keeps its own copy).
+    fn update_layered(&self) {
+        let size = SIZE {
+            cx: i32::try_from(self.picture.width).unwrap_or(0),
+            cy: i32::try_from(self.picture.height).unwrap_or(0),
+        };
+        let at = POINT {
+            x: self.picture.x,
+            y: self.picture.y,
+        };
+        let src = POINT { x: 0, y: 0 };
+        let blend = BLENDFUNCTION {
+            BlendOp: AC_SRC_OVER as u8,
+            BlendFlags: 0,
+            SourceConstantAlpha: 255,
+            AlphaFormat: AC_SRC_ALPHA as u8,
+        };
+        // SAFETY: our layered window and back buffer DC (premultiplied 32-bit DIB); the screen DC
+        // is released at once.
+        unsafe {
+            let screen = GetDC(std::ptr::null_mut());
+            UpdateLayeredWindow(
+                self.hwnd,
+                screen,
+                &raw const at,
+                &raw const size,
+                self.mem,
+                &raw const src,
+                0,
+                &raw const blend,
+                ULW_ALPHA,
+            );
+            ReleaseDC(std::ptr::null_mut(), screen);
+        }
+    }
+}
+
 impl OverlayWindow for WinOverlay {
-    fn present(&mut self, frozen: &Frame, scene: &Scene, dirty: &[Rect]) {
+    fn present(&mut self, frozen: &Frame, layer: Option<&Frame>, scene: &Scene, dirty: &[Rect]) {
         if !self.alive() || frozen.rect() != self.picture {
             return;
         }
         // SAFETY: finishes pending GDI work before the DIB's memory is written directly.
         unsafe { GdiFlush() };
         for r in dirty {
-            overlay::compose(frozen, scene, *r, self.buffer_mut());
+            overlay::compose(frozen, layer, scene, *r, self.buffer_mut());
         }
         for r in dirty {
             self.draw_text(scene, *r);
         }
         // SAFETY: as above, before WM_PAINT reads the buffer.
         unsafe { GdiFlush() };
+        if self.layered {
+            self.opaque_labels(scene, dirty);
+            self.update_layered();
+            return;
+        }
         let (ox, oy) = (self.picture.x, self.picture.y);
         for r in dirty {
             let rc = RECT {
@@ -791,6 +1011,50 @@ impl OverlayWindow for WinOverlay {
             0
         } else {
             self.len as u64
+        }
+    }
+
+    fn set_ime(&mut self, caret: Option<Rect>) {
+        if !self.alive() {
+            return;
+        }
+        let (ox, oy) = (self.picture.x, self.picture.y);
+        // SAFETY: associates (or removes) the default input context of our own window and places
+        // its windows in client coordinates; the context is released at once. The user's input
+        // method itself is never switched.
+        unsafe {
+            match caret {
+                Some(c) => {
+                    ImmAssociateContextEx(self.hwnd, std::ptr::null_mut(), IACE_DEFAULT);
+                    let himc = ImmGetContext(self.hwnd);
+                    if !himc.is_null() {
+                        let pt = POINT {
+                            x: c.x - ox,
+                            y: c.y - oy + i32::try_from(c.height).unwrap_or(0),
+                        };
+                        let cf = COMPOSITIONFORM {
+                            dwStyle: CFS_POINT,
+                            ptCurrentPos: POINT {
+                                x: c.x - ox,
+                                y: c.y - oy,
+                            },
+                            ..std::mem::zeroed()
+                        };
+                        ImmSetCompositionWindow(himc, &raw const cf);
+                        let cand = CANDIDATEFORM {
+                            dwIndex: 0,
+                            dwStyle: CFS_CANDIDATEPOS,
+                            ptCurrentPos: pt,
+                            ..std::mem::zeroed()
+                        };
+                        ImmSetCandidateWindow(himc, &raw const cand);
+                        ImmReleaseContext(self.hwnd, himc);
+                    }
+                }
+                None => {
+                    ImmAssociateContextEx(self.hwnd, std::ptr::null_mut(), 0);
+                }
+            }
         }
     }
 
@@ -899,7 +1163,7 @@ mod tests {
         let picture = desk.virtual_rect.unwrap();
         let ledger = Ledger::new();
         let frozen = syn.capture(&ledger, picture).unwrap();
-        let mut win = WinOverlay::create(picture, Placement::OFF_SCREEN_TEST).unwrap();
+        let mut win = WinOverlay::create(picture, Placement::OFF_SCREEN_TEST, false).unwrap();
         let hwnd = win.hwnd();
         // SAFETY: a plain query.
         let before = unsafe { GetForegroundWindow() };
@@ -930,7 +1194,7 @@ mod tests {
         )
         .with_magnifier(false);
         let mut scene = model.scene(&win);
-        win.present(&frozen, &scene, &[picture]);
+        win.present(&frozen, None, &scene, &[picture]);
         win.set_cursor(model.cursor());
         assert!(win.show(true), "shown (the placement refuses activation)");
         // SAFETY: a plain query.
@@ -964,7 +1228,7 @@ mod tests {
             model.handle(i);
             let next = model.scene(&win);
             let dirty = overlay::dirty(&scene, &next);
-            win.present(&frozen, &next, &dirty);
+            win.present(&frozen, None, &next, &dirty);
             scene = next;
         }
         let sel = model.selection().unwrap();
@@ -1001,8 +1265,9 @@ mod tests {
             [a[0], a[1], a[2]],
             "the border above the selection"
         );
-        // The toolbar (Step 51): no room below or above on the 150 % monitor, so inside the
-        // selection's bottom edge; the Pin button is accent-filled and GDI drew its label.
+        // The toolbar (Step 51; Step 56's tools wrap it into two rows): no room below or above
+        // on the 150 % monitor, so inside the selection's bottom edge; the Pin button is
+        // accent-filled and GDI drew its label.
         let bar = scene
             .toolbar
             .clone()
@@ -1015,7 +1280,8 @@ mod tests {
                 bar.rect.width,
                 bar.rect.height
             ),
-            (640, 193, 360, 48)
+            (640, 151, 471, 90),
+            "two rows of buttons on the narrow 150 % monitor, inside the selection's bottom edge"
         );
         let pin = bar.buttons[0].rect;
         let (mut fill, mut ink) = (0, 0);
@@ -1096,7 +1362,7 @@ mod tests {
         let picture = desk.virtual_rect.unwrap();
         let ledger = Ledger::new();
         let frozen = syn.capture(&ledger, picture).unwrap();
-        let mut win = WinOverlay::create(picture, Placement::OFF_SCREEN_TEST).unwrap();
+        let mut win = WinOverlay::create(picture, Placement::OFF_SCREEN_TEST, false).unwrap();
         let hwnd = win.hwnd();
         let mut model = Overlay::new(
             picture,
@@ -1114,7 +1380,7 @@ mod tests {
         });
         let mut scene = model.scene(&win);
         scene.sample(&frozen);
-        win.present(&frozen, &scene, &[picture]);
+        win.present(&frozen, None, &scene, &[picture]);
         let m = scene.magnifier.clone().expect("the magnifier");
         assert_eq!(m.cell, 12, "8 logical pixels at 150 %");
         assert_eq!(
@@ -1176,6 +1442,148 @@ mod tests {
         assert_eq!(cursor_pos(), before, "the cursor did not move");
         win.destroy();
         drop(frozen);
+        assert_eq!(ledger.live(), (0, 0));
+    }
+
+    /// Step 56 in a real (off-screen, never activated) window: the pin editor's layered window is
+    /// transparent around the pin and opaque under its toolbar and labels (GDI text included);
+    /// typed characters (a surrogate pair joined), IME messages and the wheel become events; the
+    /// input method is associated with the window only while asked (the user's input method is
+    /// never switched — a test stand-in answers for the composition strings).
+    #[test]
+    fn the_layered_editor_is_clear_around_the_pin_and_ime_messages_become_events() {
+        use crate::annotation::{Bounds, Object, PALETTE, Shape};
+        use windows_sys::Win32::UI::Input::Ime::ImmReleaseContext;
+        crate::win::per_monitor_dpi_awareness();
+        let (ox, oy) = crate::capture::OFF_SCREEN;
+        let canvas = Rect::new(ox, oy, 700, 300);
+        let pin = Rect::new(ox + 10, oy + 40, 200, 100);
+        let ledger = Ledger::new();
+        let mut pixels = vec![0u8; canvas.bgra_bytes() as usize];
+        for y in 40..140usize {
+            for x in 10..210usize {
+                let i = (y * 700 + x) * 4;
+                pixels[i..i + 4].copy_from_slice(&[40, 80, 120, 255]);
+            }
+        }
+        let base = Frame::new(&ledger, canvas, pixels).unwrap();
+        let obj = Object {
+            id: 1,
+            shape: Shape::Rectangle(Bounds::of_rect(pin)),
+            color: PALETTE[0].1,
+            level: 0,
+            dpi: 96,
+        };
+        let mut model = Overlay::for_pin(
+            canvas,
+            vec![crate::capture::Monitor::new(
+                Rect::new(ox, oy, 800, 600),
+                true,
+            )],
+            SystemValues::default(),
+            pin,
+            vec![obj.clone()],
+        );
+        let mut win = WinOverlay::create(canvas, Placement::OFF_SCREEN_TEST, true).unwrap();
+        let hwnd = win.hwnd();
+        // SAFETY: a plain query.
+        let before = unsafe { GetForegroundWindow() };
+        // SAFETY: plain queries on our own live window.
+        unsafe {
+            let ex = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+            assert_ne!(ex & WS_EX_LAYERED, 0, "layered");
+            assert_ne!(ex & WS_EX_TOOLWINDOW, 0);
+            assert_eq!(ex & WS_EX_TOPMOST, 0);
+            assert_ne!(ex & WS_EX_NOACTIVATE, 0);
+        }
+        let layer = crate::annotation::flatten(&base, &[obj], pin).unwrap();
+        model.typeset(&win);
+        let scene = model.scene(&win);
+        win.present(&base, Some(&layer), &scene, &[canvas]);
+        assert!(win.show(true));
+        // SAFETY: a plain query.
+        let after = unsafe { GetForegroundWindow() };
+        assert_eq!(after, before, "focus never moved");
+        let buf = win.buffer();
+        let at = |x: i32, y: i32| {
+            let i = ((y as usize) * 700 + x as usize) * 4;
+            [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]
+        };
+        let red = PALETTE[0].1;
+        assert_eq!(at(10, 60), [red.b, red.g, red.r, 255], "the annotation");
+        assert_eq!(at(100, 90), [40, 80, 120, 255], "the picture");
+        assert_eq!(at(650, 20), [0, 0, 0, 0], "clear around the pin");
+        let bar = scene.toolbar.clone().unwrap();
+        let mut opaque = true;
+        for y in bar.rect.y..bar.rect.y + i32::try_from(bar.rect.height).unwrap() {
+            for x in bar.rect.x..bar.rect.x + i32::try_from(bar.rect.width).unwrap() {
+                opaque &= at(x - ox, y - oy)[3] == 255;
+            }
+        }
+        assert!(
+            opaque,
+            "the toolbar (and the text GDI drew on it) is opaque"
+        );
+        // Characters, IME messages and the wheel, sent to our own window.
+        let _ = take_events();
+        IME_TEST.with(|t| *t.borrow_mut() = Some(("\u{d55c}".into(), String::new())));
+        // SAFETY: synchronous messages to our own window on this thread.
+        unsafe {
+            SendMessageW(hwnd, WM_CHAR, 0x61, 0);
+            SendMessageW(hwnd, WM_CHAR, 0xD83D, 0);
+            SendMessageW(hwnd, WM_CHAR, 0xDE00, 0);
+            SendMessageW(hwnd, WM_IME_STARTCOMPOSITION, 0, 0);
+            SendMessageW(hwnd, WM_IME_COMPOSITION, 0, GCS_COMPSTR as LPARAM);
+        }
+        IME_TEST.with(|t| *t.borrow_mut() = Some((String::new(), "\u{d55c}".into())));
+        // SAFETY: as above.
+        unsafe {
+            SendMessageW(hwnd, WM_IME_COMPOSITION, 0, GCS_RESULTSTR as LPARAM);
+            SendMessageW(hwnd, WM_IME_ENDCOMPOSITION, 0, 0);
+            SendMessageW(hwnd, WM_IME_CHAR, 0xAE00, 0);
+            SendMessageW(hwnd, WM_MOUSEWHEEL, (120usize) << 16, 0);
+        }
+        IME_TEST.with(|t| *t.borrow_mut() = None);
+        assert_eq!(
+            take_events(),
+            [
+                OverlayEvent::Char('a', false),
+                OverlayEvent::Char('\u{1F600}', false),
+                OverlayEvent::Ime(Ime::Start),
+                OverlayEvent::Ime(Ime::Compose("\u{d55c}".into())),
+                OverlayEvent::Ime(Ime::Commit("\u{d55c}".into())),
+                OverlayEvent::Ime(Ime::End),
+                OverlayEvent::Char('\u{ae00}', false),
+                OverlayEvent::Wheel(120),
+            ]
+        );
+        // The input method: associated while a label is edited, removed afterwards.
+        let has_context = || {
+            // SAFETY: the input context of our own window, released at once.
+            unsafe {
+                let h = ImmGetContext(hwnd);
+                if !h.is_null() {
+                    ImmReleaseContext(hwnd, h);
+                }
+                !h.is_null()
+            }
+        };
+        assert!(
+            !has_context(),
+            "off by default (shortcuts work in Hangul mode)"
+        );
+        win.set_ime(Some(Rect::new(ox + 20, oy + 50, 2, 20)));
+        assert!(has_context(), "on for the label");
+        win.set_ime(None);
+        assert!(!has_context(), "off again");
+        // The window's typesetter has the fallback faces.
+        let g = Typesetter::typeset(&win, "\u{d55c}\u{ae00}", 24);
+        assert!(g.mask.iter().filter(|v| **v > 64).count() > 50);
+        win.destroy();
+        // SAFETY: a liveness query on a (now dead) handle.
+        assert_eq!(unsafe { IsWindow(hwnd) }, 0);
+        drop(layer);
+        drop(base);
         assert_eq!(ledger.live(), (0, 0));
     }
 }

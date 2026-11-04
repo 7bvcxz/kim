@@ -59,7 +59,8 @@
       "open": 1,
       "reopenable": null,
       "hidden": 0,
-      "off_screen": 0
+      "off_screen": 0,
+      "editor": null
     },
     "captures": {
       "started": 2,
@@ -72,7 +73,9 @@
       "history": 1,
       "overlay": {
         "session": 2,
-        "phase": "annotating",
+        "mode": "capture",
+        "pin": null,
+        "phase": "recording",
         "selection": {
           "x": 100,
           "y": 120,
@@ -108,6 +111,26 @@
         "history": {
           "count": 1,
           "position": null
+        },
+        "annotation": {
+          "tool": null,
+          "objects": 0,
+          "kinds": {
+            "arrow": 0,
+            "ellipse": 0,
+            "line": 0,
+            "marker": 0,
+            "pen": 0,
+            "rectangle": 0,
+            "text": 0
+          },
+          "selected": null,
+          "undo": 0,
+          "redo": 0,
+          "editing_text": false,
+          "composing": false,
+          "color": "red",
+          "width": 3
         }
       },
       "first_frame": {

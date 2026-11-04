@@ -263,6 +263,11 @@ impl Frame {
         &self.pixels
     }
 
+    /// The pixels to draw on (annotations are rasterized into a copy, Step 56); the size stays.
+    pub fn pixels_mut(&mut self) -> &mut [u8] {
+        &mut self.pixels
+    }
+
     pub fn byte_len(&self) -> u64 {
         self.pixels.len() as u64
     }

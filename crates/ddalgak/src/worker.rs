@@ -19,6 +19,12 @@
 //! rules. A repeat is sent only for an output the ledger still holds, so a late repeat can never
 //! press again what a release-all let go.
 //!
+//! **Launches** (Step 70, [`crate::launch`]): a fired `open_program`/`open_url` rule passes a gate
+//! (`busy` while its previous run is still going, `rate_limited` within a second of its last
+//! start) and runs on a short-lived `ddalgak-launch` thread, so a slow shell hand-off never delays
+//! remaps or typing; a cancellation ends it before its next target. No launch thread exists while
+//! nothing launches.
+//!
 //! **Typing runs** (Step 69, [`crate::run`]): `type_text` and `send_keys` rules and hotstrings run
 //! one at a time as a plan of pieces, carried out between the worker's other messages (one
 //! `SendInput` call per piece, waits as timeouts), so remaps keep working while text is typed.
@@ -29,13 +35,14 @@
 
 use crate::core::{RemapOp, Signal};
 use crate::inject::{Backend, Injector, OutCode, OutEvent};
+use crate::launch;
 use crate::run::{self, Env, HotstringFire, Next, Run, RunShared};
 use crate::stats::Stats;
 use crate::table::{Action, Binding, EngineOp};
 use crate::vk::ModKey;
 use serde_json::{Value, json};
 use std::collections::VecDeque;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -197,6 +204,8 @@ impl Worker {
                     shared: &shared,
                     activity: &act,
                     active: None,
+                    gate: Arc::new(Mutex::new(launch::Gate::default())),
+                    epoch: Arc::new(AtomicU32::new(0)),
                 };
                 run(&rx, &control, &st, &mut ctx);
             })
@@ -236,13 +245,18 @@ struct Active {
     due: Instant,
 }
 
-/// What the loop's typing runs work with.
+/// What the loop's typing runs and launches work with.
 struct Ctx<'a> {
     inj: &'a mut Inj,
     env: &'a mut Env,
     shared: &'a RunShared,
-    activity: &'a Mutex<Activity>,
+    activity: &'a Arc<Mutex<Activity>>,
     active: Option<Active>,
+    /// Launch rules running now and their last starts (`busy`, `rate_limited`; Step 70).
+    gate: Arc<Mutex<launch::Gate>>,
+    /// Bumped by every cancellation; a launch thread stops before its next target when it
+    /// changed since the trigger fired.
+    epoch: Arc<AtomicU32>,
 }
 
 impl Ctx<'_> {
@@ -258,8 +272,72 @@ impl Ctx<'_> {
         }
     }
 
+    /// Starts a launch on its own short-lived thread (Step 70), so a slow shell hand-off never
+    /// delays remaps or typing. One run per rule at a time (`busy`) and one start per rule per
+    /// [`launch::DEBOUNCE`] (`rate_limited`). The thread records the outcome (codes only).
+    fn launch(&mut self, r: &Rules, b: &Binding, plan: &Arc<launch::Plan>) {
+        let entry = |outcome: &str| Entry {
+            at: crate::time::now_rfc3339(),
+            rule: b.rule.clone(),
+            profile: r.profile.clone(),
+            mode: r.mode.clone(),
+            outcome: outcome.to_string(),
+        };
+        let admitted = self
+            .gate
+            .lock()
+            .map_or(Err("busy"), |mut g| g.admit(&b.rule, Instant::now()));
+        if let Err(code) = admitted {
+            if let Ok(mut a) = self.activity.lock() {
+                a.push(entry(code));
+            }
+            return;
+        }
+        let launcher = Arc::clone(&self.env.launcher);
+        let plan = Arc::clone(plan);
+        let gate = Arc::clone(&self.gate);
+        let activity = Arc::clone(self.activity);
+        let epoch = Arc::clone(&self.epoch);
+        let fired = epoch.load(Ordering::SeqCst);
+        let rule = b.rule.clone();
+        let mut done = entry("ok");
+        let spawned = std::thread::Builder::new()
+            .name("ddalgak-launch".into())
+            .spawn(move || {
+                let cancelled = || epoch.load(Ordering::SeqCst) != fired;
+                let code = launch::execute(
+                    &plan,
+                    &launch::Exec {
+                        launcher: &*launcher,
+                        var: &launch::process_var,
+                        cancelled: &cancelled,
+                    },
+                );
+                if let Ok(mut g) = gate.lock() {
+                    g.done(&rule);
+                }
+                done.at = crate::time::now_rfc3339();
+                done.outcome = code.to_string();
+                if let Ok(mut a) = activity.lock() {
+                    a.push(done);
+                }
+            });
+        if spawned.is_err() {
+            if let Ok(mut g) = self.gate.lock() {
+                g.done(&b.rule);
+            }
+            if let Ok(mut a) = self.activity.lock() {
+                a.push(entry("launch_failed"));
+            }
+        }
+    }
+
     /// Starts a typing run for a fired rule, or drops the trigger with `busy`.
     fn start(&mut self, r: &Rules, b: &Binding, hs: Option<HotstringFire>) {
+        if let Action::Launch(plan) = &b.action {
+            self.launch(r, b, plan);
+            return;
+        }
         if self.active.is_some() {
             if let Ok(mut a) = self.activity.lock() {
                 a.push(Entry {
@@ -313,8 +391,10 @@ impl Ctx<'_> {
         }
     }
 
-    /// Ends the run in progress (pause, stop, emergency, reload).
+    /// Ends the run in progress (pause, stop, emergency, reload); a launch still running stops
+    /// before its next target (a program already started is never stopped).
     fn cancel(&mut self) {
+        self.epoch.fetch_add(1, Ordering::SeqCst);
         if let Some(mut a) = self.active.take() {
             let code = a.run.cancel(self.inj, self.env, self.shared);
             self.push(&a.run, code);
@@ -556,8 +636,8 @@ fn fire(
         Action::Block => {}
         // Remaps run through `Signal::Remap`; a fired remap does nothing more.
         Action::Remap(_) => return false,
-        // Typing runs record their own outcome when they end.
-        Action::Type(_) | Action::Keys(_) => return true,
+        // Typing runs and launches record their own outcome when they end.
+        Action::Type(_) | Action::Keys(_) | Action::Launch(_) => return true,
     }
     record(rules, generation, binding, "ok", activity);
     false
@@ -1178,5 +1258,175 @@ mod tests {
             .filter(|e| **e == OutEvent::down(OutCode::Vk(text::VK_BACK)))
             .count();
         assert_eq!(bs, 3);
+    }
+
+    // Launches (Step 70): the real worker thread with a fake launcher that records every call.
+    use crate::launch::{self as launch_mod, Call, FakeLauncher, ShellRequest, Show, Target};
+
+    fn launch_rules(generation: u32, urls: &[&str]) -> Rules {
+        let b = |id: &str, url: &str| Binding {
+            rule: id.into(),
+            trigger: Trigger::parse("F13").unwrap(),
+            on: On::Press,
+            repeat: false,
+            pass_through: false,
+            injected: Injected::Ignore,
+            widen: false,
+            injects: false,
+            action: Action::Launch(Arc::new(launch_mod::Plan {
+                targets: vec![Target::Url(url.into())],
+                stop_on_error: true,
+            })),
+            hotstring: None,
+        };
+        Rules {
+            generation,
+            bindings: Arc::new(
+                urls.iter()
+                    .enumerate()
+                    .map(|(i, u)| b(&format!("open-{i}"), u))
+                    .collect(),
+            ),
+            profile: "default".into(),
+            mode: "base".into(),
+        }
+    }
+
+    fn launch_worker(f: &Arc<FakeLauncher>) -> Worker {
+        let env = Env {
+            launcher: Arc::clone(f) as Arc<dyn launch_mod::Launcher>,
+            ..Env::inert()
+        };
+        Worker::start(
+            Arc::new(Stats::default()),
+            Box::new(|_| {}),
+            Arc::new(Mutex::new(Activity::default())),
+            Box::new(Recorder::default()),
+            env,
+        )
+    }
+
+    #[test]
+    fn a_launch_rule_opens_its_url_once_and_records_only_its_outcome() {
+        let f = Arc::new(FakeLauncher::default());
+        let w = launch_worker(&f);
+        let q = w.queue();
+        q.send(Msg::Rules(launch_rules(
+            1,
+            &["https://example.com/reset?token=s3cret"],
+        )));
+        q.signal(1, fire(0));
+        assert_eq!(wait_outcomes(&w, 1), [("open-0".into(), "ok".into())]);
+        assert_eq!(
+            f.calls(),
+            [Call::Shell(ShellRequest {
+                verb: "open",
+                target: "https://example.com/reset?token=s3cret".into(),
+                show: Show::Normal
+            })]
+        );
+        let j = w.activity.lock().unwrap().to_json(10).to_string();
+        assert!(
+            !j.contains("example") && !j.contains("s3cret"),
+            "activity holds codes only: {j}"
+        );
+    }
+
+    #[test]
+    fn rapid_triggers_are_busy_while_running_and_rate_limited_after() {
+        let f = Arc::new(FakeLauncher::default());
+        // A slow shell hand-off: the second press arrives while the first launch still runs.
+        *f.delay.lock().unwrap() = Duration::from_millis(300);
+        let w = launch_worker(&f);
+        let q = w.queue();
+        q.send(Msg::Rules(launch_rules(
+            1,
+            &["https://example.com/", "https://example.org/"],
+        )));
+        q.signal(1, fire(0));
+        q.signal(1, fire(0));
+        // Another launch rule is not held up by the first one, nor are other messages.
+        q.signal(1, fire(1));
+        let out = wait_outcomes(&w, 3);
+        assert!(out.contains(&("open-0".into(), "busy".into())), "{out:?}");
+        assert!(out.contains(&("open-0".into(), "ok".into())), "{out:?}");
+        assert!(out.contains(&("open-1".into(), "ok".into())), "{out:?}");
+        // Finished, but within a second of its start: a double press opens nothing more.
+        *f.delay.lock().unwrap() = Duration::ZERO;
+        q.signal(1, fire(0));
+        let out = wait_outcomes(&w, 4);
+        assert_eq!(out[3], ("open-0".into(), "rate_limited".into()));
+        assert_eq!(f.calls().len(), 2, "one launch per rule");
+        std::thread::sleep(launch_mod::DEBOUNCE);
+        q.signal(1, fire(0));
+        assert_eq!(wait_outcomes(&w, 5)[4], ("open-0".into(), "ok".into()));
+        assert_eq!(f.calls().len(), 3);
+    }
+
+    #[test]
+    fn a_pause_between_targets_ends_a_launch_run_before_its_next_target() {
+        let f = Arc::new(FakeLauncher::default());
+        *f.delay.lock().unwrap() = Duration::from_millis(300);
+        let w = launch_worker(&f);
+        let q = w.queue();
+        let mut r = launch_rules(1, &["https://example.com/"]);
+        r.bindings = Arc::new(vec![Binding {
+            action: Action::Launch(Arc::new(launch_mod::Plan {
+                targets: vec![
+                    Target::Url("https://example.com/".into()),
+                    Target::Url("https://example.org/".into()),
+                ],
+                stop_on_error: true,
+            })),
+            ..r.bindings[0].clone()
+        }]);
+        q.send(Msg::Rules(r));
+        q.signal(1, fire(0));
+        std::thread::sleep(Duration::from_millis(100));
+        q.send(Msg::Cancel);
+        assert_eq!(
+            wait_outcomes(&w, 1),
+            [("open-0".into(), "cancelled".into())]
+        );
+        assert_eq!(f.calls().len(), 1, "the second target never opened");
+    }
+
+    #[test]
+    fn loading_and_reloading_launch_rules_starts_nothing_until_a_trigger() {
+        // Rules arrive (engine start, a reload, an import that was then enabled): nothing opens
+        // until the user's trigger fires.
+        let f = Arc::new(FakeLauncher::default());
+        let w = launch_worker(&f);
+        let q = w.queue();
+        q.send(Msg::Rules(launch_rules(1, &["https://example.com/"])));
+        q.send(Msg::Rules(launch_rules(
+            2,
+            &["https://example.com/", "https://example.org/"],
+        )));
+        q.send(Msg::Cancel);
+        // An old table's trigger after a reload starts nothing either.
+        q.signal(1, fire(0));
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(f.calls().is_empty(), "{:?}", f.calls());
+        assert!(outcomes(&w).is_empty());
+    }
+
+    #[test]
+    fn the_inert_environment_never_starts_anything() {
+        // Tests and the debug test host without a launch root: every launch is refused.
+        let w = Worker::start(
+            Arc::new(Stats::default()),
+            Box::new(|_| {}),
+            Arc::new(Mutex::new(Activity::default())),
+            Box::new(Recorder::default()),
+            Env::inert(),
+        );
+        let q = w.queue();
+        q.send(Msg::Rules(launch_rules(1, &["https://example.com/"])));
+        q.signal(1, fire(0));
+        assert_eq!(
+            wait_outcomes(&w, 1),
+            [("open-0".into(), "launch_failed".into())]
+        );
     }
 }

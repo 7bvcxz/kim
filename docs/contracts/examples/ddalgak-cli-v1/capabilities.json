@@ -130,8 +130,8 @@
         "network": false,
         "opens_window": false,
         "requires_yes": false,
-        "summary": "One rule as stored, with its state and problems; snippet text only with --show-text (otherwise its counts)",
-        "usage": "ddalgak rule show <id> [--draft] [--show-text] [--json]"
+        "summary": "One rule as stored, with its state and problems; snippet text only with --show-text (otherwise its counts), launch targets only with --show-targets (otherwise the file name, counts, scheme and host)",
+        "usage": "ddalgak rule show <id> [--draft] [--show-text] [--show-targets] [--json]"
       },
       {
         "dry_run": false,

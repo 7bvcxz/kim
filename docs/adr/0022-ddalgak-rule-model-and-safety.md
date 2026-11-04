@@ -149,3 +149,8 @@ discloses Ddalgak's permissions (`keyboard-hook`, `input-injection`, `launch-pro
   "keyboard state is not changed" flag, so the dead-key concern behind "no character translation
   in the hook" does not arise. `char:` triggers stay out of v1. See
   [ADR 0034](0034-ddalgak-typing-runs-hotstrings-and-clipboard.md).
+- 2026-11-04 (Step 70): launches run as planned here — programs with `CreateProcessW` and a
+  quoted argument list, websites and packaged apps through the shell's `open`, never a shell
+  string or elevation — and `open_program` gained an explicit `env` list of overrides (additive to
+  rules v1, covered by the fingerprint). Custom URL protocols stay refused in v1. See
+  [ADR 0037](0037-ddalgak-program-and-website-launches.md).

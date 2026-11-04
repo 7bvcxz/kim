@@ -14,10 +14,11 @@
 //! state that needs missing consent is refused. A revoked permission disables the rule. Copies
 //! keep consent only because their targets are unchanged, and are created disabled.
 
+use crate::launch;
 use crate::model::{
-    Action, Delay, Document, EngineOp, EngineStep, Grant, IfRunning, ModeOp, ModeStep, OpenProgram,
-    OpenUrl, Permission, Remap, Rule, RuleEntry, SendKeys, TextMethod, TypeText, WindowState,
-    is_rule_id, new_rule_id,
+    Action, Delay, Document, EngineOp, EngineStep, EnvVar, Grant, IfRunning, ModeOp, ModeStep,
+    OpenProgram, OpenUrl, Permission, Remap, Rule, RuleEntry, SendKeys, TextMethod, TypeText,
+    WindowState, is_rule_id, new_rule_id,
 };
 use crate::trigger::{self, TriggerError};
 use crate::validate::{self, Problem, Report, Severity};
@@ -253,6 +254,8 @@ pub struct StepInputs {
     pub app_id: Option<String>,
     pub args: Vec<String>,
     pub working_dir: Option<String>,
+    /// `--env NAME=VALUE`: explicit environment overrides for the program (Step 70).
+    pub env: Vec<(String, String)>,
     pub window: Option<String>,
     pub if_running: Option<String>,
     pub url: Option<String>,
@@ -304,18 +307,50 @@ pub fn build_step(kind: &str, i: &StepInputs) -> Result<Action, String> {
             if i.path.is_none() == i.app_id.is_none() {
                 return Err("`--action open_program` needs --path <exe> or --app-id <id>".into());
             }
+            // A pasted path loses its quotes and `/` becomes `\` (Step 70); it is never resolved
+            // or searched for, and a path in a known folder keeps the form it was given.
+            let path = i.path.as_deref().map(launch::normalize_path);
+            if let Some(p) = path.as_deref()
+                && let Some(problem) = launch::path_problem(p, true)
+            {
+                return Err(format!("--path: {}", problem.message()));
+            }
+            let working_dir = i.working_dir.as_deref().map(launch::normalize_path);
+            if let Some(w) = working_dir.as_deref()
+                && let Some(problem) = launch::path_problem(w, false)
+            {
+                return Err(format!("--working-dir: {}", problem.message()));
+            }
+            if let Some(p) = launch::args_problem(&i.args) {
+                return Err(format!("--arg: {p}"));
+            }
+            if let Some(p) = launch::env_problem(&i.env) {
+                return Err(format!("--env: {p}"));
+            }
             Action::OpenProgram(OpenProgram {
-                path: i.path.clone(),
+                path,
                 app_id: i.app_id.clone(),
                 args: (!i.args.is_empty()).then(|| i.args.clone()),
-                working_dir: i.working_dir.clone(),
+                working_dir,
+                env: (!i.env.is_empty()).then(|| {
+                    i.env
+                        .iter()
+                        .map(|(name, value)| EnvVar {
+                            name: name.clone(),
+                            value: value.clone(),
+                        })
+                        .collect()
+                }),
                 window: parse("window state", &i.window, WindowState::parse)?,
                 if_running: parse("if-running policy", &i.if_running, IfRunning::parse)?,
                 extra: extra(),
             })
         }
+        // The address is normalized as in the editor (https:// added, scheme and host in lower
+        // case, spaces encoded); every scheme but http and https is refused (Step 70).
         "open_url" => Action::OpenUrl(OpenUrl {
-            url: need(&i.url, "--url <url>", kind)?,
+            url: launch::normalize_url(&need(&i.url, "--url <url>", kind)?)
+                .map_err(|p| format!("--url: {}", p.message()))?,
             extra: extra(),
         }),
         "engine" => Action::Engine(EngineStep {

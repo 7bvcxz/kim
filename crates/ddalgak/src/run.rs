@@ -297,6 +297,8 @@ pub struct Env {
     pub clipboard: Box<dyn Clipboard>,
     /// The local time for `{date}` and `{time}`.
     pub clock: fn() -> LocalTime,
+    /// What starts programs and hands URLs to the shell (Step 70); shared with the launch threads.
+    pub launcher: std::sync::Arc<dyn crate::launch::Launcher>,
 }
 
 impl std::fmt::Debug for Env {
@@ -306,12 +308,14 @@ impl std::fmt::Debug for Env {
 }
 
 impl Env {
-    /// Tests and the debug test host: a fixed editable target, no clipboard, the UTC clock.
+    /// Tests and the debug test host: a fixed editable target, no clipboard, the UTC clock, and
+    /// nothing is ever started ([`crate::launch::NoLauncher`]).
     pub fn inert() -> Env {
         Env {
             probe: Box::new(FakeProbe::editable()),
             clipboard: Box::new(NoClipboard),
             clock: || LocalTime::utc(crate::time::now_secs()),
+            launcher: std::sync::Arc::new(crate::launch::NoLauncher),
         }
     }
 }
@@ -815,6 +819,7 @@ mod tests {
                     probe: Box::new(probe.clone()),
                     clipboard: Box::new(clip.clone()),
                     clock: now,
+                    launcher: std::sync::Arc::new(crate::launch::NoLauncher),
                 },
                 probe,
                 clip,

@@ -25,7 +25,7 @@ the requirements it serves. ADRs are immutable once **Accepted**; a later ADR ma
 | [0017](0017-universal-customizable-hotkeys.md) | Universal customizable hotkeys without a shared hook or daemon | Accepted (implemented from Step 46) |
 | [0019](0019-secure-host-supervisor-and-ipc-v1.md) | Secure Host supervisor and IPC v1 | Accepted |
 | [0020](0020-terminal-session-lifecycle.md) | Terminal session lifecycle and the meaning of every end | Accepted (CLI verbs top level since Step 12, see 0027) |
-| [0021](0021-noeul-product-definition.md) | Noeul product definition: double-click pins, privacy defaults and a clean-room boundary | Accepted (implemented from Step 49) |
+| [0021](0021-noeul-product-definition.md) | Noeul product definition: double-click pins, privacy defaults and a clean-room boundary | Accepted (implemented from Step 49; manifest extended by 0038) |
 | [0022](0022-ddalgak-rule-model-and-safety.md) | Ddalgak: declarative rules, a tray-app engine and safety by construction | Accepted (implemented from Steps 66–83; process model refined by 0024; key translation for hotstrings refined by 0034) |
 | [0023](0023-noeul-app-foundation.md) | Noeul app foundation: plain Win32, GDI capture on demand, one instance per user session | Accepted (Step 49; overlay measured in Step 50, see 0026; pin engine in Step 53, see 0029; capture APIs in Step 58) |
 | [0024](0024-ddalgak-windows-input-apis-and-permissions.md) | Ddalgak engine: Windows input APIs, threads, IPC and permissions | Accepted (implemented in Step 66) |
@@ -33,13 +33,15 @@ the requirements it serves. ADRs are immutable once **Accepted**; a later ADR ma
 | [0026](0026-noeul-capture-overlay.md) | Noeul capture overlay: one GDI freeze, a back-buffered Win32 window, a selection handed to its output | Accepted (Step 50; gesture, toolbar, menu, copy and save in Step 51, see 0032; detection, magnifier and precision keys in Step 52, see 0035) |
 | [0027](0027-subak-cli-structure-and-headless-control.md) | Subak CLI structure, detach from outside, verbatim command lines and console restore | Accepted |
 | [0028](0028-ddalgak-rule-store-validation-and-reload.md) | Ddalgak rule store: run-time schema per rule, locked atomic writes, drafts and live reload | Accepted (Step 67) |
-| [0029](0029-noeul-pin-engine.md) | Noeul floating pin engine: one creation path, retained layered windows, focus hand-back, pins in memory only | Accepted (Step 53; the double-click's guard in Step 51, see 0032) |
+| [0029](0029-noeul-pin-engine.md) | Noeul floating pin engine: one creation path, retained layered windows, focus hand-back, pins in memory only | Accepted (Step 53; the double-click's guard in Step 51, see 0032; annotations on pins and the pin editor in Step 56, see 0038) |
 | [0030](0030-host-terminal-model-scrollback-and-replay.md) | The Host's terminal model, scrollback and replay | Accepted (Step 13) |
 | [0031](0031-ddalgak-remap-execution-and-mouse-hook.md) | Ddalgak remaps: decided in the hook, sent by the worker, a mouse hook only on demand | Accepted (Step 68; catalog disclosure of `mouse-hook` pending) |
 | [0032](0032-noeul-double-click-pin-and-outputs.md) | Noeul double-click to pin: press counting, the toolbar, separate outputs and gesture settings | Accepted (Step 51) |
 | [0034](0034-ddalgak-typing-runs-hotstrings-and-clipboard.md) | Ddalgak typing: worker runs, hotstrings from untouched key translation, a clipboard always given back | Accepted (Step 69; real-application checks manual) |
 | [0035](0035-noeul-smart-selection-and-precision.md) | Noeul smart selection: a window list taken with the picture, UI Automation rectangles off the UI thread, keyboard precision and in-memory history | Accepted (Step 52) |
 | [0036](0036-terminal-emulation-and-rendering-path.md) | Terminal emulation core and rendering path: one in-house model for Host and views, a CPU cell-grid renderer with GDI glyphs, inbox ConPTY kept | Accepted (Step 15) |
+| [0037](0037-ddalgak-program-and-website-launches.md) | Ddalgak launches: CreateProcessW without a shell, the shell's `open` for websites and apps, a launch thread per run | Accepted (Step 70; installed programs, the default browser, elevation and focus checks manual) |
+| [0038](0038-noeul-annotation.md) | Noeul annotation: vector objects until export, one editor for captures and pins, GDI text with fallback | Accepted (Step 56; real-desktop and real-IME checks manual) |
 | [0039](0039-subak-window-plain-win32-client.md) | The Subak window: a plain Win32 IPC client of one Terminal (`subak-gui`), no GUI framework or GPU | Accepted (Step 16; visible-window checks pending the maintainer) |
 
 "Accepted (validated in Step N)" means the decision is made, but the named Step must confirm it

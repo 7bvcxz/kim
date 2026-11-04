@@ -150,23 +150,23 @@ Each row has a permanent ID so that commits, tests and later audits can cite it.
 
 | ID | Snipaste feature | Src | Noeul approach | Status | Requirement | MS | Verify | Evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `ANN-01` | Rectangle and ellipse; `Shift` draws a square or circle | H, A | Same | planned | NOEUL-FR-080 | N3 | T, M | — |
-| `ANN-02` | Line, line strip and arrow; `Tab` switches line or arrow | G, H | Same tools; tool actions bindable, unbound by default ◆ (`Tab` stays navigation) | planned | NOEUL-FR-080 | N3 | T | — |
-| `ANN-03` | Pencil and marker pen | H | Pen and marker | planned | NOEUL-FR-080 | N3 | T | — |
-| `ANN-04` | Text that can be scaled and rotated | G | Text with IME (Korean first) and font fallback; scaling now, rotation as an extra | planned | NOEUL-FR-080, NOEUL-NFR-014 | N3 | T, M | — |
+| `ANN-01` | Rectangle and ellipse; `Shift` draws a square or circle | H, A | Same. Step 56: the rectangle and ellipse tools, `Shift` for a square or circle, crisp 3-pixel outlines at 100 % (5 at 150 %), resized by their handles; missing: the manual check on the visible desktop (UX spec §4.9) | partial | NOEUL-FR-080 | N3 | T, M | T: `crates/noeul/src/annotation/tests.rs` every_tool_creates_an_object_that_undo_and_redo_restore_exactly, shapes_follow_the_drag_and_shift_squares_or_snaps, a_rectangle_is_crisp_at_100_and_150_percent; T: `crates/noeul/src/app.rs` what_the_overlay_shows_is_what_copy_exports_at_100_and_150_percent |
+| `ANN-02` | Line, line strip and arrow; `Tab` switches line or arrow | G, H | Same tools; tool actions bindable, unbound by default ◆ (`Tab` stays navigation). Step 56: line and arrow (`Shift`: 45° steps), their ends as handles; missing: the line strip (polyline) and the manual check | partial | NOEUL-FR-080 | N3 | T | T: `crates/noeul/src/annotation/tests.rs` lines_arrows_and_ellipses_cover_the_expected_pixels; T: `crates/noeul/tests/annotation.rs` shapes_drawn_in_the_overlay_are_saved_exactly |
+| `ANN-03` | Pencil and marker pen | H | Pen and marker. Step 56: freehand pen, a translucent marker without darker overlaps; missing: the manual check on the visible desktop (UX spec §4.9) | partial | NOEUL-FR-080 | N3 | T | T: `crates/noeul/src/annotation/tests.rs` a_marker_is_one_translucent_coat_and_text_uses_its_mask; T: `crates/noeul/src/overlay.rs` a_tool_draws_inside_never_pins_and_escape_leaves_it_with_the_drawing |
+| `ANN-04` | Text that can be scaled and rotated | G | Text with IME (Korean first) and font fallback; scaling now, rotation as an extra. Step 56: labels with inline compositions, the input method only while a label is edited, per-character GDI fallback (Malgun Gothic, Segoe UI Emoji, …), sizes by width level; monochrome emoji, no rotation; missing: the manual check on the visible desktop (UX spec §4.9) | partial | NOEUL-FR-080, NOEUL-NFR-014 | N3 | T, M | T: `crates/noeul/src/annotation/tests.rs` korean_composition_shows_inline_and_becomes_text_only_when_committed; T: `crates/noeul/src/win/typeset.rs` every_script_finds_a_face_and_draws_ink, hebrew_is_drawn_right_to_left; T: `crates/noeul/src/win/overlay.rs` the_layered_editor_is_clear_around_the_pin_and_ime_messages_become_events |
 | `ANN-05` | Mosaic and Gaussian blur | H, P | Same, labeled as weak protection, plus a solid redaction that is irreversible on export | planned | NOEUL-FR-082 | N3 | T | — |
 | `ANN-06` | Eraser | H, P | Same | planned | NOEUL-FR-082 | N3 | T | — |
-| `ANN-07` | Undo `Ctrl+Z`, redo `Ctrl+Y`; `Ctrl+Shift+Z` removes all edits without undo | K | `Ctrl+Z`; `Ctrl+Y` and `Ctrl+Shift+Z` redo ◆; "clear all" is an undoable command without a default key | planned | NOEUL-FR-081 | N3 | T | — |
-| `ANN-08` | Pen width with the wheel, `1`/`2` or `[`/`]` | G, K | Wheel and `[`/`]` (`char:` keys) | planned | NOEUL-FR-080 | N3 | T | — |
-| `ANN-09` | Custom colors and opacity through a color dialog | G, F | Color with opacity | planned | NOEUL-FR-080 | N3 | T | — |
-| `ANN-10` | Right-click finishes the current shape | G, K | Same; `Esc` leaves the tool and keeps the drawing | planned | NOEUL-FR-081 | N3 | T (FLOW-15) | — |
-| `ANN-11` | Re-edit, clone and delete finished annotations (Pro) | P | Annotations stay editable objects until export | planned | NOEUL-FR-081 | N3 | T | — |
+| `ANN-07` | Undo `Ctrl+Z`, redo `Ctrl+Y`; `Ctrl+Shift+Z` removes all edits without undo | K | `Ctrl+Z`; `Ctrl+Y` and `Ctrl+Shift+Z` redo ◆; "clear all" is an undoable command without a default key. Step 56: one step per stroke, move or label, exact restore, also after the tool was left; toolbar Undo and Redo | partial | NOEUL-FR-081 | N3 | T | T: `crates/noeul/src/annotation/tests.rs` undo_and_redo_are_lossless_over_a_long_session; T: `crates/noeul/src/app.rs` undo_redo_and_cancel_are_lossless_and_leave_nothing_behind |
+| `ANN-08` | Pen width with the wheel, `1`/`2` or `[`/`]` | G, K | Wheel and `[`/`]` (`char:` keys). Step 56: both, and the width button; levels 1–12 logical pixels | partial | NOEUL-FR-080 | N3 | T | T: `crates/noeul/src/overlay.rs` undo_redo_width_object_keys_order_delete_and_clear_all; T: `crates/noeul/src/app.rs` a_label_suspends_shortcuts_takes_characters_and_the_ime |
+| `ANN-09` | Custom colors and opacity through a color dialog | G, F | Color with opacity. Step 56: an eight-colour palette (the colour button, `Shift` backwards); missing: opacity and a custom colour | partial | NOEUL-FR-080 | N3 | T | T: `crates/noeul/src/overlay.rs` undo_redo_width_object_keys_order_delete_and_clear_all |
+| `ANN-10` | Right-click finishes the current shape | G, K | Same; `Esc` leaves the tool and keeps the drawing. Step 56: both (FLOW-15) | partial | NOEUL-FR-081 | N3 | T (FLOW-15) | T: `crates/noeul/src/overlay.rs` right_click_finishes_a_shape_or_leaves_the_tool_and_a_lost_capture_aborts, a_tool_draws_inside_never_pins_and_escape_leaves_it_with_the_drawing |
+| `ANN-11` | Re-edit, clone and delete finished annotations (Pro) | P | Annotations stay editable objects until export. Step 56: pick, move, resize, recolour, re-width, reorder and delete objects in the overlay and on pins, by mouse and keyboard; missing: clone | partial | NOEUL-FR-081 | N3 | T | T: `crates/noeul/src/annotation/tests.rs` objects_are_selected_moved_resized_reordered_and_deleted_with_undo, keyboard_editing_selects_nudges_grows_and_shrinks; T: `crates/noeul/src/app.rs` a_pin_keeps_its_annotations_editable_and_edits_commit_crop_or_cancel |
 | `ANN-12` | Numbered markers, rounded rectangles, dashes, double-headed and styled arrows, filled or outlined text, magnifier shape (Pro) | P | Annotation extras | planned | NOEUL-FR-084 | N4 | T | — |
 | `ANN-13` | Rotatable shapes; several pen sizes; per-tool colors; shareable palette (Pro) | P | Annotation extras | planned | NOEUL-FR-084 | N4 | T | — |
 | `ANN-14` | Right-click marks the detected element in rectangle, ellipse or fill modes | A | Annotation extra | planned | NOEUL-FR-084 | N4 | T | — |
-| `ANN-15` | Annotate an image window (`Space` shows the paint bar) | K, F | `pin.annotate` (`Space`) | planned | NOEUL-FR-080 | N3 | T, M | — |
-| `ANN-16` | Crop an image window (Pro) | P | Crop on pins, and a size readout for measuring | planned | NOEUL-FR-083 | N3 | T, M | — |
-| `ANN-17` | Double-click during annotation | — (Noeul rule) | ◆ A double-click while a tool is active never pins; `Enter` pins with the drawing | planned | NOEUL-FR-021 | N3 | T (FLOW-13, FLOW-14) | — |
+| `ANN-15` | Annotate an image window (`Space` shows the paint bar) | K, F | `pin.annotate` (`Space`). Step 56: `Space` and the pin menu open the pin editor (a layered window over the pin); `Enter`/Done commit, `Esc`/Cancel leave the pin unchanged; missing: the manual check on the visible desktop (UX spec §4.9) | partial | NOEUL-FR-080 | N3 | T, M | T: `crates/noeul/src/app.rs` a_pin_keeps_its_annotations_editable_and_edits_commit_crop_or_cancel; T: `crates/noeul/tests/annotation.rs` a_label_and_a_pin_edit_through_the_real_windows |
+| `ANN-16` | Crop an image window (Pro) | P | Crop on pins, and a size readout for measuring. Step 56: the pin editor crops by the selection's handles or keys (kept where it was shown, final after the commit); the size chip measures the object drawn or selected; missing: the manual check on the visible desktop (UX spec §4.9) | partial | NOEUL-FR-083 | N3 | T, M | T: `crates/noeul/src/overlay.rs` the_pin_editor_keeps_its_selection_crops_inside_the_pin_and_commits_with_enter; T: `crates/noeul/src/pins.rs` annotations_over_a_transparent_picture_and_crop_commits |
+| `ANN-17` | Double-click during annotation | — (Noeul rule) | ◆ A double-click while a tool is active never pins; `Enter` pins with the drawing. Step 56: FLOW-13, FLOW-14 (a word of a label is selected), FLOW-15 | partial | NOEUL-FR-021 | N3 | T (FLOW-13, FLOW-14) | T: `crates/noeul/src/overlay.rs` a_tool_draws_inside_never_pins_and_escape_leaves_it_with_the_drawing, text_labels_take_characters_and_the_ime_and_a_double_click_selects_a_word |
 
 ## 7. Floating pins (`PIN`)
 
@@ -322,8 +322,8 @@ picture.
 | Status | Rows |
 | --- | --- |
 | `supported` | 0 |
-| `partial` | 60 |
-| `planned` | 87 (of which 6 are Noeul additions: `OUT-12` and five `ADD` rows) |
+| `partial` | 72 |
+| `planned` | 75 (of which 6 are Noeul additions: `OUT-12` and five `ADD` rows) |
 | `not intended` | 24 |
 | **Total** | **171** |
 
@@ -334,7 +334,7 @@ picture.
 | 3. Color picker (`COLOR`) | 0 | 7 | 0 | 7 |
 | 4. History (`HIST`) | 2 | 4 | 0 | 6 |
 | 5. Output and clipboard (`OUT`) | 7 | 4 | 1 | 12 |
-| 6. Annotation (`ANN`) | 0 | 17 | 0 | 17 |
+| 6. Annotation (`ANN`) | 12 | 5 | 0 | 17 |
 | 7. Floating pins (`PIN`) | 10 | 18 | 2 | 30 |
 | 8. Paste sources (`PASTE`) | 5 | 7 | 2 | 14 |
 | 9. Displays and color (`DISP`) | 3 | 2 | 1 | 6 |
@@ -357,3 +357,4 @@ Deviations from Snipaste's defaults (**◆**) are in `SNIP-05`, `DET-02`, `DET-0
 | 2026-11-04 | 2.11.3 (2026-01-18) | Step 53 | Floating pin engine: 9 more rows `partial` (`PIN-03`, `PIN-04`, `PIN-11`, `PIN-12`, `PIN-18`, `PIN-26`, `PASTE-10`, `DISP-04`, `CLI-04`), `PIN-01`, `PIN-02` and `PIN-09` extended; 40 `partial`, none `supported` until the manual check of UX spec §4.6. |
 | 2026-11-04 | 2.11.3 (2026-01-18) | Step 51 | Double-click to pin, toolbar, selection menu, copy, save, quick save and gesture settings (ADR 0032): 9 more rows `partial` (`OUT-01`, `OUT-02`, `OUT-04`, `OUT-05`, `OUT-08`, `OUT-09`, `SET-12`, `SET-14`, `SET-22`), `OUT-03`, `SNIP-05` and `SET-13` extended; 49 `partial`, none `supported` until the manual check of UX spec §4.7. |
 | 2026-11-04 | 2.11.3 (2026-01-18) | Step 52 | Smart selection and pixel precision (ADR 0035): 11 more rows `partial` (`DET-01`, `DET-02`, `DET-04`, `DET-05`, `DET-06`, `DET-07`, `DET-10`, `DET-11`, `DET-12`, `HIST-01`, `HIST-02`), `DET-08` extended; 60 `partial`, none `supported` until the manual check of UX spec §4.8. The planned count of Noeul additions corrected to 6. |
+| 2026-11-04 | 2.11.3 (2026-01-18) | Step 56 | Annotation (ADR 0038): 12 rows `partial` (`ANN-01`…`04`, `ANN-07`…`11`, `ANN-15`…`17`); `ANN-05`, `ANN-06` (Step 57) and the N4 extras `ANN-12`…`14` stay planned; 72 `partial`, none `supported` until the manual check of UX spec §4.9. |

@@ -1,6 +1,6 @@
 # Noeul UX specification
 
-Status: **current** (specification; Step 49 implemented the app foundation, [ADR 0023](adr/0023-noeul-app-foundation.md); Step 50 the `F1` selection overlay with `Enter` to pin, [ADR 0026](adr/0026-noeul-capture-overlay.md), see §4.5; Step 53 the floating pin engine, [ADR 0029](adr/0029-noeul-pin-engine.md), see §4.6; Step 51 the double-click-to-pin gesture, the toolbar, the selection menu, copy, save and the gesture settings, [ADR 0032](adr/0032-noeul-double-click-pin-and-outputs.md), see §4.7; Step 52 window and element detection, the magnifier, the precision keys, snapping and the rectangle history, [ADR 0035](adr/0035-noeul-smart-selection-and-precision.md), see §4.8) · Step 48 ·
+Status: **current** (specification; Step 49 implemented the app foundation, [ADR 0023](adr/0023-noeul-app-foundation.md); Step 50 the `F1` selection overlay with `Enter` to pin, [ADR 0026](adr/0026-noeul-capture-overlay.md), see §4.5; Step 53 the floating pin engine, [ADR 0029](adr/0029-noeul-pin-engine.md), see §4.6; Step 51 the double-click-to-pin gesture, the toolbar, the selection menu, copy, save and the gesture settings, [ADR 0032](adr/0032-noeul-double-click-pin-and-outputs.md), see §4.7; Step 52 window and element detection, the magnifier, the precision keys, snapping and the rectangle history, [ADR 0035](adr/0035-noeul-smart-selection-and-precision.md), see §4.8; Step 56 annotation in the overlay and on pins, [ADR 0038](adr/0038-noeul-annotation.md), see §4.9) · Step 48 ·
 Philosophy: [NOEUL_PHILOSOPHY](NOEUL_PHILOSOPHY.md) · Requirements: [NOEUL_REQUIREMENTS](NOEUL_REQUIREMENTS.md) ·
 Parity: [NOEUL_SNIPASTE_MATRIX](NOEUL_SNIPASTE_MATRIX.md) · Shortcuts: [HOTKEY_CONTRACT §13.3](HOTKEY_CONTRACT.md) ·
 Decision: [ADR 0021](adr/0021-noeul-product-definition.md)
@@ -83,7 +83,11 @@ Shipped since Step 51 ([ADR 0032](adr/0032-noeul-double-click-pin-and-outputs.md
 with this build's buttons only — **Pin** (accent-filled, first in tab order), Copy, Save
 (`Shift`+click quick-saves) and Cancel — placed as above (right-aligned with the selection), 32
 logical pixels high, with a `bg.hover` highlight under the pointer and a 2-pixel `focus.ring` on
-the button that has the keyboard focus. The tools, undo and redo join it with Step 56. Tooltips are
+the button that has the keyboard focus. Step 56 ([ADR 0038](adr/0038-noeul-annotation.md), §4.9)
+added the rectangle, ellipse, line, arrow, pen, marker and text tools, the colour and width buttons,
+Undo and Redo between Save and Cancel (icons are original vector drawings; the active tool has an
+accent bar; Undo and Redo grey out with nothing to undo or redo); on a monitor narrower than the bar
+the buttons wrap into rows. Mosaic, blur and the eraser are Step 57. Tooltips are
 not shown yet; the first-run hint is the overlay's keyboard help box, which now reads "Double-click
 inside pins it · Ctrl+C copies · Ctrl+S saves · Ctrl+Shift+S quick-saves" from the effective
 gesture and keys (`[capture] keyboard_help`, ADR 0026 §6).
@@ -134,9 +138,10 @@ corner). Under the debug-build test hook it is recorded, never shown.
 Shipped since Step 53 ([ADR 0029](adr/0029-noeul-pin-engine.md)): the menu opens on a right-click,
 `Shift+F10` or the menu key, and lists the implemented items only — Zoom in, Zoom out, Zoom 100 %,
 Hide, Close, Destroy — each with its effective key. Step 51 added Copy, Save… and Quick save
-(`pin.copy`, `pin.save`, `pin.quick-save`: the pin's picture at 100 %, whatever its zoom). The
+(`pin.copy`, `pin.save`, `pin.quick-save`: the pin's picture at 100 %, whatever its zoom; since
+Step 56 with its annotations). Step 56 added Annotate (`pin.annotate`, `Space`, §4.9). The
 other items arrive with the Steps that implement them (transforms, opacity, thumbnails and
-click-through 54, annotation 56, groups 54). The border and shadow of §10 are not drawn yet.
+click-through 54, groups 54). The border and shadow of §10 are not drawn yet.
 
 ### 3.4 Tray menu (optional tray icon)
 
@@ -453,7 +458,7 @@ synthesized input or touch of the real clipboard:
 | Real off-screen overlay window (GDI text of the toolbar at 150 %) | `crates/noeul/src/win/overlay.rs` tests | 32 (drawing) |
 | e2e (ignored; `cargo xtask e2e` only) | `e2e/tests/step51_noeul_double_click_pin.rs` | 01, 03, 05, 17, 20, 29 |
 
-FLOW-13 to FLOW-15 need the annotation tools (Step 56); FLOW-18 needs the keyboard marking of
+FLOW-13 to FLOW-15 need the annotation tools (automated since Step 56, §4.9); FLOW-18 needs the keyboard marking of
 Step 52 (automated since Step 52, §4.8); FLOW-33 is N4; FLOW-34 and FLOW-35 are covered by Step 53's focus hand-back and Step
 50's desktop check. So these steps need the maintainer, on the real desktop with a physical mouse
 and keyboard (record the Windows build, the monitors and their scales, and the date in the Step
@@ -592,6 +597,108 @@ Evidence column):
     the magnifier's cells are larger and it shows the logical position "x, y at 150 %".
 12. Hover Noeul's own pins: they are detected like other windows.
 
+### 4.9 Step 56: annotation, its rules and the manual check
+
+Step 56 ships the annotation tools in the overlay and on pins
+([ADR 0038](adr/0038-noeul-annotation.md); NOEUL-FR-080, NOEUL-FR-081, NOEUL-FR-083,
+NOEUL-NFR-014). The rules:
+
+1. **Tools.** The toolbar's rectangle, ellipse, line, arrow, pen, marker and text buttons (or their
+   bindable `annotate.*` actions) choose a tool; choosing it again leaves it. While a tool is active
+   (phase `annotating`) the selection's handles are hidden and presses inside the selection draw
+   (clipped to it): rectangle and ellipse from corner to corner (`Shift`: square, circle), line and
+   arrow from point to point (`Shift`: 45° steps), pen and marker freehand (the marker is one
+   translucent coat), text where pressed. Nothing pins while a tool is active, not even a
+   double-click (FLOW-13); `Enter`, Pin and the toolbar still pin, copy and save, with the
+   annotations.
+2. **Style.** The colour button cycles eight colours (`Shift`: backwards); the width button, `[`
+   and `]` (`annotate.width-down`/`-up`, `char:` keys) and the wheel change the width level (1, 2,
+   3, 4, 6, 8, 12 logical pixels; the marker and text have their own sizes). Widths are logical
+   pixels of the monitor where the object was drawn: 3 pixels at 100 % are 5 device pixels at 150 %.
+   A selected object takes a chosen colour or width.
+3. **Objects.** With a tool active, a press on an object picks it (the pen and marker always draw;
+   the text tool edits the label it presses on): a drag moves it, its handles resize it (box
+   handles; a line's or arrow's two ends). `N` / `Shift+N` select objects by keyboard; while one is
+   selected the arrows move it, `Ctrl`+arrows grow it, `Shift`+arrows shrink it; `Delete` removes
+   it; `PageUp`, `PageDown`, `Shift+PageUp`, `Shift+PageDown` change its order. The size chip's
+   second line measures the object drawn or selected ("120 × 80", or a line's "144 px 33.7°").
+4. **Undo.** `Ctrl+Z` undoes, `Ctrl+Y` and `Ctrl+Shift+Z` redo, also after the tool was left; one
+   stroke, one move, one whole label is one step; `annotate.clear-all` (no default key) is one step
+   too. Undo and redo restore exactly the earlier objects.
+5. **Leaving.** `Esc` ends the label being edited, else aborts the shape being drawn, else leaves
+   the tool and keeps the drawing (then the double-click pins again, FLOW-15); with nothing of that
+   left, `Esc` cancels the capture and nothing remains (no picture, no annotation). A right-click
+   finishes the shape being drawn, else leaves the tool (no menu while a tool is active).
+6. **Text.** A label is typed where the text tool pressed; the window takes the input method only
+   while a label is edited (the overlay and pins otherwise have none, so letter shortcuts work in
+   Hangul mode), and the composition shows inline at the caret, underlined, until it is committed.
+   While a label is edited every shortcut is suspended except its editing keys (`Backspace`,
+   `Delete`, arrows, `Home`, `End`, `Enter` for a new line) and `Esc`, which ends it. A double-click
+   on a word selects it (FLOW-14); typing replaces the selection. Characters are drawn with the
+   first Windows face that has them (Segoe UI, Malgun Gothic for Hangul, Segoe UI Emoji for emoji,
+   …); emoji are monochrome, and a line mixing right-to-left and left-to-right text across fonts is
+   not reordered between them (*limitations*).
+7. **Keyboard drawing.** With a tool active, `Space` (`selection.mark`) sets a shape's start at the
+   pointer, the pointer keys (`W A S D`) move its end, and `Space` sets it; with the text tool,
+   `Space` starts a label at the pointer. `Tab` reaches every toolbar button, and `Enter` on a tool
+   hands the keyboard back to the canvas (J5).
+8. **Pins.** A pin keeps its picture unchanged and its annotations as objects; its window, Copy and
+   Save show them drawn. `Space` (`pin.annotate`) or the pin's menu opens the pin editor: the pin at
+   100 % with its toolbar (Done, the tools, colour, width, Undo, Redo, Cancel) in a window whose
+   background is transparent; the pin's own window hides meanwhile. Drawing works as in the
+   overlay; dragging the selection's handles (or `Ctrl`/`Shift`+arrows) crops. `Enter` or Done
+   keeps the annotations and the crop (the kept part stays where it was shown); `Esc` or Cancel
+   leaves the pin exactly as it was. Clicking another window keeps the editor open. While a pin is
+   edited no capture opens (and the reverse); closing the pin ends the edit without keeping it.
+9. **Privacy.** `status` reports the tool, counts and IDs only, never a label's text.
+
+What the automated tests cover, without anything on the visible desktop, synthesized input, the
+user's input method or clipboard:
+
+| Layer | Where | What |
+| --- | --- | --- |
+| Model | `crates/noeul/src/annotation/tests.rs` | every tool's create, undo and redo; moving, resizing, ordering, recolouring, deleting, clear all; keyboard editing and drawing; `Esc` precedence; typing, Korean composition, emoji and Hebrew text, word selection, long text; a 23-step lossless undo session; DPI-scaled widths; ASCII goldens of a rectangle at 100 % and 150 %; lines, arrows, ellipses; the marker's single coat; text masks; transparent pictures; cropping |
+| Overlay model | `crates/noeul/src/overlay.rs` tests | FLOW-13, FLOW-14, FLOW-15; drawing never moves the selection; the toolbar's buttons, geometry, wrapping and icons; J5 keyboard-only drawing; the readout; undo/redo, wheel, width, object keys, order, delete, clear all; text and IME; right-click; the pin editor's selection, crop, commit and cancel; layered compositing |
+| Instance core (fake windows) | `crates/noeul/src/app.rs` tests | the overlay's composed pixels equal the copied PNG, at 100 % and 150 %; lines keep their DPI across the monitor seam (quick save); undo, redo and cancel leave nothing; a pin keeps its objects, the pin editor commits, crops and cancels losslessly; a label suspends shortcuts and takes compositions; keyboard-only annotation to a pin |
+| Pins | `crates/noeul/src/pins.rs` tests | annotations over a transparent picture; crops land where they were shown at any zoom; reopen keeps annotations |
+| Real Win32 (own off-screen windows) | `crates/noeul/src/win/overlay.rs`, `win/typeset.rs` tests | the layered pin editor is clear around the pin and opaque under its toolbar; `WM_CHAR` (surrogate pairs), `WM_IME_*` and the wheel become events; the input context is associated with the window only while asked; Hangul is drawn by Malgun Gothic and emoji by Segoe UI Emoji; Hebrew is ordered right to left |
+| Real binary, test hook | `crates/noeul/tests/annotation.rs` | shapes, a bound tool key, undo/redo, the wheel and `Esc`, then a quick save with exactly the annotations; a label typed with posted characters and IME messages, pinned, edited in the layered editor, committed, cancelled, and the pin's quick save |
+| e2e (ignored; `cargo xtask e2e` only) | `e2e/tests/step56_noeul_annotation.rs` | the annotate keys headlessly; drawing, a Korean label, undo/redo, pin, pin editor and quick save on the synthetic desktop |
+
+These steps need the maintainer, on the real desktop with a physical mouse and keyboard and the
+Microsoft Korean IME installed (record the Windows build, the monitors and their scales, and the
+date in the Step report and the matrix Evidence column):
+
+1. `cargo build --release -p noeul`, then `target\release\noeul.exe start` (default profile).
+2. Press `F1`, drag a rectangle over some text, click the toolbar's rectangle tool and drag inside:
+   a red 3-pixel outline appears as you drag and the chip's second line shows its size. Hold
+   `Shift` with the ellipse (a circle) and the line (45° steps); draw an arrow, a pen squiggle and a
+   marker stroke over text (translucent, overlapping parts not darker).
+3. Click the colour button (orange), `Shift`+click (red again), the width button, `[` and `]`, and
+   turn the wheel: new strokes follow. With a tool, click a shape's outline: it shows handles; drag
+   it, drag a handle, press `Delete`; press `N`, then the arrows: the selected shape moves.
+4. `Ctrl+Z` three times, `Ctrl+Y` and `Ctrl+Shift+Z`; then the toolbar's Undo and Redo.
+5. Choose the text tool, click, type `Hello`; switch the IME to Korean (한/영) and type 한글: the
+   composition shows inline, underlined, the candidate window (`Hanja`) opens at the caret, and the
+   committed text joins the label; add an emoji with `Win+.`. `Enter` starts a new line; `Esc`
+   ends the label. Double-click a word of the label (text tool active): it is selected; type: it is
+   replaced.
+6. With the IME still in Hangul mode and no label edited, press `E`, `M` and `W A S D`: the
+   overlay's shortcuts work (the overlay has no input method).
+7. `Esc` (leave the tool), then double-click inside: a pin with the annotations. Click the pin,
+   `Ctrl+C`, paste into Paint: the annotations are in the picture.
+8. `F1`, annotate, `Ctrl+C`, paste into Paint or Word: exactly what the overlay showed, nothing of
+   the toolbar or the chip. `F1`, annotate, `Ctrl+S`: the saved PNG holds the annotations.
+9. Click a pin and press `Space`: the editor opens over the pin, its toolbar below, nothing around
+   it covers the desktop. Draw, `Enter`: the pin shows the new drawing. `Space`, draw, `Esc`: the
+   pin is unchanged. `Space`, drag the bottom-right handle inwards, `Enter`: the pin is cropped and
+   its kept part stays where it was. While the editor is open, click another window, come back and
+   press `Enter`: the work is kept.
+10. On a monitor at 150 % (and across two monitors where available): strokes are 1.5 times as thick
+    in device pixels, the toolbar's icons and labels are crisp, and a copy is pixel-exact.
+11. Keyboard only: `F1`, `Ctrl+A`, `Tab` four times (the rectangle tool has the focus ring),
+    `Enter`, `Space`, `W A S D`, `Space`, `Enter`: a pin with a rectangle.
+
 ## 5. Toolbar, menus and the tray
 
 - **Toolbar order** (tab order): Pin · Copy · Save · tools (N3) · Undo · Redo · Cancel. Pin is the
@@ -663,6 +770,19 @@ the other contexts, so its keys win there):
 | `annotate.redo` | `Ctrl+Y`, `Ctrl+Shift+Z` |
 | `annotate.width-down` / `annotate.width-up` | `char:[` / `char:]` (repeat) |
 | `annotate.rectangle`, `.ellipse`, `.line`, `.arrow`, `.pen`, `.marker`, `.text`, `.mosaic`, `.blur`, `.eraser`, `.redact`, `.clear-all` | none (bindable) |
+| `annotate.delete` | `Delete` |
+| `annotate.select-next` / `annotate.select-previous` | `N` / `Shift+N` |
+| `annotate.bring-forward` / `annotate.send-backward` | `PageUp` / `PageDown` |
+| `annotate.bring-to-front` / `annotate.send-to-back` | `Shift+PageUp` / `Shift+PageDown` |
+
+Shipped since Step 56 ([ADR 0038](adr/0038-noeul-annotation.md), §4.9): every `annotate` action
+above except `mosaic`, `blur`, `eraser` and `redact` (Step 57); the object keys `annotate.delete`,
+`annotate.select-*` and the order keys were added to the final manifest by ADR 0038. The context is
+matched whenever the overlay has a confirmed selection (and in the pin editor), so `Ctrl+Z` works
+after the tool was left; `annotate.done` only while there is a label, a shape being drawn, a tool or
+a selected annotation to end — otherwise `Escape` cancels the capture as before. While an
+annotation is selected the overlay's selection keys act on it. `pin.annotate` (`Space`) shipped in
+the `pin` context.
 
 **Context `pin`** (while a pin has focus):
 

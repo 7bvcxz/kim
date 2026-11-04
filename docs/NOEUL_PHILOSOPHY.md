@@ -1,6 +1,6 @@
 # Noeul Philosophy
 
-Status: **current** (product definition; nothing of Noeul is implemented yet) · Owner: mouv ·
+Status: **current** (product definition; the app foundation is implemented since Step 49, [ADR 0023](adr/0023-noeul-app-foundation.md)) · Owner: mouv ·
 Applies to: Noeul (`noeul`) · Step 48 · Requirements: [NOEUL_REQUIREMENTS.md](NOEUL_REQUIREMENTS.md) ·
 Parity: [NOEUL_SNIPASTE_MATRIX.md](NOEUL_SNIPASTE_MATRIX.md) · UX: [NOEUL_UX_SPEC.md](NOEUL_UX_SPEC.md) ·
 Decision: [ADR 0021](adr/0021-noeul-product-definition.md)

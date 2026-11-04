@@ -27,7 +27,7 @@ COMMANDS:
                       pass, examples/<name>/invalid/ must fail) and recompute the hotkey
                       conflict scenarios with the reference checker; cross-check the
                       Ddalgak rule examples (DDALGAK_RULE_MODEL §8)
-    deps-check        Fail if a headless package (kim, subak) depends on GUI crates (ADR 0014)
+    deps-check        Fail if kim, kim-hotkeys, noeul or subak depends on GUI crates (ADR 0014, 0023)
     design-check [--verbose]
                       Check design/tokens.json: colors and declared WCAG contrast pairs
     catalog-keygen --out <file>
@@ -254,6 +254,8 @@ fn run_e2e(root: &Path, force: bool) -> Result<(), String> {
             "kim",
             "--package",
             "subak",
+            "--package",
+            "noeul",
         ],
     )?;
     // Debug `kim` accepts a development catalog key (KIM_DEV_TRUSTED_KEY); some scenarios need it.

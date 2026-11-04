@@ -21,6 +21,7 @@
 //! | `clip` | the clipboard, link opener and save dialog as traits, and their recording fakes (Step 19) | portable, unit-tested |
 //! | `export` | "Save output…": the pane's output, the secret detector, the file (Step 19) | portable, unit-tested |
 //! | [`prefs`] | `%APPDATA%\mouv\subak\gui.json` | portable, unit-tested |
+//! | `keystate` | the modifier state of a message; none from the real keyboard under the test mode | Windows |
 //! | `net` | the connection: connect or start, read frames, write frames | Windows |
 //! | `window` | the Win32 window: paint, keyboard, IME, mouse, clipboard, DPI, test hooks | Windows |
 //! | [`float`] | `--float`: the floating icon, the tray icon and the Terminal manager (Step 18) | portable parts + Windows |
@@ -53,6 +54,9 @@ mod screens;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod tabs;
 
+#[cfg(windows)]
+#[allow(unsafe_code)]
+mod keystate;
 #[cfg(windows)]
 mod net;
 #[cfg(windows)]

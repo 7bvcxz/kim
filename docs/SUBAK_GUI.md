@@ -373,6 +373,7 @@ maintainer's. Build first: `cargo build --release -p subak` (both binaries land 
 | `e2e/tests/step17_subak_tabs.rs` (ignored; `cargo xtask e2e` only) | tabs following CLI new/rename/kill, `Ctrl+Tab` switching with input to the shown tab only; `Ctrl+T`, `Ctrl+W` asking before ending a busy Terminal (Esc keeps it, consent ends only it), the window X only detaching |
 | Step 18 | the floating icon and Terminal manager: §11.10 |
 | Step 19 | search, selection, the clipboard, links and saving output: §12.10 |
+| `crates/subak/src/gui/keystate.rs` unit test (Step 21) | the off-screen test window and floating UI read **no real key state**: a Shift, Ctrl or Alt held on the machine (by the user, or by another test's synthesized input) cannot turn a test's Menu key into `Ctrl+Menu`, as it did once in Step 20's merge gate. A real window still reads `GetKeyState` as before; under the test mode modifiers come only from what the test sends (the `key` command, `MK_SHIFT`/`MK_CONTROL` of a mouse message, the Alt context bit of a posted `WM_SYSKEYDOWN`/`WM_SYSCHAR`). Checked with modifiers set in the test thread's own key table (`SetKeyboardState`, which synthesizes no input) |
 
 ## 11. The floating icon, tray icon and Terminal manager (Step 18)
 

@@ -173,7 +173,7 @@ fn run(o: Options) -> ExitCode {
 #[cfg(not(windows))]
 fn run(o: Options) -> ExitCode {
     // ADR 0011: no Linux window before M4; the portable modules compile and are tested.
-    let _ = o;
+    drop(o);
     say(
         "subak-gui: error: the Subak window needs Windows; Linux support is planned for M4 (unsupported_platform)\n",
         true,

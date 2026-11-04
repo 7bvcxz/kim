@@ -39,6 +39,7 @@ Run with `cargo xtask e2e`, which refuses unless the counter below has reached 1
 | 26 | #14 Step 14 – Persistent sessions and reconnection validation, Milestone A (merged; issue open, Milestone A NOT complete until the maintainer's Windows Terminal + Claude Code run, `MILESTONE_A_VALIDATION.md` §6) | `step14_milestone_a.rs` (2 tests): a detached Host keeps shells and an interactive program through client events; concurrent Terminals and clients stay independent | 11 |
 | 27 | #74 Step 69 – Ddalgak Unicode text expansion and string typing (merged; issue open for the maintainer's real typing/IME/clipboard checks, `DDALGAK_ENGINE.md` §12) | `step69_ddalgak_typing.rs` (2 tests): an agent builds snippets and hotstrings and never sees their text; the running app loads typing rules and types nothing by itself | 12 |
 | 28 | #57 Step 52 – Noeul smart selection and pixel precision (merged; issue open for the maintainer's real-app detection and real-monitor magnifier checks, `NOEUL_UX_SPEC.md` §4.8) | `step52_noeul_smart_selection.rs` (2 tests): the precision keys and settings are discoverable headlessly; detect, select, pin, history and keyboard marking on the synthetic desktop | 13 |
+| 29 | #15 Step 15 – Native terminal emulator foundation (merged; issue open for the maintainer's visible-window check, `TERMINAL_EMULATOR.md` §9) | `step15_terminal_emulator.rs` (2 tests): a client view of `subak attach` renders Korean like the Host model; a view of another size follows the resize and `more` | 14 |
 
 ## E2E runs
 

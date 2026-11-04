@@ -584,6 +584,30 @@ impl Core {
         )
     }
 
+    /// A profile switch (Step 75, DDALGAK_RULE_MODEL §10, `DDALGAK-FR-030`): first everything the
+    /// old profile holds or waits for ends — pending taps, holds, sequences and undecided dual
+    /// roles are dropped, the worker is told to release every output ([`Signal::ReleaseAll`]), a
+    /// remap's lifted trigger modifiers that are still held are restored and held layers end —
+    /// then the new rules apply **in their profile's default mode**: unlike a reload, nothing is
+    /// carried over by mode ID. Keys whose down was consumed keep having their up consumed, so no
+    /// application ever sees half a key press across the switch.
+    ///
+    /// Returns the signals for the old rules (send them before the new generation) and the
+    /// [`Signal::Mode`] of the new rules.
+    pub fn switch_table(&mut self, table: Table) -> (Vec<Signal>, Signal) {
+        let before = self.cancel_pending();
+        let _carried = self.set_table(table);
+        let _ = self.modes.reset(&self.table.modes, ModeOrigin::Reload);
+        let mode = self.mode_signal(
+            NONE,
+            Change {
+                state: true,
+                active: true,
+            },
+        );
+        (before, mode)
+    }
+
     pub fn table(&self) -> &Table {
         &self.table
     }
@@ -4050,6 +4074,68 @@ mod tests {
         assert!(matches!(s, Signal::Mode { switched: true, .. }));
         assert_eq!(t.active(), "base");
         assert_eq!(t.core.next_timer(now + 2000), None);
+    }
+
+    /// Step 75 (`DDALGAK-FR-030`, `DDALGAK-SEC-005`): a profile switch ends everything the old
+    /// profile holds or waits for, keeps consumed key pairs and starts the new profile in its
+    /// default mode even when both profiles have a mode with the same ID.
+    #[test]
+    fn a_profile_switch_releases_everything_keeps_pairs_and_starts_in_the_default_mode() {
+        let s = layers();
+        let (nav, game) = (s.index("nav").unwrap(), s.index("game").unwrap());
+        let rules = vec![
+            mode_rule("to-game", "F15", ModeAction::Set(game)),
+            mode_rule("hold-nav", "F14", ModeAction::Hold(nav)),
+            remap("f", "F16", "F17"),
+            dual("caps", "CapsLock", "LCtrl", "Escape"),
+        ];
+        let mut t = T::with_modes(rules, s.clone());
+        t.ev("F15", false);
+        t.ev("F15", true);
+        assert_eq!(t.active(), "game");
+        // Mid-action: a held layer, a held remap and an undecided dual role.
+        t.ev("F14", false);
+        assert_eq!(t.active(), "nav");
+        t.ev("F16", false);
+        t.ev("CapsLock", false);
+        assert_eq!(t.core.active_remaps(), 2);
+        // The other profile has modes with the same IDs: nothing is carried over.
+        let other = vec![remap("o", "F16", "F18")];
+        let (before, mode) = t
+            .core
+            .switch_table(Table::compile_modes(other, s.clone(), 20));
+        assert!(before.contains(&Signal::ReleaseAll), "{before:?}");
+        assert!(matches!(mode, Signal::Mode { switched: true, .. }));
+        assert_eq!(t.active(), "base", "the new profile's default mode");
+        assert_eq!(t.core.active_remaps(), 0, "nothing held across the switch");
+        // The old keys' ups stay consumed and do nothing (no stray tap, no stuck target).
+        for k in ["F16", "CapsLock", "F14"] {
+            let u = t.ev(k, true);
+            assert!(u.consume, "{k}: a consumed down has its up consumed");
+            assert!(u.signal.is_none(), "{k}: {:?}", u.signal);
+        }
+        assert_eq!(t.active(), "base");
+        // The new profile's rule works from the next press on; the old one is gone.
+        assert_eq!(
+            op(&t.ev("F16", false)),
+            Some(press(&[], &[], Some(vk("F18"))))
+        );
+        t.ev("F16", true);
+        assert!(!t.ev("F15", false).consume, "the old mode rule is gone");
+        t.ev("F15", true);
+        // A plain reload (the same profile) keeps the latched mode by ID instead.
+        let back = vec![mode_rule("to-game", "F15", ModeAction::Set(game))];
+        t.core
+            .set_table(Table::compile_modes(back.clone(), s.clone(), 20));
+        t.ev("F15", false);
+        t.ev("F15", true);
+        assert_eq!(t.active(), "game");
+        t.core.set_table(Table::compile_modes(back, s, 20));
+        assert_eq!(
+            t.active(),
+            "game",
+            "a reload carries the mode, a switch never does"
+        );
     }
 
     #[test]

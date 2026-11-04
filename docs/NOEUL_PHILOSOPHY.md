@@ -74,8 +74,9 @@ mouse gestures to each tool (HOTKEY_CONTRACT §1, §11.1). The exact rules and t
   another.
 - **100 % means one image pixel per device pixel.** A pin is pixel-exact on any monitor until the
   user zooms it [NOEUL-FR-061]. That makes pins usable as a ruler and a color reference.
-- **Pins never steal focus.** They do not appear in Alt+Tab or on the taskbar and take keyboard
-  focus only when clicked.
+- **Pins never steal focus.** They do not appear in Alt+Tab or on the taskbar. A pin takes
+  keyboard focus only when the user creates it or clicks it, so `Esc` or the arrow keys work on a
+  new pin at once, and a click elsewhere returns to work.
 - **No trapped UI.** `Esc` closes the focused pin. A pin that ignores the mouse (click-through)
   can always be made clickable again from the tray, the settings window or the CLI, and Noeul
   turns click-through on only when such a path exists [NOEUL-FR-063, NOEUL-SEC-013]. Pins left

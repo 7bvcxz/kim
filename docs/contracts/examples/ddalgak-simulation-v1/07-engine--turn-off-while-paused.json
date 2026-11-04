@@ -1,0 +1,45 @@
+{
+  "schema": "ddalgak.simulation",
+  "schema_version": 1,
+  "kind": "simulate",
+  "profile": "default",
+  "revision": 2,
+  "context": {
+    "mode": "base",
+    "engine": "paused",
+    "focus": "normal",
+    "app": null,
+    "ime_composing": false
+  },
+  "event": {
+    "keys": "RCtrl",
+    "on": "release",
+    "source": "physical"
+  },
+  "decision": {
+    "outcome": "fired",
+    "code": "ok",
+    "rule": "turn-off",
+    "key_reaches_app": false,
+    "candidates": [
+      {
+        "rule": "turn-off",
+        "result": "winner"
+      }
+    ]
+  },
+  "effects": [
+    {
+      "step": 0,
+      "type": "engine",
+      "performed": false,
+      "summary": "Turns Ddalgak off: the hook is removed (engine-control rules work while paused).",
+      "preview": {
+        "from": "paused",
+        "to": "off"
+      }
+    }
+  ],
+  "injected_events": 0,
+  "opened": []
+}

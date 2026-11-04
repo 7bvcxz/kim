@@ -2,7 +2,8 @@
 //! `docs/contracts/examples/<name>/invalid/*.json` (must fail) against
 //! `docs/contracts/schemas/<name>.schema.json`, using the subset validator in
 //! [`crate::jsonschema`]. The hotkey scenarios are additionally recomputed by the reference
-//! checker in [`crate::hotkeys`] (docs/HOTKEY_CONTRACT.md §15).
+//! checker in [`crate::hotkeys`] (docs/HOTKEY_CONTRACT.md §15), and the Ddalgak rule examples
+//! get the cross-reference checks of [`crate::ddalgak`] (docs/DDALGAK_RULE_MODEL.md §8).
 
 use crate::jsonschema::Validator;
 use serde_json::Value;
@@ -14,6 +15,7 @@ pub struct Report {
     pub valid_examples: usize,
     pub invalid_examples: usize,
     pub hotkey_scenarios: usize,
+    pub ddalgak_documents: usize,
     /// For each invalid example: (path, first violation) — shown by `schema-check --verbose`.
     pub rejections: Vec<(String, String)>,
     pub problems: Vec<String>,
@@ -92,6 +94,9 @@ pub fn check_contracts(root: &Path) -> Result<Report, String> {
     let hotkeys = crate::hotkeys::check(&contracts)?;
     report.hotkey_scenarios = hotkeys.scenarios;
     report.problems.extend(hotkeys.problems);
+    let ddalgak = crate::ddalgak::check(&contracts)?;
+    report.ddalgak_documents = ddalgak.documents;
+    report.problems.extend(ddalgak.problems);
     if report.schemas == 0 {
         report
             .problems

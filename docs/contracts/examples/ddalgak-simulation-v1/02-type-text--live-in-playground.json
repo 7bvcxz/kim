@@ -1,0 +1,47 @@
+{
+  "schema": "ddalgak.simulation",
+  "schema_version": 1,
+  "kind": "live",
+  "live_target": "playground",
+  "profile": "default",
+  "revision": null,
+  "context": {
+    "mode": "base",
+    "engine": "running",
+    "focus": "normal",
+    "app": null,
+    "ime_composing": false
+  },
+  "event": {
+    "keys": "Ctrl+Shift+F2",
+    "on": "press",
+    "source": "physical"
+  },
+  "decision": {
+    "outcome": "fired",
+    "code": "ok",
+    "rule": "sign-off-ko",
+    "key_reaches_app": false,
+    "candidates": [
+      {
+        "rule": "sign-off-ko",
+        "result": "winner"
+      }
+    ]
+  },
+  "effects": [
+    {
+      "step": 0,
+      "type": "type_text",
+      "performed": true,
+      "summary": "Typed 13 characters on 2 lines into the playground's test field.",
+      "preview": {
+        "characters": 13,
+        "lines": 2,
+        "method": "unicode"
+      }
+    }
+  ],
+  "injected_events": 26,
+  "opened": []
+}

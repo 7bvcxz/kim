@@ -1,0 +1,40 @@
+{
+  "schema": "ddalgak.rules",
+  "schema_version": 1,
+  "hotkey_contract": 1,
+  "active_profile": "default",
+  "profiles": [
+    {
+      "id": "default",
+      "title": "Default",
+      "default_mode": "base",
+      "modes": [
+        {
+          "id": "base",
+          "title": "Base"
+        }
+      ],
+      "rules": [
+        {
+          "id": "hold",
+          "title": "Hold",
+          "enabled": true,
+          "trigger": {
+            "keys": "CapsLock"
+          },
+          "steps": [
+            {
+              "type": "mode",
+              "op": "hold",
+              "mode": "base"
+            },
+            {
+              "type": "delay",
+              "ms": 5
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

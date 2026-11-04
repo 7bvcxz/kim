@@ -851,6 +851,12 @@ but it never skips consent (`KIM-SEC-001`). The tool ID for its shortcuts is `ki
   --all-tools` sees rule triggers that shadow Kim tools' global keys
   (`hook_overrides_global`). Rule triggers may use what the hook backend supports, but never
   the chords that §7.1, §7.3 and §7.4 reserve.
+- **Step 65** specified the rule model ([DDALGAK_RULE_MODEL](DDALGAK_RULE_MODEL.md),
+  [ADR 0022](adr/0022-ddalgak-rule-model-and-safety.md)) and finalized Ddalgak's manifest: the
+  four global actions above plus the `rules` and `playground` contexts of its editor. Rule
+  triggers add lock keys and bare side-specific modifiers to §5, use no `char:` keys or
+  leaders, and also never use `Alt+F4` or `F12`. Ddalgak's GUI actions avoid the `rule.` prefix,
+  which stays reserved for rule triggers.
 
 ### 13.5 No shared hook or daemon
 

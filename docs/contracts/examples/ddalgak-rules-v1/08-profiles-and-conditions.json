@@ -1,0 +1,93 @@
+{
+  "schema": "ddalgak.rules",
+  "schema_version": 1,
+  "hotkey_contract": 1,
+  "revision": 42,
+  "active_profile": "work",
+  "profiles": [
+    {
+      "id": "work",
+      "title": "Work",
+      "description": "App-specific rules beat global ones on the same trigger; priority decides among equals.",
+      "default_mode": "base",
+      "modes": [{"id": "base", "title": "Base"}],
+      "rules": [
+        {
+          "id": "paste-plain-code",
+          "title": "Ctrl+Shift+V in VS Code pastes without formatting",
+          "enabled": true,
+          "trigger": {"keys": "Ctrl+Shift+V"},
+          "when": {"apps": [{"exe": "Code.exe"}]},
+          "steps": [{"type": "send_keys", "keys": "Ctrl+K Ctrl+V"}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T10:10:00Z", "via": "gui"}}
+        },
+        {
+          "id": "paste-plain-global",
+          "title": "Ctrl+Shift+V elsewhere types the clipboard as plain text",
+          "enabled": true,
+          "trigger": {"keys": "Ctrl+Shift+V"},
+          "when": {"except_apps": [{"path": "C:\\Program Files\\KeePassXC\\KeePassXC.exe"}]},
+          "steps": [{"type": "send_keys", "keys": "Ctrl+Alt+Shift+V"}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T10:10:00Z", "via": "gui"}}
+        },
+        {
+          "id": "meeting-notes",
+          "title": "F15 in a Teams meeting window types a note header",
+          "enabled": true,
+          "priority": 10,
+          "trigger": {"keys": "F15"},
+          "when": {"apps": [{"exe": "ms-teams.exe"}], "window_title": {"contains": "Meeting"}},
+          "steps": [{"type": "type_text", "text": "## Notes\n- "}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T10:11:00Z", "via": "gui"}}
+        },
+        {
+          "id": "meeting-notes-fallback",
+          "title": "F15 elsewhere in Teams opens a blank note",
+          "enabled": true,
+          "trigger": {"keys": "F15"},
+          "when": {"apps": [{"exe": "ms-teams.exe"}], "window_title": {"contains": "Chat"}},
+          "steps": [{"type": "open_program", "path": "%SystemRoot%\\System32\\notepad.exe"}],
+          "consent": {"launch-programs": {"granted_at": "2026-11-04T10:12:00Z", "via": "gui", "fingerprint": "sha256:5339759d8df4faf74679af6ad902e6a2fd0503f0713e20d0ea6c7beb3735bade"}}
+        },
+        {
+          "id": "save-and-reset",
+          "title": "Ctrl+S still saves, and returns to the default mode",
+          "enabled": true,
+          "trigger": {"keys": "Ctrl+S", "pass_through": true},
+          "steps": [{"type": "mode", "op": "default"}]
+        },
+        {
+          "id": "on-screen-keyboard",
+          "title": "F16 from an on-screen keyboard pauses the rules",
+          "description": "Accepts input injected by other programs; a rule that accepts injected input may not inject input itself.",
+          "enabled": true,
+          "trigger": {"keys": "F16", "injected": "accept"},
+          "steps": [{"type": "engine", "op": "pause"}]
+        }
+      ]
+    },
+    {
+      "id": "gaming",
+      "title": "Gaming",
+      "description": "Kept small; many games ignore synthesized input or forbid it (DDALGAK_SAFETY §6).",
+      "default_mode": "base",
+      "modes": [{"id": "base", "title": "Base"}],
+      "rules": [
+        {
+          "id": "gaming-no-contextmenu",
+          "title": "Disable the menu key",
+          "enabled": true,
+          "trigger": {"keys": "ContextMenu"},
+          "steps": [{"type": "block"}]
+        },
+        {
+          "id": "gaming-pause",
+          "title": "Ctrl+Shift+F12 is reserved, so F24 pauses",
+          "enabled": true,
+          "trigger": {"keys": "F24"},
+          "steps": [{"type": "engine", "op": "toggle_pause"}]
+        }
+      ]
+    }
+  ]
+}

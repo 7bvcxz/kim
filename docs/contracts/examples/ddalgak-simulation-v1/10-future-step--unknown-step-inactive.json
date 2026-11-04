@@ -1,0 +1,35 @@
+{
+  "schema": "ddalgak.simulation",
+  "schema_version": 1,
+  "kind": "simulate",
+  "profile": "default",
+  "revision": null,
+  "context": {
+    "mode": "base",
+    "engine": "running",
+    "focus": "normal",
+    "app": null,
+    "ime_composing": false
+  },
+  "event": {
+    "keys": "Ctrl+Shift+Up",
+    "on": "press",
+    "source": "physical"
+  },
+  "decision": {
+    "outcome": "skipped",
+    "code": "step_unsupported",
+    "rule": "maximize-window",
+    "key_reaches_app": true,
+    "candidates": [
+      {
+        "rule": "maximize-window",
+        "result": "inactive",
+        "reason": "Step type `window` comes from a newer Ddalgak; this version never runs it."
+      }
+    ]
+  },
+  "effects": [],
+  "injected_events": 0,
+  "opened": []
+}

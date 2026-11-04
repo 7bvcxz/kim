@@ -1,9 +1,11 @@
 //! Repository automation. Run `cargo xtask --help`.
 //!
-//! Deliberately small: std plus `serde_json` and `regex` (for contract schema checks). Never
+//! Deliberately small: std plus `serde_json` and `regex` (for contract schema checks) and
+//! `sha2` (Ddalgak consent fingerprints in the rule examples; already used by `kim`). Never
 //! shipped to users.
 
 mod catalog_tools;
+mod ddalgak;
 mod deps;
 mod design;
 mod docs;
@@ -23,7 +25,8 @@ COMMANDS:
     schema-check [--verbose]
                       Validate contract examples against docs/contracts/schemas (valid must
                       pass, examples/<name>/invalid/ must fail) and recompute the hotkey
-                      conflict scenarios with the reference checker
+                      conflict scenarios with the reference checker; cross-check the
+                      Ddalgak rule examples (DDALGAK_RULE_MODEL §8)
     deps-check        Fail if a headless package (kim, subak) depends on GUI crates (ADR 0014)
     design-check [--verbose]
                       Check design/tokens.json: colors and declared WCAG contrast pairs
@@ -170,8 +173,12 @@ fn run_schema_check(root: &Path, verbose: bool) -> Result<(), String> {
         }
     }
     println!(
-        "schema-check: {} schemas, {} valid and {} invalid examples, {} hotkey scenarios recomputed",
-        report.schemas, report.valid_examples, report.invalid_examples, report.hotkey_scenarios
+        "schema-check: {} schemas, {} valid and {} invalid examples, {} hotkey scenarios recomputed, {} Ddalgak rule documents cross-checked",
+        report.schemas,
+        report.valid_examples,
+        report.invalid_examples,
+        report.hotkey_scenarios,
+        report.ddalgak_documents
     );
     if report.problems.is_empty() {
         println!("schema-check: PASS");

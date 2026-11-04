@@ -1,0 +1,32 @@
+{
+  "schema": "ddalgak.rules",
+  "schema_version": 1,
+  "hotkey_contract": 1,
+  "active_profile": "default",
+  "profiles": [
+    {
+      "id": "default",
+      "title": "Written by a newer Ddalgak",
+      "description": "A step type from a later version is valid in the file. A version that does not know it keeps the rule but never runs it (step_unsupported), and never drops the unknown fields when it rewrites the file.",
+      "default_mode": "base",
+      "modes": [{"id": "base", "title": "Base"}],
+      "future_profile_field": {"kept": true},
+      "rules": [
+        {
+          "id": "maximize-window",
+          "title": "Ctrl+Shift+Up maximizes the active window",
+          "enabled": true,
+          "trigger": {"keys": "Ctrl+Shift+Up"},
+          "steps": [{"type": "window", "op": "maximize", "target": "active"}]
+        },
+        {
+          "id": "known-rule",
+          "title": "A rule this version can run",
+          "enabled": true,
+          "trigger": {"keys": "Ctrl+Shift+Down"},
+          "steps": [{"type": "block"}]
+        }
+      ]
+    }
+  ]
+}

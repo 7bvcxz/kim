@@ -1,0 +1,35 @@
+{
+  "schema": "ddalgak.simulation",
+  "schema_version": 1,
+  "kind": "simulate",
+  "profile": "default",
+  "revision": 7,
+  "context": {
+    "mode": "base",
+    "engine": "running",
+    "focus": "elevated_window",
+    "app": null,
+    "ime_composing": false
+  },
+  "event": {
+    "keys": "CapsLock",
+    "on": "press",
+    "source": "physical"
+  },
+  "decision": {
+    "outcome": "skipped",
+    "code": "skipped_elevated_target",
+    "rule": "caps-to-ctrl",
+    "key_reaches_app": true,
+    "candidates": [
+      {
+        "rule": "caps-to-ctrl",
+        "result": "inactive",
+        "reason": "An administrator window has focus; Windows would block the injected key, so CapsLock passes unchanged."
+      }
+    ]
+  },
+  "effects": [],
+  "injected_events": 0,
+  "opened": []
+}

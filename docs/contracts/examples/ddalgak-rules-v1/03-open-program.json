@@ -1,0 +1,57 @@
+{
+  "schema": "ddalgak.rules",
+  "schema_version": 1,
+  "hotkey_contract": 1,
+  "active_profile": "default",
+  "profiles": [
+    {
+      "id": "default",
+      "title": "Launchers",
+      "default_mode": "base",
+      "modes": [{"id": "base", "title": "Base"}],
+      "rules": [
+        {
+          "id": "notepad",
+          "title": "Open Notepad",
+          "enabled": true,
+          "trigger": {"keys": "F14"},
+          "steps": [{"type": "open_program", "path": "%SystemRoot%\\System32\\notepad.exe"}],
+          "consent": {"launch-programs": {"granted_at": "2026-11-04T09:30:00Z", "via": "gui", "fingerprint": "sha256:5339759d8df4faf74679af6ad902e6a2fd0503f0713e20d0ea6c7beb3735bade"}}
+        },
+        {
+          "id": "code-new-window",
+          "title": "Open VS Code in a new window, or bring it to the front",
+          "enabled": true,
+          "trigger": {"keys": "Ctrl+Shift+F6"},
+          "steps": [
+            {
+              "type": "open_program",
+              "path": "%LocalAppData%\\Programs\\Microsoft VS Code\\Code.exe",
+              "args": ["--new-window", "C:\\Users\\Public\\Documents\\notes"],
+              "working_dir": "%UserProfile%",
+              "window": "maximized",
+              "if_running": "activate"
+            }
+          ],
+          "consent": {"launch-programs": {"granted_at": "2026-11-04T09:31:00Z", "via": "cli", "fingerprint": "sha256:420652ff5de698f1c324eccf7f0dcdded361258e9e6e626dbc4344ef74bff87b"}}
+        },
+        {
+          "id": "calculator",
+          "title": "Open Calculator (a packaged app)",
+          "enabled": true,
+          "trigger": {"keys": "Ctrl+Shift+F7"},
+          "steps": [{"type": "open_program", "app_id": "Microsoft.WindowsCalculator_8wekyb3d8bbwe!App"}],
+          "consent": {"launch-programs": {"granted_at": "2026-11-04T09:32:00Z", "via": "gui", "fingerprint": "sha256:68f5c5d1237616501712b9849423716c3c570755bb7bd404ad98bdc695626564"}}
+        },
+        {
+          "id": "imported-tool",
+          "title": "Open a tool from an imported profile (waiting for review)",
+          "description": "Imported rules arrive disabled and without consent; they stay inactive until the user reviews the target and turns them on.",
+          "enabled": false,
+          "trigger": {"keys": "Ctrl+Shift+F8"},
+          "steps": [{"type": "open_program", "path": "D:\\Tools\\portable\\tool.exe", "args": ["--quiet"]}]
+        }
+      ]
+    }
+  ]
+}

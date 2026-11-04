@@ -1,0 +1,45 @@
+{
+  "schema": "ddalgak.simulation",
+  "schema_version": 1,
+  "kind": "simulate",
+  "profile": "default",
+  "revision": 3,
+  "context": {
+    "mode": "base",
+    "engine": "running",
+    "focus": "normal",
+    "app": null,
+    "ime_composing": false
+  },
+  "event": {
+    "keys": "Ctrl+Shift+F9",
+    "on": "press",
+    "source": "physical"
+  },
+  "decision": {
+    "outcome": "fired",
+    "code": "ok",
+    "rule": "kim-repo",
+    "key_reaches_app": false,
+    "candidates": [
+      {
+        "rule": "kim-repo",
+        "result": "winner"
+      }
+    ]
+  },
+  "effects": [
+    {
+      "step": 0,
+      "type": "open_url",
+      "performed": false,
+      "summary": "Would open a https page on github.com in your default browser.",
+      "preview": {
+        "scheme": "https",
+        "host": "github.com"
+      }
+    }
+  ],
+  "injected_events": 0,
+  "opened": []
+}

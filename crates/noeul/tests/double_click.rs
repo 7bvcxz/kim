@@ -353,10 +353,11 @@ fn the_toolbar_copy_and_save_are_separate_actions_that_never_pin() {
         (Some(1), Some(0)),
         "copied, not pinned"
     );
-    // The Copy button: below the selection, right-aligned (the second of four buttons).
+    // The Copy button: below the selection, the second button (since Step 56 the bar is wider
+    // than the space left of the selection, so it starts at the monitor's left edge).
     let ov = open_overlay(&sb, pid);
     select(&sb, ov, (100, 100), (399, 299));
-    assert!(click(ov, 246, 324));
+    assert!(click(ov, 86, 324));
     let st = settled(&sb, false);
     assert_eq!(st["captures"]["copied"], 2);
     // Quick save (`Q` here, Ctrl+Shift+S by default): a new PNG of the frozen pixels.
@@ -555,8 +556,11 @@ fn rapid_captures_give_independent_pins_with_exact_pixels() {
     let rects = [
         ((10, 10), (59, 49), (34, 43)),
         ((70, 10), (119, 49), (94, 43)),
-        ((600, 100), (699, 199), (649, 150)), // across the seam (100 % | 150 %)
-        ((700, 50), (999, 249), (720, 120)),  // on the 150 % monitor
+        // Across the seam (100 % | 150 %); on the small 150 % test monitor the toolbar (two rows
+        // since Step 56) sits inside the selection's bottom edge from x 640, so the click is left
+        // of it.
+        ((600, 100), (699, 199), (620, 150)),
+        ((700, 50), (999, 249), (720, 120)), // on the 150 % monitor
     ];
     for (i, (a, b, (cx, cy))) in rects.iter().enumerate() {
         let ov = open_overlay(&sb, pid);

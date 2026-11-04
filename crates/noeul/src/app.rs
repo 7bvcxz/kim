@@ -4791,4 +4791,389 @@ pub(crate) mod tests {
             "the pin is the marked rectangle"
         );
     }
+
+    // ----- Step 56: annotation through the instance core (NOEUL-FR-080…083, NOEUL-NFR-014) -----
+
+    const RED: [u8; 4] = [0x4D, 0x48, 0xE5, 0xFF];
+
+    /// The centre of a toolbar button of the open overlay (from the scene it shows).
+    fn bar_button(a: &App<FakeShell>, item: overlay::ToolbarItem) -> (i32, i32) {
+        let bar = a.overlay.as_ref().unwrap().scene.toolbar.clone().unwrap();
+        let r = bar.buttons.iter().find(|b| b.item == item).unwrap().rect;
+        (
+            r.x + i32::try_from(r.width / 2).unwrap(),
+            r.y + i32::try_from(r.height / 2).unwrap(),
+        )
+    }
+
+    fn click_button(a: &mut App<FakeShell>, item: overlay::ToolbarItem) {
+        let (x, y) = bar_button(a, item);
+        press_at(a, Button::Left, x, y, Mods::NONE, 0);
+        up(a, x, y);
+    }
+
+    fn choose(a: &mut App<FakeShell>, t: annotation::Tool) {
+        click_button(a, overlay::ToolbarItem::Tool(t));
+        assert_eq!(
+            a.overlay.as_ref().unwrap().model.editor().tool(),
+            Some(t),
+            "{t:?} chosen from the toolbar"
+        );
+    }
+
+    /// The overlay's (or editor's) status, validated against the schema.
+    fn checked_status(a: &App<FakeShell>) -> Value {
+        let st = a.status();
+        let errors = crate::schema_errors("noeul-ipc-v1#status_result", &st);
+        assert!(errors.is_empty(), "{errors:?}\n{st:#}");
+        st
+    }
+
+    /// The pixel `(x, y)` of a BGRA buffer covering `r`.
+    fn px_of(buf: &[u8], r: Rect, x: i32, y: i32) -> [u8; 4] {
+        let i = (((y - r.y) as u32 * r.width + (x - r.x) as u32) * 4) as usize;
+        [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]
+    }
+
+    /// How many pixels of column `x` (rows `y0..y1`) are exactly the annotation red.
+    fn red_rows(buf: &[u8], r: Rect, x: i32, y0: i32, y1: i32) -> usize {
+        (y0..y1).filter(|y| px_of(buf, r, x, *y) == RED).count()
+    }
+
+    #[test]
+    fn what_the_overlay_shows_is_what_copy_exports_at_100_and_150_percent() {
+        let (mut a, _syn, dir) = overlay_app("ann-copy");
+        // On the 100 % monitor: a 3-pixel rectangle outline.
+        a.action("capture.region", None);
+        drag(&mut a, (-600, 20), (-201, 219));
+        let sel = Rect::new(-600, 20, 400, 200);
+        choose(&mut a, annotation::Tool::Rectangle);
+        drag(&mut a, (-580, 40), (-500, 100));
+        let pic = a.overlay.as_ref().unwrap().model.picture();
+        // Near the top of the monitor the size chip sits inside the selection, over the top edge.
+        let chip = a.overlay.as_ref().unwrap().scene.chip.clone().unwrap().rect;
+        {
+            let log = a.shell.overlays.log.borrow();
+            assert_eq!(px_of(&log.buffer, pic, -580, 70), RED, "shown at once");
+            assert_eq!(red_rows(&log.buffer, pic, -540, 60, 110), 3, "a 3-px edge");
+        }
+        let st = checked_status(&a);
+        let ov = &st["captures"]["overlay"];
+        assert_eq!(ov["phase"], "annotating");
+        assert_eq!(ov["annotation"]["objects"], 1);
+        assert_eq!(ov["annotation"]["kinds"]["rectangle"], 1);
+        assert_eq!(ov["annotation"]["tool"], "rectangle");
+        let shown = |x: i32, y: i32| !chip.contains(&Rect::new(x, y, 1, 1));
+        let screen: Vec<[u8; 4]> = {
+            let log = a.shell.overlays.log.borrow();
+            (sel.y..sel.y + 200)
+                .flat_map(|y| (sel.x..sel.x + 400).map(move |x| (x, y)))
+                .filter(|(x, y)| shown(*x, *y))
+                .map(|(x, y)| px_of(&log.buffer, pic, x, y))
+                .collect()
+        };
+        key(&mut a, "C", true, false);
+        let (png, dib) = a.shell.copies[0].clone();
+        let (w, h, px) = png_bgra(&png);
+        assert_eq!((w, h), (400, 200));
+        let exported: Vec<[u8; 4]> = (sel.y..sel.y + 200)
+            .flat_map(|y| (sel.x..sel.x + 400).map(move |x| (x, y)))
+            .filter(|(x, y)| shown(*x, *y))
+            .map(|(x, y)| px_of(&px, sel, x, y))
+            .collect();
+        assert!(
+            exported == screen,
+            "the copy holds exactly what the overlay showed (outside the readout)"
+        );
+        assert_eq!(red_rows(&px, sel, -540, 30, 110), 6, "both 3-px edges");
+        assert_eq!(px_of(&px, sel, -580, 70), RED);
+        assert_eq!(
+            px_of(&px, sel, -576, 70),
+            Synthetic::pixel(-576, 70),
+            "inside the outline: the frozen pixels"
+        );
+        assert!(!dib.is_empty());
+        // On the 150 % monitor the same tool draws 5 device pixels wide.
+        a.action("capture.region", None);
+        drag(&mut a, (100, 100), (399, 299));
+        let sel = Rect::new(100, 100, 300, 200);
+        choose(&mut a, annotation::Tool::Rectangle);
+        drag(&mut a, (120, 120), (200, 200));
+        key(&mut a, "C", true, false);
+        let (w, h, px) = png_bgra(&a.shell.copies[1].0);
+        assert_eq!((w, h), (300, 200));
+        assert_eq!(
+            red_rows(&px, sel, 160, 100, 300),
+            10,
+            "two 5-px edges at 150 %"
+        );
+        assert_eq!(px_of(&px, sel, 124, 160), RED);
+        assert_eq!(px_of(&px, sel, 125, 160), Synthetic::pixel(125, 160));
+        assert_eq!(a.ledger.live().0, 0, "every picture and layer is freed");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn annotations_across_the_monitor_seam_keep_the_dpi_they_were_drawn_at() {
+        let (mut a, _syn, dir) = overlay_app("ann-seam");
+        set_config(
+            &mut a,
+            &[(
+                "capture.quick_save_folder",
+                &dir.join("q").display().to_string(),
+            )],
+        );
+        a.action("capture.region", None);
+        drag(&mut a, (-100, 100), (99, 249));
+        let sel = Rect::new(-100, 100, 200, 150);
+        choose(&mut a, annotation::Tool::Line);
+        // One line pressed on the 100 % monitor, crossing into the 150 % one; one on the 150 %.
+        drag(&mut a, (-60, 130), (60, 130));
+        drag(&mut a, (60, 170), (-60, 170));
+        key(&mut a, "S", true, true);
+        assert_eq!(a.status()["last_action"]["result"], "saved");
+        let file = dir.join("q").join("noeul-20261104-090507.png");
+        let (w, h, px) = png_bgra(&std::fs::read(&file).unwrap());
+        assert_eq!((w, h), (200, 150));
+        for x in [-30, 30] {
+            assert_eq!(red_rows(&px, sel, x, 120, 145), 3, "line 1 at x {x}");
+            assert_eq!(red_rows(&px, sel, x, 160, 185), 5, "line 2 at x {x}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn undo_redo_and_cancel_are_lossless_and_leave_nothing_behind() {
+        let (mut a, _syn, dir) = overlay_app("ann-undo");
+        a.action("capture.region", None);
+        drag(&mut a, (-600, 20), (-201, 219));
+        choose(&mut a, annotation::Tool::Ellipse);
+        drag(&mut a, (-580, 40), (-500, 100));
+        drag(&mut a, (-400, 40), (-300, 100));
+        let objects =
+            |a: &App<FakeShell>| a.status()["captures"]["overlay"]["annotation"]["objects"].clone();
+        let all = a.overlay.as_ref().unwrap().model.annotations().to_vec();
+        key(&mut a, "Z", true, false);
+        assert_eq!(objects(&a), 1);
+        key(&mut a, "Y", true, false);
+        assert_eq!(objects(&a), 2);
+        key(&mut a, "Z", true, false);
+        key(&mut a, "Z", true, true);
+        assert_eq!(
+            a.overlay.as_ref().unwrap().model.annotations(),
+            all.as_slice(),
+            "Ctrl+Shift+Z redoes too, exactly"
+        );
+        let st = checked_status(&a);
+        assert_eq!(st["captures"]["overlay"]["annotation"]["undo"], 2);
+        // Escape leaves the tool (the drawing stays), the next Escape cancels the capture.
+        key(&mut a, "Escape", false, false);
+        assert!(a.overlay_open());
+        assert_eq!(a.status()["captures"]["overlay"]["phase"], "selected");
+        assert_eq!(objects(&a), 2);
+        key(&mut a, "Escape", false, false);
+        assert!(!a.overlay_open(), "cancelled");
+        assert!(a.shell.copies.is_empty() && a.shell.clipboard_writes == 0);
+        assert!(a.pins.is_empty());
+        assert_eq!(
+            a.ledger.live(),
+            (0, 0),
+            "the picture and the annotated layer are freed"
+        );
+        assert!(files_under(&dir).iter().all(|f| !f.ends_with(".png")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_pin_keeps_its_annotations_editable_and_edits_commit_crop_or_cancel() {
+        let (mut a, _syn, dir) = overlay_app("ann-pin");
+        a.action("capture.region", None);
+        drag(&mut a, (-600, 20), (-201, 219));
+        let sel = Rect::new(-600, 20, 400, 200);
+        choose(&mut a, annotation::Tool::Rectangle);
+        drag(&mut a, (-580, 40), (-500, 100));
+        key(&mut a, "Enter", false, false);
+        let id = PinId(1);
+        assert!(!a.overlay_open());
+        // The pin keeps the unchanged pixels and the object (in image pixels).
+        assert!(a.pins.picture(id).unwrap().pixels() == pattern(sel).as_slice());
+        let ann = a.pins.annotations(id).unwrap().to_vec();
+        assert_eq!(ann.len(), 1);
+        assert_eq!(
+            ann[0].bounds().l,
+            20.0 - 1.0,
+            "image pixels (its box grown by 1)"
+        );
+        let shown = a.pins.rendered(id).unwrap();
+        assert_eq!(px_of(shown.pixels(), shown.rect(), -580, 70), RED);
+        drop(shown);
+        let list = a.request("pin.list", &json!({})).unwrap();
+        assert_eq!(list["pins"][0]["annotations"], 1);
+        assert_eq!(list["pins"][0]["editing"], false);
+        // Copy outputs the pin with its annotations.
+        a.action("pin.copy", Some(id));
+        let (_, _, px) = png_bgra(&a.shell.copies[0].0);
+        assert_eq!(px_of(&px, sel, -580, 70), RED);
+        // pin.annotate: a layered editor over the pin; the pin's window hides meanwhile.
+        let ctrl_less = crate::hotkeys::chord_of("Space", false, false, false).unwrap();
+        a.pin_event(PinEvent::Key(id, ctrl_less, false));
+        assert_eq!(a.status()["last_action"]["result"], "editing");
+        assert!(a.overlay_open());
+        assert_eq!(a.shell.overlays.log.borrow().layered.last(), Some(&true));
+        let st = checked_status(&a);
+        assert_eq!(st["pins"]["editor"]["mode"], "pin_edit");
+        assert_eq!(st["pins"]["editor"]["pin"], "pin-1");
+        assert_eq!(st["pins"]["editor"]["annotation"]["objects"], 1);
+        assert!(st["captures"]["overlay"].is_null());
+        assert_eq!(a.pins.info(id).map(|i| i.editing), Some(true));
+        assert!(a.shell.windows.log.borrow().visible.contains(&(id, false)));
+        // A capture while editing is ignored (one overlay at a time).
+        a.action("capture.region", None);
+        assert_eq!(a.status()["last_action"]["result"], "ignored");
+        // Draw a line in the editor and commit with Enter.
+        choose(&mut a, annotation::Tool::Line);
+        drag(&mut a, (-450, 150), (-350, 150));
+        key(&mut a, "Enter", false, false);
+        assert!(!a.overlay_open());
+        assert_eq!(a.status()["last_action"]["result"], "committed");
+        assert_eq!(a.pins.annotations(id).unwrap().len(), 2);
+        assert_eq!(a.pins.info(id).map(|i| i.editing), Some(false));
+        assert_eq!(
+            a.shell.windows.log.borrow().visible.last(),
+            Some(&(id, true))
+        );
+        // Cancel is lossless: a drawing made and cancelled leaves the pin as it was.
+        let before = a.pins.annotations(id).unwrap().to_vec();
+        a.action("pin.annotate", Some(id));
+        choose(&mut a, annotation::Tool::Pen);
+        drag(&mut a, (-450, 180), (-350, 190));
+        key(&mut a, "Escape", false, false); // leaves the tool
+        key(&mut a, "Escape", false, false); // cancels the edit
+        assert!(!a.overlay_open());
+        assert_eq!(a.status()["last_action"]["result"], "cancelled");
+        assert_eq!(a.pins.annotations(id).unwrap(), before.as_slice());
+        assert!(a.pins.picture(id).unwrap().pixels() == pattern(sel).as_slice());
+        // Crop: Shift+Left ten times keeps 390 pixels; Done commits.
+        a.action("pin.annotate", Some(id));
+        for _ in 0..10 {
+            key(&mut a, "Left", false, true);
+        }
+        click_button(&mut a, overlay::ToolbarItem::Done);
+        assert!(!a.overlay_open());
+        let info = a.pins.info(id).unwrap();
+        assert_eq!(info.image, (390, 200));
+        assert_eq!(a.pins.annotations(id).unwrap().len(), 2, "both lie inside");
+        assert_eq!(a.ledger.live().0, 1, "only the pin's picture is alive");
+        // Closing a pin while it is edited ends the edit without committing.
+        a.action("pin.annotate", Some(id));
+        a.action("pin.close", Some(id));
+        assert!(!a.overlay_open());
+        assert!(!a.pins.contains(id));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_label_suspends_shortcuts_takes_characters_and_the_ime() {
+        let (mut a, _syn, dir) = overlay_app("ann-text");
+        a.action("capture.region", None);
+        drag(&mut a, (-600, 20), (-201, 219));
+        choose(&mut a, annotation::Tool::Text);
+        press_at(&mut a, Button::Left, -550, 60, Mods::NONE, 0);
+        up(&mut a, -550, 60);
+        let st = checked_status(&a);
+        assert_eq!(
+            st["captures"]["overlay"]["annotation"]["editing_text"],
+            true
+        );
+        assert!(
+            a.shell
+                .overlays
+                .log
+                .borrow()
+                .ime
+                .last()
+                .is_some_and(Option::is_some),
+            "the input method is switched on for the window at the caret"
+        );
+        // `E` (detect.cycle) does not fire while typing: it is a character of the label.
+        let mode = st["captures"]["overlay"]["detection"]["mode"].clone();
+        key(&mut a, "E", false, false);
+        a.overlay_event(OverlayEvent::Char('e', false));
+        a.overlay_event(OverlayEvent::Char('[', false));
+        assert_eq!(a.status()["captures"]["overlay"]["detection"]["mode"], mode);
+        // A Korean composition (what WM_IME_COMPOSITION reports).
+        a.overlay_event(OverlayEvent::Ime(Ime::Start));
+        a.overlay_event(OverlayEvent::Ime(Ime::Compose("\u{d55c}".into())));
+        assert_eq!(
+            a.status()["captures"]["overlay"]["annotation"]["composing"],
+            true
+        );
+        a.overlay_event(OverlayEvent::Ime(Ime::Commit("\u{d55c}".into())));
+        a.overlay_event(OverlayEvent::Ime(Ime::End));
+        key(&mut a, "Escape", false, false);
+        let st = checked_status(&a);
+        assert_eq!(
+            st["captures"]["overlay"]["annotation"]["editing_text"],
+            false
+        );
+        assert_eq!(a.shell.overlays.log.borrow().ime.last(), Some(&None));
+        let text = match &a.overlay.as_ref().unwrap().model.annotations()[0].shape {
+            annotation::Shape::Text(t) => t.text.clone(),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(text, "e[\u{d55c}");
+        assert!(
+            !serde_json::to_string(&st).unwrap().contains('\u{d55c}'),
+            "the status never carries the label's text"
+        );
+        // Not typing: `[` and `]` are the width keys (char: bindings).
+        a.overlay_event(OverlayEvent::Char('[', false));
+        assert_eq!(a.status()["captures"]["overlay"]["annotation"]["width"], 2);
+        a.overlay_event(OverlayEvent::Char(']', false));
+        a.overlay_event(OverlayEvent::Char(']', true));
+        assert_eq!(a.status()["captures"]["overlay"]["annotation"]["width"], 4);
+        // Ctrl+Z removes the whole label in one step.
+        key(&mut a, "Z", true, false);
+        assert_eq!(
+            a.status()["captures"]["overlay"]["annotation"]["objects"],
+            0
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn keyboard_only_annotation_reaches_a_pin_through_the_core() {
+        // J5 with keys only: Tab to the rectangle tool, Enter, Space, D five times, S three
+        // times, Space, Enter.
+        let (mut a, _syn, dir) = overlay_app("ann-keys");
+        a.action("capture.region", None);
+        key(&mut a, "A", true, false); // the monitor under the pointer
+        let sel = a.overlay.as_ref().unwrap().model.selection().unwrap();
+        for _ in 0..4 {
+            key(&mut a, "Tab", false, false);
+        }
+        assert_eq!(a.status()["captures"]["overlay"]["focus"], "rectangle");
+        key(&mut a, "Enter", false, false);
+        assert_eq!(a.status()["captures"]["overlay"]["focus"], "canvas");
+        key(&mut a, "Space", false, false);
+        let code = |k: &str| crate::hotkeys::chord_of(k, false, false, false);
+        for (name, n) in [("D", 5), ("S", 3)] {
+            for _ in 0..n {
+                a.overlay_event(OverlayEvent::Key(
+                    code(name).unwrap(),
+                    code(&format!("code:Key{name}")),
+                    false,
+                ));
+            }
+        }
+        key(&mut a, "Space", false, false);
+        let st = checked_status(&a);
+        assert_eq!(st["captures"]["overlay"]["annotation"]["objects"], 1);
+        key(&mut a, "Enter", false, false);
+        assert_eq!(a.pins.len(), 1);
+        let id = a.pins.ids()[0];
+        assert_eq!(a.pins.annotations(id).unwrap().len(), 1);
+        assert_eq!(a.pins.info(id).unwrap().image, (sel.width, sel.height));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

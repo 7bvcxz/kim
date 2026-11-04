@@ -1145,4 +1145,97 @@ mod tests {
         );
         assert!(!on_screen(&d, Rect::new(-5000, 0, 100, 100)));
     }
+
+    /// Step 56: a pin keeps its picture and its annotations apart; its window shows them drawn
+    /// over a transparent picture without making it opaque; a commit crops where it was shown.
+    #[test]
+    fn annotations_over_a_transparent_picture_and_crop_commits() {
+        use crate::annotation::{Bounds, Object, PALETTE, Shape};
+        let ledger = Ledger::new();
+        let mut w = FakeWindows::default();
+        let d = desk();
+        let mut pins = Pins::new();
+        let red = PALETTE[0].1;
+        let outline = Object {
+            id: 1,
+            shape: Shape::Rectangle(Bounds::new(0.0, 0.0, 10.0, 10.0)),
+            color: red,
+            level: 0,
+            dpi: 96,
+        };
+        let frame = Frame::solid(&ledger, Rect::new(100, 100, 40, 30), [0, 0, 0, 0]).unwrap();
+        let mut new = exact(frame, Source::Clipboard, false);
+        new.annotations = vec![outline.clone()];
+        let id = pins.create(&mut w, &d, new).unwrap();
+        let px = |f: &Frame, x: i32, y: i32| {
+            let r = f.rect();
+            let i = (((y - r.y) as u32 * r.width + (x - r.x) as u32) * 4) as usize;
+            [
+                f.pixels()[i],
+                f.pixels()[i + 1],
+                f.pixels()[i + 2],
+                f.pixels()[i + 3],
+            ]
+        };
+        let shown = pins.rendered(id).unwrap();
+        assert_eq!(px(&shown, 100, 100), [red.b, red.g, red.r, 255]);
+        assert_eq!(
+            px(&shown, 105, 105),
+            [0, 0, 0, 0],
+            "transparent inside the outline"
+        );
+        assert_eq!(px(&shown, 130, 120), [0, 0, 0, 0]);
+        drop(shown);
+        assert!(
+            pins.picture(id).unwrap().pixels().iter().all(|b| *b == 0),
+            "unchanged"
+        );
+        assert_eq!(pins.info(id).unwrap().annotations, 1);
+        // Editing hides the window and shows it again; nothing else changes.
+        pins.set_editing(id, true).unwrap();
+        assert!(pins.info(id).unwrap().editing);
+        pins.set_editing(id, false).unwrap();
+        assert_eq!(w.log.borrow().visible.as_slice(), [(id, false), (id, true)]);
+        // Commit a crop that keeps x 105..140: the pin moves to where that part was shown.
+        let screen = annotation::translate_all(&[outline], 100, 100);
+        pins.commit_edit(id, &screen, Rect::new(105, 100, 35, 30))
+            .unwrap();
+        let info = pins.info(id).unwrap();
+        assert_eq!(
+            (info.rect, info.image),
+            (Rect::new(105, 100, 35, 30), (35, 30))
+        );
+        assert_eq!(
+            pins.annotations(id).unwrap().len(),
+            1,
+            "still shows in the kept part"
+        );
+        assert_eq!(
+            w.log.borrow().presented.last(),
+            Some(&(id, Rect::new(105, 100, 35, 30)))
+        );
+        // At 200 % the kept part goes where it was shown at that zoom.
+        pins.set_zoom(id, 200, (105, 100)).unwrap();
+        pins.commit_edit(id, &[], Rect::new(115, 110, 25, 20))
+            .unwrap();
+        let info = pins.info(id).unwrap();
+        assert_eq!(info.rect, Rect::new(125, 120, 50, 40));
+        assert_eq!(info.annotations, 0);
+        assert!(
+            pins.commit_edit(PinId(99), &[], Rect::new(0, 0, 1, 1))
+                .is_err()
+        );
+        // Closing and reopening keeps annotations.
+        let mut new = exact(
+            Frame::solid(&ledger, Rect::new(0, 0, 20, 20), [9, 9, 9, 255]).unwrap(),
+            Source::Capture,
+            false,
+        );
+        new.annotations = annotation::translate_all(&screen, -100, -100);
+        let two = pins.create(&mut w, &d, new).unwrap();
+        pins.close(two).unwrap();
+        pins.reopen(&mut w, false).unwrap();
+        assert_eq!(pins.annotations(two).unwrap().len(), 1);
+        assert_eq!(pins.list(&d)["pins"][1]["annotations"], 1);
+    }
 }

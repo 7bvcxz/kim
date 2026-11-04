@@ -1444,4 +1444,146 @@ mod tests {
         drop(frozen);
         assert_eq!(ledger.live(), (0, 0));
     }
+
+    /// Step 56 in a real (off-screen, never activated) window: the pin editor's layered window is
+    /// transparent around the pin and opaque under its toolbar and labels (GDI text included);
+    /// typed characters (a surrogate pair joined), IME messages and the wheel become events; the
+    /// input method is associated with the window only while asked (the user's input method is
+    /// never switched — a test stand-in answers for the composition strings).
+    #[test]
+    fn the_layered_editor_is_clear_around_the_pin_and_ime_messages_become_events() {
+        use crate::annotation::{Bounds, Object, PALETTE, Shape};
+        use windows_sys::Win32::UI::Input::Ime::ImmReleaseContext;
+        crate::win::per_monitor_dpi_awareness();
+        let (ox, oy) = crate::capture::OFF_SCREEN;
+        let canvas = Rect::new(ox, oy, 700, 300);
+        let pin = Rect::new(ox + 10, oy + 40, 200, 100);
+        let ledger = Ledger::new();
+        let mut pixels = vec![0u8; canvas.bgra_bytes() as usize];
+        for y in 40..140usize {
+            for x in 10..210usize {
+                let i = (y * 700 + x) * 4;
+                pixels[i..i + 4].copy_from_slice(&[40, 80, 120, 255]);
+            }
+        }
+        let base = Frame::new(&ledger, canvas, pixels).unwrap();
+        let obj = Object {
+            id: 1,
+            shape: Shape::Rectangle(Bounds::of_rect(pin)),
+            color: PALETTE[0].1,
+            level: 0,
+            dpi: 96,
+        };
+        let mut model = Overlay::for_pin(
+            canvas,
+            vec![crate::capture::Monitor::new(
+                Rect::new(ox, oy, 800, 600),
+                true,
+            )],
+            SystemValues::default(),
+            pin,
+            vec![obj.clone()],
+        );
+        let mut win = WinOverlay::create(canvas, Placement::OFF_SCREEN_TEST, true).unwrap();
+        let hwnd = win.hwnd();
+        // SAFETY: a plain query.
+        let before = unsafe { GetForegroundWindow() };
+        // SAFETY: plain queries on our own live window.
+        unsafe {
+            let ex = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+            assert_ne!(ex & WS_EX_LAYERED, 0, "layered");
+            assert_ne!(ex & WS_EX_TOOLWINDOW, 0);
+            assert_eq!(ex & WS_EX_TOPMOST, 0);
+            assert_ne!(ex & WS_EX_NOACTIVATE, 0);
+        }
+        let layer = crate::annotation::flatten(&base, &[obj], pin).unwrap();
+        model.typeset(&win);
+        let scene = model.scene(&win);
+        win.present(&base, Some(&layer), &scene, &[canvas]);
+        assert!(win.show(true));
+        // SAFETY: a plain query.
+        let after = unsafe { GetForegroundWindow() };
+        assert_eq!(after, before, "focus never moved");
+        let buf = win.buffer();
+        let at = |x: i32, y: i32| {
+            let i = ((y as usize) * 700 + x as usize) * 4;
+            [buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]
+        };
+        let red = PALETTE[0].1;
+        assert_eq!(at(10, 60), [red.b, red.g, red.r, 255], "the annotation");
+        assert_eq!(at(100, 90), [40, 80, 120, 255], "the picture");
+        assert_eq!(at(650, 20), [0, 0, 0, 0], "clear around the pin");
+        let bar = scene.toolbar.clone().unwrap();
+        let mut opaque = true;
+        for y in bar.rect.y..bar.rect.y + i32::try_from(bar.rect.height).unwrap() {
+            for x in bar.rect.x..bar.rect.x + i32::try_from(bar.rect.width).unwrap() {
+                opaque &= at(x - ox, y - oy)[3] == 255;
+            }
+        }
+        assert!(
+            opaque,
+            "the toolbar (and the text GDI drew on it) is opaque"
+        );
+        // Characters, IME messages and the wheel, sent to our own window.
+        let _ = take_events();
+        IME_TEST.with(|t| *t.borrow_mut() = Some(("\u{d55c}".into(), String::new())));
+        // SAFETY: synchronous messages to our own window on this thread.
+        unsafe {
+            SendMessageW(hwnd, WM_CHAR, 0x61, 0);
+            SendMessageW(hwnd, WM_CHAR, 0xD83D, 0);
+            SendMessageW(hwnd, WM_CHAR, 0xDE00, 0);
+            SendMessageW(hwnd, WM_IME_STARTCOMPOSITION, 0, 0);
+            SendMessageW(hwnd, WM_IME_COMPOSITION, 0, GCS_COMPSTR as LPARAM);
+        }
+        IME_TEST.with(|t| *t.borrow_mut() = Some((String::new(), "\u{d55c}".into())));
+        // SAFETY: as above.
+        unsafe {
+            SendMessageW(hwnd, WM_IME_COMPOSITION, 0, GCS_RESULTSTR as LPARAM);
+            SendMessageW(hwnd, WM_IME_ENDCOMPOSITION, 0, 0);
+            SendMessageW(hwnd, WM_IME_CHAR, 0xAE00, 0);
+            SendMessageW(hwnd, WM_MOUSEWHEEL, (120usize) << 16, 0);
+        }
+        IME_TEST.with(|t| *t.borrow_mut() = None);
+        assert_eq!(
+            take_events(),
+            [
+                OverlayEvent::Char('a', false),
+                OverlayEvent::Char('\u{1F600}', false),
+                OverlayEvent::Ime(Ime::Start),
+                OverlayEvent::Ime(Ime::Compose("\u{d55c}".into())),
+                OverlayEvent::Ime(Ime::Commit("\u{d55c}".into())),
+                OverlayEvent::Ime(Ime::End),
+                OverlayEvent::Char('\u{ae00}', false),
+                OverlayEvent::Wheel(120),
+            ]
+        );
+        // The input method: associated while a label is edited, removed afterwards.
+        let has_context = || {
+            // SAFETY: the input context of our own window, released at once.
+            unsafe {
+                let h = ImmGetContext(hwnd);
+                if !h.is_null() {
+                    ImmReleaseContext(hwnd, h);
+                }
+                !h.is_null()
+            }
+        };
+        assert!(
+            !has_context(),
+            "off by default (shortcuts work in Hangul mode)"
+        );
+        win.set_ime(Some(Rect::new(ox + 20, oy + 50, 2, 20)));
+        assert!(has_context(), "on for the label");
+        win.set_ime(None);
+        assert!(!has_context(), "off again");
+        // The window's typesetter has the fallback faces.
+        let g = Typesetter::typeset(&win, "\u{d55c}\u{ae00}", 24);
+        assert!(g.mask.iter().filter(|v| **v > 64).count() > 50);
+        win.destroy();
+        // SAFETY: a liveness query on a (now dead) handle.
+        assert_eq!(unsafe { IsWindow(hwnd) }, 0);
+        drop(layer);
+        drop(base);
+        assert_eq!(ledger.live(), (0, 0));
+    }
 }

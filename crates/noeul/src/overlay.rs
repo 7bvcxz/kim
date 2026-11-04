@@ -1481,7 +1481,11 @@ impl Overlay {
             return Zone::Toolbar(bar.buttons.iter().position(|b| b.contains(&at)));
         }
         let z = self.base_zone((x, y));
-        if z == Zone::Interior && self.chip_at.get().is_some_and(|c| c.contains(&at)) {
+        // With a tool the chip is only a readout: presses under it draw (Step 56).
+        if z == Zone::Interior
+            && self.ann.tool().is_none()
+            && self.chip_at.get().is_some_and(|c| c.contains(&at))
+        {
             return Zone::Chip;
         }
         z
@@ -5442,5 +5446,423 @@ mod tests {
         let o = one(800, 600).with_history(&many);
         assert_eq!(o.history().0, HISTORY);
         assert_eq!(one(800, 600).history(), (0, None));
+    }
+
+    // ----- Step 56: annotation (UX spec §4.9, NOEUL-FR-080…083, FLOW-13…15) -----
+
+    use crate::annotation::{BlockType, Bounds, DEFAULT_LEVEL, PALETTE, Shape};
+
+    /// The centre of a toolbar button.
+    fn button(o: &Overlay, item: ToolbarItem) -> (i32, i32) {
+        let bar = o.scene(&Approx).toolbar.unwrap();
+        let b = bar.buttons.iter().find(|b| b.item == item).unwrap().rect;
+        (
+            b.x + i32::try_from(b.width / 2).unwrap(),
+            b.y + i32::try_from(b.height / 2).unwrap(),
+        )
+    }
+
+    fn tool(o: &mut Overlay, t: Tool) {
+        o.handle(Input::Annotate(AnnotateAction::Tool(t)));
+    }
+
+    fn red_rect(b: Bounds) -> Object {
+        Object {
+            id: 1,
+            shape: Shape::Rectangle(b),
+            color: PALETTE[0].1,
+            level: 0,
+            dpi: 96,
+        }
+    }
+
+    #[test]
+    fn a_tool_draws_inside_never_pins_and_escape_leaves_it_with_the_drawing() {
+        let (mut o, s) = flow();
+        let pen = button(&o, ToolbarItem::Tool(Tool::Pen));
+        click(&mut o, pen.0, pen.1, 0);
+        assert_eq!(o.editor().tool(), Some(Tool::Pen));
+        assert_eq!(o.phase(), Phase::Annotating);
+        let scene = o.scene(&Approx);
+        assert!(
+            scene.handles.is_empty(),
+            "a tool hides the selection's handles"
+        );
+        let bar = scene.toolbar.unwrap();
+        assert!(
+            bar.buttons
+                .iter()
+                .any(|b| b.active && b.item == ToolbarItem::Tool(Tool::Pen))
+        );
+        assert_eq!(o.zone((101, 101)), Zone::Interior, "no handle zones");
+        mv(&mut o, 300, 250);
+        assert_eq!(o.cursor(), Cursor::Cross);
+        // FLOW-13 / ANN-17: a double-click inside draws (two dots) and pins nothing.
+        assert_eq!(
+            double(&mut o, (300, 250), (300, 250), 1000, 100),
+            Outcome::Stay
+        );
+        assert_eq!(o.annotations().len(), 2);
+        assert_eq!(o.selection(), Some(s), "the selection did not move");
+        // A drag draws a stroke; it does not move the selection.
+        press_at(&mut o, Button::Left, 150, 150, Mods::NONE, 2000);
+        assert_eq!(o.phase(), Phase::Annotating);
+        mv(&mut o, 200, 180);
+        mv(&mut o, 250, 220);
+        release(&mut o, 250, 220);
+        assert_eq!(o.annotations().len(), 3);
+        assert_eq!(o.selection(), Some(s));
+        // A press outside the selection with a tool does nothing (no new selection, no pin).
+        click(&mut o, 700, 550, 3000);
+        assert_eq!((o.selection(), o.annotations().len()), (Some(s), 3));
+        // Enter pins with the drawing (the owner takes the objects).
+        assert_eq!(
+            o.handle(Input::Action(Action::Pin)),
+            Outcome::Output(Output::Pin, s, Via::Key)
+        );
+        // FLOW-15: Escape leaves the tool and keeps the drawing; then a double-click pins.
+        assert!(o.annotation_active());
+        o.handle(Input::Annotate(AnnotateAction::Done));
+        assert_eq!(o.editor().tool(), None);
+        assert_eq!(o.phase(), Phase::Selected);
+        assert_eq!(o.annotations().len(), 3);
+        assert!(
+            !o.annotation_active(),
+            "Escape now belongs to the capture overlay"
+        );
+        assert!(!o.scene(&Approx).handles.is_empty(), "handles are back");
+        assert_eq!(double(&mut o, (300, 250), (300, 250), 5000, 100), pinned(s));
+        // The tool button toggles.
+        let mut o2 = flow().0;
+        tool(&mut o2, Tool::Line);
+        tool(&mut o2, Tool::Line);
+        assert_eq!(o2.editor().tool(), None);
+    }
+
+    #[test]
+    fn keyboard_only_annotation_tabs_to_a_tool_marks_two_points_and_enter_pins() {
+        // J5 keyboard path: Tab to the rectangle tool, Enter, mark, pointer keys, mark, Enter.
+        let (mut o, s) = flow();
+        for _ in 0..4 {
+            o.handle(Input::Nav(Nav::Next));
+        }
+        assert_eq!(o.toolbar_focus(), Some(ToolbarItem::Tool(Tool::Rectangle)));
+        o.handle(Input::Nav(Nav::Activate));
+        assert_eq!(o.editor().tool(), Some(Tool::Rectangle));
+        assert_eq!(
+            o.toolbar_focus(),
+            None,
+            "the canvas takes the keys after a tool is chosen"
+        );
+        // The pointer is where the selection's drag ended (499, 399).
+        o.handle(Input::Action(Action::Mark));
+        assert!(o.editor().marking());
+        for _ in 0..20 {
+            o.handle(Input::Action(Action::Pointer(Dir::Left)));
+        }
+        for _ in 0..10 {
+            o.handle(Input::Action(Action::Pointer(Dir::Up)));
+        }
+        let chip = o.scene(&Approx).chip.unwrap();
+        assert_eq!(chip.lines[1], "21 \u{d7} 11", "the size readout");
+        o.handle(Input::Action(Action::Mark));
+        assert!(!o.editor().marking());
+        assert_eq!(
+            o.annotations()[0].shape,
+            Shape::Rectangle(Bounds::new(479.0, 389.0, 500.0, 400.0))
+        );
+        assert_eq!(
+            o.handle(Input::Action(Action::Pin)),
+            Outcome::Output(Output::Pin, s, Via::Key)
+        );
+        // Enter during a keyboard gesture keeps the shape drawn so far.
+        let (mut o, s) = flow();
+        tool(&mut o, Tool::Arrow);
+        o.handle(Input::Action(Action::Mark));
+        o.handle(Input::Action(Action::Pointer(Dir::Left)));
+        assert_eq!(
+            o.handle(Input::Action(Action::Pin)),
+            Outcome::Output(Output::Pin, s, Via::Key)
+        );
+        assert_eq!(o.annotations().len(), 1);
+        assert!(!o.editor().marking());
+    }
+
+    #[test]
+    fn undo_redo_width_object_keys_order_delete_and_clear_all() {
+        let (mut o, s) = flow();
+        tool(&mut o, Tool::Rectangle);
+        drag(&mut o, (150, 150), (200, 200));
+        drag(&mut o, (300, 150), (350, 200));
+        assert_eq!(o.annotations().len(), 2);
+        o.handle(Input::Annotate(AnnotateAction::Undo));
+        assert_eq!(o.annotations().len(), 1);
+        o.handle(Input::Annotate(AnnotateAction::Redo));
+        assert_eq!(o.annotations().len(), 2);
+        // The wheel (whole notches) and the width keys.
+        o.handle(Input::Wheel(120));
+        assert_eq!(o.editor().level(), DEFAULT_LEVEL + 1);
+        o.handle(Input::Wheel(60));
+        o.handle(Input::Wheel(-60));
+        assert_eq!(o.editor().level(), DEFAULT_LEVEL + 1, "half notches add up");
+        o.handle(Input::Annotate(AnnotateAction::WidthDown));
+        assert_eq!(o.editor().level(), DEFAULT_LEVEL);
+        // N selects an object; the selection keys then act on it, not on the capture.
+        o.handle(Input::Annotate(AnnotateAction::SelectNext));
+        let id = o.editor().selected().unwrap();
+        o.handle(Input::Action(Action::Move(Dir::Right)));
+        o.handle(Input::Action(Action::Grow(Dir::Down)));
+        assert_eq!(o.selection(), Some(s), "the capture selection stays");
+        let shape = |o: &Overlay| {
+            o.annotations()
+                .iter()
+                .find(|x| x.id == id)
+                .unwrap()
+                .shape
+                .clone()
+        };
+        assert_eq!(
+            shape(&o),
+            Shape::Rectangle(Bounds::new(151.0, 150.0, 202.0, 202.0))
+        );
+        let a = o.scene(&Approx).annotation.unwrap();
+        assert_eq!(a.handles.len(), 8);
+        assert!(a.outline.is_some());
+        // Order, delete, clear all (undoable).
+        o.handle(Input::Annotate(AnnotateAction::Order(Order::Front)));
+        assert_eq!(o.annotations().last().unwrap().id, id);
+        o.handle(Input::Annotate(AnnotateAction::Delete));
+        assert_eq!(o.annotations().len(), 1);
+        o.handle(Input::Annotate(AnnotateAction::ClearAll));
+        assert!(o.annotations().is_empty());
+        // The toolbar's Undo button undoes; Redo redoes; the colour button recolours.
+        let undo = button(&o, ToolbarItem::Undo);
+        click(&mut o, undo.0, undo.1, 0);
+        assert_eq!(o.annotations().len(), 1);
+        let redo = button(&o, ToolbarItem::Redo);
+        click(&mut o, redo.0, redo.1, 0);
+        assert!(o.annotations().is_empty());
+        let color = button(&o, ToolbarItem::Color);
+        click(&mut o, color.0, color.1, 0);
+        assert_eq!(o.editor().color().0, "orange");
+        press_at(&mut o, Button::Left, color.0, color.1, Mods::SHIFT, 0);
+        release(&mut o, color.0, color.1);
+        assert_eq!(o.editor().color().0, "red", "Shift goes back");
+        let width = button(&o, ToolbarItem::Width);
+        for _ in 0..7 {
+            click(&mut o, width.0, width.1, 0);
+        }
+        assert_eq!(o.editor().level(), 2, "it cycles back from the thickest");
+    }
+
+    #[test]
+    fn text_labels_take_characters_and_the_ime_and_a_double_click_selects_a_word() {
+        let (mut o, s) = flow();
+        tool(&mut o, Tool::Text);
+        click(&mut o, 150, 150, 0);
+        assert!(o.editing_text());
+        assert_eq!(o.phase(), Phase::Annotating);
+        assert!(
+            o.ime_caret().is_some(),
+            "the window is asked for the input method at the caret"
+        );
+        for c in "one two ".chars() {
+            o.handle(Input::Char(c));
+        }
+        // 한 composed by the IME: shown while composing, committed as text.
+        o.ime(Ime::Start);
+        o.ime(Ime::Compose("\u{314e}".into()));
+        o.ime(Ime::Compose("\u{d55c}".into()));
+        assert!(o.editor().composing());
+        o.ime(Ime::Commit("\u{d55c}".into()));
+        o.ime(Ime::End);
+        o.typeset(&BlockType);
+        let caret = o.ime_caret().unwrap();
+        assert_eq!(caret.x, 150 + 9 * 11, "after 9 characters of 11 px");
+        // FLOW-14: a double-click on "two" selects it; nothing is pinned.
+        let x = 150 + 5 * 11;
+        assert_eq!(double(&mut o, (x, 155), (x, 155), 1000, 100), Outcome::Stay);
+        let a = o.scene(&Approx).annotation.unwrap();
+        assert_eq!(a.text_selection, [Rect::new(194, 150, 33, 23)]);
+        o.handle(Input::Char('2'));
+        o.handle(Input::TextKey(TextKey::End));
+        o.handle(Input::TextKey(TextKey::Backspace));
+        // Escape ends the label (the tool stays); Enter pins with it.
+        o.handle(Input::Annotate(AnnotateAction::Done));
+        assert!(!o.editing_text());
+        assert_eq!(o.ime_caret(), None, "the input method is off again");
+        let Shape::Text(t) = &o.annotations()[0].shape else {
+            panic!()
+        };
+        assert_eq!(t.text, "one 2 ");
+        assert_eq!(
+            o.handle(Input::Action(Action::Pin)),
+            Outcome::Output(Output::Pin, s, Via::Key)
+        );
+    }
+
+    #[test]
+    fn right_click_finishes_a_shape_or_leaves_the_tool_and_a_lost_capture_aborts() {
+        let (mut o, _) = flow();
+        tool(&mut o, Tool::Line);
+        press(&mut o, Button::Left, 150, 150);
+        mv(&mut o, 200, 200);
+        assert_eq!(press(&mut o, Button::Right, 200, 200), Outcome::Stay);
+        assert_eq!(o.annotations().len(), 1, "finished (ANN-10)");
+        mv(&mut o, 260, 260);
+        release(&mut o, 260, 260);
+        assert_eq!(
+            o.annotations()[0].shape,
+            Shape::Line(
+                annotation::P::of_pixel((150, 150)),
+                annotation::P::of_pixel((200, 200))
+            ),
+            "the rest of the gesture changes nothing"
+        );
+        assert_eq!(
+            press(&mut o, Button::Right, 300, 300),
+            Outcome::Stay,
+            "no menu"
+        );
+        assert_eq!(o.editor().tool(), None, "a right-click leaves the tool");
+        tool(&mut o, Tool::Arrow);
+        press(&mut o, Button::Left, 150, 250);
+        mv(&mut o, 250, 250);
+        o.handle(Input::CaptureLost);
+        assert_eq!(o.annotations().len(), 1, "the arrow was aborted");
+        assert_eq!(o.phase(), Phase::Annotating);
+    }
+
+    #[test]
+    fn the_pin_editor_keeps_its_selection_crops_inside_the_pin_and_commits_with_enter() {
+        let canvas = Rect::new(0, 0, 700, 500);
+        let pin = Rect::new(100, 50, 300, 200);
+        let mut o = Overlay::for_pin(
+            canvas,
+            vec![Monitor::new(Rect::new(0, 0, 800, 600), true)],
+            SystemValues::default(),
+            pin,
+            vec![red_rect(Bounds::new(110.0, 60.0, 150.0, 90.0))],
+        );
+        assert_eq!(o.mode(), Mode::PinEdit);
+        assert_eq!(o.selection(), Some(pin));
+        assert_eq!(o.annotations().len(), 1, "the pin's annotations, editable");
+        let scene = o.scene(&Approx);
+        assert!(scene.layered && scene.magnifier.is_none() && scene.help.is_none());
+        let bar = scene.toolbar.unwrap();
+        assert_eq!(bar.buttons[0].item, ToolbarItem::Done);
+        assert!(bar.buttons[0].primary);
+        assert_eq!(bar.buttons.len(), EDIT_TOOLBAR.len());
+        assert!(canvas.contains(&bar.rect));
+        // Presses outside the pin and right-clicks never lose the selection; losing focus keeps
+        // the work.
+        click(&mut o, 600, 20, 0);
+        press(&mut o, Button::Right, 600, 20);
+        press(&mut o, Button::Right, 200, 150);
+        assert_eq!(o.selection(), Some(pin));
+        assert_eq!(o.handle(Input::FocusLost), Outcome::Stay);
+        // No double-click output, no copy or save, no detection or history.
+        assert_eq!(
+            double(&mut o, (200, 150), (200, 150), 0, 100),
+            Outcome::Stay
+        );
+        for a in [
+            Action::Copy,
+            Action::Save,
+            Action::QuickSave,
+            Action::Full,
+            Action::Mark,
+        ] {
+            assert_eq!(o.handle(Input::Action(a)), Outcome::Stay, "{a:?}");
+        }
+        assert_eq!(o.selection(), Some(pin));
+        // Crop: the bottom-right handle inwards, then outwards: never beyond the picture.
+        press(&mut o, Button::Left, 399, 249);
+        mv(&mut o, 350, 200);
+        release(&mut o, 350, 200);
+        assert_eq!(o.selection(), Some(Rect::new(100, 50, 251, 151)));
+        press(&mut o, Button::Left, 350, 200);
+        mv(&mut o, 650, 480);
+        release(&mut o, 650, 480);
+        assert_eq!(o.selection(), Some(pin));
+        o.handle(Input::Action(Action::Shrink(Dir::Left)));
+        let keep = Rect::new(100, 50, 299, 200);
+        assert_eq!(o.selection(), Some(keep));
+        // Enter (Done) commits; Escape cancels.
+        assert_eq!(
+            o.handle(Input::Action(Action::Pin)),
+            Outcome::Output(Output::Pin, keep, Via::Key)
+        );
+        let done = button(&o, ToolbarItem::Done);
+        assert_eq!(
+            click(&mut o, done.0, done.1, 0).1,
+            Outcome::Output(Output::Pin, keep, Via::Toolbar)
+        );
+        assert_eq!(o.handle(Input::Leave), Outcome::Cancel);
+        // Drawing works as in the overlay, inside the pin.
+        tool(&mut o, Tool::Pen);
+        drag(&mut o, (120, 120), (600, 450));
+        let Shape::Pen(points) = &o.annotations()[1].shape else {
+            panic!()
+        };
+        assert_eq!(
+            points.last(),
+            Some(&annotation::P::of_pixel((398, 249))),
+            "kept inside the part the pin keeps"
+        );
+    }
+
+    #[test]
+    fn compose_shows_the_annotated_layer_inside_and_keeps_a_layered_canvas_transparent() {
+        let ledger = Ledger::new();
+        let canvas = Rect::new(0, 0, 700, 300);
+        let mut px = vec![0u8; canvas.bgra_bytes() as usize];
+        let at_px = |x: usize, y: usize| (y * 700 + x) * 4;
+        for y in 10..30 {
+            for x in 10..50 {
+                let i = at_px(x, y);
+                px[i..i + 4].copy_from_slice(&[10, 20, 30, 255]);
+            }
+        }
+        let i = at_px(12, 28);
+        px[i..i + 4].copy_from_slice(&[100, 100, 100, 128]);
+        let base = Frame::new(&ledger, canvas, px).unwrap();
+        let pin = Rect::new(10, 10, 40, 20);
+        let obj = red_rect(Bounds::new(10.0, 10.0, 50.0, 30.0));
+        let o = Overlay::for_pin(
+            canvas,
+            vec![Monitor::new(Rect::new(0, 0, 800, 600), true)],
+            SystemValues::default(),
+            pin,
+            vec![obj.clone()],
+        );
+        let layer = annotation::flatten(&base, &[obj], pin).unwrap();
+        let scene = o.scene(&Approx);
+        let mut out = vec![0u8; canvas.bgra_bytes() as usize];
+        compose(&base, Some(&layer), &scene, canvas, &mut out);
+        let at = |out: &[u8], x: usize, y: usize| {
+            let i = at_px(x, y);
+            [out[i], out[i + 1], out[i + 2], out[i + 3]]
+        };
+        let red = PALETTE[0].1;
+        assert_eq!(
+            at(&out, 10, 25),
+            [red.b, red.g, red.r, 255],
+            "the annotation"
+        );
+        assert_eq!(at(&out, 11, 25), [10, 20, 30, 255], "the picture inside");
+        assert_eq!(
+            at(&out, 12, 28),
+            [50, 50, 50, 128],
+            "premultiplied for the layered window"
+        );
+        assert_eq!(
+            at(&out, 650, 200),
+            [0, 0, 0, 0],
+            "the canvas around the pin is clear"
+        );
+        // The same scene without the layer shows the unannotated picture.
+        compose(&base, None, &scene, canvas, &mut out);
+        assert_eq!(at(&out, 10, 25), [10, 20, 30, 255]);
     }
 }

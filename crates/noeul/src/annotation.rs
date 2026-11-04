@@ -15,8 +15,9 @@
 //!   the next edit (NOEUL-FR-081). "Clear all" is an ordinary step. Undo and redo restore the
 //!   exact objects, so they are lossless by construction.
 //! - **Editing.** [`Editor`] turns presses, drags, keys, characters and input-method events into
-//!   edits: draw with the current [`Tool`], select an object by pressing on it, move it, resize it
-//!   by its handles, reorder, recolour, re-width or delete it, type and compose text (Korean IME
+//!   edits: draw with the current [`Tool`], select an object by pressing on it (the pen and the
+//!   marker always draw; the text tool edits the label it presses on), move it, resize it by its
+//!   handles, reorder, recolour, re-width or delete it, type and compose text (Korean IME
 //!   compositions are shown inline and become text only when committed), and draw with the
 //!   keyboard (`selection.mark` sets the points). It records which pixels changed
 //!   ([`Editor::take_dirty`]) so the overlay redraws only those.
@@ -1050,7 +1051,18 @@ impl Editor {
                 return true;
             }
         }
-        if let Some(id) = self.doc.hit(p, tol) {
+        // Freehand tools always draw (a stroke may start on another one); the other tools, and
+        // no tool, pick the object under the press.
+        let picks = !matches!(self.tool, Some(Tool::Pen | Tool::Marker));
+        if let Some(id) = self.doc.hit(p, tol).filter(|_| picks) {
+            if self.tool == Some(Tool::Text)
+                && matches!(self.doc.get(id).map(|o| &o.shape), Some(Shape::Text(_)))
+            {
+                // The text tool edits the label it presses on, the caret where it pressed.
+                self.edit_text(id);
+                self.caret_at(at);
+                return true;
+            }
             self.select(id);
             let start = self.doc.get(id).cloned().expect("hit");
             self.begin(Gesture::Move {
@@ -1478,7 +1490,8 @@ impl Editor {
         }
     }
 
-    /// Ends editing the label: an empty label is removed; the whole edit is one undo step.
+    /// Ends editing the label: an empty label is removed, the label is deselected, and the whole
+    /// edit is one undo step.
     pub fn end_text(&mut self) {
         let Some(t) = self.text.take() else {
             return;
@@ -1491,9 +1504,10 @@ impl Editor {
             Some(Shape::Text(x)) if x.text.is_empty());
         if empty {
             self.doc.objects.retain(|o| o.id != t.id);
-            if self.selected == Some(t.id) {
-                self.selected = None;
-            }
+        }
+        // A finished label is not selected (the style keys then change the style only).
+        if self.selected == Some(t.id) {
+            self.selected = None;
         }
         let before = self.before.take().unwrap_or_default();
         self.doc.record(before);

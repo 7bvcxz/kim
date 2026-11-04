@@ -373,12 +373,11 @@ fn a_label_and_a_pin_edit_through_the_real_windows() {
     assert_ne!(ed.ex & WS_EX_LAYERED, 0, "layered");
     assert_eq!(ed.ex & WS_EX_TOPMOST, 0);
     assert_ne!(ed.ex & WS_EX_NOACTIVATE, 0);
-    // SAFETY: a plain query on the instance's window.
-    assert_eq!(
-        unsafe { IsWindowVisible(pin) },
-        0,
-        "the pin hides while edited"
-    );
+    let visible = |w: HWND| {
+        // SAFETY: a plain query on the instance's window.
+        unsafe { IsWindowVisible(w) != 0 }
+    };
+    assert!(!visible(pin), "the pin hides while edited");
     let origin = (ed.rect.0, ed.rect.1);
     let (lx, ly) = button(
         &EDIT_TOOLBAR,
@@ -399,8 +398,7 @@ fn a_label_and_a_pin_edit_through_the_real_windows() {
     let (_, doc) = sb.json(&["pin", "list"]);
     assert_eq!(doc["data"]["pins"][0]["annotations"], 2);
     assert_eq!(doc["data"]["pins"][0]["editing"], false);
-    // SAFETY: as above.
-    assert_ne!(unsafe { IsWindowVisible(pin) }, 0, "shown again");
+    assert!(visible(pin), "shown again");
     // A cancelled edit changes nothing.
     key(pin, 0x20);
     eventually("the editor again", || {

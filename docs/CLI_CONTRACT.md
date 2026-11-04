@@ -248,7 +248,11 @@ familiarity and to match the IPC methods (ADR 0020, ADR 0027). `new` runs `-- <p
 `PATH`, or one verbatim `--command-line` (only its first word resolved); `--env NAME=VALUE`,
 `--env NAME` and `--unset-env NAME` adjust the pane's environment; `--dry-run` reports the
 resolved `executable` also without a Host ([PTY_PROCESSES](PTY_PROCESSES.md)); only `new` starts
-a Host on demand, and `--no-start` forbids even that.
+a Host on demand, and `--no-start` forbids even that. Since Step 20 `config show|check|set|reset|
+export|import` and `profile list|show` ([SUBAK_CLI §3.13](SUBAK_CLI.md)) read and edit
+`config.toml` without contacting a Host (`config reset --all` is `destructive`; `set`, `reset`
+and `import` take `--dry-run`), and `new --profile <name>` (or the default profile) adds
+`profile` to `new`'s data.
 
 **Ddalgak codes** (Step 66 engine commands, [DDALGAK_ENGINE §6](DDALGAK_ENGINE.md); Step 67 rule
 commands, [DDALGAK_RULE_MODEL §13](DDALGAK_RULE_MODEL.md)). `ddalgak` also uses `io`,

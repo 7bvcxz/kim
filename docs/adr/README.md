@@ -52,6 +52,7 @@ the requirements it serves. ADRs are immutable once **Accepted**; a later ADR ma
 | [0046](0046-ddalgak-enable-disable-and-recovery.md) | Ddalgak enable, disable and recovery: a remembered turn-off, scoped `enabled`, a lost hook turns the engine off, stale keys released on demand | Accepted (validated in Step 73 by automated tests; physical chord, real lock, sign-out, reboot and stuck-key checks manual) |
 | [0047](0047-noeul-clipboard-paste-and-rich-sources.md) | Noeul clipboard paste and rich sources: one user-triggered read, pure-Rust decoders with limits, cards from Noeul's own sanitizer and layout | Accepted (Step 55; real-clipboard checks with real applications manual) |
 | [0048](0048-subak-search-clipboard-and-links.md) | Subak search, clipboard and links: a headless bounded search over the view's model, questions before acting on terminal content, the clipboard, opener and save dialog behind traits | Accepted (Step 19; the visible window, real clipboard, browser and save dialog pending the maintainer) |
+| [0051](0051-subak-settings-profiles-and-appearance.md) | Subak settings, shell profiles and appearance: config.toml edited in place, profiles resolved by clients, a light theme from the tokens, calm motion with no idle cost | Accepted (Step 20; the visible window, real High Contrast, light mode and animation settings pending the maintainer) |
 
 "Accepted (validated in Step N)" means the decision is made, but the named Step must confirm it
 on real Windows; if validation fails, that Step writes a superseding ADR.

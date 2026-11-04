@@ -49,6 +49,15 @@ The token file is the source of truth; this section explains intent. Sizes are l
 Measured contrast ratios are printed by `cargo xtask design-check`; the build fails if any
 declared pair drops below its minimum (WCAG 2.2: 4.5:1 text, 3:1 non-text UI and focus).
 
+**Theme `kim-light`** (Step 20; Subak's window, `appearance.theme`, [SUBAK_GUI §13](SUBAK_GUI.md)):
+the same roles on a near-white surface — `bg.base` `#F7F6FA`, `bg.raised` `#ECEBF2`,
+`bg.overlay` `#FFFFFF`, `bg.hover` `#E3E1EB`, `bg.selected` `#DCD7EE`, `border.subtle` `#D9D7E2`,
+`border.strong` `#77738C`, text `#1C1B24` / `#45425A` / `#55526B`, the lilac accent darkened to
+`#5F49C4` (4.5:1 as text, white on it 6:1), status `#23703E` `#7D5700` `#B4283B` `#235BB8`. Its own
+contrast pairs are declared in `tokens.json` (a focused button's label, drawn in `bg.base` on the
+accent or danger fill, is one of them); `design-check` verifies both themes. Kim Manager stays
+`kim-dark`.
+
 ### 2.2 Terminal palette
 
 Foreground `#D8D6E0` on `#0E0E12` (13.4:1), cursor lilac, selection `#3A3460`. Search matches
@@ -58,6 +67,12 @@ others in lightness, not hue alone, and the search bar says "3 of 17" in words. 
 colors are tuned for the near-black background; all foreground colors except ANSI black are
 ≥ 4.5:1, and bright black (used for comments/dim text) stays readable. Programs that set 24-bit
 colors are rendered exactly; the palette only maps the 16 indexed colors.
+
+`kim-light`'s terminal palette (Step 20): foreground `#24232E` on `#F7F6FA`, selection
+`#D6CDF6`, search match `#F6E3B0`, current match light text on `#6B4A00`. Every ANSI foreground —
+the bright ones too, since bold is bright — is ≥ 4.5:1 on the light background, so ANSI "white"
+is a mid grey (`#66637A`) and "bright white" the darkest ink (`#14131B`): programs that print white
+on an assumed dark background stay readable.
 
 ### 2.3 Typography
 
@@ -89,6 +104,11 @@ colors are rendered exactly; the palette only maps the 16 indexed colors.
 | `pulse.period` | 1600 ms | `in-progress` indicator (opacity 0.45 ↔ 1) |
 
 Never animate terminal content, layout of panes, or anything during typing.
+
+Implemented in Subak's window (Step 20, [SUBAK_GUI §13.5](SUBAK_GUI.md)): the active tab's marker
+fades in over `duration.base` and a banner fades in rising 4 px over `duration.slow`, both on
+`easing.standard`; a 16 ms redraw timer runs only while a transition runs, so an idle window has
+no timer. Native menus follow Windows' own menu animation.
 
 ### 2.6 Elevation
 
@@ -166,7 +186,9 @@ available (ring + dot), incompatible (triangle), not installed (nothing).
   native hover colors; close button hover uses `status.danger`).
 - **Tab**: 6 px top radius, 8 px horizontal padding, Claude dot (left) · name (ellipsis) ·
   close `×` on hover/active. Active tab: `bg.base` fill joining the terminal surface, semibold
-  name, 2 px lilac top marker. Inactive: `bg.raised`, `text.secondary`.
+  name, 2 px lilac top marker. Inactive: `bg.raised`, `text.secondary`; hovered: `bg.hover`
+  (Subak, Step 20: every tab keeps its `×`, dim unless hovered or active, so the click targets
+  never move).
 - `+` button after the last tab (new Terminal), overflow chevron when tabs exceed width.
 - Terminal surface: `terminal.background`, 8 px inner padding (configurable 0–16), no border.
 - Status line (optional, tmux-style, Step 25): 22 px at the bottom, `bg.raised`, mono caption.
@@ -241,6 +263,8 @@ available (ring + dot), incompatible (triangle), not installed (nothing).
 
 Honors Windows "Show animations in Windows" (`SPI_GETCLIENTAREAANIMATION`) and the app setting:
 all durations become 0, pulses become static rings, progress shimmer becomes static stripes.
+Subak's setting is `appearance.motion` (`system` follows Windows, `reduced` never animates,
+`full` always does).
 
 ## 5. Implementation notes
 

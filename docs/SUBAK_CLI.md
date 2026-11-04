@@ -45,6 +45,7 @@ that only your user can open.
 | `subak clear-history [<target>]` | destructive | Delete the kept history; the screen stays |
 | `subak host start\|status\|health\|attach\|stop\|serve` | — | The Host itself ([§3.11](#311-the-host-subak-host-)) |
 | `subak hotkeys list\|show\|set\|disable\|enable\|reset\|check\|export\|import` | read / write | The window's keyboard shortcuts ([§3.12](#312-keyboard-shortcuts-subak-hotkeys-)); never contacts a Host |
+| `subak config show\|check\|set\|reset\|export\|import`, `subak profile list\|show` | read / write | Settings and shell profiles in `config.toml` ([§3.13](#313-settings-and-shell-profiles-subak-config--subak-profile-)); never contacts a Host |
 | `subak capabilities` | read | The machine-readable command list (CLI_CONTRACT §9) |
 
 **Structure.** The Terminal verbs are top level and named like tmux's
@@ -57,7 +58,7 @@ Bare `subak` prints help; nothing starts implicitly.
 (`t-` + 12 hex digits). `attach` and `detach` also take `<terminal>:<window>[.<pane>]` and window
 or pane ids ([SESSION_MODEL §3](SESSION_MODEL.md)).
 
-**Endpoints.** Every command except `hotkeys` takes `--endpoint <name>`; the default is your per-user,
+**Endpoints.** Every command except `hotkeys`, `config` and `profile` takes `--endpoint <name>`; the default is your per-user,
 per-Windows-session pipe `\\.\pipe\mouv-subak-<SID>-s<session>`. Use your own name for
 experiments: it never touches the default Host.
 
@@ -93,7 +94,8 @@ The rules of [CLI_CONTRACT.md](CLI_CONTRACT.md) apply to every command:
 ```text
 subak new [<name>] [--cwd <dir>] [--env NAME[=VALUE]]... [--unset-env NAME]...
           [--size <cols>x<rows>] [--remain-on-exit] [--keep-on-failure] [--no-start]
-          [--history-limit <lines>] [--attach [--read-only]] [--dry-run] [--json]
+          [--history-limit <lines>] [--profile <name> | --no-profile]
+          [--attach [--read-only]] [--dry-run] [--json]
           [-- <program> [args...] | --command-line <line>]
 ```
 
@@ -116,6 +118,8 @@ terminal right after. Without a name it gets the lowest free number (`1`, `2`, �
   0–100 000, default 2 000; tmux `history-limit`).
 - `--dry-run` makes every check the real run makes (name, working directory, program on the
   pane's `PATH`, scripts) and reports the resolved `executable`; without a Host it starts none.
+- `--profile <name>` (Step 20) starts a shell profile of `config.toml`; without a program `new`
+  uses the default profile unless `--no-profile` ([§3.13](#313-settings-and-shell-profiles-subak-config--subak-profile-)).
 
 ```console
 > subak new build -- cmd.exe /d
@@ -325,6 +329,79 @@ subak: error: Ctrl+PageDown conflicts with another binding
   - duplicate_binding: Ctrl+PageDown is also bound to subak's "Next Terminal tab"; subak's "Rename Terminal" does not fire on Ctrl+PageDown.
 hint: try Ctrl+Shift+PageDown or Ctrl+Alt+Shift+PageDown; --replace takes Ctrl+PageDown away from tab.next
 ```
+
+### 3.13 Settings and shell profiles (`subak config …`, `subak profile …`)
+
+The window's settings and the basic shell profiles live in `%APPDATA%\mouv\subak\config.toml`
+([SUBAK_GUI §13](SUBAK_GUI.md), [ADR 0051](adr/0051-subak-settings-profiles-and-appearance.md),
+[STATE_SCHEMA §2](contracts/STATE_SCHEMA.md)). These commands are **portable and headless**: they
+read and write that file (and its `backups\`) only, never contact or start a Host, never open a
+window, and never change a running Terminal. The window's Settings menu changes the same lines
+(`KIM-FR-013`); a running window applies them when it next gets the focus.
+
+| Command | Effect | What it does |
+| --- | --- | --- |
+| `subak config show` | read | Every setting with its value, default and source (`file` or `default`), the profiles (secret-looking values as `***`), problems and unknown keys, the backup folder |
+| `subak config check` | read | The file's state and every problem with its key, line and severity; exit 0 (`valid` says whether every value was used) |
+| `subak config set <key> <value>` (or `<key>=<value>`) | write (`--dry-run`) | Change one setting by editing its line in place; comments and unknown keys stay; an invalid value is refused (`usage`) and nothing is written |
+| `subak config reset <key>\|<section>\|--all [--yes]` | write; `--all` destructive (asks or `--yes`) | Remove the keys so their defaults apply; profiles and unknown keys stay; `--all` keeps a backup and also replaces an invalid file |
+| `subak config export` | read | The file (or, without one, a header with the defaults) with every secret-looking value replaced by `***` |
+| `subak config import <file> [--dry-run]` | write | Replace the file with a checked one (valid, this version or older, no secrets); the current file is backed up first |
+| `subak profile list` | read | The profiles and which one is the default |
+| `subak profile show <name>` | read | One profile (names ignore case) |
+
+**Keys**: `appearance.theme` (`auto`, `system`, `kim-dark`, `kim-light`, `high-contrast`),
+`appearance.font_family`, `appearance.font_size` (8–36), `appearance.line_height` (1.0–2.0),
+`appearance.padding` (0–16), `appearance.opacity` (50–100), `appearance.motion` (`system`,
+`reduced`, `full`), `appearance.bold_is_bright`, `terminal.default_profile`,
+`terminal.copy_on_select`, `terminal.smart_ctrl_c`, `terminal.right_click` (`copy-paste`,
+`menu`, `paste`, `none`), `terminal.middle_click` (`none`, `paste`), `terminal.word_separators`.
+Booleans take `true`/`false` (or `on`/`off`). A value that starts with `-` is given as
+`<key>=<value>`. Profiles are `[[profiles]]` tables of the file (`name`, `program`, `args`, `cwd`,
+`env`, `unset_env`); edit them by hand or `import` a file.
+
+**Safety.** An invalid or newer file is never rewritten by `set` or `reset <key>`
+(`config_invalid`, exit 4; `config_from_newer_version`, exit 5); `reset --all --yes` replaces an
+invalid file after copying it to `backups\config-invalid-<UTC>.toml`, and a newer file is never
+replaced. `reset --all` and `import` copy the current file to `backups\config-<UTC>.toml` first
+(the newest 5 are kept). `import` refuses a document with problems (`config_invalid`, with every
+problem and its line) and one that holds a secret-looking value (`secret_in_config`, exit 4:
+a variable named like a token or password, a token-shaped value or URL password, a `--password`
+argument, or a `***` from an export). Secret-looking values typed into the file by hand are
+warned about by name and never printed.
+
+**`subak new --profile <name>`** starts a profile: its program and arguments (unless `-- <program>`
+or `--command-line` is given), its folder (unless `--cwd`), and its environment overrides (an
+`--env`/`--unset-env` of the same variable wins). Without a program, `subak new` uses
+`terminal.default_profile` unless `--no-profile`. The Host receives the explicit command, folder
+and environment; it never reads profiles. `--json` adds `profile` (the name, or `null`) to the
+result and to dry runs. `profile_not_found` (exit 3) names the profiles there are; an invalid
+settings file is `config_invalid`. A default profile that is missing only warns (the Host's
+shell runs).
+
+```console
+> subak config set appearance.theme kim-light
+subak: warning: a running Subak window applies the change when it next gets the focus; running Terminals are not changed
+Set C:\Users\me\AppData\Roaming\mouv\subak\config.toml:
+  appearance.theme: (default) → "kim-light"
+> subak config check
+C:\Users\me\AppData\Roaming\mouv\subak\config.toml: valid, 1 warning(s)
+  config.toml line 13: profile `dev`: it sets `API_TOKEN`, which looks secret; secrets do not belong in config.toml (shown as ***): let the program read them from your environment instead
+> subak profile list
+Profiles:
+  PowerShell (default): powershell.exe -NoLogo  in C:\src
+      env RUST_BACKTRACE=1
+> subak new api --profile PowerShell --env RUST_LOG=debug
+```
+
+`--json`: `config show` → `{path, state, config_version, settings: [{key, value, default, source,
+takes}], profiles, default_profile, problems, unknown, backups}`; `config check` → `{path, state,
+valid, problems, unknown, profiles}`; `set`/`reset`/`import` → `{path, changes: [{key, before,
+after}], dry_run, written, backup}` (`import` adds `from`); `export` → `{path, source, text,
+redacted}`; `profile list` → `{path, state, default, profiles}`; `profile show` → `{path,
+profile}` ([subak-cli-v1](contracts/schemas/subak-cli-v1.schema.json), golden files
+`contracts/examples/subak-cli-v1/config-*.json`, `profile-list.json`, `error-config-*.json`,
+`error-profile-not-found.json`, `error-secret-in-config.json`).
 
 ## 4. Typical sessions
 

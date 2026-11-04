@@ -1,0 +1,73 @@
+{
+  "type": "response",
+  "id": 4,
+  "result": {
+    "dry_run": false,
+    "target": "window",
+    "region": {
+      "x": -200,
+      "y": 100,
+      "width": 1000,
+      "height": 700
+    },
+    "monitor": {
+      "number": 2,
+      "rect": {
+        "x": 0,
+        "y": 0,
+        "width": 1920,
+        "height": 1080
+      },
+      "work": {
+        "x": 0,
+        "y": 0,
+        "width": 1920,
+        "height": 1040
+      },
+      "primary": true,
+      "dpi": 96,
+      "scale_percent": 100,
+      "rotation": 0,
+      "hdr": false
+    },
+    "mapping": {
+      "monitor": 2,
+      "dpi": 96,
+      "scale_percent": 100,
+      "logical": {
+        "x": -200,
+        "y": 100,
+        "width": 1000,
+        "height": 700
+      },
+      "spans": 2,
+      "mixed_dpi": true
+    },
+    "window": {
+      "rect": {
+        "x": -200,
+        "y": 100,
+        "width": 1000,
+        "height": 700
+      },
+      "affinity": "monitor"
+    },
+    "pointer": null,
+    "pin": {
+      "id": "pin-3",
+      "rect": {
+        "x": -200,
+        "y": 100,
+        "width": 1000,
+        "height": 700
+      },
+      "source": "capture",
+      "zoom": 100
+    },
+    "desktop": "available",
+    "warnings": [
+      "the picture spans 2 monitors at different scales; it keeps every monitor's device pixels (nothing is rescaled), and its logical size refers to monitor 2",
+      "the window protects its content from capture (display affinity): Windows shows it black in the picture, and Noeul does not get around that"
+    ]
+  }
+}

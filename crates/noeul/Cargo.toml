@@ -47,14 +47,19 @@ toml = { version = "1.1.8", default-features = false, features = ["parse", "serd
 # the Pictures folder (Step 51), the per-user named pipe with peer identity checks, input-desktop
 # and session checks; window rectangles (DWM extended frame bounds) and UI Automation element
 # rectangles for hover detection (Step 52, COM through raw vtables). No GUI framework, no hook,
-# no service.
+# no service. Step 58: the display configuration (rotation, advanced colour) read with
+# QueryDisplayConfig (Devices_Display), the pointer drawn into a capture with
+# GetCursorInfo/DrawIconEx, and `PrintWindow` (Storage_Xps) for the measurement example only
+# (ADR 0050). Features add no crate to the lock.
 windows-sys = { version = "0.61.2", features = [
+    "Win32_Devices_Display",
     "Win32_Foundation",
     "Win32_Graphics_Dwm",
     "Win32_Graphics_Gdi",
     "Win32_Security",
     "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
+    "Win32_Storage_Xps",
     "Win32_System_DataExchange",
     "Win32_System_IO",
     "Win32_System_JobObjects",

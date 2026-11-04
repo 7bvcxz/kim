@@ -1,0 +1,9 @@
+{
+  "type": "request",
+  "id": 3,
+  "method": "capture",
+  "params": {
+    "monitor": 0,
+    "pin": true
+  }
+}

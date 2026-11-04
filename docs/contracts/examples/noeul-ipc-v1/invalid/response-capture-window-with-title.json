@@ -1,0 +1,30 @@
+{
+  "type": "response",
+  "id": 4,
+  "result": {
+    "dry_run": true,
+    "target": "window",
+    "region": {
+      "x": 10,
+      "y": 10,
+      "width": 300,
+      "height": 200
+    },
+    "monitor": null,
+    "mapping": null,
+    "window": {
+      "rect": {
+        "x": 10,
+        "y": 10,
+        "width": 300,
+        "height": 200
+      },
+      "affinity": "none",
+      "title": "Quarterly report - Excel"
+    },
+    "pointer": null,
+    "pin": null,
+    "desktop": "available",
+    "warnings": []
+  }
+}

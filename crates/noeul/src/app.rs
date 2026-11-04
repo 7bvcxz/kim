@@ -59,7 +59,8 @@
 
 use crate::annotation::{self, Ime, Object, TextKey, Typesetter};
 use crate::capture::{CaptureBackend, DesktopState, check_region};
-use crate::detect::{DetectMode, ElementAnswer, ElementRequest, Snapshot};
+use crate::detect::{DetectMode, ElementAnswer, ElementRequest, Snapshot, WindowFacts};
+use crate::displays::{Debounce, LayoutChange, MonitorSpec};
 use crate::error::{Code, NoeulError, Result};
 use crate::frame::{Frame, Ledger, Rect};
 use crate::hotkeys::Manager;
@@ -151,6 +152,11 @@ pub trait Shell {
     fn request_element(&mut self, req: ElementRequest);
     /// The overlay closed: no more element lookups (a lookup still running is abandoned).
     fn end_detection(&mut self);
+    /// The window that has the keyboard focus now (the foreground window), as geometry and flags
+    /// only (NOEUL-SEC-007), for `capture.window` and `noeul capture --window active` (Step 58);
+    /// `None` when no window has focus. The debug-build test hook only ever names a test's own
+    /// window.
+    fn active_window(&mut self) -> Option<WindowFacts>;
 }
 
 /// The capture overlay's window (`win::overlay`; a fake in tests). It owns a back buffer of
@@ -193,6 +199,9 @@ pub enum OverlayEvent {
     Ime(Ime),
     /// The mouse wheel turned over the overlay (Step 56).
     Wheel(i32),
+    /// The overlay window was told that the displays changed (`WM_DISPLAYCHANGE`,
+    /// `WM_DPICHANGED`; Step 58): the core looks again once the layout is quiet.
+    DisplayChanged,
 }
 
 /// One first-frame measurement (NOEUL-NFR-003): from the request (the hotkey press reaching
@@ -480,6 +489,10 @@ pub enum PinEvent {
     /// Files were dropped on the pin at this screen point (Step 55, NOEUL-FR-073): they are
     /// pinned like `noeul pin <file>`.
     Files(PinId, Vec<PathBuf>, (i32, i32)),
+    /// The pin's window was told its DPI changed (`WM_DPICHANGED`: its monitor was rescaled, or
+    /// it moved to another one; Step 58). The window keeps its pixel size; the core looks at the
+    /// displays again once they are quiet and redraws the pin's outline for its monitor.
+    DpiChanged(PinId),
 }
 
 /// One entry of a pin's context menu.
@@ -603,6 +616,11 @@ pub const PASTE_AS: &[(&str, crate::paste::Kind)] = &[
 pub const PINS_CLICKABLE: &str = "pins.clickable";
 pub const PINS_TOGGLE_HIDDEN: &str = "pins.toggle-hidden";
 
+/// Global actions without default keys (Step 58, NOEUL-FR-017): capture the monitor under the
+/// pointer, or the active window, without the overlay and pin it in place.
+pub const CAPTURE_MONITOR: &str = "capture.monitor";
+pub const CAPTURE_WINDOW: &str = "capture.window";
+
 /// One wheel notch.
 const WHEEL_DELTA: i32 = 120;
 
@@ -640,6 +658,10 @@ pub struct App<S: Shell> {
     wheel: BTreeMap<PinId, i32>,
     /// Pins left off-screen by the last display change (a notice says so when it changes).
     lost: usize,
+    /// Display notifications not yet looked at (Step 58): handled once the layout is quiet.
+    displays: Debounce,
+    /// The one-shot timer the runtime should (re)arm for them.
+    display_timer: Option<Duration>,
 }
 
 impl<S: Shell> std::fmt::Debug for App<S> {
@@ -698,6 +720,8 @@ impl<S: Shell> App<S> {
             save_request: None,
             wheel: BTreeMap::new(),
             lost: 0,
+            displays: Debounce::default(),
+            display_timer: None,
         }
     }
 
@@ -808,6 +832,7 @@ impl<S: Shell> App<S> {
                          "overlay": self.overlay.as_ref().filter(|o| o.is_capture()).map(OverlaySession::to_json),
                          "first_frame": self.latency.to_json()},
             "memory": self.ledger.to_json(),
+            "displays": self.displays.to_json(),
             "hotkeys": self.hotkeys.status_json(),
             "tray": {"enabled": self.settings.settings.tray_icon, "shown": self.shell.tray_shown()},
             "settings": self.settings.to_json(),
@@ -990,16 +1015,12 @@ impl<S: Shell> App<S> {
         }
     }
 
+    /// IPC `capture` (`noeul capture --region | --monitor | --window active --pin`): one of the
+    /// targets, optionally with the pointer, captured and pinned in place (Step 49; monitors,
+    /// windows and the pointer since Step 58).
     fn capture(&mut self, params: &Value, dry_run: bool) -> Result<Value> {
-        let region = params
-            .get("region")
-            .and_then(Rect::from_json)
-            .ok_or_else(|| {
-                NoeulError::new(
-                    Code::Usage,
-                    "`region` must be {x, y, width, height} in device pixels",
-                )
-            })?;
+        let target = Target::from_params(params)?;
+        let pointer = ipc::flag(params, "pointer")?;
         if params.get("pin") != Some(&Value::Bool(true)) {
             return Err(NoeulError::new(
                 Code::Usage,
@@ -1007,30 +1028,178 @@ impl<S: Shell> App<S> {
             )
             .hint("capture to a file or the clipboard is planned (NOEUL-FR-112)"));
         }
-        let desktop = self.capture.desktop();
-        check_region(&desktop, region).map_err(NoeulError::from)?;
-        if dry_run {
-            return Ok(
-                json!({"dry_run": true, "region": region.to_json(), "pin": null,
-                             "desktop": desktop.state.as_str()}),
-            );
+        let v = self.capture_target(target, pointer, Origin::Cli, dry_run)?;
+        if !dry_run {
+            self.last_action = Some(("capture".into(), "pinned"));
         }
-        let frame = self
-            .capture
-            .capture(&self.ledger, region)
-            .map_err(NoeulError::from)?;
+        Ok(v)
+    }
+
+    /// Where a target is on `desktop` now: the rectangle to capture (inside the virtual desktop)
+    /// and, for a window, its facts (geometry and flags only).
+    fn resolve_target(
+        &mut self,
+        desktop: &crate::capture::Desktop,
+        target: Target,
+    ) -> Result<(Rect, Option<WindowFacts>)> {
+        match target {
+            Target::Region(r) => Ok((r, None)),
+            Target::Monitor(spec) => {
+                let i = crate::displays::resolve_monitor(desktop, spec, self.shell.pointer())
+                    .ok_or_else(|| {
+                        NoeulError::new(Code::MonitorNotFound, format!("there is no {spec}"))
+                            .hint(format!(
+                                "{} monitor(s) are attached; `noeul status` lists them in order (1 is the leftmost)",
+                                desktop.monitors.len()
+                            ))
+                    })?;
+                Ok((desktop.monitors[i].rect, None))
+            }
+            Target::ActiveWindow => {
+                let missing = |why: &str| {
+                    NoeulError::new(Code::WindowNotFound, format!("no window to capture: {why}"))
+                        .hint("click the window you want first, or capture a region or a monitor")
+                };
+                let facts = self
+                    .shell
+                    .active_window()
+                    .ok_or_else(|| missing("no window has the keyboard focus"))?;
+                if !facts.visible || facts.minimized {
+                    return Err(missing("the active window is hidden or minimized"));
+                }
+                if facts.cloaked {
+                    return Err(missing(
+                        "the active window is hidden by Windows (another virtual desktop)",
+                    ));
+                }
+                let on = desktop
+                    .virtual_rect
+                    .and_then(|v| crate::displays::intersect(facts.rect, v))
+                    .filter(|r| desktop.monitors.iter().any(|m| m.rect.intersects(r)))
+                    .ok_or_else(|| missing("the active window is off every monitor"))?;
+                Ok((on, Some(facts)))
+            }
+        }
+    }
+
+    /// Captures a target without the overlay and pins it in place, at 100 % (Step 58): the
+    /// region, monitor or window rectangle in device pixels, with the pointer drawn into it when
+    /// asked. A request from the CLI makes a pin without focus and a notice (NOEUL-SEC-010); a
+    /// key makes one with focus, as the overlay's pin does. The result names the monitor, the
+    /// rectangle in that monitor's logical pixels and honest warnings (mixed scales, HDR, a
+    /// window that protects itself, a pointer that is not in the picture).
+    pub fn capture_target(
+        &mut self,
+        target: Target,
+        pointer: bool,
+        origin: Origin,
+        dry_run: bool,
+    ) -> Result<Value> {
+        let desktop = self.capture.desktop();
+        if let Some(e) = desktop.state.error() {
+            return Err(e);
+        }
+        let (region, window) = self.resolve_target(&desktop, target)?;
+        check_region(&desktop, region).map_err(NoeulError::from)?;
+        let mapping = crate::displays::mapping(&desktop.monitors, region);
+        let monitor = mapping.map_or(Value::Null, |m| {
+            crate::displays::monitor_json(&desktop.monitors, m.monitor)
+        });
+        let window_json = window.map_or(Value::Null, |w| {
+            json!({"rect": w.rect.to_json(), "affinity": affinity_str(w.affinity)})
+        });
+        let mut v = json!({
+            "dry_run": dry_run, "target": target.as_str(), "region": region.to_json(),
+            "monitor": monitor, "mapping": mapping.map_or(Value::Null, |m| m.to_json()),
+            "window": window_json, "pointer": Value::Null, "pin": Value::Null,
+            "desktop": desktop.state.as_str(), "warnings": [],
+        });
+        if dry_run {
+            if pointer {
+                v["pointer"] = json!({"drawn": false, "rect": null, "reason": "dry_run"});
+            }
+            v["warnings"] = json!(crate::displays::warnings(
+                &desktop.monitors,
+                region,
+                window.as_ref().map(|w| (w, region)),
+                None
+            ));
+            return Ok(v);
+        }
+        let (frame, outcome) = if pointer {
+            let (f, o) = self
+                .capture
+                .capture_with_pointer(&self.ledger, region)
+                .map_err(NoeulError::from)?;
+            (f, Some(o))
+        } else {
+            (
+                self.capture
+                    .capture(&self.ledger, region)
+                    .map_err(NoeulError::from)?,
+                None,
+            )
+        };
         let sid = self
             .captures
-            .begin(Origin::Cli, frame, Vec::new())
+            .begin(origin, frame, Vec::new())
             .map_err(session_error)?;
         self.captures.select(sid, region).map_err(session_error)?;
         let frame = self.captures.finish_pin(sid).map_err(session_error)?;
-        let id = self.create_pin(&desktop, frame, Source::Capture, Placement::Exact)?;
-        self.last_action = Some(("capture".into(), "pinned"));
-        Ok(
-            json!({"dry_run": false, "region": region.to_json(), "pin": self.pin_ref(id),
-                   "desktop": desktop.state.as_str()}),
-        )
+        let id = if origin == Origin::Cli {
+            self.create_pin(&desktop, frame, Source::Capture, Placement::Exact)?
+        } else {
+            let new = NewPin {
+                frame,
+                source: Source::Capture,
+                placement: Placement::Exact,
+                focus: self.shell.interactive(),
+                guard: None,
+                annotations: Vec::new(),
+            };
+            self.pins
+                .create(self.shell.pin_windows(), &desktop, new)
+                .map_err(|(frame, why)| {
+                    drop(frame);
+                    NoeulError::new(
+                        Code::Internal,
+                        format!("the pin window could not be created: {why}"),
+                    )
+                })?
+        };
+        if let Some(o) = outcome {
+            v["pointer"] = o.to_json();
+        }
+        v["warnings"] = json!(crate::displays::warnings(
+            &desktop.monitors,
+            region,
+            window.as_ref().map(|w| (w, region)),
+            outcome
+        ));
+        v["pin"] = self.pin_ref(id);
+        Ok(v)
+    }
+
+    /// `capture.monitor` and `capture.window` from a key (Step 58): the monitor under the pointer
+    /// or the active window, pinned in place with focus; the pointer when `[capture] pointer` is
+    /// on. A failure says why in a notice (unless the desktop is locked).
+    fn capture_target_action(&mut self, target: Target) -> &'static str {
+        let pointer = self.settings.settings.pointer;
+        match self.capture_target(target, pointer, Origin::Hotkey, false) {
+            Ok(v) => {
+                if let Some(w) = v["warnings"].as_array().and_then(|w| w.first()) {
+                    self.shell
+                        .notice(&format!("Pinned, but {}.", w.as_str().unwrap_or("")));
+                }
+                "pinned"
+            }
+            Err(e) => {
+                if e.code != Code::DesktopUnavailable {
+                    self.shell.notice(&format!("Noeul could not capture: {}.", e.message));
+                }
+                e.code.as_str()
+            }
+        }
     }
 
     /// A pin requested over IPC: never with focus, so it never takes the keyboard from the
@@ -1343,6 +1512,10 @@ impl<S: Shell> App<S> {
         }
         let result = match (action, pin) {
             ("capture.region", _) => self.capture_region_action(Origin::Hotkey, Instant::now()),
+            (CAPTURE_MONITOR, _) => {
+                self.capture_target_action(Target::Monitor(MonitorSpec::Pointer))
+            }
+            (CAPTURE_WINDOW, _) => self.capture_target_action(Target::ActiveWindow),
             ("paste.float", _) => self.paste_float(None),
             ("pin.copy-text", Some(id)) => self.copy_text(id),
             (a, _) if PASTE_AS.iter().any(|(n, _)| *n == a) => {
@@ -1626,10 +1799,16 @@ impl<S: Shell> App<S> {
                 "picture": picture.to_json(), "monitors": desktop.monitors.len(), "first_frame_us": null}),
             );
         }
-        let frame = self
-            .capture
-            .capture(&self.ledger, picture)
-            .map_err(NoeulError::from)?;
+        // With `[capture] pointer = "on"` the frozen picture shows the pointer where it was when
+        // the capture started (Step 58, NOEUL-FR-016); it is part of what gets pinned or copied.
+        let frame = if self.settings.settings.pointer {
+            self.capture
+                .capture_with_pointer(&self.ledger, picture)
+                .map(|(f, _)| f)
+        } else {
+            self.capture.capture(&self.ledger, picture)
+        }
+        .map_err(NoeulError::from)?;
         let captured = Instant::now();
         let id = self
             .captures
@@ -1751,10 +1930,15 @@ impl<S: Shell> App<S> {
 
     /// Routes an overlay window event.
     pub fn overlay_event(&mut self, e: OverlayEvent) {
+        if e == OverlayEvent::DisplayChanged {
+            self.note_display_change(Instant::now());
+            return;
+        }
         if self.overlay.is_none() {
             return;
         }
         let input = match e {
+            OverlayEvent::DisplayChanged => return,
             OverlayEvent::Ime(ime) => {
                 let outcome = match self.overlay.as_mut() {
                     Some(ov) => ov.model.ime(ime),
@@ -2639,6 +2823,7 @@ impl<S: Shell> App<S> {
                 };
                 self.last_action = Some(("pin.drop-files".into(), r));
             }
+            PinEvent::DpiChanged(_) => self.note_display_change(Instant::now()),
             PinEvent::Closed(id) => {
                 self.cancel_pin_edit_of(id);
                 let _ = self.pins.close(id);
@@ -2813,11 +2998,45 @@ impl<S: Shell> App<S> {
         }
     }
 
-    /// Monitors were attached, removed or rearranged, or a work area changed
-    /// (`WM_DISPLAYCHANGE`, `WM_SETTINGCHANGE`). Pins keep their place, even off-screen
-    /// (NOEUL-FR-067): the model only follows where the system put each window. When a pin is
-    /// left where no monitor shows it, a notice names the way back (NOEUL-SEC-013).
+    /// Something said the displays changed (`WM_DISPLAYCHANGE`, a work-area `WM_SETTINGCHANGE`,
+    /// `WM_DPICHANGED` of a pin or the overlay; Step 58). Nothing is looked at yet: the runtime
+    /// (re)arms a one-shot timer ([`App::take_display_timer`]) and calls
+    /// [`App::display_settled`] when the layout has been quiet, so a burst of notifications
+    /// during a rearrangement is handled once and nothing polls (NOEUL-NFR-001).
+    pub fn note_display_change(&mut self, now: Instant) {
+        if let Some(d) = self.displays.note(now) {
+            self.display_timer = Some(d);
+        }
+    }
+
+    /// The delay to (re)arm the display timer with, once per change that asked for it.
+    pub fn take_display_timer(&mut self) -> Option<Duration> {
+        self.display_timer.take()
+    }
+
+    /// The display timer fired: handles the pending change once (nothing when none is pending).
+    pub fn display_settled(&mut self) {
+        if self.displays.settle() {
+            self.display_changed();
+        }
+    }
+
+    /// `status.displays`: notifications received and handled (Step 58).
+    pub fn display_counts(&self) -> (u64, u64) {
+        self.displays.counts()
+    }
+
+    /// Monitors were attached, removed, rearranged, turned or rescaled, or a work area changed.
+    /// The capture backend reads what it keeps about them again. Pins keep their place, even
+    /// off-screen (NOEUL-FR-067): the model only follows where the system put each window, and
+    /// each pin's outline is drawn for the scale of its monitor now while its picture keeps its
+    /// pixel size (NOEUL-FR-091). When a pin is left where no monitor shows it, a notice names
+    /// the way back (NOEUL-SEC-013). An open capture overlay whose frozen picture no longer
+    /// matches the monitors (one was attached, removed, moved or turned) is cancelled with a
+    /// notice; after a change of scale or work area only, it keeps its selection and is drawn
+    /// for the new scales (Step 58). A pin editor keeps going and follows the new scales.
     pub fn display_changed(&mut self) {
+        self.capture.refresh();
         self.pins.sync();
         for id in self.pins.ids() {
             self.update_dpi(id);
@@ -2826,6 +3045,7 @@ impl<S: Shell> App<S> {
         if desktop.state != DesktopState::Available {
             return;
         }
+        let cancelled = self.overlay_follows(&desktop);
         let off = self.pins.off_screen(&desktop);
         let before = std::mem::replace(&mut self.lost, off);
         if off > 0 && off != before {
@@ -2835,8 +3055,59 @@ impl<S: Shell> App<S> {
         }
         self.last_action = Some((
             "display.change".into(),
-            if off > 0 { "off_screen" } else { "ok" },
+            if cancelled {
+                "capture_cancelled"
+            } else if off > 0 {
+                "off_screen"
+            } else {
+                "ok"
+            },
         ));
+    }
+
+    /// The open overlay after a display change (see [`App::display_changed`]); `true` when a
+    /// capture was cancelled.
+    fn overlay_follows(&mut self, desktop: &crate::capture::Desktop) -> bool {
+        let Some(ov) = self.overlay.as_ref() else {
+            return false;
+        };
+        match crate::displays::compare(ov.model.monitors(), &desktop.monitors) {
+            LayoutChange::Same => false,
+            LayoutChange::Geometry if ov.is_capture() => {
+                self.cancel_overlay();
+                self.shell.notice(
+                    "The displays changed, so the capture was cancelled: its frozen picture no longer matches them. Press the capture key again.",
+                );
+                true
+            }
+            LayoutChange::Details | LayoutChange::Geometry => {
+                if let Some(ov) = self.overlay.as_mut() {
+                    ov.model.set_monitors(desktop.monitors.clone());
+                }
+                self.repaint_overlay();
+                false
+            }
+        }
+    }
+
+    /// Composes and paints the whole overlay again (after its monitors' scales changed).
+    fn repaint_overlay(&mut self) {
+        let Some(ov) = self.overlay.as_mut() else {
+            return;
+        };
+        ov.model.typeset(&*ov.window);
+        let frozen = match &ov.base {
+            Some(b) => Some(b),
+            None => self.captures.frozen(),
+        };
+        let mut scene = ov.model.scene(&*ov.window);
+        if let Some(f) = frozen {
+            scene.sample(f);
+            let all = ov.model.picture();
+            ov.window.present(f, ov.layer.as_ref(), &scene, &[all]);
+        }
+        ov.window.set_cursor(ov.model.cursor());
+        ov.scene = scene;
     }
 
     /// The tray menu for the current state (items appear only once implemented, NOEUL-FR-004).
@@ -3115,6 +3386,76 @@ fn hotkeys_forced_off(m: &Manager) -> bool {
         s["off_reason"].as_str(),
         Some("--no-hotkeys" | "KIM_NO_HOTKEYS" | "safe_mode")
     )
+}
+
+/// What a capture without the overlay takes (IPC `capture`, `capture.monitor`, `capture.window`;
+/// Step 58, NOEUL-FR-017).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Target {
+    /// A rectangle of the virtual desktop in device pixels.
+    Region(Rect),
+    /// A whole monitor.
+    Monitor(MonitorSpec),
+    /// The window that has the keyboard focus (its visible frame, without the invisible resize
+    /// border), cut from the screen as the user sees it.
+    ActiveWindow,
+}
+
+impl Target {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Target::Region(_) => "region",
+            Target::Monitor(_) => "monitor",
+            Target::ActiveWindow => "window",
+        }
+    }
+
+    /// Exactly one of `region`, `monitor` or `window: "active"`.
+    fn from_params(p: &Value) -> Result<Target> {
+        let given = |k: &str| p.get(k).is_some_and(|v| !v.is_null());
+        let wanted = ["region", "monitor", "window"]
+            .iter()
+            .filter(|k| given(k))
+            .count();
+        if wanted != 1 {
+            return Err(NoeulError::new(
+                Code::Usage,
+                "give exactly one of `region`, `monitor` or `window`",
+            ));
+        }
+        if given("region") {
+            return Rect::from_json(&p["region"]).map(Target::Region).ok_or_else(|| {
+                NoeulError::new(
+                    Code::Usage,
+                    "`region` must be {x, y, width, height} in device pixels",
+                )
+            });
+        }
+        if given("monitor") {
+            return MonitorSpec::from_json(&p["monitor"])
+                .map(Target::Monitor)
+                .ok_or_else(|| {
+                    NoeulError::new(
+                        Code::Usage,
+                        "`monitor` must be \"primary\", \"pointer\" or a number from 1",
+                    )
+                });
+        }
+        if p["window"] == "active" {
+            Ok(Target::ActiveWindow)
+        } else {
+            Err(NoeulError::new(Code::Usage, "`window` must be \"active\""))
+        }
+    }
+}
+
+/// A window's capture affinity as reported (Step 52's flags; Step 58).
+fn affinity_str(a: crate::detect::Affinity) -> &'static str {
+    match a {
+        crate::detect::Affinity::None => "none",
+        crate::detect::Affinity::Monitor => "monitor",
+        crate::detect::Affinity::Excluded => "excluded",
+    }
 }
 
 fn group_usage() -> NoeulError {
@@ -3407,7 +3748,9 @@ pub(crate) mod tests {
         /// The user's pointer settings (Windows defaults when `None`).
         pub sys: Option<SystemValues>,
         /// The windows the fake desktop lists, topmost first (Step 52).
-        pub facts: Vec<crate::detect::WindowFacts>,
+        pub facts: Vec<WindowFacts>,
+        /// The window with the keyboard focus (Step 58).
+        pub active: Option<WindowFacts>,
         /// How many window lists were taken.
         pub snapshots: usize,
         /// The UI Automation requests sent.
@@ -3550,6 +3893,9 @@ pub(crate) mod tests {
         }
         fn request_element(&mut self, req: ElementRequest) {
             self.element_requests.push(req);
+        }
+        fn active_window(&mut self) -> Option<WindowFacts> {
+            self.active
         }
         fn end_detection(&mut self) {
             self.detection_ended += 1;

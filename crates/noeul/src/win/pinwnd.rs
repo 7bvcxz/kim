@@ -34,8 +34,10 @@
 //! - **Click-through** (NOEUL-FR-063): `WS_EX_TRANSPARENT` on the layered window, so the system
 //!   hit-tests through it to the window below; the pin keeps keyboard focus if it had it (its
 //!   `Ctrl+Shift+T` turns it back) and shows the badge.
-//! - **Displays.** `WM_DPICHANGED` is ignored: a pin keeps its pixel size on every monitor
-//!   (NOEUL-FR-061, NOEUL-FR-091); the core redraws its outline for the new monitor's DPI.
+//! - **Displays.** The rectangle `WM_DPICHANGED` suggests is ignored: a pin keeps its pixel size
+//!   on every monitor (NOEUL-FR-061, NOEUL-FR-091). The message itself is reported to the core
+//!   ([`PinEvent::DpiChanged`], Step 58), which looks at the displays once they are quiet and
+//!   redraws the pin's outline, shadow and resize band for its monitor's scale.
 //!
 //! The window procedure only queues [`PinEvent`]s and calls the registered waker; the instance
 //! core handles them later, never re-entrantly. The context menu is shown by [`track_menu`],
@@ -522,8 +524,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             }
             return 0;
         }
-        // One image pixel per device pixel on every monitor: the suggested size is ignored.
-        WM_DPICHANGED => return 0,
+        // One image pixel per device pixel on every monitor: the suggested size is ignored, and
+        // the core redraws the outline for the new scale once the displays are quiet (Step 58).
+        WM_DPICHANGED => {
+            if let Some(id) = pin_of(hwnd) {
+                push(PinEvent::DpiChanged(id));
+            }
+            return 0;
+        }
         WM_CLOSE => {
             // Alt+F4 or the system: the core closes the pin (and destroys this window).
             if let Some(id) = pin_of(hwnd) {

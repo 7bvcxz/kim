@@ -52,7 +52,8 @@ use windows_sys::Win32::System::Threading::{
     GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GWL_EXSTYLE, GetLayeredWindowAttributes, GetWindowDisplayAffinity, GetWindowLongW,
+    EnumWindows, GWL_EXSTYLE, GetForegroundWindow, GetLayeredWindowAttributes, GetShellWindow,
+    GetWindowDisplayAffinity, GetWindowLongW,
     GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindowVisible, LWA_ALPHA,
     WDA_EXCLUDEFROMCAPTURE, WDA_MONITOR, WS_EX_LAYERED, WS_EX_TRANSPARENT,
 };
@@ -92,6 +93,27 @@ pub fn snapshot(picture: Rect, scope: &Scope, skip: Option<HWND>) -> Snapshot {
 
 /// The process that owns `h`; `None` when the window is gone (a window destroyed between the
 /// enumeration and this query has no owner — never "process 0").
+/// The window that has the keyboard focus (`GetForegroundWindow`) as [`WindowFacts`], for
+/// `capture.window` (Step 58): `None` when no window has focus, when the desktop itself has it
+/// (`GetShellWindow`), or when `scope` leaves the window's process out. Geometry and flags only.
+pub fn foreground(scope: &Scope) -> Option<WindowFacts> {
+    // SAFETY: plain queries without arguments.
+    let (h, shell) = unsafe { (GetForegroundWindow(), GetShellWindow()) };
+    if h.is_null() || h == shell {
+        return None;
+    }
+    facts_of(h, scope)
+}
+
+/// One window's facts when `scope` allows its process (the debug-build test hook names a test's
+/// own window this way; Step 58).
+pub fn window(h: HWND, scope: &Scope) -> Option<WindowFacts> {
+    if h.is_null() {
+        return None;
+    }
+    facts_of(h, scope)
+}
+
 fn owner(h: HWND) -> Option<u32> {
     let mut pid = 0u32;
     // SAFETY: a window handle from the enumeration (a stale one makes this fail harmlessly).

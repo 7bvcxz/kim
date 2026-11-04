@@ -11,7 +11,9 @@
 //!   (display affinity) and DRM content come out exactly as GDI delivers them (black), and are
 //!   never worked around (NOEUL-SEC-004).
 
-use crate::capture::{CaptureBackend, CaptureError, Desktop, DesktopState, Monitor, check_region};
+use crate::capture::{
+    CaptureBackend, CaptureError, Desktop, DesktopState, Monitor, PointerOutcome, check_region,
+};
 use crate::frame::{Frame, Ledger, Rect};
 use std::ffi::c_void;
 use std::sync::Arc;
@@ -19,7 +21,7 @@ use windows_sys::Win32::Foundation::{GetLastError, LPARAM, RECT};
 use windows_sys::Win32::Graphics::Gdi::{
     BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BitBlt, CAPTUREBLT, CreateCompatibleDC, CreateDIBSection,
     DIB_RGB_COLORS, DeleteDC, DeleteObject, EnumDisplayMonitors, GdiFlush, GetDC, GetMonitorInfoW,
-    HDC, HMONITOR, MONITORINFO, ReleaseDC, SRCCOPY, SelectObject,
+    HDC, HMONITOR, MONITORINFO, MONITORINFOEXW, ReleaseDC, SRCCOPY, SelectObject,
 };
 use windows_sys::Win32::System::RemoteDesktop::{
     WTS_CURRENT_SERVER_HANDLE, WTS_CURRENT_SESSION, WTSConnectState, WTSDisconnected,
@@ -125,13 +127,20 @@ fn input_desktop_is_default() -> bool {
 unsafe extern "system" fn monitor_proc(m: HMONITOR, _: HDC, _: *mut RECT, data: LPARAM) -> i32 {
     // SAFETY: `data` is the `&mut Vec<Monitor>` passed to EnumDisplayMonitors below, alive for
     // the whole enumeration, which runs on this thread.
-    let out = unsafe { &mut *(data as *mut Vec<Monitor>) };
-    let mut info = MONITORINFO {
-        cbSize: u32::try_from(size_of::<MONITORINFO>()).expect("small"),
-        ..Default::default()
+    let out = unsafe { &mut *(data as *mut Vec<(Monitor, String)>) };
+    let mut ex = MONITORINFOEXW {
+        monitorInfo: MONITORINFO {
+            cbSize: u32::try_from(size_of::<MONITORINFOEXW>()).expect("small"),
+            ..Default::default()
+        },
+        szDevice: [0; 32],
     };
-    // SAFETY: `m` comes from the enumeration; `info` is writable with cbSize set.
-    if unsafe { GetMonitorInfoW(m, &raw mut info) } != 0 {
+    // SAFETY: `m` comes from the enumeration; `ex` is a writable MONITORINFOEXW whose cbSize says
+    // so (the documented way to ask for the device name too).
+    if unsafe { GetMonitorInfoW(m, (&raw mut ex).cast::<MONITORINFO>()) } != 0 {
+        let info = ex.monitorInfo;
+        let end = ex.szDevice.iter().position(|&c| c == 0).unwrap_or(32);
+        let device = String::from_utf16_lossy(&ex.szDevice[..end]);
         let r = info.rcMonitor;
         if let (Ok(w), Ok(h)) = (
             u32::try_from(r.right - r.left),
@@ -152,23 +161,31 @@ unsafe extern "system" fn monitor_proc(m: HMONITOR, _: HDC, _: *mut RECT, data: 
                 (Ok(ww), Ok(wh)) if ww > 0 && wh > 0 => Rect::new(wr.left, wr.top, ww, wh),
                 _ => rect,
             };
-            out.push(Monitor {
-                rect,
-                primary: info.dwFlags & MONITORINFOF_PRIMARY != 0,
-                dpi: if hr == 0 && dx > 0 {
-                    dx
-                } else {
-                    crate::capture::BASE_DPI
+            out.push((
+                Monitor {
+                    rect,
+                    primary: info.dwFlags & MONITORINFOF_PRIMARY != 0,
+                    dpi: if hr == 0 && dx > 0 {
+                        dx
+                    } else {
+                        crate::capture::BASE_DPI
+                    },
+                    work,
+                    rotation: 0,
+                    hdr: None,
                 },
-                work,
-            });
+                device,
+            ));
         }
     }
     1
 }
 
+/// The monitors, left to right and then top to bottom (the numbers of `noeul capture --monitor`
+/// and `noeul status`), each with its rotation and HDR state from the display configuration
+/// (`win::displays`, Step 58).
 fn monitors() -> Vec<Monitor> {
-    let mut out: Vec<Monitor> = Vec::new();
+    let mut out: Vec<(Monitor, String)> = Vec::new();
     // SAFETY: the callback only touches `out`, passed by pointer for the duration of the call.
     unsafe {
         EnumDisplayMonitors(
@@ -178,7 +195,22 @@ fn monitors() -> Vec<Monitor> {
             (&raw mut out) as LPARAM,
         )
     };
-    out
+    let details = crate::win::displays::details();
+    let mut ms: Vec<Monitor> = out
+        .into_iter()
+        .map(|(mut m, device)| {
+            if let Some(d) = details
+                .iter()
+                .find(|d| d.device.eq_ignore_ascii_case(&device))
+            {
+                m.rotation = d.rotation;
+                m.hdr = d.hdr;
+            }
+            m
+        })
+        .collect();
+    ms.sort_by_key(|m| (m.rect.x, m.rect.y));
+    ms
 }
 
 fn virtual_rect() -> Option<Rect> {
@@ -230,8 +262,13 @@ fn last_error() -> u32 {
     unsafe { GetLastError() }
 }
 
-/// Copies `region` of the screen into a new frame.
-pub(crate) fn blit(ledger: &Arc<Ledger>, region: Rect) -> Result<Frame, CaptureError> {
+/// Copies `region` of the screen into a new frame, with the user's pointer drawn into it when
+/// `pointer` asks (Step 58; `win::displays::draw_pointer`, into the memory bitmap only).
+pub(crate) fn blit(
+    ledger: &Arc<Ledger>,
+    region: Rect,
+    pointer: bool,
+) -> Result<(Frame, PointerOutcome), CaptureError> {
     let (w, h) = (
         i32::try_from(region.width).map_err(|_| CaptureError::TooLarge)?,
         i32::try_from(region.height).map_err(|_| CaptureError::TooLarge)?,
@@ -334,6 +371,11 @@ pub(crate) fn blit(ledger: &Arc<Ledger>, region: Rect) -> Result<Frame, CaptureE
             code: last_error(),
         });
     }
+    let outcome = if pointer {
+        crate::win::displays::draw_pointer(g.mem, region)
+    } else {
+        PointerOutcome::Unavailable
+    };
     // SAFETY: makes sure GDI finished writing the DIB before it is read.
     unsafe { GdiFlush() };
     let len = region.bgra_bytes() as usize;
@@ -346,7 +388,31 @@ pub(crate) fn blit(ledger: &Arc<Ledger>, region: Rect) -> Result<Frame, CaptureE
     for p in pixels.as_chunks_mut::<4>().0 {
         p[3] = 255;
     }
-    Ok(Frame::new(ledger, region, pixels)?)
+    Ok((Frame::new(ledger, region, pixels)?, outcome))
+}
+
+impl Gdi {
+    /// Checks the desktop, copies the region (with the pointer when asked) and blackens what no
+    /// monitor shows.
+    fn take(
+        ledger: &Arc<Ledger>,
+        region: Rect,
+        pointer: bool,
+    ) -> Result<(Frame, PointerOutcome), CaptureError> {
+        let d = desktop();
+        check_region(&d, region)?;
+        let (mut frame, outcome) = blit(ledger, region, pointer).map_err(|e| {
+            // The desktop may have been locked between the check and the copy.
+            let d = desktop();
+            if d.state == DesktopState::Available {
+                e
+            } else {
+                CaptureError::Desktop(d.state)
+            }
+        })?;
+        crate::displays::fill_gaps(&mut frame, &d.monitors);
+        Ok((frame, outcome))
+    }
 }
 
 impl CaptureBackend for Gdi {
@@ -359,16 +425,15 @@ impl CaptureBackend for Gdi {
     }
 
     fn capture(&self, ledger: &Arc<Ledger>, region: Rect) -> Result<Frame, CaptureError> {
-        check_region(&desktop(), region)?;
-        blit(ledger, region).map_err(|e| {
-            // The desktop may have been locked between the check and the copy.
-            let d = desktop();
-            if d.state == DesktopState::Available {
-                e
-            } else {
-                CaptureError::Desktop(d.state)
-            }
-        })
+        Gdi::take(ledger, region, false).map(|(f, _)| f)
+    }
+
+    fn capture_with_pointer(
+        &self,
+        ledger: &Arc<Ledger>,
+        region: Rect,
+    ) -> Result<(Frame, PointerOutcome), CaptureError> {
+        Gdi::take(ledger, region, true)
     }
 }
 

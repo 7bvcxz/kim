@@ -1,6 +1,6 @@
 # Noeul Requirements
 
-Status: **current** (product definition; the app foundation is implemented since Step 49, [ADR 0023](adr/0023-noeul-app-foundation.md); the `F1` selection overlay since Step 50, [ADR 0026](adr/0026-noeul-capture-overlay.md), with its NOEUL-NFR-003 measurements; the pin engine since Step 53, [ADR 0029](adr/0029-noeul-pin-engine.md), with its NOEUL-NFR-001/002/004/007 measurements) · Owner: mouv ·
+Status: **current** (product definition; the app foundation is implemented since Step 49, [ADR 0023](adr/0023-noeul-app-foundation.md); the `F1` selection overlay since Step 50, [ADR 0026](adr/0026-noeul-capture-overlay.md), with its NOEUL-NFR-003 measurements; the pin engine since Step 53, [ADR 0029](adr/0029-noeul-pin-engine.md), with its NOEUL-NFR-001/002/004/007 measurements; the double-click-to-pin signature flow, the toolbar, copy, save, quick save and the gesture settings since Step 51, [ADR 0032](adr/0032-noeul-double-click-pin-and-outputs.md)) · Owner: mouv ·
 Step 48 · Derived from [NOEUL_PHILOSOPHY](NOEUL_PHILOSOPHY.md) and [KIM_PHILOSOPHY](KIM_PHILOSOPHY.md) ·
 Parity: [NOEUL_SNIPASTE_MATRIX](NOEUL_SNIPASTE_MATRIX.md) · UX: [NOEUL_UX_SPEC](NOEUL_UX_SPEC.md) ·
 Decision: [ADR 0021](adr/0021-noeul-product-definition.md)
@@ -220,7 +220,8 @@ OS build are recorded with every result). A budget is changed only by an ADR wit
 How the budgets are measured (Steps 50, 51, 53, 55 and 63 record the results; Step 50's
 first-frame and memory results are in [ADR 0026](adr/0026-noeul-capture-overlay.md#measurements),
 Step 53's pin latency, memory per pin, twenty pins and idle cost with pins in
-[ADR 0029](adr/0029-noeul-pin-engine.md#measurements)):
+[ADR 0029](adr/0029-noeul-pin-engine.md#measurements), Step 51's pin latency from the second
+press of the double-click in [ADR 0032](adr/0032-noeul-double-click-pin-and-outputs.md#measurements)):
 
 | Budget | Measured as | Method |
 | --- | --- | --- |
@@ -282,7 +283,10 @@ Proposed for the Steps that implement them (Steps 49 and 62); each is added to
 `desktop_unavailable`, `noeul_not_running`, `pin_not_found`, `clipboard_unavailable`,
 `nothing_to_pin` and `image_invalid`, plus the IPC codes `noeul_identity_mismatch`,
 `noeul_unresponsive`, `noeul_incompatible` and `noeul_start_failed` (CLI_CONTRACT §6, Noeul table).
-`capture_not_allowed` waits for the privacy setting of Step 62.
+`capture_not_allowed` waits for the privacy setting of Step 62. **Registered in Step 51** with
+`noeul config set|reset`: `config_invalid` (4: `config.toml` is invalid or cannot be edited in
+place without changing other keys) and `config_from_newer_version` (5: written by a newer Noeul,
+never rewritten) ([ADR 0032](adr/0032-noeul-double-click-pin-and-outputs.md) §4).
 Noeul also uses the shared codes (`usage`, `io`, `permission_denied`, `internal`,
 `confirmation_required`, `cancelled`, `unsupported_platform`) and the `hotkeys` codes.
 

@@ -1,6 +1,6 @@
 # Noeul UX specification
 
-Status: **current** (specification; Step 49 implemented the app foundation, [ADR 0023](adr/0023-noeul-app-foundation.md); Step 50 the `F1` selection overlay with `Enter` to pin, [ADR 0026](adr/0026-noeul-capture-overlay.md), see §4.5; Step 53 the floating pin engine, [ADR 0029](adr/0029-noeul-pin-engine.md), see §4.6) · Step 48 ·
+Status: **current** (specification; Step 49 implemented the app foundation, [ADR 0023](adr/0023-noeul-app-foundation.md); Step 50 the `F1` selection overlay with `Enter` to pin, [ADR 0026](adr/0026-noeul-capture-overlay.md), see §4.5; Step 53 the floating pin engine, [ADR 0029](adr/0029-noeul-pin-engine.md), see §4.6; Step 51 the double-click-to-pin gesture, the toolbar, the selection menu, copy, save and the gesture settings, [ADR 0032](adr/0032-noeul-double-click-pin-and-outputs.md), see §4.7) · Step 48 ·
 Philosophy: [NOEUL_PHILOSOPHY](NOEUL_PHILOSOPHY.md) · Requirements: [NOEUL_REQUIREMENTS](NOEUL_REQUIREMENTS.md) ·
 Parity: [NOEUL_SNIPASTE_MATRIX](NOEUL_SNIPASTE_MATRIX.md) · Shortcuts: [HOTKEY_CONTRACT §13.3](HOTKEY_CONTRACT.md) ·
 Decision: [ADR 0021](adr/0021-noeul-product-definition.md)
@@ -79,6 +79,15 @@ Each journey has a mouse path and a keyboard-only path; both reach the same resu
 - First run only: a one-line hint above the toolbar, "Double-click inside to pin it. Ctrl+C
   copies, Ctrl+S saves." It disappears after the first pin, copy or save and can be turned off.
 
+Shipped since Step 51 ([ADR 0032](adr/0032-noeul-double-click-pin-and-outputs.md)): the toolbar
+with this build's buttons only — **Pin** (accent-filled, first in tab order), Copy, Save
+(`Shift`+click quick-saves) and Cancel — placed as above (right-aligned with the selection), 32
+logical pixels high, with a `bg.hover` highlight under the pointer and a 2-pixel `focus.ring` on
+the button that has the keyboard focus. The tools, undo and redo join it with Step 56. Tooltips are
+not shown yet; the first-run hint is the overlay's keyboard help box, which now reads "Double-click
+inside pins it · Ctrl+C copies · Ctrl+S saves · Ctrl+Shift+S quick-saves" from the effective
+gesture and keys (`[capture] keyboard_help`, ADR 0026 §6).
+
 ### 3.2 Selection context menu (right-click inside, or `Shift+F10`)
 
 ```text
@@ -94,6 +103,10 @@ Each journey has a mouse path and a keyboard-only path; both reach the same resu
 | Cancel           Esc          |
 +-------------------------------+
 ```
+
+Shipped since Step 51: exactly these items, with the effective keys; it opens on a right-click
+inside the selection (or on its handles), `Shift+F10` or the menu key (then at the selection's
+corner). Under the debug-build test hook it is recorded, never shown.
 
 ### 3.3 A pin and its menu
 
@@ -120,9 +133,10 @@ Each journey has a mouse path and a keyboard-only path; both reach the same resu
 
 Shipped since Step 53 ([ADR 0029](adr/0029-noeul-pin-engine.md)): the menu opens on a right-click,
 `Shift+F10` or the menu key, and lists the implemented items only — Zoom in, Zoom out, Zoom 100 %,
-Hide, Close, Destroy — each with its effective key. The other items arrive with the Steps that
-implement them (copy and save 51, transforms, opacity, thumbnails and click-through 54,
-annotation 56, groups 54). The border and shadow of §10 are not drawn yet.
+Hide, Close, Destroy — each with its effective key. Step 51 added Copy, Save… and Quick save
+(`pin.copy`, `pin.save`, `pin.quick-save`: the pin's picture at 100 %, whatever its zoom). The
+other items arrive with the Steps that implement them (transforms, opacity, thumbnails and
+click-through 54, annotation 56, groups 54). The border and shadow of §10 are not drawn yet.
 
 ### 3.4 Tray menu (optional tray icon)
 
@@ -173,6 +187,15 @@ hidden), and Bring pins on screen (only while a pin lies where no monitor shows 
 |  Row: [Change] [Disable] [Reset]                                         |
 +--------------------------------------------------------------------------+
 ```
+
+Shipped since Step 51, before the settings window (Step 61): the Gestures section's values are
+`config.toml` settings changed with `noeul config set gestures.double_click pin|copy|save|none`,
+`gestures.middle_click pin|copy|none` and `gestures.preset noeul|snipaste`, and reset with
+`noeul config reset gestures --yes` (all with `--dry-run` and `--json`). A running Noeul uses
+them from the next capture. `noeul config show` and `noeul hotkeys list` show the gestures and
+name the "Snipaste-style gestures" preset; the preset also writes its keys (`Enter` copies,
+`Ctrl+T` pins) into `hotkeys.json`, and reset undoes them. The double-click on a pin does nothing
+and is not a setting yet.
 
 ### 3.6 Notices
 
@@ -307,7 +330,7 @@ system double-click rectangle, `H` = drag threshold; tests inject these values.
 | --- | --- | --- | --- | --- |
 | Gesture unit tests | 51 | A platform-independent gesture module fed with sequences of (time, position, button, press/release/move, modifiers), selection and hit-zone geometry, tool state and the system values; it returns commands (pin, copy, move, resize, …). Table-driven, part of `cargo test`. | FLOW-02…15, 21–25, 28, 36–38 | No window, no OS input |
 | Window integration tests | 51, 53 | A real overlay and real pin windows on a test-supplied frozen picture, positioned off-screen (for example at −6000,−6000), never activated, no taskbar entry; events posted to Noeul's own windows only; assertions on pin windows, the clipboard sequence number and the file system | FLOW-01, 16–20, 26, 27, 29–32, 34 | Headless rules of the brief: nothing visible on the maintainer's screen, no `SendInput` |
-| e2e scenario | 51 (`e2e/tests/step51_double_click_pin.rs`) | The real `noeul` binary built with a test-only feature that accepts synthetic pointer events over its IPC (absent from release builds); `noeul pin list --json` and `noeul status --json` check the result | FLOW-01, 16, 19, 28, 29, 35 | Runs only through `cargo xtask e2e` (AGENTS.md §4) |
+| e2e scenario | 51 (`e2e/tests/step51_noeul_double_click_pin.rs`) | The real debug `noeul` binary with the test hook (synthetic off-screen desktop, outputs kept off the user's clipboard and folders); pointer and key events are messages posted to Noeul's own overlay window (no IPC test method was needed, ADR 0032); `noeul pin list --json` and `noeul status --json` check the result | FLOW-01, 03, 05, 17, 20, 29 | Runs only through `cargo xtask e2e` (AGENTS.md §4) |
 | Manual script | 51, then 63 | The real-Windows script below, with a physical mouse and keyboard | Everything that needs real input, DPI and focus | Windows build, scales and date recorded in the Step report and the matrix Evidence column |
 
 **Real-Windows script** (Windows 10 19045 and Windows 11; 100 % and 150 %; two monitors where
@@ -410,6 +433,67 @@ their scales, and the date in the Step report and the matrix Evidence column):
 13. `noeul quit` with pins open asks for `--yes`; `noeul quit --yes`, then `noeul start`: no pin
     comes back (pins live in memory only), and `%LOCALAPPDATA%\mouv\noeul` holds no picture.
 
+### 4.7 Step 51: manual check of the signature flow
+
+Step 51 ships the double-click gesture of §4.2, the toolbar of §3.1, the menu of §3.2, copy,
+save, quick save and the gesture settings ([ADR 0032](adr/0032-noeul-double-click-pin-and-outputs.md)).
+What the automated tests cover, without any window on the visible desktop, registered `F1`,
+synthesized input or touch of the real clipboard:
+
+| Layer | Where | FLOW cases |
+| --- | --- | --- |
+| Gesture model (table-driven, injected system values) | `crates/noeul/src/overlay.rs` tests | 01–12, 21–25, 28, 31, 32, 36–38; the toolbar's placement, buttons, keyboard focus and pixels |
+| Instance core (fake windows, fake clipboard, sandbox folders) | `crates/noeul/src/app.rs` tests | 01, 16, 17, 19, 20, 24–30, 36; the menu, save dialog request, preset, pin copy and save |
+| Real binary, off-screen synthetic desktop, posted window messages | `crates/noeul/tests/double_click.rs` | 01, 03, 05, 07, 08, 17, 20, 21, 23, 24, 27, 28, 29, 31, 32 |
+| Real off-screen overlay window (GDI text of the toolbar at 150 %) | `crates/noeul/src/win/overlay.rs` tests | 32 (drawing) |
+| e2e (ignored; `cargo xtask e2e` only) | `e2e/tests/step51_noeul_double_click_pin.rs` | 01, 03, 05, 17, 20, 29 |
+
+FLOW-13 to FLOW-15 need the annotation tools (Step 56); FLOW-18 needs the keyboard marking of
+Step 52; FLOW-33 is N4; FLOW-34 and FLOW-35 are covered by Step 53's focus hand-back and Step
+50's desktop check. So these steps need the maintainer, on the real desktop with a physical mouse
+and keyboard (record the Windows build, the monitors and their scales, and the date in the Step
+report and the matrix Evidence column):
+
+1. `cargo build --release -p noeul`, then `target\release\noeul.exe start` (default profile).
+   `noeul status` lists `capture.region F1: registered`.
+2. Copy a line of text in Notepad. Press `F1`, drag around part of the Notepad window, release,
+   then **double-click inside the rectangle**: on the second press a pin of exactly that
+   rectangle appears at the same place and size, and the overlay is gone. Paste in Notepad: the
+   earlier text comes out (pinning never touched the clipboard).
+3. Click into Notepad and type: Notepad gets the keys and the pin stays above it; drag Notepad
+   over the pin: the pin stays on top.
+4. `F1`, drag, then double-click **outside** the rectangle, then on a corner handle, then on the
+   size chip and on the toolbar's empty bar: nothing is pinned and the selection stays. Click
+   once inside, wait longer than your double-click speed, click again: nothing is pinned.
+5. `F1`, drag, then **quadruple-click** inside as fast as you can: exactly one pin, not moved, not
+   closed, and the third and fourth clicks did nothing to it.
+6. `F1`, drag, move the rectangle by dragging its inside and resize it by a handle, then
+   double-click inside: the pin shows the moved and resized rectangle.
+7. `F1`, drag, `Enter`: a pin. `F1`, drag, `Ctrl+C`: no pin; paste into Paint: the same pixels.
+   `F1`, drag, `Tab`, `Tab` (Copy has a lilac focus ring), `Enter`: copied, no pin. `F1`, drag,
+   click the toolbar's **Copy**: copied. `F1`, drag, right-click inside: the menu lists Pin, Copy,
+   Save…, Quick save, Select monitor, Last rectangle and Cancel with their keys.
+8. `F1`, drag, `Ctrl+S`: the save dialog opens above the overlay in `Pictures\Noeul` with
+   `noeul-YYYYMMDD-HHMMSS.png`; Cancel keeps the overlay; Save writes the file and closes it.
+   `F1`, drag, `Ctrl+Shift+S` twice (two captures): two files, the second with `-2` when within
+   the same second; nothing was overwritten. `Shift`+click on Save quick-saves too.
+9. Click a pin, press `Ctrl+C` and paste into Paint; `Ctrl+S` saves it (the dialog sits above the
+   pin); its right-click menu lists Copy, Save… and Quick save.
+10. Open another program that holds the clipboard (or start a large copy), then `F1`, drag,
+    double-click: the pin appears regardless; `Ctrl+C` says the clipboard is busy and keeps the
+    overlay.
+11. Set the Windows double-click speed to the slowest setting (Control Panel → Mouse) while Noeul
+    runs, and repeat step 2 with slow clicks: it pins without restarting Noeul.
+12. `noeul config set gestures.double_click copy`: the next double-click copies, `Enter` still
+    pins. `noeul config set gestures.preset snipaste`: double-click and `Enter` copy, `Ctrl+T` and
+    a middle-click pin; `noeul hotkeys list` names "Snipaste-style gestures: on".
+    `noeul config reset gestures --yes`: the double-click pins again.
+13. On a monitor at 150 % (and across two monitors where available): select 600×450 device
+    pixels (the size chip says so), double-click: the pin is 600×450; quick-save it and check the
+    file is 600×450 pixels; the toolbar's text is crisp at that scale.
+14. Ten captures in a row as fast as possible (`F1`, drag, double-click): ten pins, none lost;
+    `noeul pin list` shows ten IDs.
+
 ## 5. Toolbar, menus and the tray
 
 - **Toolbar order** (tab order): Pin · Copy · Save · tools (N3) · Undo · Redo · Cancel. Pin is the
@@ -461,7 +545,11 @@ Shipped since Step 50 ([ADR 0026](adr/0026-noeul-capture-overlay.md)): `capture.
 `capture.cancel`, `selection.full`, `selection.last` and the `selection.move-*`, `-grow-*` and
 `-shrink-*` keys (one device pixel per press, no acceleration yet). The overlay also leaves on
 `Escape` as the reserved `nav.cancel` when no overlay binding uses it, so it never traps the user.
-The other keys of this context arrive with Steps 51 and 52.
+Step 51 ([ADR 0032](adr/0032-noeul-double-click-pin-and-outputs.md)) added `capture.copy`,
+`capture.save` and `capture.quick-save`, and the toolbar's navigation: `Tab`/`Shift+Tab` and the
+arrows move the focus, `Enter`/`Space` run the focused button, `Escape` on a button cancels,
+`Shift+F10` or the menu key open the selection's menu. The other keys of this context arrive with
+Step 52.
 
 **Context `annotate`** (while a drawing tool is active, in the overlay or on a pin; it is inside
 the other contexts, so its keys win there):
@@ -494,7 +582,8 @@ uses it, so it never traps the user, even with `--no-hotkeys`. Of the mouse gest
 wheel zoom (around the pointer), middle-click (back to 100 %), right-click (menu) and the
 double-click that does nothing are shipped; `Ctrl`+wheel (opacity), border resizing and
 Shift+double-click (thumbnail) are not in this build (border resizing of NOEUL-FR-061 is proposed
-for Step 54 with the transforms; zooming covers resizing until then).
+for Step 54 with the transforms; zooming covers resizing until then). Step 51 added `pin.copy`,
+`pin.save` and `pin.quick-save`.
 
 **Choices and where they differ from Snipaste** (the matrix lists each):
 
@@ -521,6 +610,10 @@ for Step 54 with the transforms; zooming covers resizing until then).
 | Pin | Double-click | **Nothing** (setting: Nothing, Close, Thumbnail, Reset) | — |
 | Pin | Shift+double-click | Thumbnail | `T` |
 | Tray icon | Left / middle / double-click | Capture / pin clipboard / settings | `F1` / `F3` / start `noeul` again |
+
+Shipped since Step 51: the double-click (`[gestures] double_click`: `pin`, `copy`, `save`,
+`none`), the middle-click (`[gestures] middle_click`: `pin`, `copy`, `none`) and the right-click
+menu of a selection; the pin's double-click setting is not in this build (it always does nothing).
 
 **Input method.** The overlay and pins switch the IME off for their windows, so letter keys work
 in Korean Hangul mode; the text tool switches it on and suspends the other contexts while a

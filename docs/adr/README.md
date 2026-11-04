@@ -30,10 +30,11 @@ the requirements it serves. ADRs are immutable once **Accepted**; a later ADR ma
 | [0023](0023-noeul-app-foundation.md) | Noeul app foundation: plain Win32, GDI capture on demand, one instance per user session | Accepted (Step 49; overlay measured in Step 50, see 0026; pin engine in Step 53, see 0029; capture APIs in Step 58) |
 | [0024](0024-ddalgak-windows-input-apis-and-permissions.md) | Ddalgak engine: Windows input APIs, threads, IPC and permissions | Accepted (implemented in Step 66) |
 | [0025](0025-pane-programs-environment-and-backpressure.md) | Pane programs, their environment, and backpressure | Accepted (verbatim command lines added in Step 12, see 0027) |
-| [0026](0026-noeul-capture-overlay.md) | Noeul capture overlay: one GDI freeze, a back-buffered Win32 window, a selection handed to its output | Accepted (Step 50) |
+| [0026](0026-noeul-capture-overlay.md) | Noeul capture overlay: one GDI freeze, a back-buffered Win32 window, a selection handed to its output | Accepted (Step 50; gesture, toolbar, menu, copy and save in Step 51, see 0032) |
 | [0027](0027-subak-cli-structure-and-headless-control.md) | Subak CLI structure, detach from outside, verbatim command lines and console restore | Accepted |
 | [0028](0028-ddalgak-rule-store-validation-and-reload.md) | Ddalgak rule store: run-time schema per rule, locked atomic writes, drafts and live reload | Accepted (Step 67) |
-| [0029](0029-noeul-pin-engine.md) | Noeul floating pin engine: one creation path, retained layered windows, focus hand-back, pins in memory only | Accepted (Step 53) |
+| [0029](0029-noeul-pin-engine.md) | Noeul floating pin engine: one creation path, retained layered windows, focus hand-back, pins in memory only | Accepted (Step 53; the double-click's guard in Step 51, see 0032) |
+| [0032](0032-noeul-double-click-pin-and-outputs.md) | Noeul double-click to pin: press counting, the toolbar, separate outputs and gesture settings | Accepted (Step 51) |
 
 "Accepted (validated in Step N)" means the decision is made, but the named Step must confirm it
 on real Windows; if validation fails, that Step writes a superseding ADR.

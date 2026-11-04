@@ -215,3 +215,13 @@ Idle (NOEUL-NFR-001): with twenty pins open, the measuring process waited for me
 `NOEUL-FR-114`, `NOEUL-NFR-001`, `NOEUL-NFR-002`, `NOEUL-NFR-004`, `NOEUL-NFR-007`,
 `NOEUL-NFR-014`, `NOEUL-SEC-002`, `NOEUL-SEC-005`, `NOEUL-SEC-008`, `NOEUL-SEC-010`,
 `NOEUL-SEC-012`, `NOEUL-SEC-013`.
+
+## Notes
+
+- 2026-11-04 (Step 51): §1's entry point is used as planned: the double-click, the middle-click and
+  the toolbar's Pin button create their pin through `App::pin_selection` with `guard` set to the
+  user's double-click time, read before the second press; `Enter` and the selection's menu pass
+  no guard ([ADR 0032](0032-noeul-double-click-pin-and-outputs.md) §2). §5's menu gains Copy,
+  Save… and Quick save (`pin.copy` `Ctrl+C`, `pin.save` `Ctrl+S`, `pin.quick-save`
+  `Ctrl+Shift+S`, the same outputs as the overlay's, of the pin's picture at 100 % whatever its
+  zoom); the save dialog is owned by the pin.

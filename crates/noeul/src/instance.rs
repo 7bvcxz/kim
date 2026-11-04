@@ -6,7 +6,9 @@
 //! `health` are headless reads; when no instance runs, `status` reports what it can from files
 //! and the desktop check alone.
 
-use crate::{Ctx, Outcome, QuitArgs, StartArgs, confirm};
+#[cfg(windows)]
+use crate::confirm;
+use crate::{Ctx, Outcome, QuitArgs, StartArgs};
 #[cfg(not(windows))]
 use noeul::capture::DesktopState;
 use noeul::error::{Code, NoeulError};
@@ -112,19 +114,25 @@ fn status_human(v: &Value) -> String {
         ));
     }
     for c in v["hotkeys"]["conflicts"].as_array().into_iter().flatten() {
-        if c["code"] == "taken"
-            && let Some(offer) = c["offers"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .find(|o| o["kind"] == "rebind")
-        {
-            s.push_str(&format!(
-                "  fix: `noeul hotkeys set {} {}` (a key another program registered is never taken over)\n",
-                c["action"].as_str().unwrap_or(""),
-                offer["keys"].as_str().unwrap_or("")
-            ));
+        if c["code"] != "taken" {
+            continue;
         }
+        let action = c["action"].as_str().unwrap_or("");
+        let rebind = c["offers"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .find(|o| o["kind"] == "rebind")
+            .and_then(|o| o["keys"].as_str());
+        let fix = match rebind {
+            Some(k) => format!("`noeul hotkeys set {action} {k}`"),
+            None => {
+                format!("`noeul hotkeys set {action} <keys>` or `noeul hotkeys disable {action}`")
+            }
+        };
+        s.push_str(&format!(
+            "  fix: {fix} (a key another program registered is never taken over)\n"
+        ));
     }
     s.push_str(&format!(
         "Tray icon: {}\n",
@@ -223,11 +231,12 @@ pub fn start(ctx: &Ctx, a: &StartArgs) -> Result<Outcome> {
         if a.no_hotkeys {
             args.push("--no-hotkeys".into());
         }
-        let mut child = noeul::win::spawn::instance(&args).map_err(|e| {
+        let child = noeul::win::spawn::instance(&args).map_err(|e| {
             NoeulError::new(Code::NoeulStartFailed, format!("cannot start Noeul: {e}"))
         })?;
-        let pid = child.id();
-        // Wait until the new instance answers (or ends: then it lost a start race or failed).
+        let pid = child.pid;
+        // Wait until an instance answers. Ours may have lost a start race: then it handed over
+        // to the winner and exited 0, and the winner answers; any other exit is a failure.
         let until = Instant::now() + Duration::from_secs(10);
         loop {
             match client::open(&ep) {
@@ -242,10 +251,10 @@ pub fn start(ctx: &Ctx, a: &StartArgs) -> Result<Outcome> {
                 Err(e) if e.code != Code::NoeulNotRunning => return Err(e),
                 Err(_) => {}
             }
-            if let Ok(Some(status)) = child.try_wait() {
+            if let Some(status) = child.try_wait().filter(|c| *c != 0) {
                 return Err(NoeulError::new(
                     Code::NoeulStartFailed,
-                    format!("Noeul exited during start-up ({status})"),
+                    format!("Noeul exited during start-up (exit code {status})"),
                 )
                 .hint("run `noeul run --verbose` to see why"));
             }
@@ -386,7 +395,7 @@ pub fn capture(ctx: &Ctx, a: &crate::CaptureArgs) -> Result<Outcome> {
     }
     #[cfg(not(windows))]
     {
-        let _ = ctx;
+        let _ = (ctx, region);
         Err(DesktopState::Unsupported
             .error()
             .unwrap_or_else(unsupported))

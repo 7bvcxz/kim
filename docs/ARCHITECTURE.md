@@ -49,6 +49,7 @@ flowchart LR
 | Subak Host | `subak.exe host serve` | Owns Terminals/Windows/Panes, ConPTYs, jobs, VT state, history, state store, IPC server, metrics | SUBAK-FR-001…004, SUBAK-FR-016, SUBAK-FR-040 |
 | Subak GUI | `subak-gui.exe` (Steps 16–18) | Tabbed terminal window, floating icon/tray, session manager; pure client | SUBAK-FR-030…035 |
 | Subak MCP | later (Step 37) | Opt-in local MCP adapter over the same IPC | SUBAK-FR-062 |
+| Noeul | `noeul.exe` / `crates/noeul` (Step 49 foundation, [ADR 0023](adr/0023-noeul-app-foundation.md)) | Screenshot and floating-pin tool: one per-user instance (`noeul start`) owning pins, the optional tray icon and its global hotkeys; headless CLI that controls it over its own identity-checked pipe (Noeul IPC v1); plain Win32, GDI capture on request | NOEUL-FR-001…003, NOEUL-FR-110…114, NOEUL-SEC-001…012 |
 
 ### 2.1 Host internals
 

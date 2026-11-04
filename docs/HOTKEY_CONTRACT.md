@@ -41,7 +41,7 @@ what Step 46 ran).
 | --- | --- | --- |
 | Kim Manager (`kim`) | Step 46: `catalog.refresh` `F5`, `help.show` `F1` (shortcut list), `tool.install`/`tool.update`/`tool.uninstall` unbound by default, plus the reserved navigation keys of §7.2. | **Conforms** since Step 46: compiled-in manifest (`crates/kim/src/hotkeys.manifest.json`), `kim hotkeys` commands, `focus` backend (§13.2, §17). The binding editor of §11.2 is not implemented yet. |
 | Subak (`subak`) | Not implemented yet. Defaults are specified: `Ctrl+T`, `Ctrl+W`, `Ctrl+Tab`, `Ctrl+Shift+Tab`, the `Ctrl+B` prefix table (`SUBAK-FR-033`), and `F1` / `Ctrl+B ?` help ([DESIGN_SYSTEM §4.1](DESIGN_SYSTEM.md)). | Steps 17 and 23 implement them on this contract; §13.1 maps ADR 0009 onto it. |
-| Noeul (`noeul`) | Planned (Steps 48+). `F1` region capture and `F3` floating paste are requested defaults. | Steps 48, 61 and 62 follow §13.3. Listed in the Kim catalog with this shortcut summary since Step 47. |
+| Noeul (`noeul`) | Step 49: `paste.float` `F3` (global), `pin.close` `Escape`/`Ctrl+W` and `pin.move-*` arrows (context `pin`); `capture.region` `F1` is added with its overlay in Step 50. | **Conforms for the shipped subset** since Step 49: compiled-in manifest (`crates/noeul/src/hotkeys.manifest.json`, the final manifest filtered to the implemented actions), `noeul hotkeys` commands, `register` backend with live `registered`/`taken` reporting and reload ([ADR 0023](adr/0023-noeul-app-foundation.md)). Listed in the Kim catalog with the final shortcut summary since Step 47. |
 | Ddalgak (`ddalgak`) | Planned (Steps 65+). An automation engine with its own rule model. | Steps 66, 73 and 81 follow §13.4. Listed in the Kim catalog with this shortcut summary since Step 47. |
 
 ## 2. Terms

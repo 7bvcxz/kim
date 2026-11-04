@@ -316,6 +316,15 @@ impl Live {
     }
 }
 
+/// A global binding another program registered does not fire: it is not `active` (§10.2).
+fn inactive_when_taken(action: &mut Value) {
+    for b in action["bindings"].as_array_mut().into_iter().flatten() {
+        if b["registration"] == "taken" {
+            b["active"] = Value::Bool(false);
+        }
+    }
+}
+
 fn source_text(v: &Value) -> String {
     let src = v["source"].as_str().unwrap_or("");
     let bindings = v["bindings"].as_array().cloned().unwrap_or_default();
@@ -353,6 +362,9 @@ fn list(paths: &Paths, a: &ListArgs, ctx: &Ctx) -> Result<Outcome, NoeulError> {
         w.loaded.state,
         &registration,
     );
+    if let Some(actions) = data["actions"].as_array_mut() {
+        actions.iter_mut().for_each(inactive_when_taken);
+    }
     if let Some(s) = &a.scope {
         let want = s.as_str();
         if !(matches!(want, "global" | "app" | "context")
@@ -465,9 +477,10 @@ fn show(paths: &Paths, a: &ShowArgs, ctx: &Ctx) -> Result<Outcome, NoeulError> {
     let live = Live::ask(ctx);
     let analysis = analyze(&w.tools, &live.taken());
     let registration = |action: &str, keys: &str| live.registration(action, keys);
-    let Some(data) = view::show_data(&w.tools[0], &analysis, &a.action, &registration) else {
+    let Some(mut data) = view::show_data(&w.tools[0], &analysis, &a.action, &registration) else {
         return Err(not_found(&a.action));
     };
+    inactive_when_taken(&mut data["action"]);
     let v = &data["action"];
     let mut human = format!(
         "{} — {}\nKeys:     {}\nScope:    {}\nState:    {}\nDefaults: {}\n",

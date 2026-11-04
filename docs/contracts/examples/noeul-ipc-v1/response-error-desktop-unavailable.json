@@ -1,0 +1,12 @@
+{
+  "type": "response",
+  "id": 2,
+  "error": {
+    "code": "desktop_unavailable",
+    "message": "no interactive desktop is available: the session is locked or a secure desktop (sign-in, UAC, Ctrl+Alt+Del) is shown",
+    "hint": "unlock the session or reconnect, then try again; Noeul never captures a locked, secure or other user's desktop",
+    "details": [
+      "desktop state: locked"
+    ]
+  }
+}

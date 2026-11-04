@@ -9,8 +9,8 @@ requirement that covers it ([NOEUL_REQUIREMENTS](NOEUL_REQUIREMENTS.md)), the mi
 will be verified. It is the tracking document for parity; the Step that implements a row updates
 it in the same change.
 
-**Nothing in this matrix is implemented yet.** Every row is `planned` or `not intended`, and every
-Evidence cell is `—`. Rows marked **◆** are deliberate deviations from Snipaste's default
+**Step 49 (the app foundation) made the first rows `partial`**, each with its evidence; nothing
+is `supported` yet, and every other row is `planned` or `not intended` with Evidence `—`. Rows marked **◆** are deliberate deviations from Snipaste's default
 behavior; the most important one is the signature flow (`OUT-01`, `OUT-03`): in Noeul a
 double-click inside the selection **pins**, while in Snipaste it copies to the clipboard
 ([NOEUL_PHILOSOPHY §2](NOEUL_PHILOSOPHY.md)).
@@ -47,7 +47,7 @@ macOS and Linux editions are not inventoried. Pro-only features are marked **(Pr
 | Status | Meaning |
 | --- | --- |
 | `supported` | Noeul ships it, with evidence (see [How evidence is recorded](#how-evidence-is-recorded)). *(Not used yet.)* |
-| `partial` | Some of it ships, with evidence; the approach cell says what is missing. *(Not used yet.)* |
+| `partial` | Some of it ships, with evidence; the approach cell says what is missing. |
 | `planned` | Noeul intends to provide it in the named milestone. Nothing exists yet. |
 | `not intended` | Deliberately not built; the requirement cell names the reason (`D-xx` in [NOEUL_REQUIREMENTS §6](NOEUL_REQUIREMENTS.md#6-deferred-and-not-intended)). |
 
@@ -171,16 +171,16 @@ Each row has a permanent ID so that commits, tests and later audits can cite it.
 
 | ID | Snipaste feature | Src | Noeul approach | Status | Requirement | MS | Verify | Evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `PIN-01` | Clipboard content or a snip becomes a topmost floating window | G, H, F | Independent always-on-top pins with stable IDs; no taskbar or Alt+Tab entry | planned | NOEUL-FR-060 | N1 | T, M | — |
-| `PIN-02` | Move by dragging; move one pixel with the arrows | K | Same | planned | NOEUL-FR-061 | N1 | T, M | — |
+| `PIN-01` | Clipboard content or a snip becomes a topmost floating window | G, H, F | Independent always-on-top pins with stable IDs; no taskbar or Alt+Tab entry. Step 49: Win32 layered topmost tool windows with stable `pin-<n>` IDs, from `noeul capture --region … --pin` and `F3`; missing: pins from files (N2), focus on click verified only off-screen | partial | NOEUL-FR-060 | N1 | T, M | T: `crates/noeul/src/app.rs` cli_capture_pins_and_every_picture_is_released; T: `crates/noeul/src/win/pinwnd.rs` off_screen_pin_window_lifecycle; T: `crates/noeul/tests/instance.rs` a_one_pixel_pin_lives_closes_and_reopens |
+| `PIN-02` | Move by dragging; move one pixel with the arrows | K | Same. Step 49: drag to move (system move loop) and `pin.move-*` arrows; missing: on-screen manual check of dragging | partial | NOEUL-FR-061 | N1 | T, M | T: `crates/noeul/src/app.rs` paste_float_pins_at_the_pointer_or_says_nothing_to_pin |
 | `PIN-03` | Zoom with the wheel or `+`/`-`; resize by dragging the border | G, H | Same, zoom around the pointer; 100 % is one image pixel per device pixel | planned | NOEUL-FR-061 | N1 | T, M | — |
 | `PIN-04` | Middle-click resets to 100 % size and full opacity | G | Middle-click and `pin.zoom-reset` (`0`) | planned | NOEUL-FR-061 | N1 | T | — |
 | `PIN-05` | Opacity with `Ctrl`+wheel or `Ctrl`+`+`/`-` | G, F | Same, never below 10 % | planned | NOEUL-FR-062 | N2 | T, M | — |
 | `PIN-06` | Rotate with `1`/`2`, flip with `3`/`4` | G, K | Same keys | planned | NOEUL-FR-062 | N2 | T | — |
 | `PIN-07` | Thumbnail mode with `Shift`+double-click | G, H | `Shift`+double-click and `pin.thumbnail` (`T`) | planned | NOEUL-FR-062 | N2 | T, M | — |
 | `PIN-08` | Free-size thumbnail by right-dragging (Pro) | P | Pin extra | planned | NOEUL-FR-069 | N4 | T | — |
-| `PIN-09` | Close with `Esc`, `Ctrl+W` or a **double-click** on the image | G, K | ◆ `Esc`, `Ctrl+W` and the menu close; a double-click on a pin does nothing by default, so the clicks that created a pin cannot close it | planned | NOEUL-FR-026, NOEUL-FR-061 | N1 | T (FLOW-28) | — |
-| `PIN-10` | The paste hotkey brings back recently closed images (count setting) | G | ◆ "Reopen closed pin" is its own command (tray, CLI); `F3` always pins the clipboard | planned | NOEUL-FR-065 | N1 | T | — |
+| `PIN-09` | Close with `Esc`, `Ctrl+W` or a **double-click** on the image | G, K | ◆ `Esc`, `Ctrl+W` and the menu close; a double-click on a pin does nothing by default, so the clicks that created a pin cannot close it. Step 49: `Esc`/`Ctrl+W` close, a double-click does nothing; missing: the pin menu (Step 53) | partial | NOEUL-FR-026, NOEUL-FR-061 | N1 | T (FLOW-28) | T: `crates/noeul/src/win/pinwnd.rs` off_screen_pin_window_lifecycle; T: `crates/noeul/src/hotkeys.rs` pin_keys_match_context_bindings |
+| `PIN-10` | The paste hotkey brings back recently closed images (count setting) | G | ◆ "Reopen closed pin" is its own command (tray, CLI); `F3` always pins the clipboard. Step 49: the last closed pin is kept and reopened with its ID by `noeul pin reopen` and the tray; missing: a configurable count (P1 N1, later Step) | partial | NOEUL-FR-065 | N1 | T | T: `crates/noeul/src/pins.rs` lifecycle_close_reopen_destroy_and_quit; T: `crates/noeul/tests/instance.rs` a_one_pixel_pin_lives_closes_and_reopens |
 | `PIN-11` | Destroy an image (not recoverable): `Shift+Esc` or menu | G, K, F | `pin.destroy` (`Shift+Escape`), menu | planned | NOEUL-FR-065 | N1 | T | — |
 | `PIN-12` | Hide and show all images with a global hotkey (`Shift+F3`) | G, C | Tray item and CLI; a global action without a default (no second global default, HOTKEY_CONTRACT §7.5) ◆; per-pin hide with `H` | planned | NOEUL-FR-064, NOEUL-FR-062 | N2 | T, M | — |
 | `PIN-13` | Click-through for the image under the pointer, toggled by a user-set global hotkey; again with no image under the pointer makes all clickable | G, F | `pin.click-through` (`Ctrl+Shift+T`) on the focused pin, a marker on the pin, and recovery from the tray, settings and CLI (enabled only while a recovery path exists) | planned | NOEUL-FR-063, NOEUL-SEC-013 | N2 | T, M | — |
@@ -206,9 +206,9 @@ Each row has a permanent ID so that commits, tests and later audits can cite it.
 
 | ID | Snipaste feature | Src | Noeul approach | Status | Requirement | MS | Verify | Evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `PASTE-01` | Paste with a global hotkey, `F3` by default | G, H | Global action `paste.float`, default `F3`; reads the clipboard once, at that moment | planned | NOEUL-FR-070, NOEUL-SEC-002 | N2 | T, M | — |
-| `PASTE-02` | Paste by middle-clicking the tray icon | G | Same | planned | NOEUL-FR-004 | N2 | M | — |
-| `PASTE-03` | An image on the clipboard | G, H | PNG, `CF_DIBV5`, `CF_DIB` | planned | NOEUL-FR-070 | N2 | T | — |
+| `PASTE-01` | Paste with a global hotkey, `F3` by default | G, H | Global action `paste.float`, default `F3`; reads the clipboard once, at that moment. Step 49: `paste.float` is registered (`F3` default) through `kim-hotkeys` and reads the clipboard once per press; missing: a manual `F3` check on screen (tests never register `F3`) | partial | NOEUL-FR-070, NOEUL-SEC-002 | N2 | T, M | T: `crates/noeul/tests/instance.rs` hotkeys_register_report_taken_and_reload_without_stealing; T: `crates/noeul/src/app.rs` paste_float_pins_at_the_pointer_or_says_nothing_to_pin |
+| `PASTE-02` | Paste by middle-clicking the tray icon | G | Same. Step 49: tray middle-click runs `paste.float`; missing: manual check with a real tray icon | partial | NOEUL-FR-004 | N2 | M | T: `crates/noeul/src/app.rs` tray_items_follow_the_state_and_quit_asks_once |
+| `PASTE-03` | An image on the clipboard | G, H | PNG, `CF_DIBV5`, `CF_DIB`. Step 49: `CF_DIBV5` and `CF_DIB` (24/32-bit) are decoded with size limits; missing: the PNG clipboard format (Step 55) | partial | NOEUL-FR-070 | N2 | T | T: `crates/noeul/src/dib.rs` (3 tests); T: `crates/noeul/src/app.rs` paste_float_pins_at_the_pointer_or_says_nothing_to_pin |
 | `PASTE-04` | Color values: three integers 0–255, three numbers 0–1, or HEX starting with `#` | G | Same, plus `rgb(…)`; becomes a swatch | planned | NOEUL-FR-071 | N2 | T | — |
 | `PASTE-05` | Plain text | G, H | Text card | planned | NOEUL-FR-071 | N2 | T | — |
 | `PASTE-06` | HTML text, keeping formatting such as syntax highlighting | G, H, T | HTML card from Noeul's own sanitizing renderer; no scripts, no remote resources | planned | NOEUL-FR-071, NOEUL-SEC-009 | N2 | T | — |
@@ -219,7 +219,7 @@ Each row has a permanent ID so that commits, tests and later audits can cite it.
 | `PASTE-11` | Wrap long HTML to the maximum width of text images | A | Card width limit | planned | NOEUL-FR-071 | N2 | T | — |
 | `PASTE-12` | Ignore simulated "copy" commands from other programs | L | Noeul never reacts to clipboard changes at all | not intended | NOEUL-SEC-002 | — | I | — |
 | `PASTE-13` | Convert clipboard content and send `Ctrl+V` to another program (Pro) | C | Needs synthetic input into another program | not intended | D-11 | — | — | — |
-| `PASTE-14` | Empty or unsupported clipboard | — (Noeul rule) | A short notice, nothing else changes | planned | NOEUL-FR-074 | N2 | T | — |
+| `PASTE-14` | Empty or unsupported clipboard | — (Noeul rule) | A short notice, nothing else changes. Step 49: "Nothing to pin" as a tray notice, nothing changes; missing: a notice without the tray icon (Step 55) | partial | NOEUL-FR-074 | N2 | T | T: `crates/noeul/src/app.rs` paste_float_pins_at_the_pointer_or_says_nothing_to_pin |
 
 ## 9. Displays and color (`DISP`)
 
@@ -240,15 +240,15 @@ Each row has a permanent ID so that commits, tests and later audits can cite it.
 | `SET-02` | Change the global hotkeys | F, T | Hotkey contract: list, change, disable, reset, conflicts reported | planned | NOEUL-FR-100, NOEUL-FR-101 | N5 | T, M | — |
 | `SET-03` | Run when the system starts | F | Opt-in start at sign-in (per-user, no service) | planned | NOEUL-FR-002 | N5 | T, M | — |
 | `SET-04` | Theme color, interface font, tray icon options | H, P | Kim tokens, light theme, contrast themes | planned | NOEUL-FR-103 | N5 | M | — |
-| `SET-05` | Hide the tray icon | A | Setting; everything stays reachable | planned | NOEUL-FR-004 | N1 | M | — |
+| `SET-05` | Hide the tray icon | A | Setting; everything stays reachable. Step 49: `[general] tray_icon = false` and `noeul start --no-tray`; missing: the settings window (N5) and a manual check | partial | NOEUL-FR-004 | N1 | M | T: `crates/noeul/src/settings.rs` values_unknown_keys_and_fallbacks; T: `crates/noeul/tests/instance.rs` lifecycle_status_health_capture_checks_and_quit |
 | `SET-06` | Customize the tray icon's mouse actions (Pro) | P | Fixed defaults; customization as a refinement | planned | NOEUL-FR-004 | N1 | M | — |
 | `SET-07` | Global hotkeys for most functions (Pro) | P | Every action is bindable; actions with `global` in their scopes can be bound globally by the user | planned | NOEUL-FR-100 | N5 | T | — |
 | `SET-08` | Customize in-app shortcuts (Pro) | L | Every context shortcut is rebindable, free | planned | NOEUL-FR-100, NOEUL-FR-101 | N5 | T | — |
-| `SET-09` | Turn global hotkeys off and on (Pro command) | C | `noeul hotkeys disable --all`, tray switch, `--no-hotkeys` | planned | NOEUL-FR-100 | N1 | T | — |
-| `SET-10` | Hotkeys already used by other programs (e.g. `PrintScreen`) cannot be set | T | Reported as `taken` with remap offers; never stolen | planned | NOEUL-FR-100 | N1 | T | — |
+| `SET-09` | Turn global hotkeys off and on (Pro command) | C | `noeul hotkeys disable --all`, tray switch, `--no-hotkeys`. Step 49: `noeul hotkeys disable --all`/`enable --all`, `--no-hotkeys`, `KIM_NO_HOTKEYS` and the tray switch; missing: manual tray check | partial | NOEUL-FR-100 | N1 | T | T: `crates/noeul/tests/cli.rs` hotkeys_commands_follow_the_contract; T: `crates/noeul/tests/instance.rs` no_hotkeys_flag_registers_nothing |
+| `SET-10` | Hotkeys already used by other programs (e.g. `PrintScreen`) cannot be set | T | Reported as `taken` with remap offers; never stolen. Step 49: a taken key is reported (`status`, `hotkeys list`) with offers and never taken over or retried in the background; missing: the settings window's view (N5) | partial | NOEUL-FR-100 | N1 | T | T: `crates/noeul/tests/instance.rs` hotkeys_register_report_taken_and_reload_without_stealing |
 | `SET-11` | Hotkeys may not work while an elevated window has focus | T | Same OS rule (UIPI), documented; Noeul never elevates | planned | NOEUL-SEC-003, NOEUL-SEC-012 | N1 | D, M | — |
 | `SET-12` | Restore defaults | L | Reset per section and for all shortcuts | planned | NOEUL-FR-101 | N5 | T | — |
-| `SET-13` | Configuration in `config.ini` next to the program; `--config` path | A, C, T | `%APPDATA%\mouv\noeul\config.toml`, versioned, unknown keys kept; import and export | planned | NOEUL-FR-102 | N1 | T | — |
+| `SET-13` | Configuration in `config.ini` next to the program; `--config` path | A, C, T | `%APPDATA%\mouv\noeul\config.toml`, versioned, unknown keys kept; import and export. Step 49: `config.toml` is read (versioned, unknown keys kept, invalid values fall back by name); missing: writing, export and import (N5) | partial | NOEUL-FR-102 | N1 | T | T: `crates/noeul/src/settings.rs` (3 tests) |
 | `SET-14` | Double-tap interval for keys | A | Noeul uses the Windows double-click settings; no double-tap keys | planned | NOEUL-NFR-012 | N1 | T | — |
 | `SET-15` | Ignore global hotkeys while certain programs are active (Pro) | P | The registered key would be swallowed anyway; switch Noeul's global shortcuts off instead | not intended | D-08 | — | — | — |
 | `SET-16` | Allow simple keys (letters, `Esc`) as global hotkeys | A | Reserved typing and navigation keys | not intended | D-09 | — | — | — |
@@ -263,13 +263,13 @@ Each row has a permanent ID so that commits, tests and later audits can cite it.
 
 | ID | Snipaste feature | Src | Noeul approach | Status | Requirement | MS | Verify | Evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `CLI-01` | `snip` with a given area, size, full screen, last area, active window or screen | C | `noeul capture --region`, `--monitor`, `--window active`; `--interactive` opens the overlay | planned | NOEUL-FR-112 | N5 | T | — |
+| `CLI-01` | `snip` with a given area, size, full screen, last area, active window or screen | C | `noeul capture --region`, `--monitor`, `--window active`; `--interactive` opens the overlay. Step 49: `noeul capture --region x,y,w,h --pin` through the running instance; missing: `--monitor`, `--window active`, `--output`, `--clipboard` (N4/N5) | partial | NOEUL-FR-112 | N5 | T | T: `crates/noeul/tests/instance.rs` a_one_pixel_pin_lives_closes_and_reopens; T: `crates/noeul/tests/cli.rs` usage_errors_are_contract_documents |
 | `CLI-02` | Delay before snipping | C | `--delay` | planned | NOEUL-FR-015 | N5 | T | — |
 | `CLI-03` | Wait for the snip to finish before the command returns | C | Commands return when done, with a JSON result | planned | NOEUL-FR-110, NOEUL-FR-112 | N5 | T | — |
 | `CLI-04` | Show, hide or toggle all images; groups | C | `noeul pin hide`, `show`, `list`, groups | planned | NOEUL-FR-112 | N5 | T | — |
 | `CLI-05` | Turn click-through off for all images | C | `noeul pin set --all --click-through off` | planned | NOEUL-FR-063, NOEUL-FR-112 | N2 | T | — |
-| `CLI-06` | Commands work only while the program runs | C | Captures to a file or the clipboard work without a running instance and open no window; pin commands need the instance (`noeul_not_running`, or `--start`) ◆ | planned | NOEUL-FR-112 | N5 | T | — |
-| `CLI-07` | Open preferences or help; quit | C | `noeul settings` (explicitly opens the window), `noeul quit` | planned | NOEUL-FR-112 | N5 | T | — |
+| `CLI-06` | Commands work only while the program runs | C | Captures to a file or the clipboard work without a running instance and open no window; pin commands need the instance (`noeul_not_running`, or `--start`) ◆. Step 49: pin commands need the running instance (`noeul_not_running`, `--start`); missing: captures to a file or the clipboard without an instance (N5) | partial | NOEUL-FR-112 | N5 | T | T: `crates/noeul/tests/cli.rs` instance_commands_without_an_instance_say_so |
+| `CLI-07` | Open preferences or help; quit | C | `noeul settings` (explicitly opens the window), `noeul quit`. Step 49: `noeul quit` (open pins need `--yes`); missing: `noeul settings` (N5) | partial | NOEUL-FR-112 | N5 | T | T: `crates/noeul/tests/instance.rs` lifecycle_status_health_capture_checks_and_quit |
 | `CLI-08` | Pick a color, clear history, toggle hotkeys or hot corners (Pro commands) | C | History and hotkeys commands; no hot corners | planned | NOEUL-FR-111 | N5 | T | — |
 | `CLI-09` | Run an external program (Pro command) | C | Out of scope for Noeul | not intended | D-10 | — | — | — |
 
@@ -277,7 +277,7 @@ Each row has a permanent ID so that commits, tests and later audits can cite it.
 
 | ID | Snipaste feature | Src | Noeul approach | Status | Requirement | MS | Verify | Evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `APP-01` | Stays running in the background (needed for pasting) | F | One per-user process while the user keeps it running; quitting releases everything | planned | NOEUL-FR-002 | N1 | T, M | — |
+| `APP-01` | Stays running in the background (needed for pasting) | F | One per-user process while the user keeps it running; quitting releases everything. Step 49: one per-user instance per session (`noeul start`/`run`), single-instance hand-over, quit releases everything; missing: start at sign-in (N5) | partial | NOEUL-FR-002 | N1 | T, M | T: `crates/noeul/tests/instance.rs` single_instance_under_concurrent_starts_and_runs, concurrent_runs_from_nothing_leave_exactly_one, restart_after_a_crash_and_graceful_close; M: Windows 10 Pro 19045, idle 1.47 MiB private, 0 ms CPU in 60 s (ADR 0023) |
 | `APP-02` | Portable program, installer or store package | H | Per-user install through Kim on explicit request, or by hand | planned | NOEUL-FR-001, NOEUL-FR-005 | N6 | T, M | — |
 | `APP-03` | Windows, macOS and Linux editions | H | Windows first; Linux at N7 within portal and compositor limits; macOS out of scope | planned | NOEUL-NFR-010, NOEUL-NFR-015 | N7 | T, M | — |
 | `APP-04` | Free for personal use; paid Pro edition, activation, accounts | P, H | One free edition, MIT OR Apache-2.0, no accounts | not intended | D-14 | — | — | — |
@@ -297,8 +297,8 @@ picture.
 | `ADD-03` | Optional MCP adapter | Allowlisted tools; capture and clipboard off until enabled | planned | NOEUL-FR-113 | N5 | T, D | — |
 | `ADD-04` | Captures from scripts and agents are announced | Visible notice; setting to deny | planned | NOEUL-SEC-010 | N5 | T, M | — |
 | `ADD-05` | Honest session limits | `desktop_unavailable` in locked, secure and display-less sessions | planned | NOEUL-SEC-003 | N1 | T (FLOW-35), M | — |
-| `ADD-06` | Shared hotkey contract across Kim tools | Conflicts with other Kim tools found without a daemon | planned | NOEUL-FR-100 | N1 | T | — |
-| `ADD-07` | No network at all | No update check, telemetry or remote content | planned | NOEUL-NFR-008 | N1 | T, I | — |
+| `ADD-06` | Shared hotkey contract across Kim tools | Conflicts with other Kim tools found without a daemon. Step 49: `noeul hotkeys …` on the shared library, including `check --all-tools` from installed manifests; missing: the settings window (N5) | partial | NOEUL-FR-100 | N1 | T | T: `crates/noeul/tests/cli.rs` hotkeys_commands_follow_the_contract, check_all_tools_reads_installed_manifests_only |
+| `ADD-07` | No network at all | No update check, telemetry or remote content. Step 49: no network code; every command declares `network: false`; missing: the N6 audit | partial | NOEUL-NFR-008 | N1 | T, I | T: `crates/noeul/tests/cli.rs` capabilities_version_status_and_config_are_headless_reads; I: no socket or HTTP code in `crates/noeul` |
 
 ## How evidence is recorded
 
@@ -321,26 +321,26 @@ picture.
 | Status | Rows |
 | --- | --- |
 | `supported` | 0 |
-| `partial` | 0 |
-| `planned` | 147 (of which 7 are Noeul additions) |
+| `partial` | 18 |
+| `planned` | 129 (of which 5 are Noeul additions) |
 | `not intended` | 24 |
 | **Total** | **171** |
 
-| Group | planned | not intended | Total |
-| --- | --- | --- | --- |
-| 1. Starting and selecting (`SNIP`) | 14 | 8 | 22 |
-| 2. Detection and precision (`DET`) | 12 | 0 | 12 |
-| 3. Color picker (`COLOR`) | 7 | 0 | 7 |
-| 4. History (`HIST`) | 6 | 0 | 6 |
-| 5. Output and clipboard (`OUT`) | 11 | 1 | 12 |
-| 6. Annotation (`ANN`) | 17 | 0 | 17 |
-| 7. Floating pins (`PIN`) | 28 | 2 | 30 |
-| 8. Paste sources (`PASTE`) | 12 | 2 | 14 |
-| 9. Displays and color (`DISP`) | 5 | 1 | 6 |
-| 10. Settings (`SET`) | 16 | 6 | 22 |
-| 11. Command line (`CLI`) | 8 | 1 | 9 |
-| 12. Application (`APP`) | 4 | 3 | 7 |
-| 13. Noeul additions (`ADD`) | 7 | 0 | 7 |
+| Group | partial | planned | not intended | Total |
+| --- | --- | --- | --- | --- |
+| 1. Starting and selecting (`SNIP`) | 0 | 14 | 8 | 22 |
+| 2. Detection and precision (`DET`) | 0 | 12 | 0 | 12 |
+| 3. Color picker (`COLOR`) | 0 | 7 | 0 | 7 |
+| 4. History (`HIST`) | 0 | 6 | 0 | 6 |
+| 5. Output and clipboard (`OUT`) | 0 | 11 | 1 | 12 |
+| 6. Annotation (`ANN`) | 0 | 17 | 0 | 17 |
+| 7. Floating pins (`PIN`) | 4 | 24 | 2 | 30 |
+| 8. Paste sources (`PASTE`) | 4 | 8 | 2 | 14 |
+| 9. Displays and color (`DISP`) | 0 | 5 | 1 | 6 |
+| 10. Settings (`SET`) | 4 | 12 | 6 | 22 |
+| 11. Command line (`CLI`) | 3 | 5 | 1 | 9 |
+| 12. Application (`APP`) | 1 | 3 | 3 | 7 |
+| 13. Noeul additions (`ADD`) | 2 | 5 | 0 | 7 |
 
 Deviations from Snipaste's defaults (**◆**) are in `SNIP-05`, `DET-02`, `DET-06`, `COLOR-02`,
 `HIST-03`, `OUT-01`, `OUT-03`, `OUT-09`, `ANN-02`, `ANN-07`, `ANN-17`, `PIN-09`, `PIN-10`,
@@ -351,3 +351,4 @@ Deviations from Snipaste's defaults (**◆**) are in `SNIP-05`, `DET-02`, `DET-0
 | Date | Snipaste reference | Step | Change |
 | --- | --- | --- | --- |
 | 2026-11-04 | 2.11.3 (2026-01-18) | Step 48 | Initial inventory. Nothing implemented. |
+| 2026-11-04 | 2.11.3 (2026-01-18) | Step 49 | App foundation: 18 rows `partial` with test evidence (pins, `F3` image paste, tray, single instance, CLI, shortcuts). No row `supported`. |

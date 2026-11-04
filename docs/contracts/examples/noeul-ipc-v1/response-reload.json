@@ -1,0 +1,56 @@
+{
+  "type": "response",
+  "id": 6,
+  "result": {
+    "reloaded": false,
+    "problem": "hotkeys.json is invalid (actions[0]: unknown action `nope`); the previous shortcuts stay active",
+    "hotkeys": {
+      "enabled": true,
+      "off_reason": null,
+      "config": {
+        "path": "C:\\Users\\me\\AppData\\Roaming\\mouv\\noeul\\hotkeys.json",
+        "state": "user"
+      },
+      "problem": null,
+      "registrations": [
+        {
+          "action": "paste.float",
+          "keys": "F3",
+          "status": "taken",
+          "message": "F3 is already registered by another program; Noeul did not take it"
+        }
+      ],
+      "conflicts": [
+        {
+          "code": "taken",
+          "severity": "warning",
+          "tool": "noeul",
+          "action": "paste.float",
+          "keys": "F3",
+          "scope": "global",
+          "source": "default",
+          "with": {
+            "kind": "program"
+          },
+          "offers": [
+            {
+              "kind": "rebind",
+              "keys": "Shift+F3"
+            },
+            {
+              "kind": "disable"
+            }
+          ],
+          "message": "F3 is registered by another program"
+        }
+      ],
+      "planned": [
+        {
+          "action": "capture.region",
+          "default": "F1",
+          "step": 50
+        }
+      ]
+    }
+  }
+}

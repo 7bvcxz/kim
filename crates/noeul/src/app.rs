@@ -533,7 +533,7 @@ pub(crate) mod tests {
 
     impl CaptureBackend for FakeCapture {
         fn name(&self) -> &'static str {
-            "fake"
+            "gdi" // stands in for the real backend (the schema knows only real names)
         }
         fn desktop(&self) -> Desktop {
             Desktop {
@@ -786,6 +786,57 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn every_ipc_answer_matches_the_schema() {
+        let mut a = app(&tmp("schema"), DesktopState::Available);
+        let check = |v: Value| {
+            let errors = crate::schema_errors("noeul-ipc-v1", &v);
+            assert!(errors.is_empty(), "{errors:?}\n{v:#}");
+        };
+        let region = json!({"x": 1, "y": 2, "width": 3, "height": 4});
+        for (method, params) in [
+            ("status", json!({})),
+            ("activate", json!({"reason": "start"})),
+            (
+                "capture",
+                json!({"region": region, "pin": true, "dry_run": true}),
+            ),
+            ("capture", json!({"region": region, "pin": true})),
+            ("pin.list", json!({})),
+            ("pin.close", json!({"all": true, "dry_run": true})),
+            ("pin.close", json!({"id": "pin-1"})),
+            ("pin.reopen", json!({"dry_run": true})),
+            ("pin.reopen", json!({})),
+            ("hotkeys.reload", json!({})),
+            ("status", json!({})),
+            ("quit", json!({"force": true, "dry_run": true})),
+        ] {
+            check(ipc::request(7, method, params.clone()));
+            let r = a.request(method, &params).unwrap();
+            check(ipc::ok(7, r));
+        }
+        for (method, params) in [
+            ("pin.close", json!({"id": "pin-9"})),
+            ("quit", json!({})),
+            (
+                "capture",
+                json!({"region": {"x": 99, "y": 99, "width": 9, "height": 9}, "pin": true}),
+            ),
+        ] {
+            let e = a.request(method, &params).unwrap_err();
+            check(ipc::err(8, &e));
+            check(ipc::connection_error(&e));
+        }
+        check(ipc::hello("noeul-cli"));
+        check(ipc::welcome(1, 42, &a.started_at()));
+        let mut locked = app(&tmp("schema-locked"), DesktopState::Locked);
+        let e = locked
+            .request("capture", &json!({"region": region, "pin": true}))
+            .unwrap_err();
+        check(ipc::err(2, &e));
+        check(ipc::ok(1, locked.status()));
+    }
+
+    #[test]
     fn status_reports_ids_and_geometry_only() {
         let mut a = app(&tmp("status"), DesktopState::Available);
         a.request(
@@ -796,7 +847,7 @@ pub(crate) mod tests {
         let s = a.status();
         assert_eq!(s["pins"]["open"], 1);
         assert_eq!(s["memory"]["bytes"], 36);
-        assert_eq!(s["capture_backend"], "fake");
+        assert_eq!(s["capture_backend"], "gdi");
         assert_eq!(s["hotkeys"]["off_reason"], "--no-hotkeys");
         let text = s.to_string();
         assert!(!text.contains("10, 20, 30"), "no pixel values");

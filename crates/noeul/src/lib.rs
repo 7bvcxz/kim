@@ -37,6 +37,35 @@ pub mod util;
 #[allow(unsafe_code)]
 pub mod win;
 
+/// The validator of `cargo xtask schema-check`, so unit tests check every IPC message this build
+/// constructs against docs/contracts/schemas (ADR 0015).
+#[cfg(test)]
+#[path = "../../../xtask/src/jsonschema.rs"]
+#[allow(dead_code, unused_qualifications, clippy::all)]
+mod jsonschema;
+
+/// Validates `v` against `docs/contracts/schemas/<name>.schema.json`, or against one of its
+/// `$defs` with `name#def`.
+#[cfg(test)]
+pub(crate) fn schema_errors(name: &str, v: &serde_json::Value) -> Vec<String> {
+    let (file, def) = name
+        .split_once('#')
+        .map_or((name, None), |(f, d)| (f, Some(d)));
+    let mut schema: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join(format!("../../docs/contracts/schemas/{file}.schema.json")),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    if let Some(d) = def {
+        let defs = schema["$defs"].clone();
+        schema = serde_json::json!({"$ref": format!("#/$defs/{d}"), "$defs": defs});
+    }
+    jsonschema::Validator::new(&schema).validate(v).unwrap()
+}
+
 /// The package version (`noeul --version`).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 

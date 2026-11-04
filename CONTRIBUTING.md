@@ -54,6 +54,7 @@ milestone M4 (`KIM-NFR-011`); macOS is out of scope.
 | `catalog/` | — | The signed catalog bundled into `kim` and published for `kim catalog refresh` ([format](docs/CATALOG_FORMAT.md)) |
 | `crates/kim-hotkeys` | `kim-hotkeys` | Shared hotkey library (key syntax, `hotkeys.json`, conflict checks, `RegisterHotKey` backend; [HOTKEY_CONTRACT](docs/HOTKEY_CONTRACT.md)); headless, used by `kim` and Kim Manager, later Subak, Noeul and Ddalgak (ADR 0002, ADR 0017) |
 | `crates/kim-manager` | `kim-manager` | Kim Manager GUI (egui + glow, ADR 0014); the only package allowed to depend on GUI crates so far |
+| `crates/noeul` | `noeul` | Noeul (binary `noeul`): resident instance with pins, optional tray icon and global hotkeys, its CLI and IPC v1 ([ADR 0023](docs/adr/0023-noeul-app-foundation.md)); plain Win32, no GUI framework (listed in `cargo xtask deps-check`) |
 | `crates/subak` | `subak` | Subak CLI (binary `subak`): `capabilities` and the Step 08 ConPTY Host prototype (`subak host …`, [CONPTY_PROOF](docs/CONPTY_PROOF.md)); sessions and GUI arrive in later steps |
 | `xtask` | `xtask` | Repository automation (docs/schema checks, CI gate, gated e2e runner); never shipped |
 | `e2e` | `kim-e2e` | End-to-end suite; excluded from `default-members` and CI |

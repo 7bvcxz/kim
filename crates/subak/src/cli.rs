@@ -90,6 +90,8 @@ impl Cmd {
             Self::TerminalNew => &[
                 "--endpoint",
                 "--cwd",
+                "--env",
+                "--unset-env",
                 "--size",
                 "--remain-on-exit",
                 "--keep-on-failure",
@@ -128,12 +130,33 @@ pub struct Args {
     pub force: bool,
     /// `terminal new`: working directory of the pane.
     pub cwd: Option<String>,
+    /// `terminal new --env` / `--unset-env`, in the order given.
+    pub env: Vec<EnvArg>,
     pub remain_on_exit: bool,
     pub keep_on_failure: bool,
     /// Positional arguments after the command words (a target, a name).
     pub positional: Vec<String>,
     /// `terminal new -- <program> [args…]`.
     pub command: Vec<String>,
+}
+
+/// One environment override of `terminal new` (docs/PTY_PROCESSES.md §3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EnvArg {
+    /// `--env NAME=VALUE`.
+    Set(String, String),
+    /// `--env NAME`: the value this CLI process has, so a secret never appears on a command line.
+    Copy(String),
+    /// `--unset-env NAME`.
+    Unset(String),
+}
+
+impl EnvArg {
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Set(n, _) | Self::Copy(n) | Self::Unset(n) => n,
+        }
+    }
 }
 
 /// Longest idle grace period accepted by `--idle-exit` (one day).
@@ -254,6 +277,35 @@ pub fn parse(raw: &[String]) -> Result<(Cmd, Args), (String, CliError)> {
                         bad.get_or_insert(CliError::usage("--cwd needs a directory"));
                     }
                     a.cwd = Some(v);
+                }
+            }
+            "--env" => {
+                opts.push("--env");
+                if let Some(v) = value("--env") {
+                    // Never echo the value: it may be a secret.
+                    match v.split_once('=') {
+                        Some(("", _)) => {
+                            bad.get_or_insert(
+                                CliError::usage("--env needs NAME=VALUE or NAME")
+                                    .hint("e.g. --env RUST_LOG=debug, or --env GITHUB_TOKEN to copy it from this environment"),
+                            );
+                        }
+                        Some((name, value)) => a.env.push(EnvArg::Set(name.into(), value.into())),
+                        None if v.is_empty() => {
+                            bad.get_or_insert(CliError::usage("--env needs NAME=VALUE or NAME"));
+                        }
+                        None => a.env.push(EnvArg::Copy(v)),
+                    }
+                }
+            }
+            "--unset-env" => {
+                opts.push("--unset-env");
+                if let Some(v) = value("--unset-env") {
+                    if v.is_empty() || v.contains('=') {
+                        bad.get_or_insert(CliError::usage("--unset-env needs a variable NAME"));
+                    } else {
+                        a.env.push(EnvArg::Unset(v));
+                    }
                 }
             }
             "--idle-exit" => {
@@ -531,6 +583,55 @@ mod tests {
             p(&["host", "attach", "--dry-run", "--json"]).unwrap().0,
             Cmd::HostAttach
         );
+    }
+
+    #[test]
+    fn env_overrides_parse_in_order_and_never_echo_values() {
+        let (cmd, a) = p(&[
+            "terminal",
+            "new",
+            "--env",
+            "RUST_LOG=debug",
+            "--env=URL=https://x/?a=b",
+            "--env",
+            "GITHUB_TOKEN",
+            "--unset-env",
+            "HTTP_PROXY",
+            "--env",
+            "EMPTY=",
+            "--",
+            "pwsh",
+            "--env",
+            "not-ours",
+        ])
+        .unwrap();
+        assert_eq!(cmd, Cmd::TerminalNew);
+        assert_eq!(
+            a.env,
+            vec![
+                EnvArg::Set("RUST_LOG".into(), "debug".into()),
+                EnvArg::Set("URL".into(), "https://x/?a=b".into()),
+                EnvArg::Copy("GITHUB_TOKEN".into()),
+                EnvArg::Unset("HTTP_PROXY".into()),
+                EnvArg::Set("EMPTY".into(), String::new()),
+            ]
+        );
+        assert_eq!(
+            a.command,
+            ["pwsh", "--env", "not-ours"],
+            "after -- it is the program's"
+        );
+        let secret = "s3cr3t-never-echoed";
+        for bad in [
+            vec!["terminal", "new", "--env", "=x"],
+            vec!["terminal", "new", "--env"],
+            vec!["terminal", "new", "--unset-env", "A=B"],
+            vec!["terminal", "list", "--env", "TOKEN=s3cr3t-never-echoed"],
+        ] {
+            let (_, e) = p(&bad).unwrap_err();
+            assert_eq!(e.code, crate::output::Code::Usage, "{bad:?}");
+            assert!(!e.message.contains(secret), "{}", e.message);
+        }
     }
 
     #[test]

@@ -18,6 +18,8 @@ mod output;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod proto;
 #[cfg_attr(not(windows), allow(dead_code))]
+mod pty;
+#[cfg_attr(not(windows), allow(dead_code))]
 mod session;
 
 /// The schema validator of `cargo xtask schema-check`, so unit tests can check every IPC message
@@ -49,8 +51,9 @@ subak — Subak persistent terminal (pre-alpha; Host, IPC v1 and the Terminal li
 USAGE:
     subak [--help | --version]
     subak capabilities [--json]
-    subak terminal new    [<name>] [--cwd <dir>] [--size <cols>x<rows>] [--remain-on-exit]
-                          [--keep-on-failure] [--dry-run] [--json] [-- <program> [args...]]
+    subak terminal new    [<name>] [--cwd <dir>] [--env NAME[=VALUE]]... [--unset-env NAME]...
+                          [--size <cols>x<rows>] [--remain-on-exit] [--keep-on-failure]
+                          [--dry-run] [--json] [-- <program> [args...]]
     subak terminal list   [--json]
     subak terminal info   <target> [--json]
     subak terminal rename <target> <new-name> [--dry-run] [--json]
@@ -75,6 +78,13 @@ TERMINALS (Windows only; docs/SESSION_MODEL.md):
                      Host if none runs. A name already in use (ignoring case) is refused with
                      `name_conflict`, never suffixed. A program that cannot start leaves nothing
                      behind, unless --keep-on-failure keeps it as `failed`.
+                     <program> and every argument are passed as separate words (quoted for
+                     Windows), never through a shell. A bare name is looked up on the pane's
+                     PATH (cmd, powershell, pwsh if you installed it; Subak installs nothing).
+                     Batch (.bat/.cmd) and PowerShell (.ps1) scripts are refused: name their
+                     interpreter (-- cmd.exe /d /c script.cmd). The pane gets your logon
+                     environment (not this terminal's), SUBAK_PANE_ID and SUBAK_TERMINAL_ID,
+                     and the --env/--unset-env overrides; their values are never shown.
     terminal list    Every Terminal with its state, pid and clients. Starts nothing.
     terminal info    One Terminal with its window and pane.
     terminal rename  Rename a Terminal; its id never changes.
@@ -123,6 +133,9 @@ OPTIONS:
                        exits (0..86400, default 10).
     --size <c>x<r>     Pseudo console size (new, attach; 2..1000 each).
     --cwd <dir>        Working directory of a new Terminal (an absolute path).
+    --env NAME=VALUE   Set a variable in a new Terminal (repeatable). --env NAME copies this
+                       terminal's value, so a token never appears on a command line.
+    --unset-env NAME   Remove a variable from a new Terminal's environment (repeatable).
     --remain-on-exit   Keep a new Terminal as `stopped` when its program exits by itself.
     --keep-on-failure  Keep a Terminal whose program could not start, as `failed`.
     --force            rm: also end a running Terminal.
@@ -311,12 +324,41 @@ fn row(t: &Value) -> String {
     )
 }
 
+/// An exit status as shown to people: NTSTATUS-like values (≥ 0x80000000, e.g. `0xC000013A`
+/// for a console closed with Ctrl+C or Close) also in hex.
+fn exit_text(v: &Value) -> String {
+    match v.as_u64() {
+        Some(c) if c >= 0x8000_0000 => format!("{c} (0x{c:08X})"),
+        Some(c) => c.to_string(),
+        None => "unknown".into(),
+    }
+}
+
+/// The names of a pane's environment overrides (`""` when there are none).
+fn env_text(env: &Value) -> String {
+    let names = |k: &str| {
+        env[k]
+            .as_array()
+            .map(|v| v.iter().map(text).collect::<Vec<_>>().join(", "))
+            .unwrap_or_default()
+    };
+    let (set, unset) = (names("set"), names("unset"));
+    match (set.is_empty(), unset.is_empty()) {
+        (true, true) => String::new(),
+        (false, true) => format!("\nenvironment overrides (values hidden): set {set}"),
+        (true, false) => format!("\nenvironment overrides: unset {unset}"),
+        (false, false) => {
+            format!("\nenvironment overrides (values hidden): set {set}; unset {unset}")
+        }
+    }
+}
+
 /// How a pane ended, for stop/kill/rm.
 fn ended(report: &Value) -> String {
     format!(
         "pid {} ended (exit code {}{})",
         report["pid"],
-        report["exit_code"],
+        exit_text(&report["exit_code"]),
         if report["forced"] == true {
             ", forced"
         } else {
@@ -440,13 +482,13 @@ fn human(cmd: &Cmd, d: &Value, a: &Args) {
                 } else if let Some(reason) = d["host"]["stopped"].as_str() {
                     eprintln!(
                         "[subak: the shell ended (exit code {}); the Host stopped ({reason})]",
-                        d["shell_exit_code"],
+                        exit_text(&d["shell_exit_code"]),
                     );
                 } else {
                     eprintln!(
                         "[subak: the shell ended (exit code {}); the Host keeps running until \
                          its idle grace period ends]",
-                        d["shell_exit_code"],
+                        exit_text(&d["shell_exit_code"]),
                     );
                 }
             }
@@ -457,16 +499,21 @@ fn human(cmd: &Cmd, d: &Value, a: &Args) {
             let pane = &t["windows"][0]["panes"][0];
             writeln!(
                 out,
-                "Terminal `{}` ({}) created: pid {} ({}){}\nattach with: subak terminal attach {}",
+                "Terminal `{}` ({}) created: pid {} ({}){}{}\nattach with: subak terminal attach {}",
                 text(&d["name"]),
                 text(&d["terminal_id"]),
                 pane["pid"],
-                text(&pane["command"]["program"]),
+                if pane["executable"].is_string() {
+                    text(&pane["executable"])
+                } else {
+                    text(&pane["command"]["program"])
+                },
                 if d["host"]["started"] == true {
                     format!("; started Host pid {}", d["host"]["pid"])
                 } else {
                     String::new()
                 },
+                env_text(&pane["env"]),
                 text(&d["terminal_id"]),
             )
         }
@@ -501,7 +548,7 @@ fn human(cmd: &Cmd, d: &Value, a: &Args) {
             writeln!(
                 out,
                 "Terminal `{}` ({}) — {}{} since {}\nwindow {} `{}` ({}), pane {} ({}): {} {}\n\
-                 pid {}, {} process(es), {}x{}, {} client(s), cwd {}{}",
+                 executable {}\npid {}, {} process(es), {}x{}, {} client(s), cwd {}{}{}",
                 text(&t["name"]),
                 text(&t["id"]),
                 text(&t["state"]),
@@ -517,18 +564,20 @@ fn human(cmd: &Cmd, d: &Value, a: &Args) {
                     .as_array()
                     .map(|v| v.iter().map(text).collect::<Vec<_>>().join(" "))
                     .unwrap_or_default(),
+                text(&p["executable"]),
                 text(&p["pid"]),
                 p["processes"],
                 p["size"]["cols"],
                 p["size"]["rows"],
                 p["clients"],
                 text(&p["cwd"]),
+                env_text(&p["env"]),
                 if t["last_exit"].is_null() {
                     String::new()
                 } else {
                     format!(
                         "\nlast exit: code {} ({}{})",
-                        text(&t["last_exit"]["exit_code"]),
+                        exit_text(&t["last_exit"]["exit_code"]),
                         text(&t["last_exit"]["cause"]),
                         if t["last_exit"]["forced"] == true {
                             ", forced"

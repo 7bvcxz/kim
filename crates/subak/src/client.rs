@@ -92,6 +92,10 @@ fn host_error(code: &str, message: &str, details: &Value) -> CliError {
             e = e.detail(format!("{k}: {text}"));
         }
     }
+    // `spawn_failed` carries what to do next (e.g. how to run a batch script explicitly).
+    if let Some(h) = details["hint"].as_str() {
+        e = e.hint(h);
+    }
     e
 }
 

@@ -16,11 +16,12 @@
 //! when they cannot ask. Only after that consent does the client send `force`, which the Host
 //! requires to end a Terminal that runs more than an idle shell.
 
-use crate::cli::Args;
+use crate::cli::{Args, EnvArg};
 use crate::client::{self, Connected, Failure, Plan, Session, Why, confirm};
 use crate::output::{CliError, Code};
-use crate::session;
+use crate::{pty, session};
 use serde_json::{Value, json};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 /// How long a create may take (pseudo console and process start).
@@ -62,8 +63,109 @@ fn size_json(a: &Args) -> Value {
         .map_or(Value::Null, |(c, r)| json!({"cols": c, "rows": r}))
 }
 
-/// `terminal new [<name>] [--cwd <dir>] [--size CxR] [--remain-on-exit] [--keep-on-failure]
-/// [-- <program> [args…]]`.
+/// The `env` parameter of `terminal.create` from `--env` / `--unset-env`. `--env NAME` copies
+/// this process's value, so a token never has to appear on a command line. No message ever
+/// contains a value.
+fn env_param(a: &Args) -> Result<Value, CliError> {
+    if a.env.is_empty() {
+        return Ok(Value::Null);
+    }
+    let mut map = serde_json::Map::new();
+    let mut seen: Vec<&str> = Vec::new();
+    for e in &a.env {
+        let name = e.name();
+        pty::check_env_name(name).map_err(CliError::usage)?;
+        if seen.iter().any(|s| pty::same_var(s, name)) {
+            return Err(CliError::usage(format!(
+                "the variable `{name}` is given twice (names ignore case)"
+            )));
+        }
+        seen.push(name);
+        let value = match e {
+            EnvArg::Set(_, v) => Value::from(v.as_str()),
+            EnvArg::Unset(_) => Value::Null,
+            EnvArg::Copy(_) => match std::env::var(name) {
+                Ok(v) => Value::from(v),
+                Err(std::env::VarError::NotPresent) => {
+                    return Err(CliError::usage(format!(
+                        "`--env {name}` copies `{name}` from this environment, but it is not set here"
+                    ))
+                    .hint(format!("give a value with --env {name}=VALUE")));
+                }
+                Err(std::env::VarError::NotUnicode(_)) => {
+                    return Err(CliError::usage(format!(
+                        "the value of `{name}` in this environment is not valid Unicode"
+                    )));
+                }
+            },
+        };
+        map.insert(name.to_string(), value);
+    }
+    Ok(Value::Object(map))
+}
+
+/// A dry run without a Host: the same checks the Host would make (name, working directory,
+/// the program on the pane's PATH), on this machine, as this user, with nothing started.
+fn plan_without_host(a: &Args, params: &Value) -> Result<Value, CliError> {
+    let name = match a.positional.first() {
+        Some(n) => {
+            session::parse_name(n)
+                .map_err(|e| CliError::new(Code::InvalidName, e.message))?
+                .display
+        }
+        None => "1".into(),
+    };
+    let command = match a.command.split_first() {
+        Some((program, args)) => session::Command {
+            program: program.clone(),
+            args: args.to_vec(),
+        },
+        None => session::split_command_line(&crate::host::default_shell()),
+    };
+    let env = pty::EnvOverrides::from_json(&params["env"]).map_err(CliError::usage)?;
+    let cwd = match &a.cwd {
+        Some(c) if !Path::new(c).is_absolute() => {
+            return Err(CliError::usage("--cwd must be an absolute path"));
+        }
+        Some(c) => PathBuf::from(c),
+        None => crate::host::profile_dir(crate::win::EnvBlock::for_current_user().ok().as_ref())
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_default(),
+    };
+    let executable = pty::plan(&pty::Spec {
+        program: &command.program,
+        args: &command.args,
+        raw_line: None,
+        cwd: &cwd,
+        env: &env,
+        host_vars: &[],
+        size: a.size.unwrap_or(crate::host::DEFAULT_SIZE),
+    })
+    .map_err(|e| {
+        let mut err = CliError::new(Code::SpawnFailed, e.message)
+            .detail(format!("reason: {}", e.reason.as_str()));
+        if let Some(h) = e.hint {
+            err = err.hint(h);
+        }
+        err
+    })?;
+    Ok(
+        json!({"dry_run": true, "would_start_host": true, "would_create": {
+            "name": name,
+            "command": {"program": command.program, "args": session::redact_args(&command.args)},
+            "executable": executable.display().to_string(),
+            "cwd": cwd.display().to_string(),
+            "env": session::env_json(&env.names()),
+            "size": params["size"].as_object().map_or_else(
+                || json!({"cols": crate::host::DEFAULT_SIZE.0, "rows": crate::host::DEFAULT_SIZE.1}),
+                |s| Value::Object(s.clone())),
+            "remain_on_exit": a.remain_on_exit, "keep_on_failure": a.keep_on_failure,
+        }}),
+    )
+}
+
+/// `terminal new [<name>] [--cwd <dir>] [--env NAME[=VALUE]]… [--unset-env NAME]…
+/// [--size CxR] [--remain-on-exit] [--keep-on-failure] [-- <program> [args…]]`.
 pub fn new(a: &Args, endpoint: &str) -> Result<Value, CliError> {
     let command = match a.command.split_first() {
         Some((program, args)) => json!({"program": program, "args": args}),
@@ -73,6 +175,7 @@ pub fn new(a: &Args, endpoint: &str) -> Result<Value, CliError> {
         "name": a.positional.first(),
         "command": command,
         "cwd": a.cwd,
+        "env": env_param(a)?,
         "size": size_json(a),
         "remain_on_exit": a.remain_on_exit,
         "keep_on_failure": a.keep_on_failure,
@@ -86,23 +189,8 @@ pub fn new(a: &Args, endpoint: &str) -> Result<Value, CliError> {
                 plan["would_start_host"] = json!(false);
                 Ok(plan)
             }
-            // Without a Host there is no name to collide with; check the name itself only.
-            None => {
-                let name = match a.positional.first() {
-                    Some(n) => {
-                        session::parse_name(n)
-                            .map_err(|e| CliError::new(Code::InvalidName, e.message))?
-                            .display
-                    }
-                    None => "1".into(),
-                };
-                Ok(
-                    json!({"dry_run": true, "would_start_host": true, "would_create": {
-                        "name": name, "command": p["command"], "cwd": a.cwd, "size": p["size"],
-                        "remain_on_exit": a.remain_on_exit, "keep_on_failure": a.keep_on_failure,
-                    }}),
-                )
-            }
+            // Without a Host there is no name to collide with; everything else is checked.
+            None => plan_without_host(a, &p),
         };
     }
     // Start on demand: a Host without a Terminal of its own (ADR 0019 §5).

@@ -25,7 +25,8 @@ unicode-normalization = "0.1.25"
 
 [target."cfg(windows)".dependencies]
 # The Host and its clients: pseudo console, job objects, named pipes and peer identity, detached
-# spawn with the user's logon environment (CreateEnvironmentBlock), the start mutex.
+# spawn with the user's logon environment (CreateEnvironmentBlock), the start mutex, the Host's
+# own memory counters for host.stats (ProcessStatus).
 windows-sys = { version = "0.61.2", features = [
     "Win32_Foundation",
     "Win32_Security",
@@ -36,6 +37,7 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_System_IO",
     "Win32_System_JobObjects",
     "Win32_System_Pipes",
+    "Win32_System_ProcessStatus",
     "Win32_System_RemoteDesktop",
     "Win32_System_Threading",
 ] }
@@ -47,7 +49,8 @@ regex = "1.13.1"
 [target."cfg(windows)".dev-dependencies]
 # tests/conpty_host.rs drives the real Host: hidden consoles, job objects, window-close messages.
 # tests/host_ipc.rs speaks raw IPC v1 (overlapped pipe I/O), squats a pipe name, suspends a Host
-# and lowers a token's integrity level.
+# and lowers a token's integrity level. The unit tests of win::quote_arg compare against the OS
+# parser CommandLineToArgvW (UI_Shell).
 windows-sys = { version = "0.61.2", features = [
     "Win32_Foundation",
     "Win32_Security",
@@ -59,5 +62,6 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_System_JobObjects",
     "Win32_System_Pipes",
     "Win32_System_Threading",
+    "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }

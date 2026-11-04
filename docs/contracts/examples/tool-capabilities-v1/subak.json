@@ -20,8 +20,8 @@
     },
     {
       "name": "terminal.new",
-      "usage": "subak terminal new [<name>] [--cwd <dir>] [--size <cols>x<rows>] [--remain-on-exit] [--keep-on-failure] [--dry-run] [--json] [-- <program> [args...]]",
-      "summary": "Create a named Terminal in its own pseudo console and job; starts a Host on demand",
+      "usage": "subak terminal new [<name>] [--cwd <dir>] [--env NAME[=VALUE]]... [--unset-env NAME]... [--size <cols>x<rows>] [--remain-on-exit] [--keep-on-failure] [--dry-run] [--json] [-- <program> [args...]]",
+      "summary": "Create a named Terminal running a program (resolved on its PATH, never through a shell) in its own pseudo console and job, with your logon environment plus overrides; starts a Host on demand",
       "effect": "write",
       "network": false,
       "dry_run": true,

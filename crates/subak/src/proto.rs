@@ -778,6 +778,10 @@ mod tests {
             .join("../../docs/contracts/examples/ipc-v1");
         for (file, def) in [
             ("response-terminal-create.json", "result_terminal_create"),
+            (
+                "response-terminal-create-dry-run.json",
+                "result_terminal_create",
+            ),
             ("response-terminal-list.json", "result_terminal_list"),
             ("response-terminal-info.json", "result_terminal_info"),
             ("response-terminal-stop.json", "result_terminal_end"),

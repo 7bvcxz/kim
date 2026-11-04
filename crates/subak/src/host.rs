@@ -35,12 +35,13 @@ use crate::output::{CliError, Code};
 use crate::proto::{
     self, ClientKind, ErrorCode, FLAG_INPUT, FLAG_SNAPSHOT, Frame, IpcError, Refusal, Request, Ring,
 };
+use crate::pty::{self, EnvOverrides, Pty};
 use crate::session::{self, Command, EndCause, LastExit, Registry, Spec, Transition};
-use crate::win::conpty::{self, Pty};
 use crate::win::pipe::{self, Listener, Pipe};
-use crate::win::{self, EnvBlock, Handle, JobLimits};
+use crate::win::{self, EnvBlock, JobLimits};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap};
+use std::io::Read;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -64,7 +65,7 @@ const GRACE: Duration = Duration::from_secs(5);
 /// How long a second party waits for a teardown someone else performs.
 const TEARDOWN_WAIT: Duration = Duration::from_secs(30);
 /// Longest command line `CreateProcessW` accepts.
-const MAX_COMMAND_LINE: usize = 32_767;
+const MAX_COMMAND_LINE: usize = win::launch::MAX_COMMAND_LINE;
 
 /// What `host serve` needs.
 #[derive(Debug)]
@@ -91,8 +92,10 @@ pub fn profile_dir(env: Option<&EnvBlock>) -> Option<PathBuf> {
         .filter(|p| p.is_dir())
 }
 
+/// One queued frame. Output frames are shared by every client attached to the pane (`Arc`), so
+/// several lagging clients hold one copy of the same output, not one each.
 struct Out {
-    bytes: Vec<u8>,
+    bytes: Arc<[u8]>,
     ack: Option<mpsc::Sender<()>>,
 }
 
@@ -106,7 +109,7 @@ struct Sink {
 }
 
 impl Sink {
-    fn push(&self, bytes: Vec<u8>, ack: Option<mpsc::Sender<()>>) -> bool {
+    fn push(&self, bytes: Arc<[u8]>, ack: Option<mpsc::Sender<()>>) -> bool {
         let n = bytes.len();
         if self.queued.fetch_add(n, Ordering::SeqCst) + n > QUEUE_BYTES
             || self.tx.try_send(Out { bytes, ack }).is_err()
@@ -119,13 +122,13 @@ impl Sink {
     }
 
     fn control(&self, msg: &Value) -> bool {
-        self.push(proto::encode_control(msg), None)
+        self.push(proto::encode_control(msg).into(), None)
     }
 
     /// Queues a last message and waits (bounded) until it was written.
     fn last(&self, msg: &Value) {
         let (atx, arx) = mpsc::channel();
-        if self.push(proto::encode_control(msg), Some(atx)) {
+        if self.push(proto::encode_control(msg).into(), Some(atx)) {
             let _ = arx.recv_timeout(Duration::from_secs(1));
         }
     }
@@ -133,7 +136,7 @@ impl Sink {
     /// A barrier: signals once everything queued before it was written.
     fn flushed(&self) -> Option<mpsc::Receiver<()>> {
         let (atx, arx) = mpsc::channel();
-        self.push(Vec::new(), Some(atx)).then_some(arx)
+        self.push(Arc::from(&[][..]), Some(atx)).then_some(arx)
     }
 }
 
@@ -153,7 +156,7 @@ impl Conn {
     fn event(&mut self, name: &str, data: &Value) -> bool {
         self.event_seq += 1;
         self.sink.push(
-            proto::encode_control(&proto::event(self.event_seq, name, data)),
+            proto::encode_control(&proto::event(self.event_seq, name, data)).into(),
             None,
         )
     }
@@ -172,7 +175,7 @@ struct PaneRt {
     pane_id: String,
     terminal_id: String,
     stream: u32,
-    pty: Arc<Pty>,
+    pty: Arc<dyn Pty>,
     reader: Mutex<Option<JoinHandle<()>>>,
     /// The job was terminated (not every process ended by itself).
     forced: AtomicBool,
@@ -183,7 +186,7 @@ struct PaneRt {
 impl PaneRt {
     fn terminate(&self) {
         self.forced.store(true, Ordering::SeqCst);
-        self.pty.terminate_job(1);
+        self.pty.kill_tree(1);
     }
 
     fn set_done(&self, report: Value) {
@@ -269,8 +272,8 @@ impl State {
     fn live(&self, p: &session::Pane) -> session::Live {
         let rt = self.rt.get(&p.id);
         session::Live {
-            running: rt.is_some_and(|r| win::exit_code(r.pty.process_handle()).is_none()),
-            processes: rt.map_or(0, |r| r.pty.job_processes()),
+            running: rt.is_some_and(|r| r.pty.running()),
+            processes: rt.map_or(0, |r| r.pty.processes()),
             clients: self
                 .conns
                 .values()
@@ -343,9 +346,9 @@ struct Host {
     job: Option<JobLimits>,
     session: u32,
     idle_exit: Duration,
+    /// Whether the logon environment could be built at start (`user`) or not (`inherited`).
+    /// Each new pane builds its own, fresh (`win::launch`, ADR 0025).
     environment: &'static str,
-    /// The user's logon environment for new panes (ADR 0003 §6).
-    env: Option<EnvBlock>,
     /// The default working directory of new panes: the user profile.
     home: Option<PathBuf>,
 }
@@ -396,7 +399,6 @@ pub fn serve(opts: &ServeOpts) -> Result<Value, CliError> {
         session: win::session_id(),
         idle_exit: opts.idle_exit,
         environment: if env.is_some() { "user" } else { "inherited" },
-        env,
         home,
     });
     if let Some(shell) = &opts.shell {
@@ -404,10 +406,15 @@ pub fn serve(opts: &ServeOpts) -> Result<Value, CliError> {
             name: None,
             command: session::split_command_line(shell),
             cwd: host.home.as_ref().map(|p| p.display().to_string()),
+            env: pty::EnvNames::default(),
             size: DEFAULT_SIZE,
             remain_on_exit: false,
         };
-        let created = host.create(spec, shell, false).map_err(|e| {
+        let launch = Launch {
+            raw_line: Some(shell.clone()),
+            env: EnvOverrides::default(),
+        };
+        let created = host.create(spec, &launch, false).map_err(|e| {
             CliError::new(
                 Code::SpawnFailed,
                 format!("cannot start `{shell}`: {}", e.message),
@@ -539,50 +546,35 @@ fn optional_string<'a>(params: &'a Value, name: &str) -> Result<Option<&'a str>,
     }
 }
 
-/// The `spawn_failed` reason of a failed start (IPC_PROTOCOL §6).
-fn spawn_reason(e: &std::io::Error) -> &'static str {
-    match e.raw_os_error() {
-        Some(2 | 3 | 123 | 161) => "not_found", // file/path not found, bad name or path syntax
-        Some(5) => "access_denied",
-        Some(267) => "bad_cwd", // ERROR_DIRECTORY
-        _ => "other",
+/// How a new pane's program is started, beyond what the model keeps: the verbatim `--shell`
+/// line, and the environment overrides with their values (used once, never stored).
+#[derive(Debug, Default)]
+struct Launch {
+    raw_line: Option<String>,
+    env: EnvOverrides,
+}
+
+/// The `spawn_failed` error of a failed start (IPC_PROTOCOL §6): `details.reason` and, when
+/// there is one, `details.hint` and `details.os_error`.
+fn spawn_failed(e: &pty::SpawnError, program: &str, keep: bool, tid: Option<&str>) -> IpcError {
+    let mut details = json!({
+        "reason": e.reason.as_str(),
+        "program": program,
+        "kept": keep,
+        "terminal_id": tid,
+    });
+    if let Some(h) = &e.hint {
+        details["hint"] = json!(h);
     }
-}
-
-/// The command line `CreateProcessW` gets for `c`.
-fn command_line(c: &Command) -> String {
-    std::iter::once(&c.program)
-        .chain(&c.args)
-        .map(|a| win::quote_arg(a))
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-/// Whether `program` can be found as `CreateProcessW` would look for it: as a path, or on `PATH`
-/// (with `.exe` appended when it has no extension). Used by dry runs only; the real start
-/// reports `not_found` from the OS.
-fn program_exists(program: &str, path_var: Option<String>) -> bool {
-    let exists = |p: &Path| std::fs::symlink_metadata(p).is_ok_and(|m| !m.is_dir());
-    let variants = |p: PathBuf| {
-        let mut v = vec![p.clone()];
-        if p.extension().is_none() {
-            v.push(p.with_extension("exe"));
-        }
-        v
+    if let Some(c) = e.os_error {
+        details["os_error"] = json!(c);
+    }
+    let code = if e.reason == pty::Reason::UnsupportedPlatform {
+        ErrorCode::UnsupportedPlatform
+    } else {
+        ErrorCode::SpawnFailed
     };
-    let p = Path::new(program);
-    if p.is_absolute() || program.contains(['\\', '/']) {
-        return variants(p.to_path_buf()).iter().any(|c| exists(c));
-    }
-    path_var
-        .unwrap_or_default()
-        .split(';')
-        .filter(|d| !d.is_empty())
-        .any(|d| {
-            variants(Path::new(d).join(program))
-                .iter()
-                .any(|c| exists(c))
-        })
+    IpcError::new(code, e.message.clone()).details(details)
 }
 
 enum Reply {
@@ -591,15 +583,15 @@ enum Reply {
 }
 
 /// Ends a freshly started pane that must not be kept (the Host began stopping meanwhile).
-fn discard(pty: &Arc<Pty>, output: Handle) {
-    pty.terminate_job(1);
+fn discard(pty: &Arc<dyn Pty>, mut output: Box<dyn Read + Send>) {
+    pty.kill_tree(1);
     let drain = thread::spawn(move || {
         let mut buf = vec![0u8; 16 * 1024];
-        while matches!(conpty::read_output(&output, &mut buf), Ok(n) if n > 0) {}
+        while matches!(output.read(&mut buf), Ok(n) if n > 0) {}
     });
     let closer = thread::spawn({
         let pty = Arc::clone(pty);
-        move || pty.close_console()
+        move || pty.close()
     });
     pty.wait_exit(Some(GRACE));
     join_bounded(closer, GRACE);
@@ -647,8 +639,13 @@ impl Host {
     /// name and ids are reserved under the lock (so concurrent creates with one name give one
     /// Terminal), the pane is started outside it, and a failed start leaves nothing behind
     /// unless `keep` asks for a `failed` record. Returns the `terminal.create` result.
-    fn create(self: &Arc<Self>, spec: Spec, line: &str, keep: bool) -> Result<Value, IpcError> {
-        let (tid, pane_id, stream, size, cwd, program) = {
+    fn create(
+        self: &Arc<Self>,
+        spec: Spec,
+        launch: &Launch,
+        keep: bool,
+    ) -> Result<Value, IpcError> {
+        let (tid, pane_id, stream, size, cwd, command) = {
             let mut st = self.lock();
             if st.stopping {
                 return Err(IpcError::new(
@@ -673,29 +670,30 @@ impl Host {
                 p.stream,
                 p.size,
                 p.cwd.clone(),
-                p.command.program.clone(),
+                p.command.clone(),
             );
             let data = json!({"terminal": st.terminal_json(t)});
             st.notify("terminals", "terminal.created", &data);
             out
         };
-        let spawned = match cwd.as_deref() {
-            Some(c) if !Path::new(c).is_dir() => Err((
-                "bad_cwd",
-                format!("the working directory `{c}` does not exist or is not a directory"),
-            )),
-            _ => Pty::spawn(
-                line,
-                cwd.as_deref().map(Path::new),
-                size.0,
-                size.1,
-                self.env.as_ref(),
-            )
-            .map_err(|e| (spawn_reason(&e), format!("cannot start `{program}`: {e}"))),
-        };
-        let pty = match spawned {
-            Ok(pty) => Arc::new(pty),
-            Err((reason, message)) => {
+        let program = command.program.clone();
+        let cwd = cwd
+            .map(PathBuf::from)
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_default();
+        let spawned = pty::spawn(&pty::Spec {
+            program: &command.program,
+            args: &command.args,
+            raw_line: launch.raw_line.as_deref(),
+            cwd: &cwd,
+            env: &launch.env,
+            // ADR 0010 §1: how a program (and Claude Code's hooks) knows which pane it runs in.
+            host_vars: &[("SUBAK_PANE_ID", &pane_id), ("SUBAK_TERMINAL_ID", &tid)],
+            size,
+        });
+        let started = match spawned {
+            Ok(s) => s,
+            Err(e) => {
                 let mut st = self.lock();
                 st.stats.spawn_failures += 1;
                 let name = st
@@ -707,24 +705,18 @@ impl Host {
                 if keep {
                     if let Some(t) = st.reg.get_mut(&tid) {
                         t.failure = Some(session::Failure {
-                            reason,
-                            message: message.clone(),
+                            reason: e.reason.as_str(),
+                            message: e.message.clone(),
                         });
                     }
                     st.state_changed(&tid, "starting", None);
                 } else {
                     st.removed(&tid, &name, "spawn_failed");
                 }
-                return Err(
-                    IpcError::new(ErrorCode::SpawnFailed, message).details(json!({
-                        "reason": reason,
-                        "program": program,
-                        "kept": keep,
-                        "terminal_id": if keep { Value::from(tid) } else { Value::Null },
-                    })),
-                );
+                return Err(spawn_failed(&e, &program, keep, keep.then_some(&*tid)));
             }
         };
+        let pty = started.pty;
         let output = pty
             .take_output()
             .expect("a fresh pseudo console has its output end");
@@ -755,7 +747,9 @@ impl Host {
             }
             st.reg.apply(&tid, Transition::Spawned)?;
             if let Some(t) = st.reg.get_mut(&tid) {
-                t.active_pane_mut().pid = Some(pty.pid());
+                let p = t.active_pane_mut();
+                p.pid = Some(pty.pid());
+                p.executable = Some(started.executable.display().to_string());
             }
             st.out.insert(
                 pane_id.clone(),
@@ -780,7 +774,8 @@ impl Host {
         let reader = thread::spawn({
             let host = Arc::clone(self);
             let rt = Arc::clone(&rt);
-            move || host.read_output(&rt, &output)
+            let mut output = output;
+            move || host.read_output(&rt, &mut *output)
         });
         *rt.reader
             .lock()
@@ -836,17 +831,17 @@ impl Host {
     /// is terminated. `immediate` terminates the job first. All output is drained before the
     /// report, so `pane.exited` follows the pane's last output.
     fn teardown(&self, rt: &PaneRt, immediate: bool) -> Value {
-        let processes = rt.pty.job_processes();
+        let processes = rt.pty.processes();
         if immediate {
             rt.terminate();
         }
         // On Windows 10 ClosePseudoConsole blocks until conhost exits, while the reader drains.
         let closer = thread::spawn({
             let pty = Arc::clone(&rt.pty);
-            move || pty.close_console()
+            move || pty.close()
         });
         let mut exit = rt.pty.wait_exit(Some(GRACE));
-        if exit.is_none() || rt.pty.job_processes() > 0 {
+        if exit.is_none() || rt.pty.processes() > 0 {
             rt.terminate();
             exit = rt.pty.wait_exit(Some(GRACE));
         }
@@ -866,7 +861,7 @@ impl Host {
             "exit_code": exit,
             "processes_in_job": processes,
             "forced": rt.forced.load(Ordering::SeqCst),
-            "job_processes_left": rt.pty.job_processes(),
+            "job_processes_left": rt.pty.processes(),
         })
     }
 
@@ -934,10 +929,13 @@ impl Host {
         })
     }
 
-    fn read_output(&self, rt: &PaneRt, out: &Handle) {
+    /// The pane's reader thread: drains the pseudo terminal continuously (a full output pipe
+    /// would block the pane's programs), keeps the replay ring, and fans each chunk out to the
+    /// attached clients without ever waiting for one.
+    fn read_output(&self, rt: &PaneRt, out: &mut dyn Read) {
         let mut buf = vec![0u8; 64 * 1024];
         loop {
-            let n = match conpty::read_output(out, &mut buf) {
+            let n = match out.read(&mut buf) {
                 Ok(0) | Err(_) => return,
                 Ok(n) => n,
             };
@@ -949,10 +947,10 @@ impl Host {
             pane.ring.push(&buf[..n]);
             let seq = pane.seq;
             pane.seq += n as u64;
-            let frame = proto::encode_data(rt.stream, seq, 0, &buf[..n]);
+            let frame: Arc<[u8]> = proto::encode_data(rt.stream, seq, 0, &buf[..n]).into();
             for c in st.conns.values_mut() {
                 // Never block the pane on a client: one that lags is disconnected by its sink.
-                if c.attached.contains_key(&rt.stream) && !c.sink.push(frame.clone(), None) {
+                if c.attached.contains_key(&rt.stream) && !c.sink.push(Arc::clone(&frame), None) {
                     c.attached.clear();
                     st.stats.lagging_clients_dropped += 1;
                 }
@@ -1329,12 +1327,21 @@ impl Host {
 
     /// Local metrics (ADR 0012): numbers and enumerations only.
     fn stats(&self) -> Value {
+        let mem = win::memory();
         let st = self.lock();
         let s = &st.stats;
         let out: u64 = st.out.values().map(|o| o.seq).sum::<u64>() + s.ended_output_bytes;
         let input: u64 = st.out.values().map(|o| o.input_bytes).sum::<u64>() + s.ended_input_bytes;
         json!({
-            "host": {"uptime_s": self.uptime_s(), "handle_count": win::handle_count()},
+            "host": {
+                "uptime_s": self.uptime_s(),
+                "handle_count": win::handle_count(),
+                "memory": {
+                    "working_set_bytes": mem.working_set,
+                    "private_bytes": mem.private,
+                    "peak_private_bytes": mem.peak_private,
+                },
+            },
             "terminals": st.live_terminals(),
             "terminals_total": st.reg.terminals.len(),
             "panes": st.rt.len(),
@@ -1519,7 +1526,8 @@ impl Host {
         c.sink.control(&proto::response(req.id, Ok(result)));
         if !replay.is_empty() {
             c.sink.push(
-                proto::encode_data(rt.stream, seq - replay.len() as u64, FLAG_SNAPSHOT, &replay),
+                proto::encode_data(rt.stream, seq - replay.len() as u64, FLAG_SNAPSHOT, &replay)
+                    .into(),
                 None,
             );
         }
@@ -1710,16 +1718,13 @@ impl Host {
     }
 
     fn create_request(self: &Arc<Self>, p: &Value) -> Result<Value, IpcError> {
-        for (field, step) in [("env", "Step 11"), ("profile", "Step 33")] {
-            if !p[field].is_null() {
-                return Err(IpcError::param(
-                    field,
-                    format!(
-                        "`{field}` is part of IPC v1 but not implemented by this Host yet ({step})"
-                    ),
-                ));
-            }
+        if !p["profile"].is_null() {
+            return Err(IpcError::param(
+                "profile",
+                "`profile` is part of IPC v1 but not implemented by this Host yet (Step 33)",
+            ));
         }
+        let env = EnvOverrides::from_json(&p["env"]).map_err(|m| IpcError::param("env", m))?;
         let name = optional_string(p, "name")?
             .map(session::parse_name)
             .transpose()?;
@@ -1761,7 +1766,7 @@ impl Host {
                 ));
             }
         };
-        let line = command_line(&command);
+        let line = win::launch::command_line(&command.program, &command.args);
         if line.encode_utf16().count() >= MAX_COMMAND_LINE {
             return Err(IpcError::param(
                 "command",
@@ -1788,31 +1793,29 @@ impl Host {
                 None => st.reg.default_name().display,
             };
             drop(st);
-            if let Some(c) = cwd.as_deref()
-                && !Path::new(c).is_dir()
-            {
-                return Err(IpcError::new(
-                    ErrorCode::SpawnFailed,
-                    format!("the working directory `{c}` does not exist or is not a directory"),
-                )
-                .details(json!({"reason": "bad_cwd", "program": command.program, "kept": false, "terminal_id": null})));
-            }
-            let path_var = self
-                .env
-                .as_ref()
-                .and_then(|e| e.get("PATH"))
-                .or_else(|| std::env::var("PATH").ok());
-            if !program_exists(&command.program, path_var) {
-                return Err(IpcError::new(
-                    ErrorCode::SpawnFailed,
-                    format!("`{}` was not found", command.program),
-                )
-                .details(json!({"reason": "not_found", "program": command.program, "kept": false, "terminal_id": null})));
-            }
+            // The same checks as a real start (working directory, program on the pane's PATH,
+            // scripts), with nothing started.
+            let dir = cwd
+                .as_deref()
+                .map(PathBuf::from)
+                .or_else(|| std::env::current_dir().ok())
+                .unwrap_or_default();
+            let executable = pty::plan(&pty::Spec {
+                program: &command.program,
+                args: &command.args,
+                raw_line: None,
+                cwd: &dir,
+                env: &env,
+                host_vars: &[],
+                size,
+            })
+            .map_err(|e| spawn_failed(&e, &command.program, false, None))?;
             return Ok(json!({"dry_run": true, "would_create": {
                 "name": name,
                 "command": {"program": command.program, "args": session::redact_args(&command.args)},
+                "executable": executable.display().to_string(),
                 "cwd": cwd,
+                "env": session::env_json(&env.names()),
                 "size": {"cols": size.0, "rows": size.1},
                 "remain_on_exit": remain_on_exit,
                 "keep_on_failure": keep,
@@ -1822,10 +1825,18 @@ impl Host {
             name,
             command,
             cwd,
+            env: env.names(),
             size,
             remain_on_exit,
         };
-        self.create(spec, &line, keep)
+        self.create(
+            spec,
+            &Launch {
+                raw_line: None,
+                env,
+            },
+            keep,
+        )
     }
 
     fn rename(&self, p: &Value) -> Result<Value, IpcError> {

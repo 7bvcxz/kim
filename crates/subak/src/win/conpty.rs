@@ -12,6 +12,10 @@
 //!    on a full pipe and `ClosePseudoConsole` can hang;
 //! 4. teardown: `ClosePseudoConsole` (attached processes get `CTRL_CLOSE_EVENT`) while the reader
 //!    keeps draining, then `TerminateJobObject` for anything left, then close the handles.
+//!
+//! What runs, where and with which environment is decided before, in [`super::launch`]; this
+//! module only creates the OS objects. [`ConPty`] implements the platform-neutral
+//! [`crate::pty::Pty`].
 
 use super::{AttrList, EnvBlock, Handle, exit_code, wait, wide};
 use std::ffi::c_void;
@@ -39,7 +43,7 @@ use windows_sys::Win32::System::Threading::{
 
 /// A running pseudo console session.
 #[derive(Debug)]
-pub struct Pty {
+pub struct ConPty {
     hpc: Mutex<Option<HPCON>>,
     input: Mutex<Option<Handle>>,
     output: Mutex<Option<Handle>>,
@@ -88,10 +92,13 @@ pub fn kill_on_close_job() -> io::Result<Handle> {
     Ok(job)
 }
 
-impl Pty {
+impl ConPty {
     /// Starts `command_line` in a new pseudo console of `cols`×`rows`, inside a new job, with
-    /// environment `env` (`None` inherits the Host's).
+    /// environment `env` (`None` inherits the Host's). `app` is the program file
+    /// (`lpApplicationName`, resolved by [`super::launch`]); `None` lets `CreateProcessW` take
+    /// the first word of `command_line` and search for it (only the unit tests do that).
     pub fn spawn(
+        app: Option<&Path>,
         command_line: &str,
         cwd: Option<&Path>,
         cols: u16,
@@ -138,13 +145,14 @@ impl Pty {
         si.lpAttributeList = attrs.as_ptr();
         let mut cmd = wide(command_line);
         let cwd_w = cwd.map(wide);
+        let app_w = app.map(wide);
         let mut pi = PROCESS_INFORMATION::default();
-        // SAFETY: `cmd` is a writable NUL-terminated buffer as CreateProcessW requires; `si`, the
-        // attribute list and the environment block are alive; handles are not inherited
-        // (bInheritHandles = FALSE).
+        // SAFETY: `cmd` is a writable NUL-terminated buffer as CreateProcessW requires; `app_w`,
+        // `si`, the attribute list and the environment block are alive; handles are not
+        // inherited (bInheritHandles = FALSE).
         let ok = unsafe {
             CreateProcessW(
-                std::ptr::null(),
+                app_w.as_ref().map_or(std::ptr::null(), |w| w.as_ptr()),
                 cmd.as_mut_ptr(),
                 std::ptr::null(),
                 std::ptr::null(),
@@ -183,14 +191,6 @@ impl Pty {
             job,
             pid: pi.dwProcessId,
         })
-    }
-
-    pub fn pid(&self) -> u32 {
-        self.pid
-    }
-
-    pub fn process_handle(&self) -> windows_sys::Win32::Foundation::HANDLE {
-        self.process.raw()
     }
 
     /// The output read end, for the reader thread (once).
@@ -284,10 +284,59 @@ impl Pty {
     }
 }
 
-impl Drop for Pty {
+impl Drop for ConPty {
     fn drop(&mut self) {
         // The job handle closes after this (kill-on-close) even if teardown was skipped.
         self.close_console();
+    }
+}
+
+/// The output end of a pseudo console as a byte stream (`Ok(0)` once it closed).
+#[derive(Debug)]
+pub struct Output(Handle);
+
+impl io::Read for Output {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        read_output(&self.0, buf)
+    }
+}
+
+/// The Windows implementation of the platform-neutral interface (ADR 0011).
+impl crate::pty::Pty for ConPty {
+    fn pid(&self) -> u32 {
+        self.pid
+    }
+
+    fn take_output(&self) -> Option<Box<dyn io::Read + Send>> {
+        ConPty::take_output(self).map(|h| Box::new(Output(h)) as Box<dyn io::Read + Send>)
+    }
+
+    fn write_input(&self, bytes: &[u8]) -> io::Result<()> {
+        ConPty::write_input(self, bytes)
+    }
+
+    fn resize(&self, cols: u16, rows: u16) -> io::Result<()> {
+        ConPty::resize(self, cols, rows)
+    }
+
+    fn close(&self) {
+        self.close_console();
+    }
+
+    fn wait_exit(&self, timeout: Option<Duration>) -> Option<u32> {
+        ConPty::wait_exit(self, timeout)
+    }
+
+    fn running(&self) -> bool {
+        exit_code(self.process.raw()).is_none()
+    }
+
+    fn processes(&self) -> u32 {
+        self.job_processes()
+    }
+
+    fn kill_tree(&self, code: u32) {
+        self.terminate_job(code);
     }
 }
 
@@ -384,7 +433,7 @@ mod tests {
     }
 
     struct Session {
-        pty: Arc<Pty>,
+        pty: Arc<ConPty>,
         rx: mpsc::Receiver<Vec<u8>>,
         seen: Vec<u8>,
         reader: std::thread::JoinHandle<()>,
@@ -392,8 +441,9 @@ mod tests {
 
     impl Session {
         fn start(cols: u16, rows: u16) -> Self {
-            let pty =
-                Arc::new(Pty::spawn("cmd.exe /d /q", None, cols, rows, None).expect("spawn cmd"));
+            let pty = Arc::new(
+                ConPty::spawn(None, "cmd.exe /d /q", None, cols, rows, None).expect("spawn cmd"),
+            );
             let out = pty.take_output().expect("output");
             let (tx, rx) = mpsc::channel();
             let reader = std::thread::spawn(move || {

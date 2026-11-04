@@ -90,18 +90,19 @@ pub fn snapshot(picture: Rect, scope: &Scope, skip: Option<HWND>) -> Snapshot {
     Snapshot::from_facts(facts, picture)
 }
 
-/// The process that owns `h`.
-fn owner(h: HWND) -> u32 {
+/// The process that owns `h`; `None` when the window is gone (a window destroyed between the
+/// enumeration and this query has no owner — never "process 0").
+fn owner(h: HWND) -> Option<u32> {
     let mut pid = 0u32;
     // SAFETY: a window handle from the enumeration (a stale one makes this fail harmlessly).
-    unsafe { GetWindowThreadProcessId(h, &raw mut pid) };
-    pid
+    let thread = unsafe { GetWindowThreadProcessId(h, &raw mut pid) };
+    (thread != 0).then_some(pid)
 }
 
 /// Geometry and flags of one window (never text).
 fn facts_of(h: HWND, scope: &Scope) -> Option<WindowFacts> {
     if let Scope::Processes(pids) = scope
-        && !pids.contains(&owner(h))
+        && !owner(h).is_some_and(|pid| pids.contains(&pid))
     {
         return None;
     }
@@ -224,10 +225,9 @@ pub fn own_elevated() -> bool {
 
 /// The rights of the process that owns `h`, read from its token (UIPI).
 fn target_rights(h: HWND) -> TargetRights {
-    let pid = owner(h);
-    if pid == 0 {
+    let Some(pid) = owner(h).filter(|pid| *pid != 0) else {
         return TargetRights::Unknown;
-    }
+    };
     // SAFETY: a limited query handle, closed by `Handle`.
     let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
     let Ok(process) = Handle::new(process) else {
@@ -355,17 +355,18 @@ impl Drop for Com {
 // created them (a multithreaded apartment); `Com` is moved there, never shared.
 unsafe impl Send for Com {}
 
-/// UI Automation for one worker: the automation object, the control view condition and a cache
-/// request for bounding rectangles only.
+/// UI Automation for one worker: the automation object, the control view condition, a cache
+/// request for bounding rectangles only, and the time budget of one lookup.
 #[derive(Debug)]
 struct Uia {
     automation: Com,
     condition: Com,
     cache: Com,
+    budget: Duration,
 }
 
 impl Uia {
-    fn new() -> Option<Uia> {
+    fn new(budget: Duration) -> Option<Uia> {
         let mut p = std::ptr::null_mut();
         // SAFETY: documented class and interface ids; `p` receives an owned interface pointer.
         let hr = unsafe {
@@ -406,7 +407,7 @@ impl Uia {
             if let Ok(two) =
                 automation.out(|o| qi(automation.raw(), &raw const IID_IUIAUTOMATION2, o))
             {
-                let ms = u32::try_from(BUDGET.as_millis()).unwrap_or(300);
+                let ms = u32::try_from(budget.as_millis()).unwrap_or(300);
                 let conn = std::mem::transmute::<*const c_void, FnU32>(
                     two.slot(slot::SET_CONNECTION_TIMEOUT),
                 );
@@ -421,6 +422,7 @@ impl Uia {
             automation,
             condition,
             cache,
+            budget,
         })
     }
 
@@ -488,9 +490,10 @@ impl Uia {
         }
     }
 
-    /// The deepest element under `req.at` in `req.token`'s window, within [`BUDGET`].
+    /// The deepest element under `req.at` in `req.token`'s window, within the budget
+    /// ([`BUDGET`] in Noeul).
     fn element_at(&self, req: &ElementRequest) -> ElementAnswer {
-        let deadline = Instant::now() + BUDGET;
+        let deadline = Instant::now() + self.budget;
         let at = Rect::new(req.at.0, req.at.1, 1, 1);
         let mut current = match self.element_of(req.token as usize as HWND) {
             Ok(e) => e,
@@ -554,14 +557,25 @@ impl std::fmt::Debug for ElementWorker {
 }
 
 impl ElementWorker {
-    /// Starts the worker; `waker` runs (on the worker thread) after each answer is queued.
+    /// Starts the worker with Noeul's per-lookup [`BUDGET`]; `waker` runs (on the worker
+    /// thread) after each answer is queued.
     pub fn start(waker: Box<dyn Fn() + Send>) -> std::io::Result<ElementWorker> {
+        ElementWorker::start_with_budget(waker, BUDGET)
+    }
+
+    /// The same with another time budget per lookup (the UI Automation connection and
+    /// transaction timeouts too). Only tests use a longer one: a lookup of their own window must
+    /// not depend on how fast a cold machine loads UI Automation.
+    pub fn start_with_budget(
+        waker: Box<dyn Fn() + Send>,
+        budget: Duration,
+    ) -> std::io::Result<ElementWorker> {
         let (tx, rx) = channel();
         let answers: Answers = Arc::default();
         let out = Arc::clone(&answers);
         std::thread::Builder::new()
             .name("noeul-uia".into())
-            .spawn(move || worker(&rx, &out, &*waker))?;
+            .spawn(move || worker(&rx, &out, &*waker, budget))?;
         Ok(ElementWorker {
             tx: Some(tx),
             answers,
@@ -592,10 +606,10 @@ impl Drop for ElementWorker {
     }
 }
 
-fn worker(rx: &Receiver<ElementRequest>, out: &Answers, waker: &dyn Fn()) {
+fn worker(rx: &Receiver<ElementRequest>, out: &Answers, waker: &dyn Fn(), budget: Duration) {
     // SAFETY: joins this new thread to the multithreaded apartment; balanced below on success.
     let com = unsafe { CoInitializeEx(std::ptr::null(), COINIT_MULTITHREADED as u32) } >= 0;
-    let uia = if com { Uia::new() } else { None };
+    let uia = if com { Uia::new(budget) } else { None };
     let own = own_elevated();
     while let Ok(mut req) = rx.recv() {
         while let Ok(newer) = rx.try_recv() {
@@ -631,10 +645,11 @@ mod tests {
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetForegroundWindow,
-        HWND_TOP, MSG, PM_REMOVE, PeekMessageW, RegisterClassExW, SW_SHOWNOACTIVATE,
-        SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetLayeredWindowAttributes,
-        SetWindowDisplayAffinity, SetWindowPos, ShowWindow, TranslateMessage, WNDCLASSEXW,
-        WS_CHILD, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP, WS_VISIBLE,
+        HWND_TOP, MSG, MsgWaitForMultipleObjects, PM_REMOVE, PeekMessageW, QS_ALLINPUT,
+        RegisterClassExW, SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+        SetLayeredWindowAttributes, SetWindowDisplayAffinity, SetWindowPos, ShowWindow,
+        TranslateMessage, WNDCLASSEXW, WS_CHILD, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP,
+        WS_VISIBLE,
     };
 
     /// Far off-screen: no real monitor is there, so nothing a test creates is visible.
@@ -826,6 +841,18 @@ mod tests {
     /// UI Automation against our own window only: the deepest control under a point is found
     /// as a rectangle (the second button), the answer holds no text, and a point on the
     /// window's empty area answers "the window itself".
+    ///
+    /// Deterministic on a slow machine (it failed twice on the CI runner with `Failed(Timeout)`).
+    /// The cause: a lookup sends this thread — the windows' thread — dozens of messages
+    /// (`WM_GETOBJECT` and the Win32 proxies' queries), and the test answered them only between
+    /// fixed 5 ms sleeps. Here a sleep is 5.5 ms (some program raised the timer resolution) and a
+    /// lookup took about 200 ms; with Windows' default 15.6 ms resolution, as on the runner, it
+    /// exceeded the 300 ms production [`BUDGET`]. The test now waits for messages
+    /// (`MsgWaitForMultipleObjects`, as the overlay's message loop does; a lookup takes about
+    /// 15 ms), waits until its windows are realized, warms UI Automation up with one lookup (the
+    /// first loads its client side and the window's provider), and gives every lookup a generous
+    /// budget of its own. The production budget is unchanged (a timeout there falls back to the
+    /// window, Step 52).
     #[test]
     fn ui_automation_finds_a_child_control_of_our_own_window_and_reads_no_text() {
         crate::win::per_monitor_dpi_awareness();
@@ -854,10 +881,31 @@ mod tests {
             assert!(!h.is_null());
             kids.push(h);
         }
-        pump();
+        // Realized: every window is visible and has its frame before UI Automation is asked.
+        let realized = |h: HWND| {
+            // SAFETY: a plain query of our own window.
+            let shown = unsafe { IsWindowVisible(h) } != 0;
+            shown && frame_bounds(h).is_some()
+        };
+        let ready = Instant::now() + Duration::from_secs(10);
+        loop {
+            pump();
+            if std::iter::once(top.0)
+                .chain(kids.iter().copied())
+                .all(realized)
+            {
+                break;
+            }
+            assert!(
+                Instant::now() < ready,
+                "the test windows never became visible"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
         let second = frame_bounds(kids[1]).unwrap();
         let window = frame_bounds(top.0).unwrap();
-        let worker = ElementWorker::start(Box::new(|| {})).unwrap();
+        let worker =
+            ElementWorker::start_with_budget(Box::new(|| {}), Duration::from_secs(10)).unwrap();
         let ask = |seq: u64, at: (i32, i32)| {
             worker.ask(ElementRequest {
                 seq,
@@ -865,8 +913,11 @@ mod tests {
                 window,
                 at,
             });
-            // The window's thread (this one) must keep pumping while UI Automation asks it.
-            let until = Instant::now() + Duration::from_secs(10);
+            // The window's thread (this one) must answer UI Automation's messages at once, as
+            // the overlay's message loop does: it waits for a message, never sleeps a fixed time.
+            // (Sleeping 5 ms per poll made every lookup wait for this thread dozens of times;
+            // with Windows' default 15.6 ms timer resolution that alone exceeded the budget.)
+            let until = Instant::now() + Duration::from_secs(30);
             loop {
                 pump();
                 let got = worker.take_answers();
@@ -874,24 +925,68 @@ mod tests {
                     return a.1;
                 }
                 assert!(Instant::now() < until, "no answer from UI Automation");
-                std::thread::sleep(Duration::from_millis(5));
+                // SAFETY: waits for this thread's own input or sent messages, no handles.
+                unsafe {
+                    MsgWaitForMultipleObjects(0, std::ptr::null(), 0, 2, QS_ALLINPUT);
+                }
             }
         };
+        // Warm-up: the first lookup loads UI Automation's client side and the window's provider.
+        let warm = ask(1, (window.x + 350, window.y + 250));
+        assert!(
+            !matches!(
+                warm,
+                ElementAnswer::Failed(Fallback::Unavailable | Fallback::Denied)
+            ),
+            "UI Automation is available for our own window: {warm:?}"
+        );
         let centre = (second.x + 80, second.y + 30);
-        let a = ask(1, centre);
+        let a = ask(2, centre);
         assert_eq!(
             a,
             ElementAnswer::Found(second),
             "the button under the point"
         );
         assert!(!format!("{a:?}").contains("NOEUL-SECRET"), "no text");
-        let empty = ask(2, (window.x + 350, window.y + 250));
+        let empty = ask(3, (window.x + 350, window.y + 250));
         assert_eq!(empty, ElementAnswer::WindowOnly, "no control there");
         drop(worker);
         for k in kids {
             // SAFETY: our own child windows.
             unsafe { DestroyWindow(k) };
         }
+    }
+
+    /// A window destroyed between the enumeration and the owner query has no owner: it is never
+    /// taken for "process 0" (a stale handle made `GetWindowThreadProcessId` leave the pid at 0,
+    /// so a scope of `[0]` listed it as skipped — this test's sibling failed once that way while
+    /// other tests' windows came and went).
+    #[test]
+    fn windows_that_vanish_during_the_enumeration_belong_to_no_process() {
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let churn = {
+            let stop = Arc::clone(&stop);
+            std::thread::spawn(move || {
+                let mut n = 0u32;
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) || n < 50 {
+                    drop(Own::new(Rect::new(X + 3000, Y, 50, 50), 0, false));
+                    n += 1;
+                }
+                n
+            })
+        };
+        for _ in 0..100 {
+            let none = snapshot(PICTURE, &Scope::Processes(vec![0]), None);
+            assert!(none.taken);
+            assert_eq!(
+                (none.len(), none.skipped()),
+                (0, 0),
+                "nothing belongs to process 0"
+            );
+        }
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        let made = churn.join().unwrap();
+        assert!(made >= 50, "windows came and went meanwhile: {made}");
     }
 
     /// Inspection (NOEUL-SEC-007): this file asks UI Automation and the window manager for

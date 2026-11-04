@@ -1,5 +1,6 @@
-//! Annotation through the real `noeul` binary (Step 56; NOEUL-FR-080, NOEUL-FR-081,
-//! NOEUL-FR-083, NOEUL-NFR-014; NOEUL_UX_SPEC §4.9).
+//! Annotation through the real `noeul` binary (Step 56; the privacy tools since Step 57,
+//! NOEUL-FR-082; NOEUL-FR-080, NOEUL-FR-081, NOEUL-FR-083, NOEUL-NFR-014; NOEUL_UX_SPEC §4.9,
+//! §4.10).
 //!
 //! Safety on this shared machine, as in `double_click.rs`: an isolated profile on a private
 //! endpoint, `--no-tray`, **no global shortcut**, and the debug-build test hook
@@ -424,6 +425,117 @@ fn a_label_and_a_pin_edit_through_the_real_windows() {
         Synthetic::pixel(X0 + 250, Y0 + 200),
         "not the cancelled one"
     );
+    let (code, _) = sb.json(&["quit", "--yes"]);
+    assert_eq!(code, 0);
+}
+
+/// The chunk types of a saved PNG, consecutive repeats (several `IDAT`) folded.
+fn png_chunks(path: &PathBuf) -> Vec<String> {
+    let bytes = std::fs::read(path).unwrap();
+    assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
+    let mut out: Vec<String> = Vec::new();
+    let mut i = 8;
+    while i + 8 <= bytes.len() {
+        let len = u32::from_be_bytes(bytes[i..i + 4].try_into().unwrap()) as usize;
+        let kind = String::from_utf8_lossy(&bytes[i + 4..i + 8]).into_owned();
+        if out.last() != Some(&kind) {
+            out.push(kind);
+        }
+        i += 12 + len;
+    }
+    assert_eq!(i, bytes.len(), "nothing after IEND");
+    out
+}
+
+/// Step 57 (NOEUL-FR-082): the privacy tools through the real overlay and a pin. A solid
+/// redaction chosen on the toolbar and dragged is quick-saved as the opaque fill — not one frozen
+/// pixel under it, no chunk beyond IHDR, IDAT and IEND, no temporary file; a blur next to it
+/// changes its pixels; the redaction rides along into a pin, whose quick save is redacted too.
+#[test]
+fn a_redaction_through_the_real_windows_is_saved_without_the_original() {
+    const FILL: [u8; 4] = [0x11, 0x11, 0x11, 0xFF];
+    let mut sb = sandbox("ann-redact");
+    let pid = sb.instance();
+    let sel = Rect::new(X0 + 100, Y0 + 100, 300, 200);
+    let tool = |t| button(&TOOLBAR, sel, ToolbarItem::Tool(t), (X0, Y0));
+    let ov = open_overlay(&sb, pid);
+    drag(ov, (100, 100), (399, 299));
+    eventually("the selection is confirmed", || {
+        status(&sb)["captures"]["overlay"]["phase"] == "selected"
+    });
+    let (x, y) = tool(noeul::annotation::Tool::Redact);
+    click(ov, x, y);
+    eventually("the redaction tool", || {
+        let st = status(&sb);
+        annotation(&st)["tool"] == "redact" && annotation(&st)["color"] == "black"
+    });
+    drag(ov, (150, 150), (250, 220));
+    let (x, y) = tool(noeul::annotation::Tool::Blur);
+    click(ov, x, y);
+    eventually("the blur tool", || {
+        annotation(&status(&sb))["tool"] == "blur"
+    });
+    drag(ov, (280, 130), (380, 260));
+    eventually("a redaction and a blur", || {
+        let a = annotation(&status(&sb));
+        a["kinds"]["redact"] == 1 && a["kinds"]["blur"] == 1
+    });
+    key(ov, 0x51); // Q: quick save
+    eventually("saved", || status(&sb)["captures"]["open"] == false);
+    let files = shots(&sb);
+    assert_eq!(files.len(), 1, "one file, no temporary one: {files:?}");
+    assert_eq!(png_chunks(&files[0]), ["IHDR", "IDAT", "IEND"]);
+    let img = png_bgra(&files[0]);
+    assert_eq!((img.0, img.1), (300, 200));
+    // The box (150,150)-(250,220) is (50,50)-(150,120) of the picture, both inclusive.
+    for y in 50..121 {
+        for x in 50..151 {
+            assert_eq!(px(&img, x, y), FILL, "({x}, {y}) under the redaction");
+        }
+    }
+    assert_eq!(
+        px(&img, 49, 80),
+        Synthetic::pixel(X0 + 149, Y0 + 180),
+        "next to it: the frozen pixels"
+    );
+    let blurred = (30..161)
+        .flat_map(|y| (180..281).map(move |x| (x, y)))
+        .filter(|(x, y)| {
+            px(&img, *x, *y) != Synthetic::pixel(X0 + 100 + *x as i32, Y0 + 100 + *y as i32)
+        })
+        .count();
+    assert!(blurred > 1000, "the blur changed its pixels: {blurred}");
+    // Into a pin: its quick save is redacted as well.
+    let ov = open_overlay(&sb, pid);
+    drag(ov, (100, 100), (399, 299));
+    eventually("selected again", || {
+        status(&sb)["captures"]["overlay"]["phase"] == "selected"
+    });
+    let (x, y) = tool(noeul::annotation::Tool::Redact);
+    click(ov, x, y);
+    eventually("the redaction tool", || {
+        annotation(&status(&sb))["tool"] == "redact"
+    });
+    drag(ov, (150, 150), (250, 220));
+    eventually("a redaction", || {
+        annotation(&status(&sb))["kinds"]["redact"] == 1
+    });
+    key(ov, 0x0D); // Enter pins with the redaction
+    eventually("pinned", || status(&sb)["pins"]["open"] == 1);
+    let pin = of_class(pid, "NoeulPin")[0].hwnd;
+    key(pin, 0x51);
+    eventually("the pin was saved", || shots(&sb).len() == 2);
+    let second = shots(&sb)
+        .into_iter()
+        .find(|f| *f != files[0])
+        .expect("the pin's file");
+    assert_eq!(png_chunks(&second), ["IHDR", "IDAT", "IEND"]);
+    let img = png_bgra(&second);
+    for y in 50..121 {
+        for x in 50..151 {
+            assert_eq!(px(&img, x, y), FILL, "({x}, {y}) under the pin's redaction");
+        }
+    }
     let (code, _) = sb.json(&["quit", "--yes"]);
     assert_eq!(code, 0);
 }

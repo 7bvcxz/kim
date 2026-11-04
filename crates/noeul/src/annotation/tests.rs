@@ -74,7 +74,15 @@ fn every_tool_creates_an_object_that_undo_and_redo_restore_exactly() {
         assert_eq!(e.objects().len(), 1, "{tool:?}");
         let o = e.objects()[0].clone();
         assert_eq!(o.shape.kind(), tool);
-        assert_eq!(o.color, PALETTE[0].1, "the default colour");
+        let colour = if tool == Tool::Redact {
+            PALETTE[REDACT_COLOR].1
+        } else {
+            PALETTE[0].1
+        };
+        assert_eq!(
+            o.color, colour,
+            "the default colour (a redaction starts black)"
+        );
         assert_eq!((o.level, o.dpi), (DEFAULT_LEVEL, D100));
         assert_eq!(
             e.doc().undo_steps(),

@@ -178,8 +178,8 @@ CLI follows the identity checks of [ADR 0005](adr/0005-local-ipc.md)/[ADR 0019](
   typing run learns about what was typed meanwhile.
 - **Typing never follows focus** (Step 69): before every `SendInput` call of a run the focused
   window and control are compared with the ones the run started in; a change stops the run
-  (`focus_changed`) and nothing is typed into the new window. Disabled, read-only or absent
-  focus targets are refused (`skipped_disabled_field`).
+  (`focus_changed`) and nothing is typed into the new window. Disabled and read-only focus
+  targets, and a missing or disabled foreground window, are refused (`skipped_disabled_field`).
 - **The clipboard is the user's** (Step 69, `paste` only, with `clipboard` consent): Ddalgak copies
   every format first and refuses to paste when one cannot be copied faithfully
   (`clipboard_not_restorable`), keeps the snippet out of clipboard history and the cloud

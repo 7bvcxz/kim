@@ -7,7 +7,8 @@
 //!   never disturbs a dead key the focused application is waiting on.
 //! - [`WinProbe`]: the foreground window and its focused control (`GetGUIThreadInfo`), password
 //!   edits (`ES_PASSWORD`), read-only edits (`ES_READONLY`) and disabled controls
-//!   (`IsWindowEnabled`), the process integrity level, the session state and the IME. The IME
+//!   (`IsWindowEnabled`; when the foreground thread reports no focused control, as UWP apps do,
+//!   the foreground window decides), the process integrity level, the session state and the IME. The IME
 //!   mode is read from the focused window's default IME window (`WM_IME_CONTROL` with
 //!   `IMC_GETOPENSTATUS` and `IMC_GETCONVERSIONMODE`, `SendMessageTimeoutW` with a 100 ms limit);
 //!   when that cannot be read the mode counts as not native. Titles, text and keys are never read
@@ -229,7 +230,14 @@ impl Probe for WinProbe {
             elevated: is_elevated_window(fg, self.own_il),
             ime_composing: flags.ime_composing,
             ime_native: ime_mode && ime_native(if focus.is_null() { fg } else { focus }),
-            editable: is_editable(focus),
+            // UWP apps type into a window of another thread, so the foreground thread reports no
+            // focused control: then the foreground window decides.
+            editable: if focus.is_null() {
+                // SAFETY: reads a window's state; null and foreign windows are allowed.
+                !fg.is_null() && unsafe { IsWindowEnabled(fg) } != 0
+            } else {
+                is_editable(focus)
+            },
         }
     }
 }

@@ -423,7 +423,7 @@ abbreviation and runs one of them. Each is the rule's only step in this version.
 | --- | --- |
 | Core (hook thread) | Keys triggers fire as before. While a hotstring rule is active, a key that reaches the application unchanged is translated (`ToUnicodeEx`, flag 4: no keyboard-state change) and fed into a bounded buffer (the longest abbreviation plus one); a completing key is consumed and `Signal::Hotstring` carries how many characters to erase, the case form, the key and its modifiers. Every reset clears the buffer (RULE_MODEL §3.4). The core publishes the modifiers the application sees, the physical ones and a count of physical key presses, and consumes the physical release of a modifier a run released |
 | Worker | One run at a time, as pieces: release modifiers (masking key before Alt), one `SendInput` call per piece (32 characters, or one with a key delay), waits as timeouts, clipboard copy and restore, press Ctrl and Shift again if still held. Other messages are handled between pieces: remaps keep working; pause, stop, session lock, a reload and the emergency chord end the run with `cancelled`; a trigger meanwhile is `busy` (a hotstring's key is given back) |
-| Probe (`win::typing::WinProbe`) | Before the first piece and before every call: foreground window and focused control (`focus_changed` when they change), session state, `ES_PASSWORD`, integrity level, IME composition, focused control present, enabled and not `ES_READONLY` (`skipped_disabled_field`); for hotstrings also the IME's native mode via `WM_IME_CONTROL` (100 ms limit) |
+| Probe (`win::typing::WinProbe`) | Before the first piece and before every call: foreground window and focused control (`focus_changed` when they change), session state, `ES_PASSWORD`, integrity level, IME composition, focused control enabled and not `ES_READONLY`, or, when none is reported (UWP apps), an enabled foreground window (`skipped_disabled_field`); for hotstrings also the IME's native mode via `WM_IME_CONTROL` (100 ms limit) |
 | Clipboard (`win::typing::WinClipboard`) | Opened with the app's hidden window as owner; copies every format or refuses (`clipboard_not_restorable`); text marked out of clipboard history and the cloud clipboard; restore after 500 ms unless another program changed it; every exit path restores first |
 | Test host | Its worker sends nothing (`Discard`), its runs see a fixed editable target and a clipboard that is always busy: an automated test can never type for the user or touch their clipboard |
 
@@ -496,7 +496,9 @@ rule below is removed again at the end; keep Notepad open):
    yet, DDALGAK_SAFETY §8).
 10. **Elevated window**: open an administrator Notepad yourself, press Ctrl+Shift+F2 and type
     `btw `: nothing happens; activity shows `skipped_elevated_target`.
-11. **Disabled field**: with focus on a window without a text field (the desktop, after a click on
-    it), press Ctrl+Shift+F2: `skipped_disabled_field`.
+11. **Read-only field**: open a file's Properties in Explorer, click into the read-only
+    *Location* field on the General tab and press Ctrl+Shift+F2: nothing is typed; activity shows
+    `skipped_disabled_field`. In a UWP app (Calculator, the Settings search box) Ctrl+Shift+F2
+    still types (the foreground window decides when no focused control is reported).
 12. Remove the rules: `ddalgak rule delete t-sign t-jamo t-slow t-paste t-cursor h-btw h-sig h-ac k-copy --yes`,
     then quit the app.

@@ -334,8 +334,8 @@ never blocks the emergency chord. A rule of `block` and `engine` steps is an eng
   number). An IME composition in progress is never committed or cancelled by Ddalgak; the rule is
   skipped with `skipped_ime_composition`.
 - **Checks before every call.** The session state, a password edit, the target's integrity
-  level, an IME composition and whether a control has keyboard focus and is enabled and not
-  read-only are checked before the first call (`skipped_*`); before every later call a different
+  level, an IME composition and whether the focused control is enabled and not read-only (when no
+  focused control is reported, as for UWP apps, the foreground window) are checked before the first call (`skipped_*`); before every later call a different
   window or control ends the run with `focus_changed` and nothing more is typed. Pause, turning
   off, the emergency chord, a session lock and a reload end it with `cancelled`; more than 60 s,
   with `timeout`. One typing run at a time: a trigger meanwhile is `busy`.
@@ -735,7 +735,7 @@ Every trigger event that reaches a candidate produces one outcome:
 | `ok` | The run finished. |
 | `skipped_paused` | The engine is paused. |
 | `skipped_password_field`, `skipped_secure_desktop`, `skipped_elevated_target`, `skipped_ime_composition` | Ddalgak stepped aside; the key passed unchanged (a hotstring's end key is given back). |
-| `skipped_disabled_field` | Typing (Step 69): no control had keyboard focus, or it was disabled or read-only; nothing was typed. |
+| `skipped_disabled_field` | Typing (Step 69): the focused control was disabled or a read-only edit (when the application reports no focused control, as UWP apps do, a disabled or missing foreground window); nothing was typed. |
 | `focus_changed` | Typing (Step 69): another window or control took focus during the run; it stopped, and nothing was typed into the new window. |
 | `skipped_injected_input` | Injected input and the rule accepts only physical input. |
 | `busy` | The rule is still running. |

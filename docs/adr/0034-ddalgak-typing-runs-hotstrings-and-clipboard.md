@@ -33,8 +33,8 @@ state in the focused application").
    and the port change together).
 2. **The target is checked before every call.** A read-only probe reports the foreground window
    and focused control, the session state, a password edit (`ES_PASSWORD`), the integrity level,
-   an IME composition and whether a control can take text (focus exists, enabled, not
-   `ES_READONLY`). Before the first piece a refusal skips the run (`skipped_secure_desktop`,
+   an IME composition and whether the target can take text (the focused control enabled and not
+   `ES_READONLY`; when no focused control is reported, as for UWP apps, the foreground window). Before the first piece a refusal skips the run (`skipped_secure_desktop`,
    `skipped_password_field`, `skipped_elevated_target`, `skipped_ime_composition`, new
    `skipped_disabled_field`); later, a different window or control ends it with the new
    `focus_changed` and **nothing more is typed** into the new window. A partial `SendInput` ends

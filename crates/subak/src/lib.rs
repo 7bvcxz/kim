@@ -21,6 +21,9 @@
 // ADR 0011) only the Windows Host and clients use most of them.
 #[cfg_attr(not(windows), allow(dead_code))]
 mod cli;
+/// `config.toml`: the window's settings and the basic shell profiles (Step 20, ADR 0051).
+/// Portable; read by the window and the `subak config`/`profile` commands, never by the Host.
+mod config;
 /// Subak's keyboard shortcuts (hotkey contract; `subak hotkeys`, the window's dispatch).
 pub mod hotkeys;
 /// `subak hotkeys …` (Step 17): portable, never contacts a Host.

@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/hellomouv/kim/docs/contracts/schemas/subak-config-v1.schema.json",
+  "title": "Subak settings, config_version 1 (the data model of config.toml)",
+  "description": "The settings of %APPDATA%\\mouv\\subak\\config.toml (Step 20, ADR 0051, docs/SUBAK_GUI.md §13, docs/contracts/STATE_SCHEMA.md §2) as JSON: the file is TOML, and `subak config show --json` reports these values as `settings` (every key with its effective value). Display and behaviour settings of the Subak window and basic local shell profiles only: no process ids, terminal content or secrets. Unknown keys are allowed in the file and kept by every edit; an invalid value falls back to its default alone. Profile values shown by Subak are redacted (`***`) where they look secret.",
+  "type": "object",
+  "required": ["config_version"],
+  "properties": {
+    "config_version": { "const": 1 },
+    "appearance": {
+      "type": "object",
+      "properties": {
+        "theme": {
+          "description": "auto: kim-dark, or the system colours while Windows High Contrast is on. system: kim-light while Windows apps use the light mode, else kim-dark (High Contrast wins). kim-dark, kim-light: always. high-contrast: the system colours always.",
+          "enum": ["auto", "system", "kim-dark", "kim-light", "high-contrast"]
+        },
+        "font_family": {
+          "description": "The terminal font family tried first; the design system's chain (Cascadia Mono, Consolas, D2Coding, Malgun Gothic, Segoe UI Emoji, Segoe UI Symbol) follows it. Empty: the chain alone.",
+          "type": "string",
+          "maxLength": 31
+        },
+        "font_size": { "description": "Terminal text size in logical pixels (size.terminal, default 13); the zoom keys change it.", "type": "number", "minimum": 8, "maximum": 36 },
+        "line_height": { "description": "The cell height as a multiple of the text size (line-height.terminal, default 1.2).", "type": "number", "minimum": 1.0, "maximum": 2.0 },
+        "padding": { "description": "Logical pixels around the cell grid (default 8).", "type": "integer", "minimum": 0, "maximum": 16 },
+        "opacity": { "description": "Window opacity in percent (default 100). High Contrast always draws opaque.", "type": "integer", "minimum": 50, "maximum": 100 },
+        "motion": { "description": "system: follow Windows' Show animations setting; reduced: no motion; full: short transitions always.", "enum": ["system", "reduced", "full"] },
+        "bold_is_bright": { "description": "Bold text in ANSI colours 0-7 uses the bright variants (default true).", "type": "boolean" }
+      },
+      "additionalProperties": true
+    },
+    "terminal": {
+      "type": "object",
+      "properties": {
+        "default_profile": { "description": "The profile Ctrl+T, + and `subak new` (without a program) start; empty: the Host's default shell.", "type": "string", "maxLength": 64 },
+        "copy_on_select": { "description": "A mouse selection is copied when the button is released (default false).", "type": "boolean" },
+        "smart_ctrl_c": { "description": "Ctrl+C copies when text is selected, else it reaches the program (default false).", "type": "boolean" },
+        "right_click": { "description": "copy-paste (default): copy a selection, else paste; menu: the pane menu; paste; none.", "enum": ["copy-paste", "menu", "paste", "none"] },
+        "middle_click": { "enum": ["none", "paste"] },
+        "word_separators": { "description": "Characters that end a word for double-click selection and mark mode.", "type": "string", "maxLength": 128 }
+      },
+      "additionalProperties": true
+    },
+    "profiles": {
+      "description": "Basic local shell profiles ([[profiles]] in the file). SSH and other profile kinds are Step 33.",
+      "type": "array",
+      "maxItems": 64,
+      "items": { "$ref": "#/$defs/profile" }
+    }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "env_name": { "type": "string", "minLength": 1, "maxLength": 255, "pattern": "^[^=\\u0000-\\u001f]+$" },
+    "profile": {
+      "type": "object",
+      "required": ["name", "program"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "program": { "description": "A program path, or a bare name looked up on the pane's PATH; never run through a shell.", "type": "string", "minLength": 1 },
+        "args": { "type": "array", "maxItems": 256, "items": { "type": "string" } },
+        "cwd": { "description": "An absolute working directory; absent or null: the Host's default (the user's profile folder).", "type": ["string", "null"] },
+        "env": { "description": "Variables set in the pane (names as env_name). Values that look secret are shown as ***; Subak never writes them.", "type": "object", "additionalProperties": { "type": "string" } },
+        "unset_env": { "type": "array", "items": { "$ref": "#/$defs/env_name" } },
+        "secret_env": { "description": "Shown by Subak (not in the file): the variables whose name or value looks secret.", "type": "array", "items": { "type": "string" } },
+        "default": { "description": "Shown by Subak (not in the file): whether terminal.default_profile names it.", "type": "boolean" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

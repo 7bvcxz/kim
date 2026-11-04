@@ -44,7 +44,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::io::Read;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime};
@@ -57,9 +57,13 @@ pub const DEFAULT_IDLE_EXIT_S: u64 = 10;
 pub const MAX_CONNECTIONS: usize = 64;
 /// Most Terminals (live and stored) one Host owns; more get `busy`.
 pub const MAX_TERMINALS: usize = 256;
-/// Frames and bytes queued per connection before a slow client is dropped.
-const QUEUE_FRAMES: usize = 4096;
+/// Bytes queued per connection before a slow client is dropped; each queued frame also counts
+/// [`FRAME_COST`], so many tiny frames (ConPTY's output arrives in chunks of ~80 bytes on
+/// Windows 10) are bounded by memory, not by a frame count (ADR 0025).
 const QUEUE_BYTES: usize = 16 * 1024 * 1024;
+const FRAME_COST: usize = 64;
+/// Most bytes the writer of one connection takes off its queue for one write.
+const WRITE_BATCH: usize = 256 * 1024;
 /// How long a graceful stop waits for the processes after `ClosePseudoConsole`.
 const GRACE: Duration = Duration::from_secs(5);
 /// How long a second party waits for a teardown someone else performs.
@@ -99,26 +103,86 @@ struct Out {
     ack: Option<mpsc::Sender<()>>,
 }
 
-/// The sending side of one connection: a bounded queue (frames and bytes) to its writer thread.
-/// A client that falls that far behind is disconnected; it never blocks the Host.
+#[derive(Default)]
+struct Pending {
+    items: std::collections::VecDeque<Out>,
+    /// Bytes plus [`FRAME_COST`] per item.
+    cost: usize,
+    closed: bool,
+}
+
+/// The queue between a connection's senders and its writer thread.
+#[derive(Default)]
+struct Queue {
+    pending: Mutex<Pending>,
+    ready: Condvar,
+}
+
+impl Queue {
+    fn lock(&self) -> MutexGuard<'_, Pending> {
+        self.pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// The writer's side: the next batch (several small frames are written at once), or `None`
+    /// once the queue is closed and drained.
+    fn take(&self) -> Option<Vec<Out>> {
+        let mut q = self.lock();
+        while q.items.is_empty() && !q.closed {
+            q = self
+                .ready
+                .wait(q)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+        let mut batch = Vec::new();
+        let mut size = 0;
+        while let Some(o) = q.items.front() {
+            if !batch.is_empty() && size + o.bytes.len() > WRITE_BATCH {
+                break;
+            }
+            let o = q.items.pop_front().expect("front exists");
+            size += o.bytes.len();
+            q.cost -= o.bytes.len() + FRAME_COST;
+            let ack = o.ack.is_some();
+            batch.push(o);
+            if ack {
+                break; // a barrier is acknowledged as soon as everything before it is written
+            }
+        }
+        (!batch.is_empty()).then_some(batch)
+    }
+
+    /// No more frames: the writer drains what is queued and ends.
+    fn close(&self) {
+        self.lock().closed = true;
+        self.ready.notify_all();
+    }
+}
+
+/// The sending side of one connection: a queue bounded in bytes to its writer thread. A client
+/// that falls that far behind is disconnected; it never blocks the Host.
 #[derive(Clone)]
 struct Sink {
-    tx: mpsc::SyncSender<Out>,
-    queued: Arc<AtomicUsize>,
+    queue: Arc<Queue>,
     pipe: Arc<Pipe>,
 }
 
 impl Sink {
     fn push(&self, bytes: Arc<[u8]>, ack: Option<mpsc::Sender<()>>) -> bool {
-        let n = bytes.len();
-        if self.queued.fetch_add(n, Ordering::SeqCst) + n > QUEUE_BYTES
-            || self.tx.try_send(Out { bytes, ack }).is_err()
+        let cost = bytes.len() + FRAME_COST;
         {
-            self.queued.fetch_sub(n, Ordering::SeqCst);
-            self.pipe.cancel(); // its handler sees the error and removes the connection
-            return false;
+            let mut q = self.queue.lock();
+            if !q.closed && q.cost + cost <= QUEUE_BYTES {
+                q.cost += cost;
+                q.items.push_back(Out { bytes, ack });
+                drop(q);
+                self.queue.ready.notify_one();
+                return true;
+            }
         }
-        true
+        self.pipe.cancel(); // its handler sees the error and removes the connection
+        false
     }
 
     fn control(&self, msg: &Value) -> bool {
@@ -974,24 +1038,32 @@ impl Host {
     }
 
     fn serve_conn(self: Arc<Self>, pipe: &Arc<Pipe>) {
-        let (tx, rx) = mpsc::sync_channel::<Out>(QUEUE_FRAMES);
-        let queued = Arc::new(AtomicUsize::new(0));
+        let queue = Arc::new(Queue::default());
         let sink = Sink {
-            tx,
-            queued: Arc::clone(&queued),
+            queue: Arc::clone(&queue),
             pipe: Arc::clone(pipe),
         };
         let writer = thread::spawn({
             let pipe = Arc::clone(pipe);
             move || {
-                for out in rx {
-                    let ok = pipe.write_all_bytes(&out.bytes).is_ok();
-                    queued.fetch_sub(out.bytes.len(), Ordering::SeqCst);
+                let mut buf = Vec::new();
+                while let Some(batch) = queue.take() {
+                    // One write for a run of small frames (the client still reads them one
+                    // by one); a single frame is written as it is.
+                    let ok = if let [one] = batch.as_slice() {
+                        pipe.write_all_bytes(&one.bytes).is_ok()
+                    } else {
+                        buf.clear();
+                        for o in &batch {
+                            buf.extend_from_slice(&o.bytes);
+                        }
+                        pipe.write_all_bytes(&buf).is_ok()
+                    };
                     if !ok {
                         pipe.cancel();
                         return;
                     }
-                    if let Some(a) = out.ack {
+                    for a in batch.into_iter().filter_map(|o| o.ack) {
                         let _ = a.send(());
                     }
                 }
@@ -1015,6 +1087,8 @@ impl Host {
             st.conns.remove(&id);
         }
         let _ = self.events.send(Ev::Changed);
+        // The writer sends what is queued (e.g. a last error message), then ends.
+        sink.queue.close();
         drop(sink);
         // Unblocks a writer stuck on a client that stopped reading.
         let until = Instant::now() + Duration::from_secs(2);

@@ -37,6 +37,14 @@ use windows_sys::Win32::System::Threading::{
     UpdateProcThreadAttribute, WaitForSingleObject,
 };
 
+/// Held by the unit tests that count this process's handles, and by the one that creates many
+/// pseudo consoles (each keeps a handle on Windows 10), so they never measure each other.
+#[cfg(test)]
+pub(crate) fn handle_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// An owned kernel handle, closed exactly once on drop.
 #[derive(Debug)]
 pub struct Handle(HANDLE);

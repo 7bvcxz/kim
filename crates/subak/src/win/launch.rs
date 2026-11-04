@@ -16,6 +16,8 @@
 //! 4. batch and PowerShell scripts are refused (`not_executable`): `CreateProcessW` would run a
 //!    `.bat`/`.cmd` through `cmd.exe /c` with cmd's own parsing of every argument, a shell the
 //!    user did not ask for. Naming `cmd.exe /d /c script.cmd` explicitly is the way to run one;
+//!    a file this user may not execute (`access_denied`) or without an executable header
+//!    (`not_executable`) is refused here too, before a pseudo console exists ([`check_image`]);
 //! 5. the **command line** is the program as named plus every argument quoted for
 //!    `CommandLineToArgvW` / the MSVC runtime ([`super::quote_arg`]), or, for `host serve
 //!    --shell`, the user's line verbatim;
@@ -55,6 +57,7 @@ pub fn prepare(spec: &Spec) -> Result<Prepared, SpawnError> {
     let base = EnvBlock::for_current_user().unwrap_or_else(|_| EnvBlock::from_process());
     let env = base.with_overrides(spec.env, spec.host_vars);
     let app = resolve(spec.program, spec.cwd, &env)?;
+    check_image(spec.program, &app)?;
     let line = match spec.raw_line {
         Some(l) => l.to_string(),
         None => command_line(spec.program, spec.args),
@@ -264,6 +267,65 @@ pub fn resolve(program: &str, cwd: &Path, env: &EnvBlock) -> Result<PathBuf, Spa
     }
 }
 
+/// Refuses a program file this user may not execute, or one without an executable header, before
+/// any pseudo console exists. `CreateProcessW` would report the same, but only after the pseudo
+/// console was created, and Windows 10's inbox ConPTY keeps one handle per pseudo console even
+/// when no process ever ran in it (measured; docs/PTY_PROCESSES.md §9). Anything this check cannot
+/// decide (an App Execution Alias, a file it may execute but not read) is left to
+/// `CreateProcessW`.
+pub fn check_image(program: &str, app: &Path) -> Result<(), SpawnError> {
+    use std::io::Read;
+    use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+    use windows_sys::Win32::Storage::FileSystem::{FILE_ATTRIBUTE_REPARSE_POINT, FILE_EXECUTE};
+    let Ok(meta) = std::fs::symlink_metadata(app) else {
+        return Ok(());
+    };
+    if meta.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+        return Ok(()); // App Execution Aliases are resolved by CreateProcessW alone
+    }
+    let share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
+    if let Err(e) = std::fs::OpenOptions::new()
+        .access_mode(FILE_EXECUTE | SYNCHRONIZE)
+        .share_mode(share)
+        .open(app)
+        && e.raw_os_error() == Some(5)
+    {
+        return Err(SpawnError::new(
+            Reason::AccessDenied,
+            format!("cannot start `{program}` ({}): {e}", app.display()),
+        )
+        .os(Some(5)));
+    }
+    let mut head = [0u8; 2];
+    let readable = std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(share)
+        .open(app)
+        .and_then(|mut f| {
+            let mut n = 0;
+            while n < head.len() {
+                match f.read(&mut head[n..])? {
+                    0 => break,
+                    m => n += m,
+                }
+            }
+            Ok(n)
+        });
+    match readable {
+        Ok(2) if &head == b"MZ" => Ok(()),
+        Ok(_) => Err(SpawnError::new(
+            Reason::NotExecutable,
+            format!(
+                "`{program}` ({}) is not a program Windows can start (it has no executable header)",
+                app.display()
+            ),
+        )
+        .hint("run a script or document through its interpreter, e.g. -- cmd.exe /d /c <file>")),
+        // Unreadable but executable, or vanished: CreateProcessW decides.
+        Err(_) => Ok(()),
+    }
+}
+
 fn not_found(program: &str) -> SpawnError {
     let e = if is_path(program) {
         SpawnError::new(Reason::NotFound, format!("`{program}` was not found"))
@@ -299,12 +361,9 @@ pub fn os_failure(program: &str, app: &Path, e: &io::Error) -> SpawnError {
         // by code integrity; blocked by antivirus.
         Some(5 | 1260 | 4551 | 225 | 226) => (Reason::AccessDenied, None),
         Some(267) => (Reason::BadCwd, None),
-        Some(216) => (
-            Reason::NotExecutable,
-            Some("the program is built for another processor architecture"),
-        ),
-        // Bad format, not a valid Win32 application, invalid or 16-bit executable.
-        Some(11 | 129 | 191 | 193) => (
+        // Bad format, not a valid Win32 application, invalid or 16-bit executable, or one for
+        // another machine type (Windows 10 also reports a text file named `.exe` that way).
+        Some(11 | 129 | 191 | 193 | 216) => (
             Reason::NotExecutable,
             Some("it is not a program Windows can start; run a script through its interpreter"),
         ),
@@ -463,6 +522,80 @@ mod tests {
             r#""C:\Program Files\PowerShell\7\pwsh.exe" -NoLogo "a b" """#
         );
         assert_eq!(command_line("cmd.exe", &[]), "cmd.exe");
+    }
+
+    #[test]
+    fn unusable_program_files_are_refused_before_any_os_object_exists() {
+        use std::os::windows::process::CommandExt;
+        let d = tmp("image");
+        let sys = PathBuf::from(std::env::var("SystemRoot").unwrap()).join("System32");
+        std::fs::copy(sys.join("whoami.exe"), d.join("denied.exe")).unwrap();
+        std::fs::copy(sys.join("whoami.exe"), d.join("fine.exe")).unwrap();
+        std::fs::write(d.join("fake.exe"), "not a program").unwrap();
+        std::fs::write(d.join("tiny.exe"), "M").unwrap();
+        let icacls = |args: &[&str]| {
+            let st = std::process::Command::new("icacls")
+                .arg(d.join("denied.exe"))
+                .args(args)
+                .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+                .stdout(std::process::Stdio::null())
+                .status()
+                .unwrap();
+            assert!(st.success());
+        };
+        icacls(&["/deny", "*S-1-1-0:(X)"]);
+        let e = check_image("denied", &d.join("denied.exe")).unwrap_err();
+        assert_eq!(e.reason, Reason::AccessDenied, "{e:?}");
+        assert_eq!(e.os_error, Some(5));
+        for f in ["fake.exe", "tiny.exe"] {
+            let e = check_image("fake", &d.join(f)).unwrap_err();
+            assert_eq!(e.reason, Reason::NotExecutable, "{f}: {e:?}");
+            assert!(
+                e.message.contains("not a program Windows can start"),
+                "{e:?}"
+            );
+        }
+        assert!(check_image("fine", &d.join("fine.exe")).is_ok());
+        assert!(check_image("cmd", &sys.join("cmd.exe")).is_ok());
+        icacls(&["/remove:d", "*S-1-1-0"]);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn preparing_a_start_holds_no_handle() {
+        // Building the logon environment, checking the directory and resolving the program
+        // open and close handles; 100 preparations leave none behind.
+        let _serial = super::super::handle_test_lock();
+        let count = || {
+            (0..5)
+                .map(|_| {
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                    super::super::handle_count()
+                })
+                .min()
+                .unwrap()
+        };
+        let cwd = std::env::temp_dir();
+        let env = EnvOverrides::default();
+        let spec = Spec {
+            program: "cmd.exe",
+            args: &[],
+            raw_line: None,
+            cwd: &cwd,
+            env: &env,
+            host_vars: &[],
+            size: (80, 25),
+        };
+        prepare(&spec).unwrap();
+        let before = count();
+        for _ in 0..100 {
+            prepare(&spec).unwrap();
+            assert!(check_cwd(&cwd.join("subak-missing")).is_err());
+        }
+        let after = count();
+        // Other tests of this binary open handles concurrently; the minimum filters most of
+        // them, and a leak of one handle per preparation would add 100.
+        assert!(after <= before + 24, "handles {before} -> {after}");
     }
 
     #[test]

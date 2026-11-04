@@ -296,9 +296,42 @@ impl Drop for ConPty {
 pub struct Output(Handle);
 
 impl io::Read for Output {
+    /// Waits for output, then also takes what is already queued behind it (up to `buf`), so a
+    /// fast producer yields a few large chunks instead of thousands of tiny ones: every chunk
+    /// becomes one data frame per attached client, and a client is judged by its queue of
+    /// frames (ADR 0025). Never waits for more than the first byte.
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        read_output(&self.0, buf)
+        let mut n = read_output(&self.0, buf)?;
+        while n > 0 && n < buf.len() {
+            let avail = available(&self.0);
+            if avail == 0 {
+                break;
+            }
+            let end = n + avail.min(buf.len() - n);
+            match read_output(&self.0, &mut buf[n..end])? {
+                0 => break,
+                m => n += m,
+            }
+        }
+        Ok(n)
     }
+}
+
+/// Bytes waiting in a pipe (0 when none, or when it cannot tell).
+fn available(h: &Handle) -> usize {
+    let mut avail = 0u32;
+    // SAFETY: valid pipe handle; only the count is requested (no buffer).
+    let ok = unsafe {
+        windows_sys::Win32::System::Pipes::PeekNamedPipe(
+            h.raw(),
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null_mut(),
+            &raw mut avail,
+            std::ptr::null_mut(),
+        )
+    };
+    if ok == 0 { 0 } else { avail as usize }
 }
 
 /// The Windows implementation of the platform-neutral interface (ADR 0011).
@@ -524,8 +557,82 @@ mod tests {
         eprintln!("ConPTY teardown: ClosePseudoConsole alone ended the shell: {graceful}");
     }
 
+    /// Measured on Windows 10 19045: the inbox ConPTY keeps one handle per pseudo console after
+    /// `ClosePseudoConsole`, even for one that never ran a process (50 bare create/close pairs
+    /// added 53 handles). That is the OS's, not ours: a whole session (pipes, job, process,
+    /// thread, attribute list, reader) adds nothing beyond it. Newer ConPTY builds may keep
+    /// none; the bounds hold either way (docs/PTY_PROCESSES.md §9).
+    #[test]
+    fn sessions_hold_no_handle_beyond_the_one_the_inbox_conpty_keeps() {
+        let _serial = crate::win::handle_test_lock();
+        let count = || {
+            (0..5)
+                .map(|_| {
+                    std::thread::sleep(Duration::from_millis(50));
+                    crate::win::handle_count()
+                })
+                .min()
+                .unwrap()
+        };
+        let a = count();
+        for _ in 0..50 {
+            drop(kill_on_close_job().unwrap());
+        }
+        let b = count();
+        for _ in 0..50 {
+            let (in_read, _in_write) = anonymous_pipe().unwrap();
+            let (_out_read, out_write) = anonymous_pipe().unwrap();
+            let mut hpc: HPCON = 0;
+            // SAFETY: probe only.
+            let hr = unsafe {
+                CreatePseudoConsole(
+                    size(80, 25),
+                    in_read.raw(),
+                    out_write.raw(),
+                    0,
+                    &raw mut hpc,
+                )
+            };
+            assert!(hr >= 0);
+            drop(in_read);
+            drop(out_write);
+            // SAFETY: probe only.
+            unsafe { ClosePseudoConsole(hpc) };
+        }
+        let c = count();
+        for _ in 0..50 {
+            let pty = ConPty::spawn(None, "cmd.exe /d /c exit 0", None, 80, 25, None).unwrap();
+            let out = pty.take_output().unwrap();
+            let t = std::thread::spawn(move || {
+                let mut buf = [0u8; 4096];
+                while matches!(read_output(&out, &mut buf), Ok(n) if n > 0) {}
+            });
+            pty.wait_exit(Some(Duration::from_secs(5)));
+            pty.close_console();
+            t.join().unwrap();
+        }
+        let d = count();
+        eprintln!(
+            "EVIDENCE handles: start {a}; after 50 jobs {b}; after 50 bare pseudo consoles {c}; \
+             after 50 full sessions {d}"
+        );
+        // Other tests of this binary open handles concurrently; the minimum of several samples
+        // filters most of that, the slack the rest.
+        assert!(b <= a + 16, "jobs leak: {a} -> {b}");
+        let os = c.saturating_sub(b);
+        assert!(
+            os <= 50 + 16,
+            "more than one handle per pseudo console: {b} -> {c}"
+        );
+        assert!(
+            d.saturating_sub(c) <= os + 24,
+            "a session holds more than the bare pseudo console: {c} -> {d} (bare: +{os})"
+        );
+    }
+
     #[test]
     fn repeated_sessions_do_not_leak_handles() {
+        let _serial = crate::win::handle_test_lock();
         // The handle count is process-wide, and other tests in this binary open and close
         // handles at the same time. Take the minimum of several samples, which filters out
         // their short-lived handles, and run enough cycles that a real leak (about 8 handles

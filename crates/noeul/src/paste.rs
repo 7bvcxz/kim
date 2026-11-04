@@ -543,7 +543,7 @@ pub fn take(clip: &mut dyn Clipboard, want: Option<Kind>, opts: Options) -> Resu
         return Err(Refusal::Private);
     }
     let offered = offered(clip, opts);
-    let kind = match want {
+    let mut kind = match want {
         Some(k) if offered.contains(&k) => k,
         Some(k) => return Err(Refusal::NotOffered(k, offered)),
         None => *offered.first().ok_or(Refusal::Nothing)?,
@@ -607,6 +607,18 @@ pub fn take(clip: &mut dyn Clipboard, want: Option<Kind>, opts: Options) -> Resu
         }
         Kind::Html => match clip.read(Format::Html, Limits::HTML) {
             Some(Ok(b)) => Payload::Html(b),
+            // Too much HTML for a card (a whole document copied from a word processor): when no
+            // kind was asked for, its plain text is the honest fallback.
+            Some(Err(size)) if want.is_none() && offered.contains(&Kind::Text) => {
+                match clip.read(Format::Text, Limits::TEXT) {
+                    Some(Ok(b)) => {
+                        kind = Kind::Text;
+                        Payload::Text(utf16_text(&b))
+                    }
+                    Some(Err(t)) => return Err(Refusal::TooLarge(Format::Text, t)),
+                    None => return Err(Refusal::TooLarge(Format::Html, size)),
+                }
+            }
             Some(Err(size)) => return Err(Refusal::TooLarge(Format::Html, size)),
             None => return Err(Refusal::Unreadable(Format::Html)),
         },

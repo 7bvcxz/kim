@@ -301,6 +301,17 @@ fn oversized_formats_are_refused_without_being_copied() {
         take(&mut big, None, o).unwrap_err(),
         Refusal::TooLarge(Format::Html, (Limits::HTML + 1) as u64)
     );
+    // Too much HTML next to its plain text: the text, unless HTML was asked for.
+    let mut doc = Snapshot::default()
+        .with(Format::Html, vec![b'a'; Limits::HTML + 1])
+        .with_text("the document's text");
+    let t = take(&mut doc, None, o).unwrap();
+    assert_eq!(t.kind, Kind::Text);
+    assert!(matches!(t.payload, Payload::Text(ref s) if s == "the document's text"));
+    assert!(matches!(
+        take(&mut doc, Some(Kind::Html), o).unwrap_err(),
+        Refusal::TooLarge(Format::Html, _)
+    ));
     let mut text = Snapshot::default().with(Format::Text, vec![b'a'; Limits::TEXT + 2]);
     assert!(matches!(
         take(&mut text, None, o).unwrap_err(),

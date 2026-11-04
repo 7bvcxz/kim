@@ -1,0 +1,35 @@
+{
+  "schema": "ddalgak.simulation",
+  "schema_version": 1,
+  "kind": "simulate",
+  "profile": "default",
+  "revision": 1,
+  "context": {
+    "mode": "base",
+    "engine": "running",
+    "focus": "normal",
+    "app": null,
+    "ime_composing": false
+  },
+  "event": {
+    "keys": "Right",
+    "on": "press",
+    "source": "physical"
+  },
+  "decision": {
+    "outcome": "no_match",
+    "code": "no_match",
+    "rule": null,
+    "key_reaches_app": true,
+    "candidates": [
+      {
+        "rule": "pointer-right",
+        "result": "mode_mismatch",
+        "reason": "Only in Mouse keys mode."
+      }
+    ]
+  },
+  "effects": [],
+  "injected_events": 0,
+  "opened": []
+}

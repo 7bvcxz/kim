@@ -1,0 +1,41 @@
+{
+  "schema": "ddalgak.rules",
+  "schema_version": 1,
+  "hotkey_contract": 1,
+  "active_profile": "default",
+  "profiles": [
+    {
+      "id": "default",
+      "title": "Default",
+      "default_mode": "base",
+      "modes": [
+        {
+          "id": "base",
+          "title": "Base"
+        }
+      ],
+      "rules": [
+        {
+          "id": "hide-emergency",
+          "title": "Hide emergency",
+          "enabled": true,
+          "trigger": {
+            "keys": "RCtrl+RAlt+RShift+Escape"
+          },
+          "steps": [
+            {
+              "type": "remap",
+              "to": "F13"
+            }
+          ],
+          "consent": {
+            "input-injection": {
+              "granted_at": "2026-11-04T09:00:00Z",
+              "via": "gui"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

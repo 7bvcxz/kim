@@ -1,0 +1,48 @@
+{
+  "schema": "ddalgak.simulation",
+  "schema_version": 1,
+  "kind": "simulate",
+  "profile": "default",
+  "revision": 7,
+  "context": {
+    "mode": "base",
+    "engine": "running",
+    "focus": "normal",
+    "app": null,
+    "ime_composing": false
+  },
+  "event": {
+    "keys": "Ctrl+Shift+J",
+    "on": "press",
+    "source": "physical"
+  },
+  "decision": {
+    "outcome": "fired",
+    "code": "ok",
+    "rule": "chord-to-arrow",
+    "key_reaches_app": false,
+    "candidates": [
+      {
+        "rule": "chord-to-arrow",
+        "result": "winner"
+      }
+    ]
+  },
+  "effects": [
+    {
+      "step": 0,
+      "type": "remap",
+      "performed": false,
+      "summary": "Down is held while J is held; Ctrl and Shift are released meanwhile.",
+      "preview": {
+        "holds": "Down",
+        "released_modifiers": [
+          "Ctrl",
+          "Shift"
+        ]
+      }
+    }
+  ],
+  "injected_events": 0,
+  "opened": []
+}

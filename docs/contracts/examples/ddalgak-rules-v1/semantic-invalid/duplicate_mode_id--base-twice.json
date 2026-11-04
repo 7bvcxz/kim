@@ -1,0 +1,24 @@
+{
+  "schema": "ddalgak.rules",
+  "schema_version": 1,
+  "hotkey_contract": 1,
+  "active_profile": "default",
+  "profiles": [
+    {
+      "id": "default",
+      "title": "Default",
+      "default_mode": "base",
+      "modes": [
+        {
+          "id": "base",
+          "title": "Base"
+        },
+        {
+          "id": "base",
+          "title": "Base again"
+        }
+      ],
+      "rules": []
+    }
+  ]
+}

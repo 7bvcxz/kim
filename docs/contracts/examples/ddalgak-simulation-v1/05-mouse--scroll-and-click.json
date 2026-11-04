@@ -1,0 +1,58 @@
+{
+  "schema": "ddalgak.simulation",
+  "schema_version": 1,
+  "kind": "simulate",
+  "profile": "default",
+  "revision": 1,
+  "context": {
+    "mode": "mouse",
+    "engine": "running",
+    "focus": "normal",
+    "app": null,
+    "ime_composing": false
+  },
+  "event": {
+    "keys": "Home",
+    "on": "press",
+    "source": "physical"
+  },
+  "decision": {
+    "outcome": "fired",
+    "code": "ok",
+    "rule": "center-and-double-click",
+    "key_reaches_app": false,
+    "candidates": [
+      {
+        "rule": "center-and-double-click",
+        "result": "winner"
+      }
+    ]
+  },
+  "effects": [
+    {
+      "step": 0,
+      "type": "mouse_move",
+      "performed": false,
+      "summary": "Moves the pointer to the middle of the primary monitor.",
+      "preview": {
+        "to": {
+          "x": 960,
+          "y": 540
+        },
+        "clamped": false
+      }
+    },
+    {
+      "step": 1,
+      "type": "mouse_click",
+      "performed": false,
+      "summary": "Double-clicks the left button.",
+      "preview": {
+        "button": "left",
+        "op": "double_click"
+      }
+    }
+  ],
+  "injected_events": 0,
+  "opened": []
+}

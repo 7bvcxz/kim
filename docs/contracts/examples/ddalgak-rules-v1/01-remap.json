@@ -1,0 +1,99 @@
+{
+  "schema": "ddalgak.rules",
+  "schema_version": 1,
+  "hotkey_contract": 1,
+  "revision": 7,
+  "active_profile": "default",
+  "settings": {"engine_on_start": "off", "activity": {"persist": false}, "max_runs_per_second": 20},
+  "profiles": [
+    {
+      "id": "default",
+      "title": "Everyday",
+      "description": "Remaps: one key acts as another key or chord, a chord becomes another chord, a key is disabled.",
+      "default_mode": "base",
+      "modes": [{"id": "base", "title": "Base"}],
+      "rules": [
+        {
+          "id": "caps-to-ctrl",
+          "title": "CapsLock acts as Ctrl, a tap is Escape",
+          "enabled": true,
+          "trigger": {"keys": "CapsLock"},
+          "steps": [{"type": "remap", "to": "LCtrl", "tap": "Escape", "tap_ms": 200}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T09:00:00Z", "via": "gui"}}
+        },
+        {
+          "id": "ralt-hangul",
+          "title": "Right Alt switches Korean and English input",
+          "description": "For keyboards without a 한/영 key: Right Alt acts as HangulMode.",
+          "enabled": true,
+          "trigger": {"keys": "RAlt"},
+          "steps": [{"type": "remap", "to": "HangulMode"}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T09:00:00Z", "via": "gui"}}
+        },
+        {
+          "id": "chord-to-arrow",
+          "title": "Ctrl+Shift+J acts as Down",
+          "enabled": true,
+          "trigger": {"keys": "Ctrl+Shift+J"},
+          "steps": [{"type": "remap", "to": "Down"}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T09:05:00Z", "via": "cli"}}
+        },
+        {
+          "id": "f13-copy",
+          "title": "F13 presses Ctrl+C",
+          "enabled": true,
+          "trigger": {"keys": "F13", "repeat": false},
+          "steps": [{"type": "send_keys", "keys": "Ctrl+C"}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T09:05:00Z", "via": "gui"}}
+        },
+        {
+          "id": "show-desktop",
+          "title": "Ctrl+Shift+D shows the desktop (sends Win+D)",
+          "enabled": true,
+          "trigger": {"keys": "Ctrl+Shift+D"},
+          "steps": [{"type": "send_keys", "keys": "Win+D"}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T09:06:00Z", "via": "gui"}}
+        },
+        {
+          "id": "no-insert",
+          "title": "Disable the Insert key",
+          "enabled": true,
+          "trigger": {"keys": "Insert"},
+          "steps": [{"type": "block"}]
+        },
+        {
+          "id": "leader-sequence",
+          "title": "The sequence Ctrl+K, Ctrl+U presses Ctrl+Shift+U (disabled)",
+          "enabled": false,
+          "trigger": {"keys": "Ctrl+K Ctrl+U"},
+          "steps": [{"type": "send_keys", "keys": "Ctrl+Shift+U", "step_delay_ms": 0}]
+        }
+      ]
+    },
+    {
+      "id": "swap",
+      "title": "Swap CapsLock and Escape",
+      "description": "Two remaps that point at each other are a swap, not a loop: Ddalgak's own output never triggers a rule.",
+      "default_mode": "base",
+      "modes": [{"id": "base", "title": "Base"}],
+      "rules": [
+        {
+          "id": "swap-caps-esc",
+          "title": "CapsLock acts as Escape",
+          "enabled": true,
+          "trigger": {"keys": "CapsLock"},
+          "steps": [{"type": "remap", "to": "Escape"}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T09:10:00Z", "via": "gui"}}
+        },
+        {
+          "id": "swap-esc-caps",
+          "title": "Escape acts as CapsLock",
+          "enabled": true,
+          "trigger": {"keys": "Escape"},
+          "steps": [{"type": "remap", "to": "CapsLock"}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T09:10:00Z", "via": "gui"}}
+        }
+      ]
+    }
+  ]
+}

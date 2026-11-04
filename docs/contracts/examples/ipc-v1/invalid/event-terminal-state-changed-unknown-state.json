@@ -1,0 +1,1 @@
+{"type": "event", "seq": 5, "event": "terminal.state_changed", "data": {"terminal_id": "t-3fa9c0d21b7e", "name": "work", "state": "exited", "previous_state": "running"}}

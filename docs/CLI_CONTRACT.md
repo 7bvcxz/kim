@@ -4,7 +4,8 @@ Status: **current** · CLI contract **v1** · Step 07 · Decision: [ADR 0015](ad
 · Requirements: `KIM-FR-010`, `KIM-FR-011`, `KIM-FR-012`, `KIM-FR-020`, `KIM-NFR-014`,
 `KIM-SEC-013`
 
-Every Kim tool's command line follows this contract: `kim` today, `subak` from Step 12, and
+Every Kim tool's command line follows this contract: `kim` today, `subak` (its `host` and
+`terminal` commands since Steps 09–10, the full CLI from Step 12), and
 every later tool. It is what agents and scripts may rely on. The `kim` command reference is
 [KIM_CLI.md](KIM_CLI.md); machine-readable schemas are in
 [contracts/schemas/](contracts/schemas/cli-envelope-v1.schema.json).
@@ -135,16 +136,19 @@ different meaning or exit code. `crates/kim/tests/cli_contract.rs` checks that t
 | `already_installed` | 7 | The requested version is already installed; nothing to do (use `--reinstall` to repair). |
 | `cancelled` | 8 | The user cancelled; nothing was changed. |
 
-**Subak codes** (Step 08 `host` prototype, Step 09 Host supervisor and IPC v1). `subak` also
-uses `io`, `internal`, `permission_denied`, `usage`, `timeout`, `confirmation_required` and
-`cancelled` with the meaning and exit code above. `crates/subak/src/output.rs` tests that this
-table matches its code.
+**Subak codes** (Step 08 `host` prototype, Step 09 Host supervisor and IPC v1, Step 10 Terminal
+lifecycle). `subak` also uses `io`, `internal`, `permission_denied`, `usage`, `timeout`,
+`confirmation_required` and `cancelled` with the meaning and exit code above. For `subak`,
+`confirmation_required` also covers a Host refusing to end a busy Terminal without consent (IPC
+`busy`). `crates/subak/src/output.rs` tests that this table matches its code.
 
 | Code | Exit | Meaning |
 | --- | --- | --- |
-| `spawn_failed` | 1 | The Host or its shell could not be started (missing program, bad command line). |
+| `spawn_failed` | 1 | The Host, its shell or a Terminal's program could not be started (missing program, bad working directory, access denied); `details` carry the `reason`. |
+| `invalid_name` | 2 | A Terminal name breaks the naming rules ([SESSION_MODEL §3](SESSION_MODEL.md)). |
+| `ambiguous_target` | 2 | Several objects match the target (e.g. `host attach` with several running Terminals); `details` list the candidates. Name one exactly. |
 | `host_not_running` | 3 | No Subak Host serves the endpoint. |
-| `target_not_found` | 3 | The Host has no pane matching the target (a Host started with `--no-shell` has none). |
+| `target_not_found` | 3 | The Host has no Terminal, window or pane matching the target (names match exactly, ignoring case). |
 | `protocol_error` | 4 | The Host or client sent a malformed or unexpected IPC message. |
 | `host_identity_mismatch` | 4 | The endpoint is served by a process that is not a `subak.exe` of this user (a pipe squatter, or a Host that cannot be verified). Nothing was sent to it. |
 | `unsupported_platform` | 5 | The command needs an OS feature this platform does not have yet (the Host needs Windows ConPTY until M4). |
@@ -153,6 +157,9 @@ table matches its code.
 | `host_disconnected` | 6 | The Host closed the connection unexpectedly (crashed, killed, or shutting down). |
 | `host_unresponsive` | 6 | A verified Host accepted the connection but did not answer the handshake in time. It is neither stopped nor replaced. |
 | `host_already_running` | 7 | A Host already serves the endpoint; attach to it or stop it explicitly. |
+| `name_conflict` | 7 | Another Terminal already uses the name (names ignore case and Unicode composition). Nothing is renamed or suffixed. |
+| `invalid_state` | 7 | The Terminal's state does not allow the operation (`rm` of a running Terminal without `--force`, attaching to a stopped one, acting on one that is still starting). |
+| `terminals_running` | 7 | `host stop` would end live Terminals; it does so only with `--kill-terminals` (ADR 0003 §7). |
 
 **Noeul codes** (Step 49 foundation: the resident instance, Noeul IPC v1, region pins requested
 from the CLI, `F3` image paste; [ADR 0023](adr/0023-noeul-app-foundation.md),
@@ -191,12 +198,19 @@ another meaning; `kim` implements them since Step 46:
 
 Subak's IPC error codes ([IPC_PROTOCOL](contracts/IPC_PROTOCOL.md)) are a separate namespace;
 the CLI maps them onto the codes above (for example IPC `invalid_params` → `usage`). Step 12
-extends this table for Subak's real CLI. `host attach` is the one command whose stdout is not a
-document: it streams the terminal, so `--json` is accepted only with `--dry-run`. The `data` of
-`host status` is the IPC `host.status` result ([IPC_PROTOCOL §4.1](contracts/IPC_PROTOCOL.md));
-`host health`, `host start` and `host stop` add the fields listed there and in
-[CONPTY_PROOF.md](CONPTY_PROOF.md). It is not yet a published schema (Step 12 publishes Subak's
-CLI schema); the envelopes are validated against `cli-envelope-v1`.
+extends this table for Subak's real CLI. `host attach` and `terminal attach` are the commands
+whose stdout is not a document: they stream the terminal, so `--json` is accepted only with
+`--dry-run`. The `data` of `host status` is the IPC `host.status` result
+([IPC_PROTOCOL §4.1](contracts/IPC_PROTOCOL.md)); `host health`, `host start` and `host stop` add
+the fields listed there and in [CONPTY_PROOF.md](CONPTY_PROOF.md). The `data` of `terminal new`,
+`list`, `info`, `rename`, `stop`, `kill` and `rm` is the result of the IPC method they call
+(`terminal.create`, `.list`, `.info`, `.rename`, `.stop`, `.kill`, `.remove`; typed by the
+`result_*` definitions of `ipc-v1.schema.json`), plus `host` (`{pid, started}` for `new`, `{pid}`
+for `list`, `null` when no Host runs). Their meanings and consent rules are in
+[SESSION_MODEL §4](SESSION_MODEL.md): `stop`, `kill` and `rm` are `destructive` and ask, or need
+`--yes`; `host stop` with live Terminals also needs `--kill-terminals`. `new`, `info` and `rm` are
+tmux words outside §2's standard verbs, chosen to match the IPC methods (ADR 0020). There is no
+published Subak CLI schema yet (Step 12); the envelopes are validated against `cli-envelope-v1`.
 
 ## 7. Output streams and the `--json` envelope
 

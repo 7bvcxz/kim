@@ -10,7 +10,7 @@
     "cli_contract": 1,
     "json_schema_version": 1,
     "implementation": "placeholder",
-    "summary": "Pre-alpha: Host supervisor with IPC v1 (identity-checked pipe, start on demand, idle exit) and one prototype pane per Host; no Terminals, GUI or recovery yet",
+    "summary": "Pre-alpha: per-user Host with IPC v1 and named Terminals (create, list, rename, attach, stop, kill, remove), one window and pane each; no GUI, splits or recovery yet",
     "commands": [
       {
         "name": "capabilities",
@@ -23,9 +23,89 @@
         "opens_window": false
       },
       {
+        "name": "terminal.new",
+        "usage": "subak terminal new [<name>] [--cwd <dir>] [--size <cols>x<rows>] [--remain-on-exit] [--keep-on-failure] [--dry-run] [--json] [-- <program> [args...]]",
+        "summary": "Create a named Terminal in its own pseudo console and job; starts a Host on demand",
+        "effect": "write",
+        "network": false,
+        "dry_run": true,
+        "requires_yes": false,
+        "opens_window": false
+      },
+      {
+        "name": "terminal.list",
+        "usage": "subak terminal list [--json]",
+        "summary": "Every Terminal of the Host with its state, pid and clients; starts nothing",
+        "effect": "read",
+        "network": false,
+        "dry_run": false,
+        "requires_yes": false,
+        "opens_window": false
+      },
+      {
+        "name": "terminal.info",
+        "usage": "subak terminal info <target> [--json]",
+        "summary": "One Terminal with its window and pane",
+        "effect": "read",
+        "network": false,
+        "dry_run": false,
+        "requires_yes": false,
+        "opens_window": false
+      },
+      {
+        "name": "terminal.rename",
+        "usage": "subak terminal rename <target> <new-name> [--dry-run] [--json]",
+        "summary": "Rename a Terminal (unique, case-insensitive); its id never changes",
+        "effect": "write",
+        "network": false,
+        "dry_run": true,
+        "requires_yes": false,
+        "opens_window": false
+      },
+      {
+        "name": "terminal.attach",
+        "usage": "subak terminal attach <target> [--size <cols>x<rows>] [--dry-run [--json]]",
+        "summary": "Interactive attach to a Terminal's pane; Ctrl+B d detaches and stops nothing",
+        "effect": "write",
+        "network": false,
+        "dry_run": true,
+        "requires_yes": false,
+        "opens_window": false
+      },
+      {
+        "name": "terminal.stop",
+        "usage": "subak terminal stop <target> [--yes] [--dry-run] [--json]",
+        "summary": "End a Terminal's processes (graceful, then forced after 5 s) and keep it as stopped",
+        "effect": "destructive",
+        "network": false,
+        "dry_run": true,
+        "requires_yes": true,
+        "opens_window": false
+      },
+      {
+        "name": "terminal.kill",
+        "usage": "subak terminal kill <target> [--yes] [--dry-run] [--json]",
+        "summary": "End a Terminal's processes at once and remove the Terminal",
+        "effect": "destructive",
+        "network": false,
+        "dry_run": true,
+        "requires_yes": true,
+        "opens_window": false
+      },
+      {
+        "name": "terminal.rm",
+        "usage": "subak terminal rm <target> [--force] [--yes] [--dry-run] [--json]",
+        "summary": "Remove a Terminal that runs nothing; --force also ends a running one",
+        "effect": "destructive",
+        "network": false,
+        "dry_run": true,
+        "requires_yes": true,
+        "opens_window": false
+      },
+      {
         "name": "host.start",
         "usage": "subak host start [--endpoint <name>] [--shell <command> | --no-shell] [--idle-exit <secs>] [--dry-run] [--json]",
-        "summary": "Start a detached per-user Host (one start lock per endpoint), optionally owning one prototype ConPTY pane",
+        "summary": "Start a detached per-user Host (one start lock per endpoint), optionally with a first Terminal",
         "effect": "write",
         "network": false,
         "dry_run": true,
@@ -35,7 +115,7 @@
       {
         "name": "host.status",
         "usage": "subak host status [--endpoint <name>] [--json]",
-        "summary": "Host and pane process ids, protocol, job breakaway, environment, idle grace and clients",
+        "summary": "Host process id, protocol, job breakaway, environment, idle grace, Terminals and clients",
         "effect": "read",
         "network": false,
         "dry_run": false,
@@ -55,7 +135,7 @@
       {
         "name": "host.attach",
         "usage": "subak host attach [--endpoint <name>] [--size <cols>x<rows>] [--dry-run [--json]]",
-        "summary": "Prototype: interactive attach to the pane; Ctrl+B d or end of piped input detaches",
+        "summary": "Interactive attach to the Host's only running pane; Ctrl+B d or end of piped input detaches",
         "effect": "write",
         "network": false,
         "dry_run": true,
@@ -64,8 +144,8 @@
       },
       {
         "name": "host.stop",
-        "usage": "subak host stop [--endpoint <name>] [--yes] [--dry-run] [--json]",
-        "summary": "Stop the Host; ending a live pane and every process in its job needs consent",
+        "usage": "subak host stop [--endpoint <name>] [--kill-terminals] [--yes] [--dry-run] [--json]",
+        "summary": "Stop the Host; ending live Terminals needs --kill-terminals and consent",
         "effect": "destructive",
         "network": false,
         "dry_run": true,

@@ -1,0 +1,42 @@
+{
+  "schema": "ddalgak.rules",
+  "schema_version": 1,
+  "hotkey_contract": 1,
+  "active_profile": "default",
+  "profiles": [
+    {
+      "id": "default",
+      "title": "Default",
+      "default_mode": "base",
+      "modes": [
+        {
+          "id": "base",
+          "title": "Base"
+        }
+      ],
+      "rules": [
+        {
+          "id": "loop",
+          "title": "Loop",
+          "enabled": true,
+          "trigger": {
+            "keys": "Ctrl+Shift+J",
+            "injected": "accept"
+          },
+          "steps": [
+            {
+              "type": "send_keys",
+              "keys": "Ctrl+Shift+K"
+            }
+          ],
+          "consent": {
+            "input-injection": {
+              "granted_at": "2026-11-04T09:00:00Z",
+              "via": "gui"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

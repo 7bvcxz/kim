@@ -15,13 +15,20 @@ did.
 | [NOEUL_REQUIREMENTS.md](NOEUL_REQUIREMENTS.md) | current (Step 48; Step 49 registered its first error codes) | `NOEUL-*` requirements, milestones N1–N7 (Steps 49–64), platform permissions, performance budgets, deferrals, planned error codes |
 | [NOEUL_SNIPASTE_MATRIX.md](NOEUL_SNIPASTE_MATRIX.md) | current (inventory, Snipaste 2.11.3; 18 rows `partial` since Step 49) | Snipaste feature parity matrix with status, requirement, milestone and verification per row |
 | [NOEUL_UX_SPEC.md](NOEUL_UX_SPEC.md) | current (specification) | Noeul journeys and click paths, wireframes, the exact double-click-to-pin rules and their test cases, default shortcuts, session limits, privacy |
+| [DDALGAK_PHILOSOPHY.md](DDALGAK_PHILOSOPHY.md) | current (Step 65; Ddalgak not implemented yet) | Ddalgak, the automation engine: one action, useful automation; novice-friendly GUI and headless CLI; safe by construction; honest about AutoHotkey |
+| [DDALGAK_REQUIREMENTS.md](DDALGAK_REQUIREMENTS.md) | current (Step 65) | `DDALGAK-*` requirements and milestones D1–D7 (Steps 65–83) |
+| [DDALGAK_RULE_MODEL.md](DDALGAK_RULE_MODEL.md) | current (rules document v1; not implemented) | Triggers, the seven core action types with inputs/outputs/errors/safety, modes, conditions, profiles, consent, precedence, validation, playground, outcomes and activity, versioning, CLI preview |
+| [DDALGAK_GUI_JOURNEYS.md](DDALGAK_GUI_JOURNEYS.md) | current (design) | End-to-end GUI journeys and wireframes: create, capture, effects, playground, profiles, modes, rollback, search/edit/delete/duplicate/export, emergency |
+| [DDALGAK_SAFETY.md](DDALGAK_SAFETY.md) | current (nothing run on Windows yet) | Risks and scope: reserved shortcuts, elevated windows, engine lifecycle, layouts and IME, anti-cheat, hook security and emergency off, password fields and privacy, Linux, recursion and stuck keys, verification plan |
+| [DDALGAK_AHK_MATRIX.md](DDALGAK_AHK_MATRIX.md) | current (inventory, matrix v1, AutoHotkey v2.0.31) | AutoHotkey v2 comparison with sources: supported, partial, planned, not intended |
 
 ## Architecture and compatibility
 
 | Document | Status | Purpose |
 | --- | --- | --- |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | current | Components, Host internals, object model, lifecycles, close/kill semantics, restart behavior, telemetry |
-| [adr/README.md](adr/README.md) | current | Architecture decision records (ADR 0001–0021) |
+| [adr/README.md](adr/README.md) | current | Architecture decision records (ADR 0001–0023) |
+| [SESSION_MODEL.md](SESSION_MODEL.md) | current (implemented, Step 10) | Terminal → Window → Pane model, the Terminal state machine, naming and target rules, what detach/stop/kill/rm/host stop do to processes, consent and the busy rule, concurrency guarantees, evidence |
 | [CONPTY_PROOF.md](CONPTY_PROOF.md) | current (Step 08 prototype) | Windows ConPTY + detached Host proof: what "detached" means, evidence with process ids, OS limitations and power states, manual procedures (Windows Terminal, sleep, logoff pending) |
 | [CLI_CONTRACT.md](CLI_CONTRACT.md) | current (contract v1) | Cross-tool CLI contract: names, help, streams, `--json` envelope, exit codes, error-code registry, dry-run/confirmation, versioning, capabilities and tool-to-tool invocation, secret redaction |
 | [KIM_CLI.md](KIM_CLI.md) | current | `kim` command reference, files and environment, sample agent workflows |
@@ -30,7 +37,7 @@ did.
 | [RELEASE_POLICY.md](RELEASE_POLICY.md) | current | Consent rules (incl. disclosure of permissions and dependencies, running background utilities), install transaction, channels, signing keys, publishing checklist |
 | [DESIGN_SYSTEM.md](DESIGN_SYSTEM.md) | current | Kim visual language: tokens, components, keyboard, high-DPI, contrast, Korean/Unicode, reduced motion |
 | [RISK_REGISTER.md](RISK_REGISTER.md) | current | ConPTY, job objects, IPC, GUI, SSH, tmux, recovery and Claude risks with owner steps |
-| [contracts/IPC_PROTOCOL.md](contracts/IPC_PROTOCOL.md) | current (implemented v1, Step 09) | Subak IPC v1: framing and limits, handshake with mutual identity checks, version negotiation, methods and authorization by client kind, events, error codes, Host lifetime and start on demand, manual cross-user checks |
+| [contracts/IPC_PROTOCOL.md](contracts/IPC_PROTOCOL.md) | current (implemented v1, Steps 09–10) | Subak IPC v1: framing and limits, handshake with mutual identity checks, version negotiation, methods and authorization by client kind, Terminal methods and events, error codes, Host lifetime and start on demand, manual cross-user checks |
 | [contracts/STATE_SCHEMA.md](contracts/STATE_SCHEMA.md) | draft contract | `state.json` v1 and `config.toml` v1 |
 | [TMUX_COMPATIBILITY.md](TMUX_COMPATIBILITY.md) | current (inventory) | tmux command/key/option parity matrix with status and evidence |
 | [TABBY_FEATURE_MATRIX.md](TABBY_FEATURE_MATRIX.md) | current (inventory) | Tabby feature parity matrix with status and evidence |
@@ -50,13 +57,18 @@ checked against every message `crates/noeul` builds, and its CLI output against 
 implemented by the shared `kim-hotkeys` crate and `kim hotkeys` (Step 46), whose tests validate
 real output against them; for the scenarios, `schema-check` also recomputes every expected
 conflict report with a reference checker, and the library recomputes them again
-([HOTKEY_CONTRACT §15](HOTKEY_CONTRACT.md)).
+([HOTKEY_CONTRACT §15](HOTKEY_CONTRACT.md)). The `ipc-v1` schema also types the Terminal,
+Window and Pane objects, the `terminal.*` events and the Step 10 method results; Subak's tests
+validate every control message and result a real Host sends against it.
+
+The Ddalgak schemas (`ddalgak-rules-v1`, `ddalgak-simulation-v1`) are specifications that
+nothing implements yet (Step 65); `schema-check` validates their examples and runs the
+cross-reference checks of [DDALGAK_RULE_MODEL §8](DDALGAK_RULE_MODEL.md) on them.
 
 ## Planned
 
 | Document | Status | Planned by | Purpose |
 | --- | --- | --- | --- |
-| `SESSION_MODEL.md` | planned | Step 10 | Session state machine and naming rules as implemented |
 | `SUBAK_CLI.md` | planned | Step 12 | Subak CLI reference |
 | `MILESTONE_A_VALIDATION.md` | planned | Step 14 | Persistent sessions validation evidence |
 | `MILESTONE_B_VALIDATION.md` | planned | Step 20 | GUI journey validation evidence |

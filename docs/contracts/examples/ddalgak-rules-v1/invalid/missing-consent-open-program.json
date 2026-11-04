@@ -1,0 +1,35 @@
+{
+  "schema": "ddalgak.rules",
+  "schema_version": 1,
+  "hotkey_contract": 1,
+  "active_profile": "default",
+  "profiles": [
+    {
+      "id": "default",
+      "title": "Default",
+      "default_mode": "base",
+      "modes": [
+        {
+          "id": "base",
+          "title": "Base"
+        }
+      ],
+      "rules": [
+        {
+          "id": "launch",
+          "title": "Launch",
+          "enabled": true,
+          "trigger": {
+            "keys": "F13"
+          },
+          "steps": [
+            {
+              "type": "open_program",
+              "path": "C:\\Tools\\tool.exe"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

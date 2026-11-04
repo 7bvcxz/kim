@@ -1,0 +1,49 @@
+{
+  "schema": "ddalgak.simulation",
+  "schema_version": 1,
+  "kind": "simulate",
+  "profile": "default",
+  "revision": 1,
+  "context": {
+    "mode": "mouse",
+    "engine": "running",
+    "focus": "normal",
+    "app": null,
+    "ime_composing": false
+  },
+  "event": {
+    "keys": "Backspace",
+    "on": "press",
+    "source": "physical"
+  },
+  "decision": {
+    "outcome": "fired",
+    "code": "ok",
+    "rule": "back-button",
+    "key_reaches_app": false,
+    "candidates": [
+      {
+        "rule": "back-button",
+        "result": "winner"
+      }
+    ]
+  },
+  "effects": [
+    {
+      "step": 0,
+      "type": "mouse_click",
+      "performed": false,
+      "summary": "Clicks the back button at the left edge; the point was outside every monitor.",
+      "preview": {
+        "button": "x1",
+        "op": "click",
+        "at": {
+          "x": 0,
+          "y": 300
+        }
+      }
+    }
+  ],
+  "injected_events": 0,
+  "opened": []
+}

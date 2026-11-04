@@ -1,0 +1,58 @@
+{
+  "schema": "ddalgak.rules",
+  "schema_version": 1,
+  "hotkey_contract": 1,
+  "active_profile": "default",
+  "profiles": [
+    {
+      "id": "default",
+      "title": "Text snippets",
+      "default_mode": "base",
+      "modes": [{"id": "base", "title": "Base"}],
+      "rules": [
+        {
+          "id": "sign-off-ko",
+          "title": "Korean sign-off",
+          "enabled": true,
+          "trigger": {"keys": "Ctrl+Shift+F2"},
+          "steps": [{"type": "type_text", "text": "감사합니다.\n김민수 드림", "method": "unicode"}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T09:20:00Z", "via": "gui"}}
+        },
+        {
+          "id": "thumbs-up",
+          "title": "Type 👍 (outside the Basic Multilingual Plane)",
+          "enabled": true,
+          "trigger": {"keys": "Ctrl+Shift+F3"},
+          "steps": [{"type": "type_text", "text": "👍"}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T09:20:00Z", "via": "gui"}}
+        },
+        {
+          "id": "address-block",
+          "title": "Paste a long address block through the clipboard",
+          "description": "The clipboard is restored after the paste.",
+          "enabled": true,
+          "trigger": {"keys": "Ctrl+Shift+F4"},
+          "steps": [
+            {
+              "type": "type_text",
+              "text": "서울특별시 중구 세종대로 110\n\tKim Minsu\n\t+82 2-000-0000",
+              "method": "paste"
+            }
+          ],
+          "consent": {
+            "input-injection": {"granted_at": "2026-11-04T09:21:00Z", "via": "gui"},
+            "clipboard": {"granted_at": "2026-11-04T09:21:00Z", "via": "gui"}
+          }
+        },
+        {
+          "id": "slow-target",
+          "title": "Type slowly into an application that drops fast input",
+          "enabled": true,
+          "trigger": {"keys": "Ctrl+Shift+F5"},
+          "steps": [{"type": "type_text", "text": "ticket-0042", "key_delay_ms": 15}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T09:22:00Z", "via": "cli"}}
+        }
+      ]
+    }
+  ]
+}

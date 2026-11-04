@@ -1,0 +1,272 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/hellomouv/kim/blob/main/docs/contracts/schemas/ddalgak-simulation-v1.schema.json",
+  "title": "Ddalgak test playground result, schema_version 1",
+  "description": "What the test playground (GUI) and `ddalgak test --json` report for one input event: the context it was tested in, which rule would win and why, and the effect of every step. In `simulate` (the default) nothing is injected, opened or changed outside the playground; `live` only types into the playground's own test field and opens a program or website only after a per-effect confirmation (docs/DDALGAK_RULE_MODEL.md §11). Personal content is summarized, never echoed: typed text as counts, URLs as scheme and host, programs as file names. Closed schema (CLI output, CLI_CONTRACT §8).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "schema_version", "kind", "profile", "revision", "context", "event", "decision", "effects", "injected_events", "opened"],
+  "properties": {
+    "schema": {"const": "ddalgak.simulation"},
+    "schema_version": {"const": 1},
+    "kind": {"enum": ["simulate", "live"]},
+    "live_target": {"description": "Where live input goes: only the playground's own test field.", "const": "playground"},
+    "profile": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$"},
+    "revision": {"description": "The rules revision tested, or null for an unsaved draft.", "type": ["integer", "null"], "minimum": 0},
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "engine", "focus", "app", "ime_composing"],
+      "properties": {
+        "mode": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$"},
+        "engine": {"enum": ["running", "paused"]},
+        "focus": {
+          "description": "What the event would reach. Ddalgak steps aside (the rule is skipped and the key passes unchanged) for password fields, elevated windows and the secure desktop.",
+          "enum": ["normal", "password_field", "elevated_window", "secure_desktop"]
+        },
+        "app": {
+          "description": "The focused program to test against (chosen by the user), or null for none.",
+          "oneOf": [
+            {"type": "null"},
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["exe"],
+              "properties": {
+                "exe": {"type": "string", "pattern": "^[^\\\\/:*?\"<>|\\x00-\\x1f]{1,255}\\.(exe|EXE|Exe)$"},
+                "window_title": {"type": "string", "maxLength": 200}
+              }
+            }
+          ]
+        },
+        "ime_composing": {"type": "boolean"}
+      }
+    },
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["keys", "on", "source"],
+      "properties": {
+        "keys": {"type": "string", "minLength": 1, "maxLength": 200},
+        "on": {"enum": ["press", "release", "hold", "repeat"]},
+        "source": {"enum": ["physical", "injected_by_other_program"]}
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["outcome", "code", "rule", "key_reaches_app", "candidates"],
+      "properties": {
+        "outcome": {"enum": ["fired", "skipped", "no_match"]},
+        "code": {
+          "enum": [
+            "ok",
+            "no_match",
+            "skipped_paused",
+            "skipped_password_field",
+            "skipped_elevated_target",
+            "skipped_secure_desktop",
+            "skipped_ime_composition",
+            "skipped_injected_input",
+            "consent_missing",
+            "consent_stale",
+            "step_unsupported",
+            "condition_unsupported",
+            "busy",
+            "rate_limited"
+          ]
+        },
+        "rule": {"oneOf": [{"type": "null"}, {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,47}$"}]},
+        "key_reaches_app": {"description": "Whether the original key event would still reach the focused application.", "type": "boolean"},
+        "candidates": {
+          "description": "Every enabled rule whose trigger matches the event, in precedence order (DDALGAK_RULE_MODEL §7), with why it did or did not win.",
+          "type": "array",
+          "maxItems": 1000,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["rule", "result"],
+            "properties": {
+              "rule": {"type": "string", "pattern": "^[a-z][a-z0-9-]{1,47}$"},
+              "result": {"enum": ["winner", "lower_precedence", "mode_mismatch", "condition_false", "inactive"]},
+              "reason": {"type": "string", "maxLength": 200}
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "description": "fired: a rule, code ok. no_match: no rule, code no_match. skipped: a rule and a skip or inactivity code.",
+          "oneOf": [
+            {"properties": {"outcome": {"const": "fired"}, "code": {"const": "ok"}, "rule": {"type": "string"}}},
+            {"properties": {"outcome": {"const": "no_match"}, "code": {"const": "no_match"}, "rule": {"type": "null"}, "key_reaches_app": {"const": true}}},
+            {"properties": {"outcome": {"const": "skipped"}, "code": {"not": {"enum": ["ok", "no_match"]}}, "rule": {"type": "string"}, "key_reaches_app": {"const": true}}}
+          ]
+        }
+      ]
+    },
+    "effects": {"type": "array", "maxItems": 32, "items": {"$ref": "#/$defs/effect"}},
+    "injected_events": {"description": "Keyboard and mouse events actually injected (only into the playground).", "type": "integer", "minimum": 0},
+    "opened": {
+      "description": "Programs or websites actually opened, each after its own confirmation.",
+      "type": "array",
+      "maxItems": 32,
+      "items": {"type": "string", "minLength": 1, "maxLength": 300}
+    }
+  },
+  "allOf": [
+    {
+      "description": "simulate changes nothing: no performed effect, no injected event, nothing opened, no live target.",
+      "anyOf": [
+        {"properties": {"kind": {"const": "live"}}, "required": ["live_target"]},
+        {
+          "properties": {
+            "kind": {"const": "simulate"},
+            "effects": {"items": {"properties": {"performed": {"const": false}}}},
+            "injected_events": {"const": 0},
+            "opened": {"maxItems": 0}
+          },
+          "not": {"required": ["live_target"]}
+        }
+      ]
+    },
+    {
+      "description": "Only a fired rule has effects.",
+      "anyOf": [
+        {"properties": {"decision": {"properties": {"outcome": {"const": "fired"}}}, "effects": {"minItems": 1}}},
+        {"properties": {"decision": {"properties": {"outcome": {"enum": ["skipped", "no_match"]}}}, "effects": {"maxItems": 0}}}
+      ]
+    }
+  ],
+  "$defs": {
+    "point": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y"],
+      "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}}
+    },
+    "effect": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["step", "type", "performed", "summary", "preview"],
+      "properties": {
+        "step": {"type": "integer", "minimum": 0, "maximum": 31},
+        "type": {"enum": ["remap", "block", "send_keys", "type_text", "open_program", "open_url", "mouse_move", "mouse_scroll", "mouse_click", "mode", "engine", "delay"]},
+        "performed": {"description": "Whether this effect really happened (live only).", "type": "boolean"},
+        "needs_confirmation": {"description": "Live: the user must confirm this launch first; it was not performed.", "type": "boolean"},
+        "confirmed": {"description": "Live: the user confirmed this launch.", "type": "boolean"},
+        "summary": {"description": "A human sentence about the effect, without personal content.", "type": "string", "minLength": 1, "maxLength": 200},
+        "preview": {"type": "object"}
+      },
+      "allOf": [
+        {
+          "description": "A program or website is only opened after its own confirmation.",
+          "anyOf": [
+            {"properties": {"type": {"not": {"enum": ["open_program", "open_url"]}}}},
+            {"properties": {"performed": {"const": false}}},
+            {"required": ["confirmed"], "properties": {"confirmed": {"const": true}}}
+          ]
+        },
+        {"anyOf": [{"properties": {"type": {"not": {"const": "remap"}}}}, {"properties": {"preview": {"$ref": "#/$defs/preview_remap"}}}]},
+        {"anyOf": [{"properties": {"type": {"not": {"const": "send_keys"}}}}, {"properties": {"preview": {"$ref": "#/$defs/preview_send_keys"}}}]},
+        {"anyOf": [{"properties": {"type": {"not": {"const": "type_text"}}}}, {"properties": {"preview": {"$ref": "#/$defs/preview_type_text"}}}]},
+        {"anyOf": [{"properties": {"type": {"not": {"const": "open_program"}}}}, {"properties": {"preview": {"$ref": "#/$defs/preview_open_program"}}}]},
+        {"anyOf": [{"properties": {"type": {"not": {"const": "open_url"}}}}, {"properties": {"preview": {"$ref": "#/$defs/preview_open_url"}}}]},
+        {"anyOf": [{"properties": {"type": {"not": {"const": "mouse_move"}}}}, {"properties": {"preview": {"$ref": "#/$defs/preview_mouse_move"}}}]},
+        {"anyOf": [{"properties": {"type": {"not": {"const": "mouse_scroll"}}}}, {"properties": {"preview": {"$ref": "#/$defs/preview_mouse_scroll"}}}]},
+        {"anyOf": [{"properties": {"type": {"not": {"const": "mouse_click"}}}}, {"properties": {"preview": {"$ref": "#/$defs/preview_mouse_click"}}}]},
+        {"anyOf": [{"properties": {"type": {"not": {"const": "mode"}}}}, {"properties": {"preview": {"$ref": "#/$defs/preview_mode"}}}]},
+        {"anyOf": [{"properties": {"type": {"not": {"const": "engine"}}}}, {"properties": {"preview": {"$ref": "#/$defs/preview_engine"}}}]},
+        {"anyOf": [{"properties": {"type": {"not": {"const": "delay"}}}}, {"properties": {"preview": {"$ref": "#/$defs/preview_delay"}}}]},
+        {"anyOf": [{"properties": {"type": {"not": {"const": "block"}}}}, {"properties": {"preview": {"$ref": "#/$defs/preview_block"}}}]}
+      ]
+    },
+    "preview_remap": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["holds"],
+      "properties": {"holds": {"type": "string"}, "tap": {"type": "string"}, "released_modifiers": {"type": "array", "items": {"type": "string"}}}
+    },
+    "preview_send_keys": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["keys"],
+      "properties": {"keys": {"type": "string"}}
+    },
+    "preview_type_text": {
+      "description": "Counts only: the text itself appears in the playground's own field, never in this output.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["characters", "lines", "method"],
+      "properties": {
+        "characters": {"type": "integer", "minimum": 1},
+        "lines": {"type": "integer", "minimum": 1},
+        "method": {"enum": ["unicode", "paste"]}
+      }
+    },
+    "preview_open_program": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["program", "found"],
+      "properties": {
+        "program": {"description": "File name or app name only, never the full path or arguments.", "type": "string", "minLength": 1, "maxLength": 255},
+        "found": {"type": "boolean"},
+        "arguments": {"description": "Number of arguments.", "type": "integer", "minimum": 0},
+        "if_running": {"enum": ["start_new", "activate"]}
+      }
+    },
+    "preview_open_url": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scheme", "host"],
+      "properties": {"scheme": {"enum": ["http", "https"]}, "host": {"type": "string", "minLength": 1, "maxLength": 253}}
+    },
+    "preview_mouse_move": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["to", "clamped"],
+      "properties": {
+        "from": {"$ref": "#/$defs/point"},
+        "to": {"$ref": "#/$defs/point"},
+        "clamped": {"description": "The target was outside the visible desktop and was moved inside it.", "type": "boolean"},
+        "while_held": {"type": "boolean"},
+        "speed": {"type": "integer", "minimum": 50, "maximum": 5000}
+      }
+    },
+    "preview_mouse_scroll": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["direction", "notches"],
+      "properties": {"direction": {"enum": ["up", "down", "left", "right"]}, "notches": {"type": "integer", "minimum": 1, "maximum": 50}}
+    },
+    "preview_mouse_click": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["button", "op"],
+      "properties": {"button": {"enum": ["left", "right", "middle", "x1", "x2"]}, "op": {"enum": ["click", "double_click", "hold"]}, "at": {"$ref": "#/$defs/point"}}
+    },
+    "preview_mode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from", "to"],
+      "properties": {
+        "from": {"type": "string"},
+        "to": {"type": "string"},
+        "until_release": {"description": "mode hold: the mode returns when the trigger is released.", "type": "boolean"}
+      }
+    },
+    "preview_engine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from", "to"],
+      "properties": {"from": {"enum": ["running", "paused"]}, "to": {"enum": ["running", "paused", "off"]}}
+    },
+    "preview_delay": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ms"],
+      "properties": {"ms": {"type": "integer", "minimum": 1, "maximum": 10000}}
+    },
+    "preview_block": {"type": "object", "additionalProperties": false}
+  }
+}

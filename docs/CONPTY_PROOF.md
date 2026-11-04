@@ -90,7 +90,7 @@ A narrow vertical slice, labeled as a prototype in `--help`, in `capabilities` a
 | `subak host start [--endpoint <name>] [--shell <cmd>] [--dry-run] [--json]` | write | Spawns `subak host serve` detached (§2), waits until it serves its pipe, prints Host and shell pids |
 | `subak host status [--endpoint <name>] [--json]` | read | Host pid, start time, session, `job_breakaway`, `in_job`; shell pid, command, running, size, processes in its job; clients |
 | `subak host attach [--endpoint <name>] [--size <c>x<r>] [--dry-run [--json]]` | write | Streams the shell. In a console it uses raw VT input and follows window resizes. With redirected input it sends bytes; the end of input detaches. `Ctrl+B d` detaches in both modes |
-| `subak host stop [--endpoint <name>] [--yes] [--dry-run] [--json]` | destructive | `ClosePseudoConsole` (shell gets `CTRL_CLOSE_EVENT`), wait up to 5 s, `TerminateJobObject` for the rest, then the Host exits. Needs `--yes` when it cannot ask |
+| `subak host stop [--endpoint <name>] [--kill-terminals] [--yes] [--dry-run] [--json]` | destructive | `ClosePseudoConsole` (shell gets `CTRL_CLOSE_EVENT`), wait up to 5 s, `TerminateJobObject` for the rest, then the Host exits. Needs `--yes` when it cannot ask; since Step 10 a Host with a live Terminal (the shell is one) also needs `--kill-terminals` ([SESSION_MODEL §4](SESSION_MODEL.md)) |
 | `subak host serve [--endpoint <name>] [--shell <cmd>] [--dry-run] [--json]` | write | The Host itself, in the foreground (what `start` launches) |
 
 - **Endpoint.** The default is `\\.\pipe\mouv-subak-proto-<user SID>-s<session id>`. The `proto` part
@@ -283,7 +283,8 @@ started**. With consent: `subak host start --endpoint subak-smoke-claude`, then
 `subak host attach --endpoint subak-smoke-claude` in a terminal, run `claude`, ask something
 trivial, close the terminal window, reattach from another terminal, and check that the
 conversation is still there and responsive. Stop the Host with
-`subak host stop --endpoint subak-smoke-claude --yes`.
+`subak host stop --endpoint subak-smoke-claude --kill-terminals --yes` (Step 10 added
+`--kill-terminals`).
 
 ## 8. Reproducing the automated evidence
 

@@ -5,6 +5,10 @@ Decision: [ADR 0006](../adr/0006-state-and-configuration-storage.md)
 
 ## 1. `state.json` (schema `subak.state`, version 1)
 
+Step 10 implements the Terminal, Window and Pane objects of this schema in the Host's memory;
+IPC shows them with volatile fields ([IPC_PROTOCOL §4.3](IPC_PROTOCOL.md),
+[SESSION_MODEL](../SESSION_MODEL.md)). Nothing is written to `state.json` before Step 29.
+
 Machine-readable: [schemas/subak-state-v1.schema.json](schemas/subak-state-v1.schema.json);
 examples in [examples/subak-state-v1/](examples/subak-state-v1/two-terminals.json), validated
 by `cargo xtask schema-check`.

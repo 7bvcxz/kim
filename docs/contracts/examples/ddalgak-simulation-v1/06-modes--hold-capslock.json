@@ -1,0 +1,46 @@
+{
+  "schema": "ddalgak.simulation",
+  "schema_version": 1,
+  "kind": "simulate",
+  "profile": "default",
+  "revision": 5,
+  "context": {
+    "mode": "base",
+    "engine": "running",
+    "focus": "normal",
+    "app": null,
+    "ime_composing": false
+  },
+  "event": {
+    "keys": "CapsLock",
+    "on": "press",
+    "source": "physical"
+  },
+  "decision": {
+    "outcome": "fired",
+    "code": "ok",
+    "rule": "hold-nav",
+    "key_reaches_app": false,
+    "candidates": [
+      {
+        "rule": "hold-nav",
+        "result": "winner"
+      }
+    ]
+  },
+  "effects": [
+    {
+      "step": 0,
+      "type": "mode",
+      "performed": false,
+      "summary": "Navigation is active while CapsLock is held, then Base returns.",
+      "preview": {
+        "from": "base",
+        "to": "nav",
+        "until_release": true
+      }
+    }
+  ],
+  "injected_events": 0,
+  "opened": []
+}

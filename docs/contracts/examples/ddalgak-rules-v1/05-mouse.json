@@ -1,0 +1,138 @@
+{
+  "schema": "ddalgak.rules",
+  "schema_version": 1,
+  "hotkey_contract": 1,
+  "active_profile": "default",
+  "profiles": [
+    {
+      "id": "default",
+      "title": "Keyboard mouse",
+      "description": "ScrollLock turns the arrow keys into a mouse; the other keys keep working.",
+      "default_mode": "base",
+      "modes": [
+        {"id": "base", "title": "Base"},
+        {"id": "mouse", "title": "Mouse keys", "color": "#8AB4F8"}
+      ],
+      "rules": [
+        {
+          "id": "mouse-mode",
+          "title": "ScrollLock turns mouse keys on or off",
+          "enabled": true,
+          "trigger": {"keys": "ScrollLock"},
+          "steps": [{"type": "mode", "op": "toggle", "mode": "mouse"}]
+        },
+        {
+          "id": "pointer-up",
+          "title": "Up moves the pointer up while held",
+          "enabled": true,
+          "modes": ["mouse"],
+          "trigger": {"keys": "Up"},
+          "steps": [{"type": "mouse_move", "mode": "relative", "dx": 0, "dy": -1, "while_held": {"speed": 600, "acceleration": 3}}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T09:50:00Z", "via": "gui"}}
+        },
+        {
+          "id": "pointer-down",
+          "title": "Down moves the pointer down while held",
+          "enabled": true,
+          "modes": ["mouse"],
+          "trigger": {"keys": "Down"},
+          "steps": [{"type": "mouse_move", "mode": "relative", "dx": 0, "dy": 1, "while_held": {"speed": 600, "acceleration": 3}}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T09:50:00Z", "via": "gui"}}
+        },
+        {
+          "id": "pointer-left",
+          "title": "Left moves the pointer left while held",
+          "enabled": true,
+          "modes": ["mouse"],
+          "trigger": {"keys": "Left"},
+          "steps": [{"type": "mouse_move", "mode": "relative", "dx": -1, "dy": 0, "while_held": {"speed": 600, "acceleration": 3}}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T09:50:00Z", "via": "gui"}}
+        },
+        {
+          "id": "pointer-right",
+          "title": "Right moves the pointer right while held",
+          "enabled": true,
+          "modes": ["mouse"],
+          "trigger": {"keys": "Right"},
+          "steps": [{"type": "mouse_move", "mode": "relative", "dx": 1, "dy": 0, "while_held": {"speed": 600, "acceleration": 3}}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T09:50:00Z", "via": "gui"}}
+        },
+        {
+          "id": "nudge-right",
+          "title": "Shift+Right nudges the pointer 10 pixels",
+          "enabled": true,
+          "modes": ["mouse"],
+          "trigger": {"keys": "Shift+Right", "repeat": true},
+          "steps": [{"type": "mouse_move", "mode": "relative", "dx": 10, "dy": 0}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T09:50:00Z", "via": "gui"}}
+        },
+        {
+          "id": "left-click",
+          "title": "Enter clicks",
+          "enabled": true,
+          "modes": ["mouse"],
+          "trigger": {"keys": "Enter"},
+          "steps": [{"type": "mouse_click", "button": "left", "op": "click"}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T09:50:00Z", "via": "gui"}}
+        },
+        {
+          "id": "drag",
+          "title": "Space holds the left button (drag)",
+          "enabled": true,
+          "modes": ["mouse"],
+          "trigger": {"keys": "Space"},
+          "steps": [{"type": "mouse_click", "button": "left", "op": "hold"}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T09:50:00Z", "via": "gui"}}
+        },
+        {
+          "id": "right-click",
+          "title": "ContextMenu right-clicks",
+          "enabled": true,
+          "modes": ["mouse"],
+          "trigger": {"keys": "ContextMenu"},
+          "steps": [{"type": "mouse_click", "button": "right"}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T09:50:00Z", "via": "gui"}}
+        },
+        {
+          "id": "scroll-up",
+          "title": "PageUp scrolls up three notches",
+          "enabled": true,
+          "modes": ["mouse"],
+          "trigger": {"keys": "PageUp", "repeat": true},
+          "steps": [{"type": "mouse_scroll", "direction": "up", "notches": 3}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T09:50:00Z", "via": "gui"}}
+        },
+        {
+          "id": "scroll-down",
+          "title": "PageDown scrolls down three notches",
+          "enabled": true,
+          "modes": ["mouse"],
+          "trigger": {"keys": "PageDown", "repeat": true},
+          "steps": [{"type": "mouse_scroll", "direction": "down", "notches": 3}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T09:50:00Z", "via": "gui"}}
+        },
+        {
+          "id": "center-and-double-click",
+          "title": "Home double-clicks the middle of the primary monitor",
+          "enabled": true,
+          "modes": ["mouse"],
+          "trigger": {"keys": "Home"},
+          "steps": [
+            {"type": "mouse_move", "mode": "absolute", "to": {"x": 960, "y": 540, "relative_to": "primary_monitor"}},
+            {"type": "mouse_click", "button": "left", "op": "double_click"}
+          ],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T09:50:00Z", "via": "gui"}}
+        },
+        {
+          "id": "back-button",
+          "title": "Backspace sends the mouse back button",
+          "enabled": true,
+          "modes": ["mouse"],
+          "trigger": {"keys": "Backspace"},
+          "steps": [{"type": "mouse_click", "button": "x1", "at": {"x": -200, "y": 300, "relative_to": "virtual_screen"}}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T09:50:00Z", "via": "gui"}}
+        }
+      ]
+    }
+  ]
+}

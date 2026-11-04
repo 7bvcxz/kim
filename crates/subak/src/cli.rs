@@ -1,7 +1,8 @@
 //! Argument parsing for the `subak` CLI (docs/CLI_CONTRACT.md §2–§4).
 //!
-//! Hand-written on purpose: the CLI is tiny until Step 12, and staying dependency-free keeps the
-//! binary small. Flags may appear anywhere; each command accepts only its documented options.
+//! Hand-written on purpose: the CLI is small until Step 12, and staying dependency-free keeps the
+//! binary small. Flags may appear anywhere before `--`; everything after `--` is the command of
+//! `terminal new`. Each command accepts only its documented options and positional arguments.
 
 use crate::output::CliError;
 
@@ -17,6 +18,14 @@ pub enum Cmd {
     HostHealth,
     HostAttach,
     HostStop,
+    TerminalNew,
+    TerminalList,
+    TerminalInfo,
+    TerminalRename,
+    TerminalAttach,
+    TerminalStop,
+    TerminalKill,
+    TerminalRm,
 }
 
 impl Cmd {
@@ -31,6 +40,28 @@ impl Cmd {
             Self::HostHealth => "host.health",
             Self::HostAttach => "host.attach",
             Self::HostStop => "host.stop",
+            Self::TerminalNew => "terminal.new",
+            Self::TerminalList => "terminal.list",
+            Self::TerminalInfo => "terminal.info",
+            Self::TerminalRename => "terminal.rename",
+            Self::TerminalAttach => "terminal.attach",
+            Self::TerminalStop => "terminal.stop",
+            Self::TerminalKill => "terminal.kill",
+            Self::TerminalRm => "terminal.rm",
+        }
+    }
+
+    /// The positional arguments after the command words, and how many are required.
+    fn positionals(&self) -> (&'static [&'static str], usize) {
+        match self {
+            Self::TerminalNew => (&["name"], 0),
+            Self::TerminalInfo
+            | Self::TerminalAttach
+            | Self::TerminalStop
+            | Self::TerminalKill
+            | Self::TerminalRm => (&["target"], 1),
+            Self::TerminalRename => (&["target", "new name"], 2),
+            _ => (&[], 0),
         }
     }
 
@@ -55,7 +86,20 @@ impl Cmd {
             ],
             Self::HostStatus | Self::HostHealth => &["--endpoint"],
             Self::HostAttach => &["--endpoint", "--size", "--dry-run"],
-            Self::HostStop => &["--endpoint", "--dry-run", "--yes"],
+            Self::HostStop => &["--endpoint", "--dry-run", "--yes", "--kill-terminals"],
+            Self::TerminalNew => &[
+                "--endpoint",
+                "--cwd",
+                "--size",
+                "--remain-on-exit",
+                "--keep-on-failure",
+                "--dry-run",
+            ],
+            Self::TerminalList | Self::TerminalInfo => &["--endpoint"],
+            Self::TerminalRename => &["--endpoint", "--dry-run"],
+            Self::TerminalAttach => &["--endpoint", "--size", "--dry-run"],
+            Self::TerminalStop | Self::TerminalKill => &["--endpoint", "--dry-run", "--yes"],
+            Self::TerminalRm => &["--endpoint", "--dry-run", "--yes", "--force"],
         };
         allowed.contains(&opt)
     }
@@ -78,6 +122,18 @@ pub struct Args {
     pub idle_exit: Option<u64>,
     pub size: Option<(u16, u16)>,
     pub job_breakaway: Option<bool>,
+    /// `host stop`: consent to end every live Terminal (ADR 0003 §7).
+    pub kill_terminals: bool,
+    /// `terminal rm`: also end a Terminal that still runs.
+    pub force: bool,
+    /// `terminal new`: working directory of the pane.
+    pub cwd: Option<String>,
+    pub remain_on_exit: bool,
+    pub keep_on_failure: bool,
+    /// Positional arguments after the command words (a target, a name).
+    pub positional: Vec<String>,
+    /// `terminal new -- <program> [args…]`.
+    pub command: Vec<String>,
 }
 
 /// Longest idle grace period accepted by `--idle-exit` (one day).
@@ -109,8 +165,14 @@ pub fn parse(raw: &[String]) -> Result<(Cmd, Args), (String, CliError)> {
     let mut version = false;
     let mut i = 0;
     let mut bad: Option<CliError> = None;
+    let mut dashdash = false;
     while i < raw.len() {
         let arg = raw[i].as_str();
+        if arg == "--" {
+            dashdash = true;
+            a.command = raw[i + 1..].to_vec();
+            break;
+        }
         let (flag, inline) = match arg.split_once('=') {
             Some((f, v)) if f.starts_with("--") => (f, Some(v.to_string())),
             _ => (arg, None),
@@ -169,6 +231,31 @@ pub fn parse(raw: &[String]) -> Result<(Cmd, Args), (String, CliError)> {
                 a.no_shell = true;
                 opts.push("--no-shell");
             }
+            "--kill-terminals" => {
+                a.kill_terminals = true;
+                opts.push("--kill-terminals");
+            }
+            "--force" => {
+                a.force = true;
+                opts.push("--force");
+            }
+            "--remain-on-exit" => {
+                a.remain_on_exit = true;
+                opts.push("--remain-on-exit");
+            }
+            "--keep-on-failure" => {
+                a.keep_on_failure = true;
+                opts.push("--keep-on-failure");
+            }
+            "--cwd" => {
+                opts.push("--cwd");
+                if let Some(v) = value("--cwd") {
+                    if v.trim().is_empty() {
+                        bad.get_or_insert(CliError::usage("--cwd needs a directory"));
+                    }
+                    a.cwd = Some(v);
+                }
+            }
             "--idle-exit" => {
                 opts.push("--idle-exit");
                 if let Some(v) = value("--idle-exit") {
@@ -220,21 +307,37 @@ pub fn parse(raw: &[String]) -> Result<(Cmd, Args), (String, CliError)> {
     if version {
         return Ok((Cmd::Version, a));
     }
-    let cmd = match words.as_slice() {
-        [] if !a.json => Cmd::Help,
+    let (cmd, n) = match words.as_slice() {
+        [] if !a.json && !dashdash => (Cmd::Help, 0),
         [] => {
             return Err((
                 "subak".into(),
                 CliError::usage("no command given; --json needs a command"),
             ));
         }
-        ["capabilities"] => Cmd::Capabilities,
-        ["host", "serve"] => Cmd::HostServe,
-        ["host", "start"] => Cmd::HostStart,
-        ["host", "status"] => Cmd::HostStatus,
-        ["host", "health"] => Cmd::HostHealth,
-        ["host", "attach"] => Cmd::HostAttach,
-        ["host", "stop"] => Cmd::HostStop,
+        ["capabilities", ..] => (Cmd::Capabilities, 1),
+        ["host", "serve", ..] => (Cmd::HostServe, 2),
+        ["host", "start", ..] => (Cmd::HostStart, 2),
+        ["host", "status", ..] => (Cmd::HostStatus, 2),
+        ["host", "health", ..] => (Cmd::HostHealth, 2),
+        ["host", "attach", ..] => (Cmd::HostAttach, 2),
+        ["host", "stop", ..] => (Cmd::HostStop, 2),
+        ["terminal", "new", ..] => (Cmd::TerminalNew, 2),
+        ["terminal", "list" | "ls", ..] => (Cmd::TerminalList, 2),
+        ["terminal", "info", ..] => (Cmd::TerminalInfo, 2),
+        ["terminal", "rename", ..] => (Cmd::TerminalRename, 2),
+        ["terminal", "attach", ..] => (Cmd::TerminalAttach, 2),
+        ["terminal", "stop", ..] => (Cmd::TerminalStop, 2),
+        ["terminal", "kill", ..] => (Cmd::TerminalKill, 2),
+        ["terminal", "rm", ..] => (Cmd::TerminalRm, 2),
+        ["terminal", ..] => {
+            return Err((
+                "terminal".into(),
+                CliError::usage(format!("unknown command `{}`", words.join(" "))).hint(
+                    "terminal commands: new, list, info, rename, attach, stop, kill, rm (see `subak --help`)",
+                ),
+            ));
+        }
         ["host", ..] => {
             return Err((
                 "host".into(),
@@ -247,11 +350,48 @@ pub fn parse(raw: &[String]) -> Result<(Cmd, Args), (String, CliError)> {
             return Err((
                 "subak".into(),
                 CliError::usage(format!("unknown command `{}`", words.join(" "))).hint(
-                    "Subak is pre-alpha: only `capabilities` and the `host` commands exist; see `subak --help`",
+                    "Subak is pre-alpha: only `capabilities`, `terminal` and `host` commands exist; see `subak --help`",
                 ),
             ));
         }
     };
+    let (names, min) = cmd.positionals();
+    let rest = &words[n..];
+    if rest.len() > names.len() || rest.len() < min {
+        let want = if names.is_empty() {
+            "no arguments".to_string()
+        } else {
+            names
+                .iter()
+                .enumerate()
+                .map(|(i, w)| {
+                    if i < min {
+                        format!("<{w}>")
+                    } else {
+                        format!("[<{w}>]")
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        return Err((
+            cmd.name().into(),
+            CliError::usage(format!("`{}` takes {want}", words[..n].join(" "))),
+        ));
+    }
+    a.positional = rest.iter().map(|s| (*s).to_string()).collect();
+    if dashdash && cmd != Cmd::TerminalNew {
+        return Err((
+            cmd.name().into(),
+            CliError::usage("only `terminal new` takes a command after `--`"),
+        ));
+    }
+    if dashdash && a.command.first().is_none_or(|p| p.trim().is_empty()) {
+        return Err((
+            cmd.name().into(),
+            CliError::usage("`--` must be followed by a program"),
+        ));
+    }
     if a.no_shell && a.shell.is_some() {
         return Err((
             cmd.name().into(),
@@ -273,10 +413,13 @@ pub fn parse(raw: &[String]) -> Result<(Cmd, Args), (String, CliError)> {
             CliError::usage("--quiet and --verbose conflict"),
         ));
     }
-    if cmd == Cmd::HostAttach && a.json && !a.dry_run {
+    if matches!(cmd, Cmd::HostAttach | Cmd::TerminalAttach) && a.json && !a.dry_run {
         return Err((
             cmd.name().into(),
-            CliError::usage("`host attach` streams the terminal; --json works only with --dry-run"),
+            CliError::usage(format!(
+                "`{}` streams the terminal; --json works only with --dry-run",
+                words[..n].join(" ")
+            )),
         ));
     }
     Ok((cmd, a))

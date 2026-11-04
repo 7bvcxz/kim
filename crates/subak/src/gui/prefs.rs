@@ -114,12 +114,7 @@ pub struct Loaded {
 /// `%APPDATA%\mouv\subak` (Linux, M4: `$XDG_CONFIG_HOME/mouv/subak`), from the environment, so a
 /// test can point it at a sandbox. `None` when the variable is not set (nothing is persisted).
 pub fn config_dir() -> Option<PathBuf> {
-    let base = if cfg!(windows) {
-        std::env::var_os("APPDATA")
-    } else {
-        std::env::var_os("XDG_CONFIG_HOME")
-    }?;
-    (!base.is_empty()).then(|| PathBuf::from(base).join("mouv").join("subak"))
+    crate::hotkeys::config_dir()
 }
 
 impl Prefs {

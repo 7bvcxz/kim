@@ -20,6 +20,8 @@
 // ADR 0011) only the Windows Host and clients use most of them.
 #[cfg_attr(not(windows), allow(dead_code))]
 mod cli;
+/// Subak's keyboard shortcuts (hotkey contract; `subak hotkeys`, the window's dispatch).
+pub mod hotkeys;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod output;
 #[cfg_attr(not(windows), allow(dead_code))]

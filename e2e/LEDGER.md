@@ -41,6 +41,7 @@ Run with `cargo xtask e2e`, which refuses unless the counter below has reached 1
 | 28 | #57 Step 52 – Noeul smart selection and pixel precision (merged; issue open for the maintainer's real-app detection and real-monitor magnifier checks, `NOEUL_UX_SPEC.md` §4.8) | `step52_noeul_smart_selection.rs` (2 tests): the precision keys and settings are discoverable headlessly; detect, select, pin, history and keyboard marking on the synthetic desktop | 13 |
 | 29 | #15 Step 15 – Native terminal emulator foundation (merged; issue open for the maintainer's visible-window check, `TERMINAL_EMULATOR.md` §9) | `step15_terminal_emulator.rs` (2 tests): a client view of `subak attach` renders Korean like the Host model; a view of another size follows the resize and `more` | 14 |
 | 30 | #75 Step 70 – Ddalgak program and website launch actions (merged; issue open for the maintainer's real-program and real-browser check, `DDALGAK_ENGINE.md` §13) | `step70_ddalgak_launch.rs` (2 tests): an agent writes launch rules headlessly and nothing starts; the running app starts only the hidden test program and opens no browser (the debug test host records URLs instead of opening them) | 15 |
+| 31 | #61 Step 56 – Noeul annotation shapes and text tools (merged; issue open for the maintainer's real-desktop drawing/IME check, `NOEUL_UX_SPEC.md` §4.9) | `step56_noeul_annotation.rs` (2 tests): the annotation shortcuts are discoverable headlessly; draw, type, undo, pin edit and save on the synthetic desktop | 1 |
 
 ## E2E runs
 

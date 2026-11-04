@@ -130,8 +130,8 @@
     },
     {
       "name": "rule.show",
-      "usage": "ddalgak rule show <id> [--draft] [--json]",
-      "summary": "One rule as stored, with its state and problems",
+      "usage": "ddalgak rule show <id> [--draft] [--show-text] [--json]",
+      "summary": "One rule as stored, with its state and problems; snippet text only with --show-text (otherwise its counts)",
       "effect": "read",
       "network": false,
       "dry_run": false,
@@ -150,7 +150,7 @@
     },
     {
       "name": "rule.add",
-      "usage": "ddalgak rule add --trigger <keys> (--action <type> [inputs] | --step <json>...) [--allow <permission>]... [--endpoint <name>] [--dry-run] [--draft] [--if-revision <n>] [--json]",
+      "usage": "ddalgak rule add (--trigger <keys> | --hotstring <abbreviation> [hotstring options]) (--action <type> [inputs] | --step <json>...) [--allow <permission>]... [--endpoint <name>] [--dry-run] [--draft] [--if-revision <n>] [--json]",
       "summary": "Add a rule with a new ID; refused with nothing written when it would add an error; saved disabled without the consent it needs",
       "effect": "write",
       "network": false,

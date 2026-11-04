@@ -4,7 +4,12 @@
 //! ```text
 //! cargo run --release -p noeul --example overlay_measure [-- --runs 20]
 //! cargo run --release -p noeul --example overlay_measure -- --gdi-stages
+//! cargo run --release -p noeul --example overlay_measure -- --double-click [--runs 50]
 //! ```
+//!
+//! `--double-click` measures NOEUL-NFR-004 through the Step 51 gesture: from the second press of
+//! a double-click inside a 1920×1080 and a 3840×2160 selection to the pin shown (synthetic
+//! off-screen monitors, off-screen never-activated pin windows).
 //!
 //! It runs the instance core's real path (`capture.region` → frozen picture → overlay window →
 //! first frame painted; pointer drags; `capture.cancel`) on three layouts:
@@ -366,10 +371,106 @@ mod measure {
         );
     }
 
+    /// NOEUL-NFR-004 through the double-click (Step 51): on a synthetic off-screen monitor of
+    /// the selection's size, `capture.region`, a drag over the whole monitor, a first click, and
+    /// the time from handing the second press to the core until it returns — the selection cut
+    /// from the frozen picture, the pin window created, rendered and shown, the overlay window
+    /// destroyed and the frozen picture freed. Pins are closed between runs.
+    fn double_click_latency(w: u32, h: u32, runs: usize) {
+        let mon = vec![Monitor::new(
+            Rect::new(OFF_SCREEN.0, OFF_SCREEN.1, w, h),
+            true,
+        )];
+        let dir = std::env::temp_dir().join(format!("noeul-measure-dc-{}", std::process::id()));
+        let paths = Paths::under(&dir);
+        let mgr = Manager::start(&paths, Some("--no-hotkeys"), || {
+            unreachable!("no hotkey is registered")
+        });
+        let mut app = App::new(
+            Quiet {
+                windows: WinPins {
+                    style: Style::OFF_SCREEN_TEST,
+                },
+                pointer: (OFF_SCREEN.0 + 10, OFF_SCREEN.1 + 10),
+            },
+            Box::new(Synthetic::new(mon)),
+            mgr,
+            noeul::settings::load(&paths.config_file()),
+            paths,
+            Identity {
+                pid: std::process::id(),
+                endpoint: r"\\.\pipe\noeul-measure".into(),
+                session: 0,
+            },
+        );
+        let (x0, y0) = OFF_SCREEN;
+        let (x1, y1) = (
+            x0 + i32::try_from(w).unwrap_or(0) - 1,
+            y0 + i32::try_from(h).unwrap_or(0) - 1,
+        );
+        let (cx, cy) = ((x0 + x1) / 2, (y0 + y1) / 2);
+        let ev = |app: &mut App<Quiet>, i: Input| app.overlay_event(OverlayEvent::Input(i));
+        let press = |x, y, t| Input::Press {
+            button: Button::Left,
+            x,
+            y,
+            mods: Mods::NONE,
+            time_ms: t,
+        };
+        let release = |x, y| Input::Release {
+            button: Button::Left,
+            x,
+            y,
+        };
+        let mut samples = Vec::new();
+        for i in 0..runs {
+            app.request("capture.region", &json!({})).expect("overlay");
+            ev(&mut app, press(x0, y0, 0));
+            ev(
+                &mut app,
+                Input::Move {
+                    x: x1,
+                    y: y1,
+                    mods: Mods::NONE,
+                },
+            );
+            ev(&mut app, release(x1, y1));
+            let t0 = u32::try_from(i).unwrap_or(0) * 10_000 + 1_000;
+            ev(&mut app, press(cx, cy, t0));
+            ev(&mut app, release(cx, cy));
+            let t = Instant::now();
+            ev(&mut app, press(cx, cy, t0 + 100));
+            samples.push(u64::try_from(t.elapsed().as_micros()).unwrap_or(u64::MAX));
+            assert!(!app.overlay_open(), "the double-click pinned");
+            assert_eq!(app.pins().len(), 1);
+            app.request("pin.close", &json!({"all": true})).unwrap();
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+        println!(
+            "| {w}×{h} | {} / {} ms |",
+            ms(pct(&mut samples.clone(), 50)),
+            ms(pct(&mut samples, 95))
+        );
+    }
+
     pub fn main() {
         noeul::win::per_monitor_dpi_awareness();
         if std::env::args().any(|a| a == "--gdi-stages") {
             gdi_stages(20);
+            return;
+        }
+        if std::env::args().any(|a| a == "--double-click") {
+            let runs = std::env::args()
+                .skip_while(|a| a != "--runs")
+                .nth(1)
+                .and_then(|n| n.parse().ok())
+                .unwrap_or(50usize);
+            println!("Second press of the double-click → pin shown, {runs} runs (NOEUL-NFR-004)");
+            println!("| Selection | p50 / p95 |");
+            println!("| --- | --- |");
+            double_click_latency(1920, 1080, runs);
+            double_click_latency(3840, 2160, runs);
             return;
         }
         let runs = std::env::args()

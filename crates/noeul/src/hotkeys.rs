@@ -24,7 +24,11 @@
 //! overlay keys it implements (ADR 0026); Step 49 left it out because the contract forbids
 //! registering an action that does nothing (NOEUL-FR-114). Step 51 added the outputs
 //! `capture.copy` / `pin.copy` (`Ctrl+C`), `capture.save` / `pin.save` (`Ctrl+S`) and
-//! `capture.quick-save` / `pin.quick-save` (`Ctrl+Shift+S`).
+//! `capture.quick-save` / `pin.quick-save` (`Ctrl+Shift+S`). Step 52 added the precision keys
+//! of the overlay: `selection.mark` (`Space`), `pointer.move-*` (`code:KeyW` `code:KeyA`
+//! `code:KeyS` `code:KeyD`, matched by the key's physical position from its scan code,
+//! [`physical_chord`]), `detect.cycle` (`E`), `magnifier.toggle` (`M`), `history.previous`
+//! (`Comma`) and `history.next` (`Period`).
 
 use crate::paths::Paths;
 use kim_hotkeys::check::{Conflict, Severity, ToolState, analyze};
@@ -51,6 +55,7 @@ pub const IMPLEMENTED: &[&str] = &[
     "capture.save",
     "capture.quick-save",
     "capture.cancel",
+    "selection.mark",
     "selection.full",
     "selection.last",
     "selection.move-up",
@@ -65,6 +70,14 @@ pub const IMPLEMENTED: &[&str] = &[
     "selection.shrink-down",
     "selection.shrink-left",
     "selection.shrink-right",
+    "pointer.move-up",
+    "pointer.move-down",
+    "pointer.move-left",
+    "pointer.move-right",
+    "detect.cycle",
+    "magnifier.toggle",
+    "history.previous",
+    "history.next",
     "pin.close",
     "pin.destroy",
     "pin.copy",
@@ -318,8 +331,15 @@ impl ContextKeys {
     /// The action a key press in the focused window runs. Context bindings come first (§9.1);
     /// an auto-repeated press fires only bindings with `repeat: true` (§5.4).
     pub fn lookup(&self, pressed: &Chord, repeat: bool) -> Option<&str> {
-        let step = Step::Chord(*pressed);
-        let hit = |want_context: bool| {
+        self.lookup_any(&[*pressed], repeat)
+    }
+
+    /// The same for a key press that has several identities — its logical key and its physical
+    /// position (`code:`, HOTKEY_CONTRACT §6.1) — tried in this order inside each precedence
+    /// level, so the context still beats `app` bindings.
+    pub fn lookup_any(&self, pressed: &[Chord], repeat: bool) -> Option<&str> {
+        let hit = |want_context: bool, chord: &Chord| {
+            let step = Step::Chord(*chord);
             self.active
                 .iter()
                 .filter(|(_, _, _, inside)| *inside == want_context)
@@ -327,8 +347,98 @@ impl ContextKeys {
                 .filter(|(_, _, r, _)| *r || !repeat)
                 .map(|(a, _, _, _)| a.as_str())
         };
-        hit(true).or_else(|| hit(false))
+        [true, false]
+            .into_iter()
+            .find_map(|ctx| pressed.iter().find_map(|c| hit(ctx, c)))
     }
+}
+
+/// The W3C UI Events `code` name of a scan code (set 1, as Windows reports it in a key message's
+/// `lParam`) for the keys a `code:` binding may name: letters, digits and the punctuation of the
+/// main block (HOTKEY_CONTRACT §5.2). Extended scan codes are not on that block.
+pub fn code_of_scancode(scancode: u32, extended: bool) -> Option<&'static str> {
+    if extended {
+        return None;
+    }
+    Some(match scancode {
+        0x02 => "Digit1",
+        0x03 => "Digit2",
+        0x04 => "Digit3",
+        0x05 => "Digit4",
+        0x06 => "Digit5",
+        0x07 => "Digit6",
+        0x08 => "Digit7",
+        0x09 => "Digit8",
+        0x0A => "Digit9",
+        0x0B => "Digit0",
+        0x0C => "Minus",
+        0x0D => "Equal",
+        0x10 => "KeyQ",
+        0x11 => "KeyW",
+        0x12 => "KeyE",
+        0x13 => "KeyR",
+        0x14 => "KeyT",
+        0x15 => "KeyY",
+        0x16 => "KeyU",
+        0x17 => "KeyI",
+        0x18 => "KeyO",
+        0x19 => "KeyP",
+        0x1A => "BracketLeft",
+        0x1B => "BracketRight",
+        0x1E => "KeyA",
+        0x1F => "KeyS",
+        0x20 => "KeyD",
+        0x21 => "KeyF",
+        0x22 => "KeyG",
+        0x23 => "KeyH",
+        0x24 => "KeyJ",
+        0x25 => "KeyK",
+        0x26 => "KeyL",
+        0x27 => "Semicolon",
+        0x28 => "Quote",
+        0x29 => "Backquote",
+        0x2B => "Backslash",
+        0x2C => "KeyZ",
+        0x2D => "KeyX",
+        0x2E => "KeyC",
+        0x2F => "KeyV",
+        0x30 => "KeyB",
+        0x31 => "KeyN",
+        0x32 => "KeyM",
+        0x33 => "Comma",
+        0x34 => "Period",
+        0x35 => "Slash",
+        0x56 => "IntlBackslash",
+        _ => return None,
+    })
+}
+
+/// The physical chord (`code:…` with the modifiers held) of a key message's scan code.
+pub fn physical_chord(
+    scancode: u32,
+    extended: bool,
+    ctrl: bool,
+    alt: bool,
+    shift: bool,
+) -> Option<Chord> {
+    let code = code_of_scancode(scancode, extended)?;
+    chord_of(&format!("code:{code}"), ctrl, alt, shift)
+}
+
+/// How a binding's keys read in the overlay's help: `code:KeyW` as `W` (its position on a US
+/// keyboard), everything else as written.
+pub fn key_label(keys: &str) -> String {
+    keys.split('+')
+        .map(|part| match part.strip_prefix("code:") {
+            Some(code) => code
+                .strip_prefix("Key")
+                .or_else(|| code.strip_prefix("Digit"))
+                .unwrap_or(code)
+                .to_string(),
+            None => part.to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join("+")
 }
 
 /// The pin window's keys (`context:pin`).
@@ -503,9 +613,19 @@ impl Manager {
         self.pin_keys.lookup(chord, repeat).map(str::to_string)
     }
 
-    /// The overlay action of a key press in the capture overlay.
-    pub fn overlay_action(&self, chord: &Chord, repeat: bool) -> Option<String> {
-        self.overlay_keys.lookup(chord, repeat).map(str::to_string)
+    /// The overlay action of a key press in the capture overlay: its logical chord, then its
+    /// physical one (`code:` bindings such as `W A S D`, Step 52).
+    pub fn overlay_action(
+        &self,
+        chord: &Chord,
+        code: Option<&Chord>,
+        repeat: bool,
+    ) -> Option<String> {
+        let mut pressed = vec![*chord];
+        pressed.extend(code.copied());
+        self.overlay_keys
+            .lookup_any(&pressed, repeat)
+            .map(str::to_string)
     }
 
     /// The first active keys of `action` (for the overlay's keyboard help), if it has any.
@@ -723,7 +843,26 @@ mod tests {
             (c("Enter", false, false, false), true, None),
             (c("C", true, false, false), false, Some("capture.copy")),
             (c("S", true, false, true), false, Some("capture.quick-save")),
-            (c("Space", false, false, false), false, None),
+            (
+                c("Space", false, false, false),
+                false,
+                Some("selection.mark"),
+            ),
+            (c("E", false, false, false), false, Some("detect.cycle")),
+            (c("M", false, false, false), false, Some("magnifier.toggle")),
+            (
+                c("Comma", false, false, false),
+                false,
+                Some("history.previous"),
+            ),
+            (
+                c("Period", false, false, false),
+                false,
+                Some("history.next"),
+            ),
+            (c("Space", false, false, false), true, None),
+            // W A S D are physical keys: the logical letters do nothing.
+            (c("W", false, false, false), false, None),
         ] {
             assert_eq!(
                 keys.lookup(&chord, repeat),
@@ -731,6 +870,33 @@ mod tests {
                 "{chord:?} repeat {repeat}"
             );
         }
+        // The physical position of W A S D, whatever the layout, with repeat (Step 52).
+        let phys = |sc: u32| physical_chord(sc, false, false, false, false).unwrap();
+        for (sc, want) in [
+            (0x11, "pointer.move-up"),
+            (0x1F, "pointer.move-down"),
+            (0x1E, "pointer.move-left"),
+            (0x20, "pointer.move-right"),
+        ] {
+            assert_eq!(keys.lookup(&phys(sc), true), Some(want));
+            // On AZERTY the key at W's position is Z; its logical chord is tried first and
+            // binds nothing, so the position wins.
+            assert_eq!(
+                keys.lookup_any(&[c("Z", false, false, false), phys(sc)], false),
+                Some(want)
+            );
+        }
+        // The logical chord wins inside the same level: `E` stays detection, not a position.
+        assert_eq!(
+            keys.lookup_any(&[c("E", false, false, false), phys(0x12)], false),
+            Some("detect.cycle")
+        );
+        assert_eq!(physical_chord(0x11, true, false, false, false), None);
+        assert_eq!(code_of_scancode(0x32, false), Some("KeyM"));
+        assert_eq!(code_of_scancode(0x00, false), None);
+        assert_eq!(key_label("code:KeyW"), "W");
+        assert_eq!(key_label("Ctrl+code:Digit1"), "Ctrl+1");
+        assert_eq!(key_label("Comma"), "Comma");
         assert!(
             ContextKeys::from_state(&st(None), true, OVERLAY_CONTEXT)
                 .lookup(&c("Enter", false, false, false), false)

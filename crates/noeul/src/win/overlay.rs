@@ -19,10 +19,14 @@
 //!   the hotkey may); when another program's window becomes active the overlay is cancelled
 //!   (NOEUL-FR-013). The test placement ([`Placement::OFF_SCREEN_TEST`]) never activates, never
 //!   stays on top and never touches the cursor.
+//! - **Keys** (Step 52): every key message carries its logical chord and, from the scan code in
+//!   `lParam`, its physical chord (`code:KeyW`…), so `W A S D` keep their position on every
+//!   layout. A pointer key moves the real cursor with `SetCursorPos` only while this window is
+//!   the foreground window and never under the test placement (NOEUL-SEC-012).
 
 use crate::app::{OverlayEvent, OverlayWindow};
 use crate::frame::{Frame, Rect};
-use crate::hotkeys::chord_of;
+use crate::hotkeys::{chord_of, physical_chord};
 use crate::overlay::{self, Button, Cursor, Font, Input, Measure, Mods, Scene, color};
 use crate::win::pinwnd::vk_name;
 use crate::win::wide;
@@ -57,6 +61,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SYSKEYDOWN, WM_SYSKEYUP, WNDCLASSEXW,
     WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
+use windows_sys::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, SetCursorPos};
 
 const CLASS: &str = "NoeulOverlay";
 
@@ -258,18 +263,28 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 }
                 return 0;
             }
-            if let Some(name) = vk_name(vk) {
-                if msg == WM_SYSKEYDOWN && name == "F4" {
-                    // Alt+F4 (reserved `window.close`) leaves the overlay.
-                    input(Input::Leave);
-                    return 0;
-                }
-                if let Some(chord) =
-                    chord_of(&name, down(VK_CONTROL), down(VK_MENU), down(VK_SHIFT))
-                {
-                    push(OverlayEvent::Key(chord, repeat));
-                    return 0;
-                }
+            let name = vk_name(vk);
+            if msg == WM_SYSKEYDOWN && name.as_deref() == Some("F4") {
+                // Alt+F4 (reserved `window.close`) leaves the overlay.
+                input(Input::Leave);
+                return 0;
+            }
+            let (ctrl, alt, shift) = (down(VK_CONTROL), down(VK_MENU), down(VK_SHIFT));
+            // The key's position: its scan code (bits 16–23) and the extended flag (bit 24).
+            let code = physical_chord(
+                ((lp >> 16) & 0xFF) as u32,
+                (lp >> 24) & 1 == 1,
+                ctrl,
+                alt,
+                shift,
+            );
+            let logical = name.and_then(|n| chord_of(&n, ctrl, alt, shift));
+            match (logical, code) {
+                (Some(chord), code) => push(OverlayEvent::Key(chord, code, repeat)),
+                // A key without a logical name (punctuation on some layouts) still has its
+                // position.
+                (None, Some(code)) => push(OverlayEvent::Key(code, None, repeat)),
+                (None, None) => {}
             }
             return 0;
         }
@@ -582,10 +597,15 @@ impl WinOverlay {
         *clipped = true;
     }
 
-    /// Draws the text of the labels and toolbar buttons that intersect `area`, clipped to it.
+    /// Draws the text of the labels, the magnifier's readout and the toolbar buttons that
+    /// intersect `area`, clipped to it.
     fn draw_text(&self, scene: &Scene, area: Rect) {
         let (ox, oy) = (self.picture.x, self.picture.y);
-        let labels = scene.chip.iter().chain(scene.help.iter());
+        let labels = scene
+            .chip
+            .iter()
+            .chain(scene.help.iter())
+            .chain(scene.magnifier.iter().map(|m| &m.text));
         let mut clipped = false;
         if let Some(bar) = &scene.toolbar
             && bar.rect.intersects(&area)
@@ -774,6 +794,16 @@ impl OverlayWindow for WinOverlay {
         }
     }
 
+    fn warp_pointer(&mut self, at: (i32, i32)) {
+        // SAFETY: plain queries; `SetCursorPos` only for a real overlay that is the foreground
+        // window (NOEUL-SEC-012). The test placement never moves the user's cursor.
+        unsafe {
+            if self.placement.activate && self.alive() && GetForegroundWindow() == self.hwnd {
+                SetCursorPos(at.0, at.1);
+            }
+        }
+    }
+
     fn destroy(&mut self) {
         // SAFETY: every object was created by `create` (or is null) and is released once:
         // the window first (it reads the DC in WM_PAINT), then fonts, bitmap and DC.
@@ -897,7 +927,8 @@ mod tests {
             Some(vec![
                 "Drag to select a region. Esc or right-click cancels.".into(),
             ]),
-        );
+        )
+        .with_magnifier(false);
         let mut scene = model.scene(&win);
         win.present(&frozen, &scene, &[picture]);
         win.set_cursor(model.cursor());
@@ -1012,8 +1043,8 @@ mod tests {
         let enter = chord_of("Enter", false, false, false).unwrap();
         let left = chord_of("Left", false, false, false).unwrap();
         let ev = take_events();
-        assert_eq!(ev[0], OverlayEvent::Key(enter, false));
-        assert_eq!(ev[1], OverlayEvent::Key(left, true));
+        assert_eq!(ev[0], OverlayEvent::Key(enter, None, false));
+        assert_eq!(ev[1], OverlayEvent::Key(left, None, true));
         assert_eq!(ev[2], OverlayEvent::Input(Input::Leave), "Alt+F4 leaves");
         assert!(matches!(
             ev[3],
@@ -1049,5 +1080,102 @@ mod tests {
         let v = system_values();
         assert!(v.drag.0 >= 1 && v.drag.1 >= 1);
         assert!((100..=5000).contains(&v.double_click_ms), "{v:?}");
+    }
+
+    /// Step 52 in the real (off-screen, never activated) window: the magnifier on the 150 %
+    /// monitor is drawn into the back buffer with exact pixels and GDI's readout; key messages
+    /// carry their physical position from the scan code (so the key at W's place is `code:KeyW`
+    /// whatever letter the layout gives it); and a pointer key never moves the user's cursor
+    /// under the test placement.
+    #[test]
+    fn the_real_window_draws_the_magnifier_reports_key_positions_and_keeps_the_cursor() {
+        use crate::overlay::{MAG_CELLS, Mods};
+        crate::win::per_monitor_dpi_awareness();
+        let syn = Synthetic::off_screen();
+        let desk = syn.desktop();
+        let picture = desk.virtual_rect.unwrap();
+        let ledger = Ledger::new();
+        let frozen = syn.capture(&ledger, picture).unwrap();
+        let mut win = WinOverlay::create(picture, Placement::OFF_SCREEN_TEST).unwrap();
+        let hwnd = win.hwnd();
+        let mut model = Overlay::new(
+            picture,
+            desk.monitors,
+            SystemValues::default(),
+            (picture.x + 200, picture.y + 100),
+            None,
+            None,
+        );
+        let at = (picture.x + 800, picture.y + 100); // on the 150 % monitor
+        model.handle(Input::Move {
+            x: at.0,
+            y: at.1,
+            mods: Mods::NONE,
+        });
+        let mut scene = model.scene(&win);
+        scene.sample(&frozen);
+        win.present(&frozen, &scene, &[picture]);
+        let m = scene.magnifier.clone().expect("the magnifier");
+        assert_eq!(m.cell, 12, "8 logical pixels at 150 %");
+        assert_eq!(
+            m.text.lines.len(),
+            4,
+            "position, logical position, HEX, RGB"
+        );
+        let buf = win.buffer();
+        let px = |x: i32, y: i32| {
+            let i = (((y - picture.y) as usize) * 1120 + (x - picture.x) as usize) * 4;
+            [buf[i], buf[i + 1], buf[i + 2]]
+        };
+        let c = m.centre();
+        let want = Synthetic::pixel(at.0, at.1);
+        assert_eq!(
+            px(c.x + 5, c.y + 5),
+            [want[0], want[1], want[2]],
+            "the pointer's pixel"
+        );
+        let corner = Synthetic::pixel(at.0 - (MAG_CELLS / 2) as i32, at.1 - (MAG_CELLS / 2) as i32);
+        assert_eq!(
+            px(m.grid.x + 3, m.grid.y + 3),
+            [corner[0], corner[1], corner[2]],
+            "the top-left cell"
+        );
+        // GDI drew the readout's text: the box has pixels other than its background.
+        let t = m.text.rect;
+        let bg = color::BG_OVERLAY;
+        let mut ink = 0;
+        for y in t.y..t.y + i32::try_from(t.height).unwrap() {
+            for x in t.x..t.x + i32::try_from(t.width).unwrap() {
+                if px(x, y) != [bg[0], bg[1], bg[2]] {
+                    ink += 1;
+                }
+            }
+        }
+        assert!(ink > 50, "the readout's text was drawn: {ink} pixels");
+        // Key positions from the scan code (bits 16–23 of lParam).
+        let _ = take_events();
+        // SAFETY: synchronous messages to our own window on this thread.
+        unsafe {
+            SendMessageW(hwnd, WM_KEYDOWN, 0x57, 0x11 << 16); // W at W's place (QWERTY)
+            SendMessageW(hwnd, WM_KEYDOWN, 0x5A, (0x11 << 16) | (1 << 30)); // Z there (AZERTY), repeat
+            SendMessageW(hwnd, WM_KEYDOWN, 0x20, 0x39 << 16); // Space: no `code:` name
+        }
+        let ev = take_events();
+        let code_w = chord_of("code:KeyW", false, false, false);
+        assert_eq!(
+            ev,
+            [
+                OverlayEvent::Key(chord_of("W", false, false, false).unwrap(), code_w, false),
+                OverlayEvent::Key(chord_of("Z", false, false, false).unwrap(), code_w, true),
+                OverlayEvent::Key(chord_of("Space", false, false, false).unwrap(), None, false),
+            ]
+        );
+        // The test placement never moves the user's cursor.
+        let before = cursor_pos();
+        win.warp_pointer((picture.x + 5, picture.y + 5));
+        assert_eq!(cursor_pos(), before, "the cursor did not move");
+        win.destroy();
+        drop(frozen);
+        assert_eq!(ledger.live(), (0, 0));
     }
 }

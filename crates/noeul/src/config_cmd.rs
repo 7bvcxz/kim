@@ -19,6 +19,7 @@ use serde_json::{Value, json};
 #[derive(Debug, Args)]
 pub struct SetArgs {
     /// The setting: general.tray_icon, capture.keyboard_help, capture.quick_save_folder,
+    /// capture.detection (window, element, off), capture.magnifier (on, off),
     /// gestures.double_click (pin, copy, save, none), gestures.middle_click (pin, copy, none) or
     /// gestures.preset (noeul, snipaste)
     pub key: String,

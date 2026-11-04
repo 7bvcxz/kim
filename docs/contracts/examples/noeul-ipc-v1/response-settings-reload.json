@@ -9,6 +9,8 @@
       "tray_icon": true,
       "keyboard_help": "first-run",
       "quick_save_folder": "C:\\Users\\me\\Pictures\\Shots",
+      "detection": "window",
+      "magnifier": "on",
       "gestures": {
         "double_click": "copy",
         "middle_click": "pin",

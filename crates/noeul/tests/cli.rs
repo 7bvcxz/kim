@@ -201,11 +201,11 @@ fn hotkeys_commands_follow_the_contract() {
         (code, refused["error"]["code"].as_str()),
         (2, Some("hotkey_reserved"))
     );
-    let (code, refused) = hk(&["set", "selection.mark", "Space"]);
+    let (code, refused) = hk(&["set", "color.copy", "C"]);
     assert_eq!(
         (code, refused["error"]["code"].as_str()),
         (3, Some("action_not_found")),
-        "selection.mark is planned, not in this build"
+        "color.copy is planned (N3), not in this build"
     );
     let (code, needs_yes) = hk(&["reset", "--all"]);
     assert_eq!(

@@ -69,6 +69,7 @@
       "cancelled": 0,
       "open": true,
       "ignored": 3,
+      "history": 1,
       "overlay": {
         "session": 2,
         "phase": "selected",
@@ -87,7 +88,27 @@
         "monitors": 2,
         "buffer_bytes": 25804800,
         "help": false,
-        "focus": "canvas"
+        "focus": "canvas",
+        "pointer": {
+          "x": 900,
+          "y": 700
+        },
+        "detection": {
+          "mode": "window",
+          "windows": 7,
+          "target": null,
+          "protected": false,
+          "fallback": null,
+          "suspended": false
+        },
+        "magnifier": {
+          "enabled": true,
+          "shown": true
+        },
+        "history": {
+          "count": 1,
+          "position": null
+        }
       },
       "first_frame": {
         "count": 2,
@@ -165,6 +186,8 @@
       "tray_icon": true,
       "keyboard_help": "first-run",
       "quick_save_folder": null,
+      "detection": "window",
+      "magnifier": "on",
       "gestures": {
         "double_click": "pin",
         "middle_click": "pin",

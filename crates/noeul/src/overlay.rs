@@ -48,11 +48,41 @@
 //! to it first ([`Nav`]), so `Enter` on Copy copies (ADR 0021 §5); `Escape` there cancels, as
 //! everywhere.
 //!
+//! **Smart selection and pixel precision** (Step 52, UX spec §4.8, ADR 0035, NOEUL-FR-040…043,
+//! NOEUL-FR-050):
+//!
+//! - *Detection.* While nothing is selected and no button is held, the window under the pointer
+//!   (or, after `detect.cycle` (`E`), the UI element; again, nothing) is shown undimmed with the
+//!   selection's border, and a click without a drag — or `selection.mark` (`Space`) — selects it.
+//!   The windows come from a [`Snapshot`] taken with the frozen picture; elements are asked for
+//!   with [`Overlay::take_element_request`] and answered with [`Input::Element`]. A window that is
+//!   protected from capture is never highlighted (a note says Windows shows it black); anything
+//!   that cannot be detected leaves the plain region selection.
+//! - *Keyboard pointer.* `pointer.move-*` (`W A S D`, physical keys) move the pointer one device
+//!   pixel, also during a drag or a resize; the owner moves the real cursor along
+//!   ([`Overlay::take_warp`]). While the pointer was last moved by the keyboard, detection and
+//!   snapping pause, so a corner lands exactly where the keys put it. `selection.mark` sets the
+//!   first corner at the pointer, then the opposite one (`Marking`).
+//! - *Acceleration.* Held keys ([`Input::Repeat`]) move 1, then 2, 5 and 10 pixels per repeat
+//!   ([`accel`]).
+//! - *Snapping.* While dragging or resizing with the mouse, a moving edge within 6 logical pixels
+//!   of a monitor edge or a detected window's edge snaps to it; `Alt` turns it off for that move.
+//! - *Magnifier.* Near the pointer: [`MAG_CELLS`]² pixels of the frozen picture enlarged, a centre
+//!   crosshair, the device-pixel position (and the logical one on a scaled monitor) and the
+//!   pixel's colour as HEX and RGB ([`Scene::sample`]). `magnifier.toggle` (`M`) shows or hides it.
+//! - *History.* `history.previous` / `history.next` (`Comma` / `Period`) step through the
+//!   rectangles of earlier successful captures over the current picture (memory only).
+//!
 //! Lengths of Noeul's own drawing are *logical* pixels scaled by the DPI of the monitor they are
 //! drawn on (handles 7, handle zones 9, border band 3, small-selection limit 27, toolbar 32
-//! high); every selection, readout and pin rectangle is in *device* pixels (NOEUL-FR-090).
+//! high, magnifier cells 8, snapping 6); every selection, readout and pin rectangle is in
+//! *device* pixels (NOEUL-FR-090).
 
 use crate::capture::{Monitor, scale_px};
+use crate::detect::{
+    DetectMode, DetectWindow, ElementAnswer, ElementRequest, Fallback, Snapshot, check_element,
+};
+use crate::dpi;
 use crate::frame::{Frame, Rect};
 use std::cell::Cell;
 
@@ -227,6 +257,19 @@ pub enum Action {
     Grow(Dir),
     /// `selection.shrink-*` (`Shift`+arrows): from the opposite edge by one device pixel.
     Shrink(Dir),
+    /// `selection.mark` (`Space`): accept the detected window or element, else mark the first
+    /// corner at the pointer, then the opposite corner (Step 52, NOEUL-FR-043).
+    Mark,
+    /// `pointer.move-*` (`W A S D`): the pointer by one device pixel (Step 52, NOEUL-FR-042).
+    Pointer(Dir),
+    /// `detect.cycle` (`E`): windows, elements, nothing (Step 52, NOEUL-FR-040).
+    DetectCycle,
+    /// `magnifier.toggle` (`M`) (Step 52, NOEUL-FR-041).
+    Magnifier,
+    /// `history.previous` (`Comma`): the rectangle of an earlier capture (Step 52, NOEUL-FR-050).
+    HistoryPrevious,
+    /// `history.next` (`Period`).
+    HistoryNext,
 }
 
 /// The action IDs of [`Action`], in manifest order.
@@ -236,6 +279,7 @@ pub const ACTION_IDS: &[&str] = &[
     "capture.save",
     "capture.quick-save",
     "capture.cancel",
+    "selection.mark",
     "selection.full",
     "selection.last",
     "selection.move-up",
@@ -250,6 +294,14 @@ pub const ACTION_IDS: &[&str] = &[
     "selection.shrink-down",
     "selection.shrink-left",
     "selection.shrink-right",
+    "pointer.move-up",
+    "pointer.move-down",
+    "pointer.move-left",
+    "pointer.move-right",
+    "detect.cycle",
+    "magnifier.toggle",
+    "history.previous",
+    "history.next",
 ];
 
 impl Action {
@@ -267,8 +319,16 @@ impl Action {
             "capture.save" => Action::Save,
             "capture.quick-save" => Action::QuickSave,
             "capture.cancel" => Action::Cancel,
+            "selection.mark" => Action::Mark,
             "selection.full" => Action::Full,
             "selection.last" => Action::Last,
+            "detect.cycle" => Action::DetectCycle,
+            "magnifier.toggle" => Action::Magnifier,
+            "history.previous" => Action::HistoryPrevious,
+            "history.next" => Action::HistoryNext,
+            _ if id.starts_with("pointer.move-") => {
+                Action::Pointer(dir(id.strip_prefix("pointer.move-")?)?)
+            }
             _ => {
                 let rest = id.strip_prefix("selection.")?;
                 let (kind, d) = rest.split_once('-')?;
@@ -307,6 +367,13 @@ pub enum Input {
     },
     /// A key press matched to an overlay action (the `capture-overlay` bindings).
     Action(Action),
+    /// An auto-repeat of a held key bound with `repeat`: the steps accelerate ([`accel`]).
+    Repeat(Action),
+    /// UI Automation's answer to an [`ElementRequest`] (Step 52).
+    Element {
+        request: ElementRequest,
+        answer: ElementAnswer,
+    },
     /// A navigation key for the toolbar (the owner sends it while a button has focus, and for
     /// `Tab`/`Shift+Tab` from the canvas when no binding uses them).
     Nav(Nav),
@@ -485,6 +552,9 @@ pub enum Phase {
     Selected,
     Moving,
     Resizing,
+    /// The first corner is marked by `selection.mark`; the next mark (or a click) sets the
+    /// opposite one (Step 52).
+    Marking,
 }
 
 impl Phase {
@@ -496,8 +566,77 @@ impl Phase {
             Phase::Selected => "selected",
             Phase::Moving => "moving",
             Phase::Resizing => "resizing",
+            Phase::Marking => "marking",
         }
     }
+}
+
+/// What detection found under the pointer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DetectKind {
+    Window,
+    Element,
+}
+
+impl DetectKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DetectKind::Window => "window",
+            DetectKind::Element => "element",
+        }
+    }
+}
+
+/// The detected target under the pointer (geometry only).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Detected {
+    pub rect: Rect,
+    pub kind: DetectKind,
+    /// Protected from capture: shown black, never highlighted or selected.
+    pub protected: bool,
+}
+
+/// Source pixels per side of the magnifier (odd, so one sits in the centre).
+pub const MAG_CELLS: u32 = 15;
+/// Logical pixels per enlarged source pixel.
+pub const MAG_CELL: u32 = 8;
+/// Logical pixels between the pointer and the magnifier.
+const MAG_GAP: u32 = 20;
+/// Logical pixels within which a moving edge snaps.
+pub const SNAP: u32 = 6;
+/// How many earlier capture rectangles the overlay steps through.
+pub const HISTORY: usize = 20;
+
+/// The step of a held key after `repeats` auto-repeats: 1 device pixel for the first press and
+/// nine repeats, then 2, 5 and 10 (NOEUL-FR-042, "with acceleration").
+pub fn accel(repeats: u32) -> i32 {
+    match repeats {
+        0..=9 => 1,
+        10..=19 => 2,
+        20..=29 => 5,
+        _ => 10,
+    }
+}
+
+/// Hover detection's state for one capture (Step 52).
+#[derive(Debug, Clone, Default)]
+struct Detection {
+    mode: DetectMode,
+    snapshot: Snapshot,
+    /// The pointer was last moved by the keyboard: no highlight and no snapping until the mouse
+    /// moves it again.
+    suspended: bool,
+    /// The last accepted element: its window's token and rectangle.
+    element: Option<(u64, Rect)>,
+    /// The last request issued (its window and point are not asked again).
+    asked: Option<ElementRequest>,
+    seq: u64,
+    /// A request for the owner to send.
+    pending: Option<ElementRequest>,
+    /// Windows that refused or did not answer: not asked again during this capture.
+    refused: Vec<u64>,
+    /// Why the last lookup fell back to the window rectangle.
+    fallback: Option<Fallback>,
 }
 
 /// The pointer shape the overlay asks for.
@@ -544,6 +683,11 @@ enum State {
         grab: (i32, i32),
         start: Rect,
     },
+    /// `selection.mark` set the first corner; `before` is the selection it replaces.
+    Marking {
+        anchor: (i32, i32),
+        before: Option<Rect>,
+    },
 }
 
 /// The overlay of one capture session. See the module documentation.
@@ -557,7 +701,20 @@ pub struct Overlay {
     selection: Option<Rect>,
     pointer: (i32, i32),
     shift: bool,
+    /// `Alt` held during the last pointer event: no snapping.
+    alt: bool,
     last: Option<Rect>,
+    detect: Detection,
+    magnifier: bool,
+    /// Earlier capture rectangles inside the picture, oldest first, and where `history.*` is.
+    history: Vec<Rect>,
+    history_at: Option<usize>,
+    /// The action of the last key and how many auto-repeats of it came in a row.
+    streak: Option<(Action, u32)>,
+    /// Where the owner should move the real pointer (a keyboard pointer move).
+    warp: Option<(i32, i32)>,
+    /// Whether the owner provided a window list (it may be empty or unavailable).
+    snapshot_tried: bool,
     help: Option<Vec<String>>,
     help_monitor: usize,
     banner: Option<String>,
@@ -596,7 +753,15 @@ impl Overlay {
             selection: None,
             pointer: (picture.x, picture.y),
             shift: false,
+            alt: false,
             last,
+            detect: Detection::default(),
+            magnifier: true,
+            history: Vec::new(),
+            history_at: None,
+            streak: None,
+            warp: None,
+            snapshot_tried: false,
             help,
             help_monitor: 0,
             banner: None,
@@ -620,6 +785,210 @@ impl Overlay {
 
     pub fn gestures(&self) -> Gestures {
         self.gestures
+    }
+
+    /// The same overlay with hover detection in `mode` over `snapshot` (`None`: no window list
+    /// yet; the owner provides one when [`Overlay::needs_snapshot`] says so) (Step 52).
+    #[must_use]
+    pub fn with_detection(mut self, mode: DetectMode, snapshot: Option<Snapshot>) -> Overlay {
+        self.detect.mode = mode;
+        if let Some(s) = snapshot {
+            self.set_snapshot(s);
+        }
+        self
+    }
+
+    /// The window list, taken by the owner (with the frozen picture, or when detection was
+    /// turned on during the capture).
+    pub fn set_snapshot(&mut self, snapshot: Snapshot) {
+        self.detect.snapshot = snapshot;
+        self.snapshot_tried = true;
+    }
+
+    /// Whether detection is on and no window list was taken yet.
+    pub fn needs_snapshot(&self) -> bool {
+        self.detect.mode != DetectMode::Off && !self.snapshot_tried
+    }
+
+    /// The same overlay with the magnifier on or off (`[capture] magnifier`).
+    #[must_use]
+    pub fn with_magnifier(mut self, on: bool) -> Overlay {
+        self.magnifier = on;
+        self
+    }
+
+    /// The same overlay with the rectangles of earlier captures, oldest first (`history.*`); the
+    /// ones outside the picture and repeated ones are left out, at most [`HISTORY`] are kept.
+    #[must_use]
+    pub fn with_history(mut self, history: &[Rect]) -> Overlay {
+        let mut v: Vec<Rect> = Vec::new();
+        for r in history
+            .iter()
+            .filter_map(|r| intersection(*r, self.picture))
+        {
+            if v.last() != Some(&r) {
+                v.push(r);
+            }
+        }
+        let extra = v.len().saturating_sub(HISTORY);
+        v.drain(..extra);
+        self.history = v;
+        self
+    }
+
+    pub fn detect_mode(&self) -> DetectMode {
+        self.detect.mode
+    }
+
+    /// How many windows detection offers in this capture (`None`: no list).
+    pub fn detect_windows(&self) -> Option<usize> {
+        self.detect
+            .snapshot
+            .taken
+            .then(|| self.detect.snapshot.len())
+    }
+
+    /// Why the last element lookup fell back to the window rectangle.
+    pub fn detect_fallback(&self) -> Option<Fallback> {
+        self.detect.fallback
+    }
+
+    /// Whether detection and snapping pause because the keyboard moved the pointer last.
+    pub fn detect_suspended(&self) -> bool {
+        self.detect.suspended
+    }
+
+    pub fn magnifier_enabled(&self) -> bool {
+        self.magnifier
+    }
+
+    /// `(retained rectangles, position)` of `history.*`.
+    pub fn history(&self) -> (usize, Option<usize>) {
+        (self.history.len(), self.history_at)
+    }
+
+    /// Where the real pointer should go after a keyboard pointer move (taken once).
+    pub fn take_warp(&mut self) -> Option<(i32, i32)> {
+        self.warp.take()
+    }
+
+    /// A UI Automation request for the owner to send (taken once).
+    pub fn take_element_request(&mut self) -> Option<ElementRequest> {
+        self.detect.pending.take()
+    }
+
+    /// The window under the pointer that detection may use now: only while nothing is selected
+    /// and no button is held (a press from `Hover` keeps it until its release), detection on,
+    /// and the mouse moved the pointer last.
+    fn hover_window(&self) -> Option<&DetectWindow> {
+        if self.detect.mode == DetectMode::Off
+            || self.detect.suspended
+            || self.selection.is_some()
+            || !matches!(self.state, State::Hover | State::Pressed { .. })
+        {
+            return None;
+        }
+        self.detect.snapshot.window_at(self.pointer)
+    }
+
+    /// What detection shows under the pointer now.
+    pub fn detected(&self) -> Option<Detected> {
+        let w = self.hover_window()?;
+        if w.protected {
+            return Some(Detected {
+                rect: w.rect,
+                kind: DetectKind::Window,
+                protected: true,
+            });
+        }
+        let at = Rect::new(self.pointer.0, self.pointer.1, 1, 1);
+        if self.detect.mode == DetectMode::Element
+            && let Some((token, r)) = self.detect.element
+            && token == w.token
+            && r.contains(&at)
+        {
+            return Some(Detected {
+                rect: r,
+                kind: DetectKind::Element,
+                protected: false,
+            });
+        }
+        Some(Detected {
+            rect: w.rect,
+            kind: DetectKind::Window,
+            protected: false,
+        })
+    }
+
+    /// The detected target a click or `selection.mark` selects (never a protected window).
+    fn selectable(&self) -> Option<Rect> {
+        self.detected().filter(|d| !d.protected).map(|d| d.rect)
+    }
+
+    /// Issues a UI Automation request when the element under the pointer may have changed.
+    fn update_element_request(&mut self) {
+        if self.detect.mode != DetectMode::Element {
+            return;
+        }
+        let Some(w) = self.hover_window().copied() else {
+            return;
+        };
+        if w.protected || self.detect.refused.contains(&w.token) {
+            return;
+        }
+        if self
+            .detect
+            .asked
+            .is_some_and(|a| a.token == w.token && a.at == self.pointer)
+        {
+            return;
+        }
+        self.detect.seq += 1;
+        let req = ElementRequest {
+            seq: self.detect.seq,
+            token: w.token,
+            window: w.rect,
+            at: self.pointer,
+        };
+        self.detect.asked = Some(req);
+        self.detect.pending = Some(req);
+    }
+
+    /// Takes UI Automation's answer: the current request's, or an older one whose element still
+    /// holds the pointer inside the same window.
+    fn element_answer(&mut self, request: ElementRequest, answer: ElementAnswer) {
+        let current = self.detect.asked.is_some_and(|a| a.seq == request.seq);
+        let window = self.hover_window().map(|w| w.token);
+        match answer {
+            ElementAnswer::Found(r) => match check_element(r, &request, &self.monitors) {
+                Some(r) => {
+                    let at = Rect::new(self.pointer.0, self.pointer.1, 1, 1);
+                    if current || (window == Some(request.token) && r.contains(&at)) {
+                        self.detect.element = Some((request.token, r));
+                        self.detect.fallback = None;
+                    }
+                }
+                None if current => {
+                    self.detect.element = None;
+                    self.detect.fallback = Some(Fallback::InvalidRect);
+                }
+                None => {}
+            },
+            ElementAnswer::WindowOnly if current => {
+                self.detect.element = None;
+                self.detect.fallback = None;
+            }
+            ElementAnswer::WindowOnly => {}
+            ElementAnswer::Failed(f) => {
+                if f.refuses_window() && !self.detect.refused.contains(&request.token) {
+                    self.detect.refused.push(request.token);
+                }
+                if current {
+                    self.detect.element = None;
+                    self.detect.fallback = Some(f);
+                }
+            }
+        }
     }
 
     /// The user's pointer settings as they are now; the owner calls this before every press, so
@@ -654,23 +1023,26 @@ impl Overlay {
             State::Selected => Phase::Selected,
             State::Moving { .. } => Phase::Moving,
             State::Resizing { .. } => Phase::Resizing,
+            State::Marking { .. } => Phase::Marking,
         }
     }
 
     /// The confirmed selection (released after a drag, or set by a key).
     pub fn selection(&self) -> Option<Rect> {
         match self.state {
-            State::Dragging { .. } => None,
+            State::Dragging { .. } | State::Marking { .. } => None,
             _ => self.selection,
         }
     }
 
-    /// The rectangle shown undimmed now: the rubber band while dragging, else the selection.
+    /// The rectangle shown undimmed now: the rubber band while dragging or marking, else the
+    /// selection.
     pub fn live(&self) -> Option<Rect> {
         match self.state {
             State::Dragging {
                 anchor, to, square, ..
             } => Some(self.band(anchor, to, square)),
+            State::Marking { anchor, .. } => Some(self.band(anchor, self.pointer, self.shift)),
             _ => self.selection,
         }
     }
@@ -751,16 +1123,36 @@ impl Overlay {
             tx = ax + sx * d;
             ty = ay + sy * d;
         }
-        let x0 = ax.min(tx);
-        let y0 = ay.min(ty);
-        let w = (ax - tx).unsigned_abs() + 1;
-        let h = (ay - ty).unsigned_abs() + 1;
-        Rect::new(
-            i32::try_from(x0).unwrap_or(i32::MAX),
-            i32::try_from(y0).unwrap_or(i32::MAX),
-            u32::try_from(w).unwrap_or(u32::MAX),
-            u32::try_from(h).unwrap_or(u32::MAX),
-        )
+        let (mut l, mut t) = (ax.min(tx), ay.min(ty));
+        let (mut r, mut b) = (ax.max(tx) + 1, ay.max(ty) + 1);
+        if !square && self.snapping() {
+            // The edges on the pointer's side move; they snap (Step 52).
+            let p = self.picture;
+            let (pl, pr, pt, pb) = (i64::from(p.x), p.right(), i64::from(p.y), p.bottom());
+            if tx >= ax {
+                let s = self.snap(r, true, (t, b));
+                if s > l {
+                    r = s.min(pr);
+                }
+            } else {
+                let s = self.snap(l, true, (t, b));
+                if s < r {
+                    l = s.max(pl);
+                }
+            }
+            if ty >= ay {
+                let s = self.snap(b, false, (l, r));
+                if s > t {
+                    b = s.min(pb);
+                }
+            } else {
+                let s = self.snap(t, false, (l, r));
+                if s < b {
+                    t = s.max(pt);
+                }
+            }
+        }
+        rect_from(l, t, r, b)
     }
 
     /// Lengths of the selection's handles and band, from the DPI of the monitor at its center.
@@ -848,12 +1240,28 @@ impl Overlay {
             State::Resizing { edges, .. } => edge_cursor(edges),
             State::Pressed { zone, .. } => zone_cursor(zone),
             State::Selected => zone_cursor(self.zone(self.pointer)),
-            State::Hover | State::Dragging { .. } => Cursor::Cross,
+            State::Hover | State::Dragging { .. } | State::Marking { .. } => Cursor::Cross,
         }
     }
 
     /// Feeds one input. See the module documentation for the rules.
     pub fn handle(&mut self, input: Input) -> Outcome {
+        let out = self.input(input);
+        self.update_element_request();
+        out
+    }
+
+    /// The mouse put the pointer at `p`: a real move resumes detection and snapping after the
+    /// keyboard moved the pointer (the real cursor warped by a pointer key reports the same
+    /// position again, which changes nothing).
+    fn mouse_at(&mut self, p: (i32, i32)) {
+        if p != self.pointer {
+            self.detect.suspended = false;
+        }
+        self.pointer = p;
+    }
+
+    fn input(&mut self, input: Input) -> Outcome {
         match input {
             Input::Leave | Input::FocusLost | Input::Action(Action::Cancel) => Outcome::Cancel,
             Input::CaptureLost => {
@@ -862,8 +1270,9 @@ impl Overlay {
                 Outcome::Stay
             }
             Input::Move { x, y, mods } => {
-                self.pointer = self.clamp((x, y));
+                self.mouse_at(self.clamp((x, y)));
                 self.shift = mods.shift;
+                self.alt = mods.alt;
                 self.pointer_moved();
                 Outcome::Stay
             }
@@ -874,13 +1283,14 @@ impl Overlay {
                 mods,
                 time_ms,
             } => {
-                self.pointer = self.clamp((x, y));
+                self.mouse_at(self.clamp((x, y)));
                 self.shift = mods.shift;
+                self.alt = mods.alt;
                 self.press(button, mods, time_ms)
             }
             Input::Release { button, x, y } => {
                 if button == Button::Left {
-                    self.pointer = self.clamp((x, y));
+                    self.mouse_at(self.clamp((x, y)));
                     self.pointer_moved();
                     return self.release();
                 }
@@ -888,7 +1298,20 @@ impl Overlay {
             }
             Input::Action(a) => {
                 self.click = None;
+                self.streak = Some((a, 0));
                 self.action(a)
+            }
+            Input::Repeat(a) => {
+                self.click = None;
+                self.streak = Some(match self.streak {
+                    Some((last, n)) if last == a => (a, n.saturating_add(1)),
+                    _ => (a, 1),
+                });
+                self.action(a)
+            }
+            Input::Element { request, answer } => {
+                self.element_answer(request, answer);
+                Outcome::Stay
             }
             Input::Nav(n) => {
                 self.click = None;
@@ -922,6 +1345,20 @@ impl Overlay {
         // Any press ends the wait for a second click; a plain left press in the interior may
         // complete it first.
         let first = self.click.take();
+        if let State::Marking { anchor, .. } = self.state {
+            match button {
+                // A click sets the opposite corner of a marked selection.
+                Button::Left => {
+                    let r = self.band(anchor, self.pointer, self.shift);
+                    self.set_selection(r);
+                    self.history_at = None;
+                }
+                // A right-click undoes the mark.
+                Button::Right => self.abort_drag(),
+                Button::Middle => {}
+            }
+            return Outcome::Stay;
+        }
         match button {
             Button::Left => match self.state {
                 State::Hover => {
@@ -1049,10 +1486,15 @@ impl Overlay {
         match self.state {
             State::Pressed { at, click, .. } => {
                 // A click without a drag. Inside a confirmed selection it may be the first
-                // press of a double-click; otherwise nothing in this build (window detection
-                // is Step 52).
+                // press of a double-click; with nothing selected it selects the detected window
+                // or element (Step 52, J2), if any.
                 self.click = click.map(|t| (at, t));
-                self.state = self.rest();
+                if let Some(r) = self.selectable() {
+                    self.set_selection(r);
+                    self.history_at = None;
+                } else {
+                    self.state = self.rest();
+                }
             }
             State::Dragging {
                 anchor, to, square, ..
@@ -1060,6 +1502,7 @@ impl Overlay {
                 // The release that ends a drag is not a click (rule 4).
                 self.selection = Some(self.band(anchor, to, square));
                 self.state = State::Selected;
+                self.history_at = None;
             }
             State::Moving { .. } | State::Resizing { .. } => self.state = State::Selected,
             State::Selected => {
@@ -1069,7 +1512,7 @@ impl Overlay {
                     return self.activate(i, shift, Via::Toolbar);
                 }
             }
-            State::Hover => {}
+            State::Hover | State::Marking { .. } => {}
         }
         Outcome::Stay
     }
@@ -1122,7 +1565,9 @@ impl Overlay {
 
     fn abort_drag(&mut self) {
         match self.state {
-            State::Dragging { before, .. } => self.selection = before,
+            State::Dragging { before, .. } | State::Marking { before, .. } => {
+                self.selection = before;
+            }
             State::Moving { start, .. } | State::Resizing { start, .. } => {
                 self.selection = Some(start);
             }
@@ -1141,48 +1586,143 @@ impl Overlay {
         )
     }
 
+    /// The step of the current key: its auto-repeats in a row accelerate it.
+    fn key_step(&self) -> i32 {
+        accel(self.streak.map_or(0, |(_, n)| n))
+    }
+
     fn action(&mut self, a: Action) -> Outcome {
+        match a {
+            // Settings of the session work in every state.
+            Action::Cancel => return Outcome::Cancel,
+            Action::DetectCycle => {
+                self.detect.mode = self.detect.mode.next();
+                self.detect.element = None;
+                self.detect.asked = None;
+                self.detect.fallback = None;
+                self.detect.suspended = false;
+                return Outcome::Stay;
+            }
+            Action::Magnifier => {
+                self.magnifier = !self.magnifier;
+                return Outcome::Stay;
+            }
+            // The keyboard pointer works during a drag, a move and a resize too: the precise
+            // end of a drag is what it is for.
+            Action::Pointer(d) => {
+                let n = self.key_step();
+                let (dx, dy) = step(d);
+                let p = self.clamp((
+                    self.pointer.0.saturating_add(dx * n),
+                    self.pointer.1.saturating_add(dy * n),
+                ));
+                self.pointer = p;
+                self.detect.suspended = true;
+                self.warp = Some(p);
+                self.pointer_moved();
+                return Outcome::Stay;
+            }
+            _ => {}
+        }
         if self.dragging() {
-            // Keys wait until the button is released (Esc still cancels, above).
+            // Other keys wait until the button is released (Esc still cancels, above).
             return Outcome::Stay;
         }
+        let marking = matches!(self.state, State::Marking { .. });
         let output = |o: Output| move |s: Rect| Outcome::Output(o, s, Via::Key);
         match a {
-            Action::Cancel => Outcome::Cancel,
+            // Nothing is confirmed while a corner is marked.
+            Action::Pin
+            | Action::Copy
+            | Action::Save
+            | Action::QuickSave
+            | Action::Move(_)
+            | Action::Grow(_)
+            | Action::Shrink(_)
+                if marking =>
+            {
+                Outcome::Stay
+            }
             Action::Pin => self.selection.map_or(Outcome::Stay, output(Output::Pin)),
             Action::Copy => self.selection.map_or(Outcome::Stay, output(Output::Copy)),
             Action::Save => self.selection.map_or(Outcome::Stay, output(Output::Save)),
             Action::QuickSave => self
                 .selection
                 .map_or(Outcome::Stay, output(Output::QuickSave)),
+            Action::Mark => {
+                match self.state {
+                    State::Marking { anchor, .. } => {
+                        let r = self.band(anchor, self.pointer, self.shift);
+                        self.set_selection(r);
+                        self.history_at = None;
+                    }
+                    State::Hover if self.selectable().is_some() => {
+                        if let Some(r) = self.selectable() {
+                            self.set_selection(r);
+                            self.history_at = None;
+                        }
+                    }
+                    _ => {
+                        self.bar_focus = None;
+                        self.state = State::Marking {
+                            anchor: self.pointer,
+                            before: self.selection,
+                        };
+                    }
+                }
+                Outcome::Stay
+            }
             Action::Full => {
                 let m = self.monitor_at(self.pointer).rect;
-                let next = if self.selection == Some(m) {
+                let next = if self.selection() == Some(m) {
                     self.picture
                 } else {
                     m
                 };
                 self.set_selection(next);
+                self.history_at = None;
                 Outcome::Stay
             }
             Action::Last => {
                 if let Some(r) = self.last.and_then(|l| intersection(l, self.picture)) {
                     self.set_selection(r);
+                    self.history_at = None;
+                }
+                Outcome::Stay
+            }
+            Action::HistoryPrevious | Action::HistoryNext => {
+                let len = self.history.len();
+                if len == 0 {
+                    return Outcome::Stay;
+                }
+                let at = match (a, self.history_at) {
+                    (Action::HistoryPrevious, None) => Some(len - 1),
+                    (Action::HistoryPrevious, Some(i)) => Some(i.saturating_sub(1)),
+                    (_, Some(i)) => Some((i + 1).min(len - 1)),
+                    (_, None) => None,
+                };
+                if let Some(i) = at {
+                    self.history_at = Some(i);
+                    self.set_selection(self.history[i]);
                 }
                 Outcome::Stay
             }
             Action::Move(d) | Action::Grow(d) | Action::Shrink(d) => {
+                let n = self.key_step();
                 if let Some(s) = self.selection {
                     let next = match a {
                         Action::Move(_) => {
                             let (dx, dy) = step(d);
-                            self.moved(s, dx, dy)
+                            self.moved(s, dx * n, dy * n)
                         }
-                        Action::Grow(_) => self.grown(s, d),
-                        _ => shrunk(s, d),
+                        Action::Grow(_) => self.grown(s, d, n),
+                        _ => shrunk(s, d, n),
                     };
                     self.selection = Some(next);
                 }
+                Outcome::Stay
+            }
+            Action::Cancel | Action::DetectCycle | Action::Magnifier | Action::Pointer(_) => {
                 Outcome::Stay
             }
         }
@@ -1231,39 +1771,111 @@ impl Overlay {
         if edges.bottom {
             b = (b + i64::from(dy)).clamp(pt, pb);
         }
+        if self.snapping() {
+            // The dragged edges snap (Step 52); the extent across is the rectangle's.
+            let (ys, xs) = ((t.min(b), t.max(b)), (l.min(r), l.max(r)));
+            if edges.left {
+                l = self.snap(l, true, ys).clamp(pl, pr);
+            }
+            if edges.right {
+                r = self.snap(r, true, ys).clamp(pl, pr);
+            }
+            if edges.top {
+                t = self.snap(t, false, xs).clamp(pt, pb);
+            }
+            if edges.bottom {
+                b = self.snap(b, false, xs).clamp(pt, pb);
+            }
+        }
         let (l, r) = span(l, r, pl, pr);
         let (t, b) = span(t, b, pt, pb);
         rect_from(l, t, r, b)
     }
 
-    fn grown(&self, s: Rect, d: Dir) -> Rect {
+    /// `s` with the edge towards `d` moved out by `n` device pixels, inside the picture.
+    fn grown(&self, s: Rect, d: Dir, n: i32) -> Rect {
         let p = self.picture;
+        let n = i64::from(n.max(1));
         let (mut l, mut r, mut t, mut b) = (i64::from(s.x), s.right(), i64::from(s.y), s.bottom());
         match d {
-            Dir::Up => t = (t - 1).max(i64::from(p.y)),
-            Dir::Down => b = (b + 1).min(p.bottom()),
-            Dir::Left => l = (l - 1).max(i64::from(p.x)),
-            Dir::Right => r = (r + 1).min(p.right()),
+            Dir::Up => t = (t - n).max(i64::from(p.y)),
+            Dir::Down => b = (b + n).min(p.bottom()),
+            Dir::Left => l = (l - n).max(i64::from(p.x)),
+            Dir::Right => r = (r + n).min(p.right()),
         }
         rect_from(l, t, r, b)
+    }
+
+    /// Whether moving edges snap now: detection on (its windows are the targets), the mouse moved
+    /// the pointer last, and `Alt` is not held.
+    fn snapping(&self) -> bool {
+        self.detect.mode != DetectMode::Off && !self.detect.suspended && !self.alt
+    }
+
+    /// `edge` (a vertical edge's x when `vertical`, else a horizontal edge's y) snapped to the
+    /// nearest monitor or detected window edge within [`SNAP`] logical pixels whose extent
+    /// overlaps `span` (the moving edge's extent across).
+    fn snap(&self, edge: i64, vertical: bool, span: (i64, i64)) -> i64 {
+        let reach = i64::from(self.monitor_at(self.pointer).px(SNAP));
+        let overlaps = |r: Rect| {
+            let (lo, hi) = if vertical {
+                (i64::from(r.y), r.bottom())
+            } else {
+                (i64::from(r.x), r.right())
+            };
+            lo < span.1 && span.0 < hi
+        };
+        let edges = |r: Rect| {
+            if vertical {
+                [i64::from(r.x), r.right()]
+            } else {
+                [i64::from(r.y), r.bottom()]
+            }
+        };
+        let rects = self
+            .monitors
+            .iter()
+            .map(|m| m.rect)
+            .chain(self.detect.snapshot.windows().iter().map(|w| w.rect));
+        let mut best: Option<(i64, i64)> = None;
+        for r in rects.filter(|r| overlaps(*r)) {
+            for c in edges(r) {
+                let d = (c - edge).abs();
+                if d <= reach && best.is_none_or(|(bd, _)| d < bd) {
+                    best = Some((d, c));
+                }
+            }
+        }
+        best.map_or(edge, |(_, c)| c)
     }
 
     /// The scene for the current state (what [`compose`] draws). `measure` sizes the labels'
     /// text in device pixels.
     pub fn scene(&self, measure: &dyn Measure) -> Scene {
         let live = self.live();
-        let confirmed = !matches!(self.state, State::Dragging { .. });
+        // With nothing selected, the detected window or element is shown as a selection would
+        // be, without handles; a protected window is not, and a note says why (Step 52).
+        let detected = if live.is_none() {
+            self.detected()
+        } else {
+            None
+        };
+        let protected = detected.is_some_and(|d| d.protected);
+        let shown = live.or(detected.filter(|d| !d.protected).map(|d| d.rect));
+        let confirmed =
+            live.is_some() && !matches!(self.state, State::Dragging { .. } | State::Marking { .. });
         let mut scene = Scene {
             picture: self.picture,
-            selection: live,
+            selection: shown,
             accent: None,
             halo: None,
             handles: Vec::new(),
             chip: None,
             help: None,
             toolbar: None,
+            magnifier: None,
         };
-        if let Some(s) = live {
+        if let Some(s) = shown {
             // The border sits just outside the selection; on a picture edge it moves inside so
             // it stays visible (UX spec §10).
             scene.accent = Some(clamp_into(grow(s, 1), self.picture));
@@ -1282,10 +1894,12 @@ impl Overlay {
                     .collect();
             }
         }
-        let chip = self.chip(live, measure);
+        let note = protected.then_some(PROTECTED_NOTE);
+        let chip = self.chip(shown, note, measure);
         // Hit-testing follows what is drawn (the toolbar avoids the chip; a press on the chip
         // where it covers the selection is not a click).
         self.chip_at.set(Some(chip.rect));
+        scene.magnifier = self.magnifier_scene(measure);
         let bar = self.toolbar(Some(chip.rect));
         scene.chip = Some(chip);
         if let Some(bar) = &bar {
@@ -1313,10 +1927,81 @@ impl Overlay {
                 None => self.help.clone(),
             };
             if let Some(lines) = lines {
-                scene.help = Some(self.help_label(lines, live, bar.map(|b| b.rect), measure));
+                scene.help = Some(self.help_label(lines, shown, bar.map(|b| b.rect), measure));
             }
         }
         scene
+    }
+
+    /// Whether the magnifier is wanted now: while selecting (hovering, dragging, resizing,
+    /// marking) and next to a confirmed selection where a press would start something new or
+    /// resize; not while moving it, nor over its inside, the toolbar or the size chip.
+    fn magnifier_wanted(&self) -> bool {
+        match self.state {
+            State::Hover
+            | State::Dragging { .. }
+            | State::Resizing { .. }
+            | State::Marking { .. } => true,
+            State::Pressed { zone, .. } => matches!(zone, Zone::Outside | Zone::Edge(_)),
+            State::Selected => matches!(self.zone(self.pointer), Zone::Outside | Zone::Edge(_)),
+            State::Moving { .. } => false,
+        }
+    }
+
+    /// The magnifier near the pointer, on the pointer's monitor and at its DPI: right of and below
+    /// the pointer, or left of and above it where the monitor ends (NOEUL-FR-041).
+    fn magnifier_scene(&self, measure: &dyn Measure) -> Option<MagnifierScene> {
+        if !self.magnifier || !self.magnifier_wanted() {
+            return None;
+        }
+        let m = self.monitor_at(self.pointer);
+        let (x, y) = self.pointer;
+        let mut lines = vec![format!("{x}, {y}")];
+        if m.dpi != crate::capture::BASE_DPI
+            && let Some(lp) = dpi::point_to_logical(&self.monitors, self.pointer)
+        {
+            // On a scaled monitor, also the logical position on that monitor.
+            lines.push(format!(
+                "{}, {} at {} %",
+                lp.x,
+                lp.y,
+                dpi::scale_percent(m.dpi)
+            ));
+        }
+        let color = lines.len();
+        lines.extend(COLOR_TEMPLATE.iter().map(|s| (*s).to_string()));
+        let mut text = Label::new(lines, Font::Mono, m.dpi, measure);
+        let cell = m.px(MAG_CELL);
+        let side = i64::from(cell * MAG_CELLS);
+        let w = side.max(i64::from(text.rect.width)) + 2;
+        let h = side + i64::from(text.rect.height) + 2;
+        let gap = i64::from(m.px(MAG_GAP));
+        let mr = m.rect;
+        let (ml, mt, mrr, mb) = (i64::from(mr.x), i64::from(mr.y), mr.right(), mr.bottom());
+        let (px, py) = (i64::from(x), i64::from(y));
+        let bx = if px + gap + w <= mrr {
+            px + gap
+        } else {
+            px - gap - w
+        };
+        let by = if py + gap + h <= mb {
+            py + gap
+        } else {
+            py - gap - h
+        };
+        let (bx, by) = (bx.min(mrr - w).max(ml), by.min(mb - h).max(mt));
+        let rect = rect_from(bx, by, bx + w, by + h);
+        let gx = bx + 1 + (w - 2 - side) / 2;
+        let grid = rect_from(gx, by + 1, gx + side, by + 1 + side);
+        text.rect = rect_from(bx + 1, by + 1 + side, bx + w - 1, by + h - 1);
+        Some(MagnifierScene {
+            rect,
+            grid,
+            cell,
+            at: self.pointer,
+            text,
+            color,
+        })
     }
 
     /// The toolbar's place and buttons (UX spec §3.1): next to a confirmed selection while no
@@ -1376,9 +2061,9 @@ impl Overlay {
         })
     }
 
-    /// The size and position readout (device pixels): next to the selection, or next to the
-    /// pointer while nothing is selected.
-    fn chip(&self, live: Option<Rect>, measure: &dyn Measure) -> Label {
+    /// The size and position readout (device pixels): next to the selection (or the detected
+    /// target), or next to the pointer while nothing is shown, with an optional second line.
+    fn chip(&self, live: Option<Rect>, note: Option<&str>, measure: &dyn Measure) -> Label {
         let (text, anchor) = match live {
             Some(s) => (
                 format!("{} \u{d7} {}  at {}, {}", s.width, s.height, s.x, s.y),
@@ -1390,7 +2075,9 @@ impl Overlay {
             ),
         };
         let m = self.monitor_at(anchor);
-        let mut label = Label::new(vec![text], Font::Mono, m.dpi, measure);
+        let mut lines = vec![text];
+        lines.extend(note.map(str::to_string));
+        let mut label = Label::new(lines, Font::Mono, m.dpi, measure);
         let (w, h) = (i64::from(label.rect.width), i64::from(label.rect.height));
         let mr = m.rect;
         let (ml, mt, mrr, mb) = (i64::from(mr.x), i64::from(mr.y), mr.right(), mr.bottom());
@@ -1537,14 +2224,15 @@ fn step(d: Dir) -> (i32, i32) {
 }
 
 /// `Shift`+arrow: shrink from the edge opposite to the arrow (the manifest's titles: `Shift+Up`
-/// shrinks from the bottom edge), never below one pixel.
-fn shrunk(s: Rect, d: Dir) -> Rect {
+/// shrinks from the bottom edge) by `n` pixels, never below one pixel.
+fn shrunk(s: Rect, d: Dir, n: i32) -> Rect {
+    let n = i64::from(n.max(1));
     let (mut l, mut r, mut t, mut b) = (i64::from(s.x), s.right(), i64::from(s.y), s.bottom());
     match d {
-        Dir::Up => b = (b - 1).max(t + 1),
-        Dir::Down => t = (t + 1).min(b - 1),
-        Dir::Left => r = (r - 1).max(l + 1),
-        Dir::Right => l = (l + 1).min(r - 1),
+        Dir::Up => b = (b - n).max(t + 1),
+        Dir::Down => t = (t + n).min(b - 1),
+        Dir::Left => r = (r - n).max(l + 1),
+        Dir::Right => l = (l + n).min(r - 1),
     }
     rect_from(l, t, r, b)
 }
@@ -1702,6 +2390,79 @@ pub struct Scene {
     pub help: Option<Label>,
     /// The toolbar of a confirmed selection.
     pub toolbar: Option<ToolbarScene>,
+    /// The magnifier near the pointer (Step 52).
+    pub magnifier: Option<MagnifierScene>,
+}
+
+/// The note of the size chip over a window protected from capture (NOEUL-SEC-004).
+pub const PROTECTED_NOTE: &str = "Protected window: Windows captures it as black";
+
+/// The widest colour lines (HEX, then RGB), for sizing the magnifier's readout before it is
+/// sampled.
+const COLOR_TEMPLATE: [&str; 2] = ["#000000", "255, 255, 255"];
+
+/// The magnifier as drawn: a `bg.overlay` box with a `border.subtle` outline holding
+/// [`MAG_CELLS`]² enlarged pixels of the frozen picture around `at` (each `cell` device pixels
+/// wide, pixels outside the picture dark), a crosshair through the centre pixel, and the readout:
+/// the device-pixel position, on a scaled monitor the logical one, then the colour as HEX and
+/// RGB (filled in by [`Scene::sample`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MagnifierScene {
+    pub rect: Rect,
+    pub grid: Rect,
+    pub cell: u32,
+    /// The picture pixel in the centre (the pointer).
+    pub at: (i32, i32),
+    pub text: Label,
+    /// The index of the HEX line in `text` (RGB follows it).
+    pub color: usize,
+}
+
+impl MagnifierScene {
+    /// The centre cell (the pointer's pixel).
+    pub fn centre(&self) -> Rect {
+        let half = i32::try_from((MAG_CELLS / 2) * self.cell).unwrap_or(0);
+        Rect::new(self.grid.x + half, self.grid.y + half, self.cell, self.cell)
+    }
+}
+
+/// One pixel of the frozen picture (BGRA), if `(x, y)` lies in it.
+pub fn pixel_at(frozen: &Frame, (x, y): (i32, i32)) -> Option<[u8; 4]> {
+    let r = frozen.rect();
+    if !r.contains(&Rect::new(x, y, 1, 1)) {
+        return None;
+    }
+    let i = ((i64::from(y) - i64::from(r.y)) as usize * r.width as usize
+        + (i64::from(x) - i64::from(r.x)) as usize)
+        * 4;
+    frozen
+        .pixels()
+        .get(i..i + 4)
+        .map(|p| [p[0], p[1], p[2], p[3]])
+}
+
+/// The magnifier's colour lines for the frozen picture's pixel at `at`: HEX (`#3A6EA5`) and RGB
+/// (`58, 110, 165`) of the captured sRGB values (NOEUL-FR-041); dashes outside the picture.
+pub fn color_lines(frozen: &Frame, at: (i32, i32)) -> [String; 2] {
+    match pixel_at(frozen, at) {
+        Some([b, g, r, _]) => [format!("#{r:02X}{g:02X}{b:02X}"), format!("{r}, {g}, {b}")],
+        None => ["\u{2014}".to_string(), "\u{2014}".to_string()],
+    }
+}
+
+impl Scene {
+    /// Fills in what depends on the frozen picture's pixels: the magnifier's colour lines.
+    pub fn sample(&mut self, frozen: &Frame) {
+        if let Some(m) = &mut self.magnifier {
+            let [hex, rgb] = color_lines(frozen, m.at);
+            if let Some(l) = m.text.lines.get_mut(m.color) {
+                *l = hex;
+            }
+            if let Some(l) = m.text.lines.get_mut(m.color + 1) {
+                *l = rgb;
+            }
+        }
+    }
 }
 
 /// The toolbar as drawn: a `bg.overlay` bar with a `border.subtle` outline, the primary Pin
@@ -1747,6 +2508,7 @@ impl Scene {
             out.push(t.rect);
             out.extend(t.buttons.iter().map(ButtonScene::ring));
         }
+        out.extend(self.magnifier.iter().map(|m| m.rect));
         out
     }
 }
@@ -1919,6 +2681,53 @@ pub fn compose(frozen: &Frame, scene: &Scene, area: Rect, out: &mut [u8]) {
             }
         }
     }
+    if let Some(m) = &scene.magnifier {
+        fill(m.rect, color::BORDER_SUBTLE);
+        fill(grow(m.rect, -1), color::BG_OVERLAY);
+        // The enlarged pixels: undimmed, opaque; outside the picture a dark cell.
+        let half = i64::from(MAG_CELLS / 2);
+        let cell = i64::from(m.cell);
+        for j in 0..i64::from(MAG_CELLS) {
+            for i in 0..i64::from(MAG_CELLS) {
+                let x0 = i64::from(m.grid.x) + i * cell;
+                let y0 = i64::from(m.grid.y) + j * cell;
+                let cr = rect_from(x0, y0, x0 + cell, y0 + cell);
+                if !cr.intersects(&area) {
+                    continue;
+                }
+                let src = (
+                    i32::try_from(i64::from(m.at.0) - half + i).unwrap_or(i32::MAX),
+                    i32::try_from(i64::from(m.at.1) - half + j).unwrap_or(i32::MAX),
+                );
+                let c = pixel_at(frozen, src).map_or(color::HALO, |p| [p[0], p[1], p[2], 0xFF]);
+                fill(cr, c);
+            }
+        }
+        // The crosshair: one device pixel through the middle of the centre row and column,
+        // stopping at the centre cell, which gets an accent outline with a dark halo.
+        let c = m.centre();
+        let (cx, cy) = (i64::from(c.x) + cell / 2, i64::from(c.y) + cell / 2);
+        let (gl, gt, gr, gb) = (
+            i64::from(m.grid.x),
+            i64::from(m.grid.y),
+            m.grid.right(),
+            m.grid.bottom(),
+        );
+        for r in [
+            rect_from(cx, gt, cx + 1, i64::from(c.y) - 1),
+            rect_from(cx, c.bottom() + 1, cx + 1, gb),
+            rect_from(gl, cy, i64::from(c.x) - 1, cy + 1),
+            rect_from(c.right() + 1, cy, gr, cy + 1),
+        ] {
+            fill(r, color::ACCENT);
+        }
+        for r in outline_strips(grow(c, 1), 1) {
+            fill(r, color::HALO);
+        }
+        for r in outline_strips(c, 1) {
+            fill(r, color::ACCENT);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1928,6 +2737,7 @@ mod tests {
     use crate::frame::Ledger;
 
     fn one(w: u32, h: u32) -> Overlay {
+        // The Step 50/51 tests look at the selection; the magnifier has its own tests.
         Overlay::new(
             Rect::new(0, 0, w, h),
             vec![Monitor::new(Rect::new(0, 0, w, h), true)],
@@ -1936,6 +2746,7 @@ mod tests {
             None,
             None,
         )
+        .with_magnifier(false)
     }
 
     fn mv(o: &mut Overlay, x: i32, y: i32) -> Outcome {
@@ -2295,7 +3106,13 @@ mod tests {
             Action::from_id("selection.grow-left"),
             Some(Action::Grow(Dir::Left))
         );
-        assert_eq!(Action::from_id("selection.mark"), None, "not in this build");
+        assert_eq!(Action::from_id("selection.mark"), Some(Action::Mark));
+        assert_eq!(
+            Action::from_id("pointer.move-left"),
+            Some(Action::Pointer(Dir::Left))
+        );
+        assert_eq!(Action::from_id("pointer.move-sideways"), None);
+        assert_eq!(Action::from_id("color.copy"), None, "not in this build");
         assert_eq!(Action::from_id("selection.move-sideways"), None);
     }
 
@@ -2422,7 +3239,8 @@ mod tests {
             (0, 0),
             None,
             None,
-        );
+        )
+        .with_magnifier(false);
         drag(&mut o, (-40, -10), (59, 59)); // 100×70 at (-40,-10)
         let scene = o.scene(&Approx);
         let mut out = vec![0u8; 300 * 200 * 4];
@@ -3036,5 +3854,605 @@ mod tests {
         );
         assert_eq!(o.zone((-894, 200)), Zone::Interior);
         assert_eq!(double(&mut o, (-894, 200), (-894, 200), 0, 100), pinned(s));
+    }
+
+    // ---- Step 52: smart selection and pixel precision (UX spec §4.8, ADR 0035) ----
+
+    use crate::detect::{Affinity, WindowFacts};
+
+    /// One 800×600 monitor with detection over these windows (topmost first).
+    fn detecting(facts: Vec<WindowFacts>) -> Overlay {
+        let pic = Rect::new(0, 0, 800, 600);
+        one(800, 600).with_detection(DetectMode::Window, Some(Snapshot::from_facts(facts, pic)))
+    }
+
+    /// A small window above a large one.
+    fn windows() -> Vec<WindowFacts> {
+        vec![
+            WindowFacts::plain(1, Rect::new(100, 100, 300, 200)),
+            WindowFacts::plain(2, Rect::new(0, 0, 800, 560)),
+        ]
+    }
+
+    fn act(o: &mut Overlay, a: Action) -> Outcome {
+        o.handle(Input::Action(a))
+    }
+
+    #[test]
+    fn detection_highlights_the_window_under_the_pointer_and_a_click_selects_it() {
+        // J2: hover the window (it is highlighted), click, double-click inside: a pin of it.
+        let mut o = detecting(windows());
+        mv(&mut o, 150, 150);
+        let w = Rect::new(100, 100, 300, 200);
+        assert_eq!(
+            o.detected(),
+            Some(Detected {
+                rect: w,
+                kind: DetectKind::Window,
+                protected: false
+            })
+        );
+        let s = o.scene(&Approx);
+        assert_eq!(
+            s.selection,
+            Some(w),
+            "shown undimmed, as a selection would be"
+        );
+        assert_eq!(s.accent, Some(grow(w, 1)));
+        assert!(
+            s.handles.is_empty() && s.toolbar.is_none(),
+            "not confirmed yet"
+        );
+        assert!(s.chip.unwrap().lines[0].starts_with("300 \u{d7} 200"));
+        assert_eq!(o.selection(), None);
+        // Elsewhere the window below.
+        mv(&mut o, 600, 500);
+        assert_eq!(
+            o.detected().map(|d| d.rect),
+            Some(Rect::new(0, 0, 800, 560))
+        );
+        mv(&mut o, 600, 590);
+        assert_eq!(o.detected(), None, "no window there");
+        // A click (no drag) selects the highlighted window; that press does not start a
+        // double-click.
+        mv(&mut o, 150, 150);
+        click(&mut o, 150, 150, 0);
+        assert_eq!((o.phase(), o.selection()), (Phase::Selected, Some(w)));
+        assert_eq!(o.detected(), None, "no detection next to a selection");
+        assert_eq!(
+            double(&mut o, (200, 200), (200, 200), 1_000, 100),
+            pinned(w)
+        );
+        // A drag still makes a region, whatever lies below.
+        let mut o = detecting(windows());
+        drag(&mut o, (150, 150), (250, 220));
+        assert_eq!(o.selection(), Some(Rect::new(150, 150, 101, 71)));
+        // Right-click outside clears the selection: detection comes back.
+        press(&mut o, Button::Right, 700, 500);
+        assert_eq!(o.phase(), Phase::Hover);
+        mv(&mut o, 120, 120);
+        assert_eq!(o.detected().map(|d| d.rect), Some(w));
+        // A pointer that never moved still detects at its opening position.
+        let mut o = detecting(windows());
+        o.pointer = (150, 150);
+        assert_eq!(o.detected().map(|d| d.rect), Some(w));
+    }
+
+    #[test]
+    fn protected_absent_and_undetectable_windows_fall_back_to_the_plain_region() {
+        let mut protected = WindowFacts::plain(3, Rect::new(300, 300, 200, 100));
+        protected.affinity = Affinity::Monitor;
+        let mut absent = WindowFacts::plain(4, Rect::new(50, 400, 200, 100));
+        absent.affinity = Affinity::Excluded;
+        let mut through = WindowFacts::plain(5, Rect::new(600, 400, 100, 100));
+        through.layered = true;
+        through.transparent = true;
+        let mut facts = vec![protected, absent, through];
+        facts.extend(windows());
+        let mut o = detecting(facts);
+        // A protected window: never highlighted, a note says why, a click selects nothing.
+        mv(&mut o, 350, 350);
+        assert!(o.detected().is_some_and(|d| d.protected));
+        let s = o.scene(&Approx);
+        assert_eq!(s.selection, None, "nothing undimmed");
+        let chip = s.chip.unwrap();
+        assert_eq!(chip.lines[1], PROTECTED_NOTE);
+        click(&mut o, 350, 350, 0);
+        assert_eq!((o.phase(), o.selection()), (Phase::Hover, None));
+        assert_eq!(act(&mut o, Action::Mark), Outcome::Stay);
+        assert_eq!(o.phase(), Phase::Marking, "Space marks a corner instead");
+        press(&mut o, Button::Right, 350, 350);
+        assert_eq!(o.phase(), Phase::Hover);
+        // The plain region still works over it (the picture holds black there).
+        drag(&mut o, (310, 310), (400, 380));
+        assert_eq!(o.selection(), Some(Rect::new(310, 310, 91, 71)));
+        // Excluded from capture and click-through windows are not there: the one below is.
+        let mut o = detecting({
+            let mut f = vec![absent, through];
+            f.extend(windows());
+            f
+        });
+        mv(&mut o, 60, 410);
+        assert_eq!(
+            o.detected().map(|d| d.rect),
+            Some(Rect::new(0, 0, 800, 560))
+        );
+        mv(&mut o, 650, 450);
+        assert_eq!(
+            o.detected().map(|d| d.rect),
+            Some(Rect::new(0, 0, 800, 560))
+        );
+        // No window list (the platform could not read it), or detection turned off with E:
+        // the plain region selection.
+        let mut none =
+            one(800, 600).with_detection(DetectMode::Window, Some(Snapshot::unavailable()));
+        mv(&mut none, 150, 150);
+        assert_eq!(none.detected(), None);
+        assert_eq!(none.detect_windows(), None);
+        click(&mut none, 150, 150, 0);
+        assert_eq!(none.selection(), None);
+        let mut o = detecting(windows());
+        act(&mut o, Action::DetectCycle);
+        assert_eq!(o.detect_mode(), DetectMode::Element);
+        act(&mut o, Action::DetectCycle);
+        assert_eq!(o.detect_mode(), DetectMode::Off);
+        mv(&mut o, 150, 150);
+        assert_eq!(o.detected(), None);
+        click(&mut o, 150, 150, 0);
+        assert_eq!(o.selection(), None, "off: a click selects nothing");
+        act(&mut o, Action::DetectCycle);
+        assert_eq!(
+            o.detected().map(|d| d.rect),
+            Some(Rect::new(100, 100, 300, 200))
+        );
+    }
+
+    #[test]
+    fn element_detection_asks_off_thread_and_falls_back_to_the_window() {
+        let mut o = detecting(windows());
+        act(&mut o, Action::DetectCycle);
+        o.pointer = (5, 5);
+        o.take_element_request();
+        mv(&mut o, 150, 150);
+        let req = o
+            .take_element_request()
+            .expect("a request for the window under the pointer");
+        assert_eq!(
+            (req.token, req.window, req.at),
+            (1, Rect::new(100, 100, 300, 200), (150, 150))
+        );
+        mv(&mut o, 150, 150);
+        assert_eq!(
+            o.take_element_request(),
+            None,
+            "the same point is not asked again"
+        );
+        // Until the answer comes, the window rectangle.
+        assert_eq!(o.detected().map(|d| d.kind), Some(DetectKind::Window));
+        let button = Rect::new(120, 130, 80, 30);
+        o.handle(Input::Element {
+            request: req,
+            answer: ElementAnswer::Found(button),
+        });
+        assert_eq!(
+            o.detected(),
+            Some(Detected {
+                rect: button,
+                kind: DetectKind::Element,
+                protected: false
+            })
+        );
+        click(&mut o, 150, 150, 0);
+        assert_eq!(o.selection(), Some(button), "a click selects the element");
+        // A newer request supersedes an old answer unless it still fits the pointer.
+        let mut o = detecting(windows());
+        act(&mut o, Action::DetectCycle);
+        mv(&mut o, 150, 150);
+        let first = o.take_element_request().unwrap();
+        mv(&mut o, 300, 250);
+        let second = o.take_element_request().unwrap();
+        assert!(second.seq > first.seq);
+        o.handle(Input::Element {
+            request: first,
+            answer: ElementAnswer::Found(button),
+        });
+        assert_eq!(
+            o.detected().map(|d| d.kind),
+            Some(DetectKind::Window),
+            "the old element does not hold the pointer any more"
+        );
+        o.handle(Input::Element {
+            request: second,
+            answer: ElementAnswer::WindowOnly,
+        });
+        assert_eq!(
+            o.detected().map(|d| d.rect),
+            Some(Rect::new(100, 100, 300, 200))
+        );
+        assert_eq!(o.detect_fallback(), None);
+        // An answer that does not fit the window: the window rectangle, reason reported.
+        mv(&mut o, 310, 250);
+        let third = o.take_element_request().unwrap();
+        o.handle(Input::Element {
+            request: third,
+            answer: ElementAnswer::Found(Rect::new(700, 500, 10, 10)),
+        });
+        assert_eq!(o.detect_fallback(), Some(Fallback::InvalidRect));
+        assert_eq!(o.detected().map(|d| d.kind), Some(DetectKind::Window));
+        // An elevated or unresponsive window is not asked again during this capture.
+        mv(&mut o, 320, 250);
+        let fourth = o.take_element_request().unwrap();
+        o.handle(Input::Element {
+            request: fourth,
+            answer: ElementAnswer::Failed(Fallback::Denied),
+        });
+        assert_eq!(o.detect_fallback(), Some(Fallback::Denied));
+        mv(&mut o, 330, 260);
+        assert_eq!(o.take_element_request(), None, "refused window");
+        assert_eq!(
+            o.detected().map(|d| d.rect),
+            Some(Rect::new(100, 100, 300, 200))
+        );
+        mv(&mut o, 600, 500);
+        assert!(
+            o.take_element_request().is_some_and(|r| r.token == 2),
+            "other windows are still asked"
+        );
+        // Protected windows are never asked.
+        let mut p = WindowFacts::plain(9, Rect::new(0, 0, 50, 50));
+        p.affinity = Affinity::Monitor;
+        let mut o = detecting(vec![p]);
+        act(&mut o, Action::DetectCycle);
+        mv(&mut o, 10, 10);
+        assert_eq!(o.take_element_request(), None);
+    }
+
+    #[test]
+    fn pointer_keys_move_one_pixel_accelerate_and_pause_detection() {
+        let mut o = detecting(windows());
+        mv(&mut o, 150, 150);
+        assert!(o.detected().is_some());
+        act(&mut o, Action::Pointer(Dir::Right));
+        assert_eq!(o.pointer(), (151, 150));
+        assert_eq!(o.take_warp(), Some((151, 150)), "the real pointer follows");
+        assert_eq!(o.take_warp(), None);
+        assert!(o.detect_suspended());
+        assert_eq!(o.detected(), None, "exact corners, not windows");
+        // The warped cursor reports the same position: still paused. A real move resumes.
+        mv(&mut o, 151, 150);
+        assert!(o.detect_suspended());
+        mv(&mut o, 152, 150);
+        assert!(!o.detect_suspended());
+        assert!(o.detected().is_some());
+        // Held: 1 for the press and nine repeats, then 2, 5 and 10 per repeat.
+        let mut o = one(800, 600);
+        mv(&mut o, 0, 300);
+        act(&mut o, Action::Pointer(Dir::Right));
+        for _ in 0..30 {
+            o.handle(Input::Repeat(Action::Pointer(Dir::Right)));
+        }
+        let want = 1 + 9 + 10 * 2 + 10 * 5 + 10;
+        assert_eq!(o.pointer(), (want, 300));
+        assert_eq!(
+            [accel(0), accel(9), accel(10), accel(20), accel(99)],
+            [1, 1, 2, 5, 10]
+        );
+        // Another key starts over at one pixel; the picture's edge stops the pointer.
+        act(&mut o, Action::Pointer(Dir::Up));
+        assert_eq!(o.pointer(), (want, 299));
+        for _ in 0..100 {
+            o.handle(Input::Repeat(Action::Pointer(Dir::Up)));
+        }
+        assert_eq!(o.pointer(), (want, 0), "clamped to the picture");
+        // During a drag the pointer keys move its end, pixel by pixel.
+        let mut o = one(800, 600);
+        press(&mut o, Button::Left, 100, 100);
+        mv(&mut o, 200, 150);
+        act(&mut o, Action::Pointer(Dir::Right));
+        act(&mut o, Action::Pointer(Dir::Down));
+        assert_eq!(o.live(), Some(Rect::new(100, 100, 102, 52)));
+        release(&mut o, 201, 151);
+        assert_eq!(o.selection(), Some(Rect::new(100, 100, 102, 52)));
+        // Arrow nudges and edge adjustments accelerate the same way.
+        let before = o.selection().unwrap();
+        act(&mut o, Action::Move(Dir::Right));
+        for _ in 0..10 {
+            o.handle(Input::Repeat(Action::Move(Dir::Right)));
+        }
+        assert_eq!(o.selection().unwrap().x, before.x + 1 + 9 + 2);
+        act(&mut o, Action::Grow(Dir::Down));
+        for _ in 0..12 {
+            o.handle(Input::Repeat(Action::Grow(Dir::Down)));
+        }
+        assert_eq!(o.selection().unwrap().height, before.height + 1 + 9 + 3 * 2);
+        act(&mut o, Action::Shrink(Dir::Up));
+        for _ in 0..12 {
+            o.handle(Input::Repeat(Action::Shrink(Dir::Up)));
+        }
+        assert_eq!(o.selection().unwrap().height, before.height);
+    }
+
+    #[test]
+    fn space_marks_two_corners_or_accepts_the_detection() {
+        // FLOW-18: W A S D to (100,100), Space, to (500,400), Space, Enter.
+        let mut o = one(800, 600);
+        mv(&mut o, 90, 95);
+        for _ in 0..10 {
+            act(&mut o, Action::Pointer(Dir::Right));
+        }
+        for _ in 0..5 {
+            act(&mut o, Action::Pointer(Dir::Down));
+        }
+        assert_eq!(o.pointer(), (100, 100));
+        act(&mut o, Action::Mark);
+        assert_eq!((o.phase(), o.selection()), (Phase::Marking, None));
+        mv(&mut o, 495, 397);
+        for _ in 0..5 {
+            act(&mut o, Action::Pointer(Dir::Right));
+        }
+        for _ in 0..3 {
+            act(&mut o, Action::Pointer(Dir::Down));
+        }
+        assert_eq!(
+            o.live(),
+            Some(Rect::new(100, 100, 401, 301)),
+            "the band follows"
+        );
+        assert_eq!(
+            act(&mut o, Action::Pin),
+            Outcome::Stay,
+            "nothing confirmed yet"
+        );
+        act(&mut o, Action::Mark);
+        let s = Rect::new(100, 100, 401, 301);
+        assert_eq!((o.phase(), o.selection()), (Phase::Selected, Some(s)));
+        assert_eq!(
+            act(&mut o, Action::Pin),
+            Outcome::Output(Output::Pin, s, Via::Key)
+        );
+        // From a selection, Space starts a new one; a right-click restores the old.
+        act(&mut o, Action::Mark);
+        assert_eq!(o.phase(), Phase::Marking);
+        press(&mut o, Button::Right, 600, 500);
+        assert_eq!((o.phase(), o.selection()), (Phase::Selected, Some(s)));
+        // A click sets the second corner of a marked one.
+        mv(&mut o, 10, 10);
+        act(&mut o, Action::Mark);
+        press(&mut o, Button::Left, 20, 30);
+        release(&mut o, 20, 30);
+        assert_eq!(o.selection(), Some(Rect::new(10, 10, 11, 21)));
+        // J2 by keyboard: Space over a highlighted window selects it.
+        let mut o = detecting(windows());
+        mv(&mut o, 150, 150);
+        act(&mut o, Action::Mark);
+        assert_eq!(o.selection(), Some(Rect::new(100, 100, 300, 200)));
+        // After the keyboard moved the pointer, Space marks a corner instead.
+        let mut o = detecting(windows());
+        mv(&mut o, 150, 150);
+        act(&mut o, Action::Pointer(Dir::Left));
+        act(&mut o, Action::Mark);
+        assert_eq!(o.phase(), Phase::Marking);
+    }
+
+    #[test]
+    fn moving_edges_snap_to_windows_and_monitors_unless_alt_or_the_keyboard() {
+        let target = || vec![WindowFacts::plain(1, Rect::new(200, 200, 300, 200))];
+        let mut o = detecting(target());
+        // The drag's right/bottom edges end 3 pixels short of the window's: they snap.
+        drag(&mut o, (210, 210), (496, 396));
+        assert_eq!(o.selection(), Some(Rect::new(210, 210, 290, 190)));
+        // Farther than 6 logical pixels: no snap (a right-click outside clears first).
+        press(&mut o, Button::Right, 790, 590);
+        drag(&mut o, (210, 210), (490, 390));
+        assert_eq!(o.selection(), Some(Rect::new(210, 210, 281, 181)));
+        // Dragging up and left, the left/top edges snap.
+        press(&mut o, Button::Right, 790, 590);
+        drag(&mut o, (450, 350), (203, 197));
+        assert_eq!(o.selection(), Some(Rect::new(200, 200, 251, 151)));
+        // With Alt held: exact.
+        press(&mut o, Button::Right, 790, 590);
+        press(&mut o, Button::Left, 100, 100);
+        o.handle(Input::Move {
+            x: 496,
+            y: 396,
+            mods: Mods::ALT,
+        });
+        release(&mut o, 496, 396);
+        assert_eq!(o.selection(), Some(Rect::new(100, 100, 397, 297)));
+        // Resizing by the right edge snaps to the monitor's edge (800).
+        let mut o = detecting(Vec::new());
+        drag(&mut o, (100, 100), (299, 299));
+        press(&mut o, Button::Left, 300, 200);
+        mv(&mut o, 500, 200);
+        mv(&mut o, 796, 200);
+        release(&mut o, 796, 200);
+        assert_eq!(o.selection(), Some(Rect::new(100, 100, 700, 200)));
+        // Pointer keys are exact: no snapping while the keyboard moved the pointer last.
+        let mut o = detecting(target());
+        mv(&mut o, 210, 210);
+        act(&mut o, Action::Pointer(Dir::Right));
+        act(&mut o, Action::Pointer(Dir::Left));
+        act(&mut o, Action::Mark);
+        mv(&mut o, 494, 396);
+        act(&mut o, Action::Pointer(Dir::Right));
+        act(&mut o, Action::Mark);
+        assert_eq!(o.selection(), Some(Rect::new(210, 210, 286, 187)));
+        // Detection off: no window edges.
+        let mut o = detecting(target());
+        act(&mut o, Action::DetectCycle);
+        act(&mut o, Action::DetectCycle);
+        drag(&mut o, (210, 210), (496, 396));
+        assert_eq!(o.selection(), Some(Rect::new(210, 210, 287, 187)));
+    }
+
+    fn frame_of(pic: Rect) -> (std::sync::Arc<Ledger>, Frame) {
+        let ledger = Ledger::new();
+        let syn = Synthetic::new(vec![Monitor::new(pic, true)]);
+        let f = crate::capture::CaptureBackend::capture(&syn, &ledger, pic).unwrap();
+        (ledger, f)
+    }
+
+    #[test]
+    fn the_magnifier_enlarges_exact_pixels_with_a_crosshair_and_reads_the_colour() {
+        let pic = Rect::new(0, 0, 800, 600);
+        let (_l, frozen) = frame_of(pic);
+        let mut o = one(800, 600).with_magnifier(true);
+        mv(&mut o, 50, 40);
+        let mut s = o.scene(&Approx);
+        s.sample(&frozen);
+        let m = s.magnifier.clone().expect("shown while selecting");
+        assert_eq!(m.cell, 8);
+        assert_eq!(m.grid.width, 8 * MAG_CELLS);
+        assert_eq!(
+            (m.rect.x, m.rect.y),
+            (70, 60),
+            "right of and below the pointer"
+        );
+        let p = Synthetic::pixel(50, 40);
+        assert_eq!(m.text.lines[0], "50, 40");
+        assert_eq!(
+            m.text.lines[1],
+            format!("#{:02X}{:02X}{:02X}", p[2], p[1], p[0])
+        );
+        assert_eq!(m.text.lines[2], format!("{}, {}, {}", p[2], p[1], p[0]));
+        assert_eq!(color_lines(&frozen, (5000, 5)), ["\u{2014}", "\u{2014}"]);
+        // Composed: every cell is its source pixel, the centre cell is outlined, the crosshair
+        // runs through the middle.
+        let mut out = vec![0u8; 800 * 600 * 4];
+        compose(&frozen, &s, pic, &mut out);
+        let at = |out: &[u8], x: i32, y: i32| {
+            let i = ((y * 800 + x) * 4) as usize;
+            [out[i], out[i + 1], out[i + 2], out[i + 3]]
+        };
+        let half = (MAG_CELLS / 2) as i32;
+        for (i, j) in [(0, 0), (3, 11), (14, 14), (6, 5)] {
+            let src = Synthetic::pixel(50 - half + i, 40 - half + j);
+            let cx = m.grid.x + i * 8 + 2;
+            let cy = m.grid.y + j * 8 + 2;
+            assert_eq!(at(&out, cx, cy), src, "cell ({i}, {j})");
+        }
+        let c = m.centre();
+        assert_eq!(
+            at(&out, c.x, c.y),
+            color::ACCENT,
+            "the centre cell's outline"
+        );
+        assert_eq!(
+            at(&out, c.x + 2, c.y + 2),
+            p,
+            "the pointer's pixel inside it"
+        );
+        assert_eq!(
+            at(&out, c.x + 4, m.grid.y + 1),
+            color::ACCENT,
+            "the crosshair"
+        );
+        // Near the bottom-right corner it moves left of and above the pointer.
+        mv(&mut o, 790, 590);
+        let m = o.scene(&Approx).magnifier.unwrap();
+        assert!(m.rect.right() <= 790 && m.rect.bottom() <= 590);
+        // At the picture's corner, cells outside it are dark.
+        mv(&mut o, 0, 0);
+        let mut s = o.scene(&Approx);
+        s.sample(&frozen);
+        let m = s.magnifier.clone().unwrap();
+        compose(&frozen, &s, pic, &mut out);
+        assert_eq!(
+            at(&out, m.grid.x + 2, m.grid.y + 2),
+            color::HALO,
+            "outside the picture"
+        );
+        // M hides and shows it; it hides while moving the selection and over its inside.
+        act(&mut o, Action::Magnifier);
+        assert!(o.scene(&Approx).magnifier.is_none());
+        act(&mut o, Action::Magnifier);
+        drag(&mut o, (100, 100), (399, 299));
+        mv(&mut o, 250, 200);
+        assert!(o.scene(&Approx).magnifier.is_none(), "inside the selection");
+        mv(&mut o, 600, 500);
+        assert!(o.scene(&Approx).magnifier.is_some(), "outside it");
+        mv(&mut o, 399, 299);
+        assert!(
+            o.scene(&Approx).magnifier.is_some(),
+            "on a handle: precise resizing"
+        );
+        // It is redrawn where it was and where it is now.
+        mv(&mut o, 600, 500);
+        let a = o.scene(&Approx);
+        mv(&mut o, 650, 450);
+        let b = o.scene(&Approx);
+        let d = dirty(&a, &b);
+        let covered = |r: Rect| d.iter().any(|x| x.contains(&r));
+        assert!(covered(a.magnifier.unwrap().rect) && covered(b.magnifier.unwrap().rect));
+    }
+
+    #[test]
+    fn the_magnifier_follows_the_monitor_scale_and_shows_logical_coordinates() {
+        // Mixed DPI: a 100 % monitor and a 150 % one to its right.
+        let mons = vec![
+            Monitor::new(Rect::new(0, 0, 800, 600), true),
+            Monitor::new(Rect::new(800, 0, 1200, 900), false).with_dpi(144),
+        ];
+        let mut o = Overlay::new(
+            Rect::new(0, 0, 2000, 900),
+            mons,
+            SystemValues::default(),
+            (0, 0),
+            None,
+            None,
+        );
+        mv(&mut o, 400, 300);
+        let m = o.scene(&Approx).magnifier.unwrap();
+        assert_eq!(
+            (m.cell, m.text.lines.len()),
+            (8, 3),
+            "100 %: no logical line"
+        );
+        mv(&mut o, 800 + 300, 450);
+        let m = o.scene(&Approx).magnifier.unwrap();
+        assert_eq!(m.cell, 12, "8 logical pixels at 150 %");
+        assert_eq!(m.text.lines[0], "1100, 450");
+        assert_eq!(
+            m.text.lines[1], "200, 300 at 150 %",
+            "logical, on that monitor"
+        );
+        assert_eq!(m.color, 2);
+        assert_eq!(m.text.dpi, 144);
+    }
+
+    #[test]
+    fn history_steps_through_earlier_rectangles_over_the_current_picture() {
+        let a = Rect::new(10, 10, 100, 100);
+        let b = Rect::new(20, 20, 50, 50);
+        let c = Rect::new(700, 500, 200, 200); // sticks out: clipped
+        let gone = Rect::new(5000, 5000, 10, 10); // off this picture: left out
+        let mut o = one(800, 600).with_history(&[a, b, b, gone, c]);
+        assert_eq!(o.history(), (3, None), "repeats and absent ones left out");
+        act(&mut o, Action::HistoryNext);
+        assert_eq!(o.selection(), None, "nothing newer than now");
+        act(&mut o, Action::HistoryPrevious);
+        assert_eq!(o.selection(), Some(Rect::new(700, 500, 100, 100)));
+        act(&mut o, Action::HistoryPrevious);
+        assert_eq!(o.selection(), Some(b));
+        act(&mut o, Action::HistoryPrevious);
+        act(&mut o, Action::HistoryPrevious);
+        assert_eq!(
+            (o.selection(), o.history()),
+            (Some(a), (3, Some(0))),
+            "stops at the oldest"
+        );
+        act(&mut o, Action::HistoryNext);
+        assert_eq!(o.selection(), Some(b));
+        assert_eq!(o.phase(), Phase::Selected);
+        // A new drag leaves the history; Previous starts again from the newest.
+        drag(&mut o, (300, 300), (350, 350));
+        assert_eq!(o.history().1, None);
+        act(&mut o, Action::HistoryPrevious);
+        assert_eq!(o.selection(), Some(Rect::new(700, 500, 100, 100)));
+        // Bounded.
+        let many: Vec<Rect> = (0..40).map(|i| Rect::new(i, 0, 5, 5)).collect();
+        let o = one(800, 600).with_history(&many);
+        assert_eq!(o.history().0, HISTORY);
+        assert_eq!(one(800, 600).history(), (0, None));
     }
 }

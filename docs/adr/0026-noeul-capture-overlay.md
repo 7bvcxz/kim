@@ -235,3 +235,13 @@ Against the budgets:
   test hook now also keeps the outputs off the user's clipboard, screen and Pictures folder
   (ADR 0032 §5). `noeul status` reports `captures.copied`, `captures.saved` and the overlay's
   keyboard `focus`.
+- 2026-11-04 (Step 52): [ADR 0035](0035-noeul-smart-selection-and-precision.md) adds what §4
+  left to Step 52. With nothing selected, a click without a drag now selects the window or UI
+  element detection highlights (a window list taken right after the §2 freeze; UI Automation
+  rectangles off the UI thread after `E`); with nothing detected it still selects nothing. The
+  overlay gains the `marking` phase (`selection.mark`, `Space`), the keyboard pointer
+  (`pointer.move-*` on the physical keys `W A S D`, also during a drag; the real cursor follows
+  with `SetCursorPos` only for the foreground overlay, never under §8's test placement),
+  acceleration of held keys, edge snapping (`Alt` turns it off), the magnifier and
+  `history.previous`/`history.next`. §8's test hook lists only the windows of processes named in
+  `NOEUL_DEV_DETECT_PIDS`.

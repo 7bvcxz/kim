@@ -30,13 +30,21 @@
 //! file in the configured quick-save folder (never shown), and quick save never falls back to
 //! the user's Pictures folder.
 //!
+//! **Detection** (Step 52, ADR 0035): the window list is read on the UI thread when a capture
+//! starts ([`crate::win::detect::snapshot`]); element lookups run on a UI Automation worker that
+//! exists only while an overlay uses element detection, and its answers reach the core through
+//! the pump. Under the test hook the list holds only windows of the processes named in
+//! `NOEUL_DEV_DETECT_PIDS` (a test's own off-screen windows); without it, none — the hook never
+//! looks at the user's windows.
+//!
 //! **Pins** (Step 53, ADR 0029): a pin's context menu is modal, so the pump only records the
 //! request and [`wake`] shows it after releasing the core (one menu at a time), as for the tray
 //! menu. `WM_DISPLAYCHANGE` and a work-area change (`WM_SETTINGCHANGE` with `SPI_SETWORKAREA`)
 //! reach the core as [`App::display_changed`]: pins keep their place, nothing moves by itself.
 
-use crate::app::{App, Identity, OverlayWindow, Shell};
+use crate::app::{App, Identity, OverlayEvent, OverlayWindow, Shell};
 use crate::capture::{CaptureBackend, Synthetic};
+use crate::detect::{ElementRequest, Snapshot};
 use crate::error::{Code, NoeulError, Result};
 use crate::frame::{Frame, Ledger, Rect};
 use crate::hotkeys::{self, Manager};
@@ -44,6 +52,7 @@ use crate::ipc;
 use crate::paths::Paths;
 use crate::pins::PinWindows;
 use crate::settings;
+use crate::win::detect::{ElementWorker, Scope};
 use crate::win::overlay::{self, Placement, WinOverlay};
 use crate::win::pinwnd::{self, Style, WinPins};
 use crate::win::pipe::{self, Listener, Pipe, Until};
@@ -120,12 +129,26 @@ enum CopyTarget {
     Synthetic { busy: bool },
 }
 
-/// The Win32 [`Shell`]: pin windows, the overlay, clipboard, pointer, tray notices.
+/// The Win32 [`Shell`]: pin windows, the overlay, clipboard, pointer, tray notices, detection.
 struct WinShell {
     windows: WinPins,
     /// `false` only under the debug-build test hook.
     interactive: bool,
     copy: CopyTarget,
+    /// Whose windows detection lists: all of them, or under the test hook only a test's own.
+    detect_scope: Scope,
+    /// The UI Automation worker of the open overlay, while it uses element detection.
+    uia: Option<ElementWorker>,
+}
+
+impl WinShell {
+    /// The element answers that arrived from the worker.
+    fn element_answers(&self) -> Vec<(ElementRequest, crate::detect::ElementAnswer)> {
+        self.uia
+            .as_ref()
+            .map(ElementWorker::take_answers)
+            .unwrap_or_default()
+    }
 }
 
 impl Shell for WinShell {
@@ -224,6 +247,36 @@ impl Shell for WinShell {
     fn interactive(&self) -> bool {
         self.interactive
     }
+
+    fn window_snapshot(&mut self, picture: Rect) -> Snapshot {
+        crate::win::detect::snapshot(picture, &self.detect_scope, overlay::current())
+    }
+
+    fn request_element(&mut self, req: ElementRequest) {
+        if self.uia.is_none() {
+            let control = CONTROL.get();
+            self.uia = ElementWorker::start(Box::new(move || post_wake(control))).ok();
+        }
+        if let Some(w) = &self.uia {
+            w.ask(req);
+        }
+    }
+
+    fn end_detection(&mut self) {
+        self.uia = None;
+    }
+}
+
+/// Whose windows the debug-build test hook lists: the processes in `NOEUL_DEV_DETECT_PIDS`
+/// (comma-separated), never anyone else's.
+fn dev_detect_scope() -> Scope {
+    let pids = std::env::var("NOEUL_DEV_DETECT_PIDS")
+        .unwrap_or_default()
+        .split(',')
+        .filter_map(|p| p.trim().parse::<u32>().ok())
+        .filter(|p| *p != 0)
+        .collect();
+    Scope::Processes(pids)
 }
 
 /// The debug-build test hook: `NOEUL_DEV_SYNTHETIC_DESKTOP=1` (ignored by release builds, and
@@ -290,6 +343,10 @@ fn pump(app: &mut App<WinShell>) {
         for e in overlay::take_events() {
             did = true;
             app.overlay_event(e);
+        }
+        for (req, answer) in app.shell().element_answers() {
+            did = true;
+            app.overlay_event(OverlayEvent::Element(req, answer));
         }
         if !did {
             break;
@@ -703,6 +760,8 @@ pub fn run(opts: &RunOpts) -> Result<Value> {
             } else {
                 CopyTarget::System
             },
+            detect_scope: if dev { dev_detect_scope() } else { Scope::All },
+            uia: None,
         },
         backend,
         mgr,

@@ -1,6 +1,6 @@
 # Noeul UX specification
 
-Status: **current** (specification; Step 49 implemented the app foundation, [ADR 0023](adr/0023-noeul-app-foundation.md); Step 50 the `F1` selection overlay with `Enter` to pin, [ADR 0026](adr/0026-noeul-capture-overlay.md), see §4.5; Step 53 the floating pin engine, [ADR 0029](adr/0029-noeul-pin-engine.md), see §4.6; Step 51 the double-click-to-pin gesture, the toolbar, the selection menu, copy, save and the gesture settings, [ADR 0032](adr/0032-noeul-double-click-pin-and-outputs.md), see §4.7) · Step 48 ·
+Status: **current** (specification; Step 49 implemented the app foundation, [ADR 0023](adr/0023-noeul-app-foundation.md); Step 50 the `F1` selection overlay with `Enter` to pin, [ADR 0026](adr/0026-noeul-capture-overlay.md), see §4.5; Step 53 the floating pin engine, [ADR 0029](adr/0029-noeul-pin-engine.md), see §4.6; Step 51 the double-click-to-pin gesture, the toolbar, the selection menu, copy, save and the gesture settings, [ADR 0032](adr/0032-noeul-double-click-pin-and-outputs.md), see §4.7; Step 52 window and element detection, the magnifier, the precision keys, snapping and the rectangle history, [ADR 0035](adr/0035-noeul-smart-selection-and-precision.md), see §4.8) · Step 48 ·
 Philosophy: [NOEUL_PHILOSOPHY](NOEUL_PHILOSOPHY.md) · Requirements: [NOEUL_REQUIREMENTS](NOEUL_REQUIREMENTS.md) ·
 Parity: [NOEUL_SNIPASTE_MATRIX](NOEUL_SNIPASTE_MATRIX.md) · Shortcuts: [HOTKEY_CONTRACT §13.3](HOTKEY_CONTRACT.md) ·
 Decision: [ADR 0021](adr/0021-noeul-product-definition.md)
@@ -213,7 +213,12 @@ stateDiagram-v2
   [*] --> Idle
   Idle --> Hover: capture.region (F1)
   Hover --> Dragging: left press + move beyond drag threshold
-  Hover --> Selected: click on highlighted window / Space twice / Ctrl+A / R
+  Hover --> Selected: click on highlighted window / Space on it / Ctrl+A / R / Comma
+  Hover --> Marking: Space (nothing highlighted, or the keys moved the pointer)
+  Selected --> Marking: Space (a new first corner)
+  Marking --> Selected: Space / click (the opposite corner)
+  Marking --> Hover: right-click (nothing was selected before)
+  Marking --> Selected: right-click (the previous selection comes back)
   Dragging --> Selected: release
   Selected --> Moving: press in interior + move beyond threshold
   Selected --> Resizing: press on handle or border band + move
@@ -449,7 +454,7 @@ synthesized input or touch of the real clipboard:
 | e2e (ignored; `cargo xtask e2e` only) | `e2e/tests/step51_noeul_double_click_pin.rs` | 01, 03, 05, 17, 20, 29 |
 
 FLOW-13 to FLOW-15 need the annotation tools (Step 56); FLOW-18 needs the keyboard marking of
-Step 52; FLOW-33 is N4; FLOW-34 and FLOW-35 are covered by Step 53's focus hand-back and Step
+Step 52 (automated since Step 52, §4.8); FLOW-33 is N4; FLOW-34 and FLOW-35 are covered by Step 53's focus hand-back and Step
 50's desktop check. So these steps need the maintainer, on the real desktop with a physical mouse
 and keyboard (record the Windows build, the monitors and their scales, and the date in the Step
 report and the matrix Evidence column):
@@ -493,6 +498,99 @@ report and the matrix Evidence column):
     file is 600×450 pixels; the toolbar's text is crisp at that scale.
 14. Ten captures in a row as fast as possible (`F1`, drag, double-click): ten pins, none lost;
     `noeul pin list` shows ten IDs.
+
+### 4.8 Step 52: manual check of smart selection and precision
+
+Step 52 ships detection, the magnifier, the precision keys, snapping and the rectangle history
+([ADR 0035](adr/0035-noeul-smart-selection-and-precision.md)). The rules:
+
+1. **Detection** (`detect.cycle`, `E`: window → element → off; `[capture] detection`). While
+   nothing is selected and no button is held, the window under the pointer is shown as a selection
+   would be (undimmed, the accent border, its size in the chip), without handles or toolbar. In
+   element mode the UI element under the pointer is shown once UI Automation answers (the window
+   until then). A click without a drag, or `Space`, selects what is shown; that click is not the
+   first press of a double-click. With a selection, nothing is detected; a right-click outside it
+   clears it and detection comes back.
+2. **What is detected.** The windows are listed right after the picture is frozen, as rectangles
+   and flags only; hidden, minimized, cloaked (other virtual desktops), click-through and fully
+   transparent layered windows are not offered, nor windows excluded from capture
+   (`WDA_EXCLUDEFROMCAPTURE`: absent from the picture, so the window below is what shows). A window
+   protected from capture (`WDA_MONITOR`, shown black) is never highlighted or selected by a click;
+   the chip says "Protected window: Windows captures it as black" and the plain region selection
+   remains. Elements come from UI Automation bounding rectangles; a window of an elevated program
+   (UIPI), one that does not answer within 300 ms, one without UI Automation, or an answer that
+   does not fit the window, falls back to the window rectangle and is not asked again during that
+   capture. Nothing else is read: no title, name, value or text (NOEUL-SEC-007).
+3. **The pointer keys** `W A S D` are physical keys (`code:`): the same positions on AZERTY and
+   other layouts. Each press moves the pointer one device pixel, also during a drag, a move or a
+   resize; the real cursor follows. While the keyboard moved the pointer last, detection and
+   snapping pause, so `Space` marks a corner exactly there; moving the mouse resumes them.
+4. **`Space` (`selection.mark`)** selects the highlighted window or element; otherwise (or after the
+   pointer keys) it sets the first corner at the pointer — the rubber band then follows the pointer
+   (phase `marking`) — and the next `Space` or a click sets the opposite corner. A right-click
+   undoes the mark (a previous selection comes back); `Esc` cancels the capture.
+5. **Acceleration.** A held key moves 1 pixel for the press and nine repeats, then 2, 5 and 10 per
+   repeat: the pointer keys, the arrows and `Ctrl`/`Shift`+arrows.
+6. **Snapping.** While dragging, marking or resizing with the mouse, a moving edge within 6
+   logical pixels of a monitor edge or a detected window's edge snaps to it. Holding `Alt` turns it
+   off for that movement; with detection off only monitor edges remain.
+7. **The magnifier** (`magnifier.toggle`, `M`; `[capture] magnifier`) follows the pointer while
+   selecting and outside or on the handles of a confirmed selection: 15 × 15 pixels of the frozen
+   picture enlarged (8 logical pixels each), a crosshair through the centre pixel, the position in
+   device pixels (and, on a scaled monitor, the logical position on that monitor, "200, 300 at
+   150 %"), and the pixel's colour as HEX and RGB. It hides while moving the selection, over its
+   inside, the toolbar and the size chip.
+8. **History.** `Comma` (`history.previous`) shows the rectangle of the last successful capture,
+   again the one before, down to the oldest of 20; `Period` (`history.next`) goes forward. Only
+   rectangles are kept, in memory; cancelled captures are never kept (NOEUL-FR-050).
+
+What the automated tests cover, without anything on the visible desktop, synthesized input, a
+moved cursor or a look at the user's windows:
+
+| Layer | Where | What |
+| --- | --- | --- |
+| Model (table-driven) | `crates/noeul/src/overlay.rs`, `detect.rs`, `dpi.rs` tests | detection and click-to-select, protected/excluded/click-through/unavailable fallbacks, element answers and their fallbacks, pointer keys and acceleration, FLOW-18 marking, snapping (`Alt`, keyboard), the magnifier's pixels, crosshair and colour lines at 100 % and 150 %, history, mixed-DPI conversions on synthetic layouts |
+| Instance core (fake windows) | `crates/noeul/src/app.rs` tests | the window list is taken once (and only when detection is on), element requests and answers, warps of the real pointer, status and its schema, history across captures, FLOW-18 to a pin |
+| Real Win32 (own off-screen windows) | `crates/noeul/src/win/detect.rs`, `win/overlay.rs` tests | the window list over plain, raised, layered, transparent, click-through, capture-excluded, protected, hidden and DPI-unaware own windows; UI Automation finds a child button of an own window and reads no text; the magnifier drawn into the real back buffer at 150 %; scan codes become physical chords; the test placement never moves the cursor |
+| Real binary, test hook | `crates/noeul/tests/smart_selection.rs` | own windows in another process detected through the real instance (window, protected, excluded), click-to-select and pin, UI Automation across processes, W/Z/D at W's and D's positions, `M`, `Comma`, keyboard marking to a pin |
+| e2e (ignored; `cargo xtask e2e` only) | `e2e/tests/step52_noeul_smart_selection.rs` | the keys and settings headlessly; detection, protected report, click, pin, history and marking on the synthetic desktop |
+
+These steps need the maintainer, on the real desktop with a physical mouse and keyboard (record the
+Windows build, the monitors and their scales, and the date in the Step report and the matrix
+Evidence column):
+
+1. `cargo build --release -p noeul`, then `target\release\noeul.exe start` (default profile).
+2. Open Notepad and Explorer side by side. Press `F1` and move the pointer over Notepad: Notepad's
+   frame is undimmed with the lilac border and the chip shows its size; over Explorer, Explorer's;
+   over the taskbar, the taskbar. Click: that window is selected with handles and toolbar;
+   double-click inside: a pin of exactly the window.
+3. `F1`, press `E` (element detection), hover Notepad's menu bar and the text area, Explorer's
+   address bar and a file: the highlight follows the elements; click one: it is selected.
+   `E` again: nothing is detected; `E` again: windows.
+4. Open a browser page: with `E`, hover parts of the page; elements appear where the browser
+   exposes them, otherwise the browser window is highlighted (no error, no hang).
+5. Start a program as administrator (for example Notepad via "Run as administrator"). `F1`, `E`,
+   hover it: the window rectangle is highlighted (not its elements); `noeul status --json` shows
+   `detection.fallback: "denied"`.
+6. Play a DRM-protected video or open a program that excludes itself from capture, then `F1`: the
+   picture shows it black or absent, nothing of it is highlighted as content; over a `WDA_MONITOR`
+   window the chip says "Protected window: Windows captures it as black".
+7. `F1`, look at the magnifier: it follows the pointer, shows the enlarged pixels with a crosshair,
+   the position and the colour. Move over a known colour (for example a pure white area) and check
+   `#FFFFFF  255, 255, 255`. Press `M`: it disappears; `M` again: it is back.
+8. `F1`, press `W A S D` (also on an AZERTY layout, the keys at those positions): the pointer and
+   the magnifier move one pixel per press; hold a key: it speeds up. Press `Space`, move with the
+   keys, `Space`: a rectangle; `Enter` pins it with the size the chip said.
+9. `F1`, drag towards a window edge slowly: the selection's edge snaps to the window edge within a
+   few pixels; hold `Alt` and repeat: no snapping. Resize a selection by a handle near the monitor
+   edge: it snaps to the edge.
+10. Make three captures (pin, copy, save). `F1`, press `Comma` three times and `Period` once: the
+    three rectangles come back in reverse order and then forward again. Restart Noeul: the history
+    is empty (`noeul status --json` → `captures.history` 0) and nothing was written to disk.
+11. On a monitor at 125 % or 150 % (and across monitors of different scales where available):
+    hover a window that is not DPI-aware and one that is: the highlight fits each window exactly;
+    the magnifier's cells are larger and it shows the logical position "x, y at 150 %".
+12. Hover Noeul's own pins: they are detected like other windows.
 
 ## 5. Toolbar, menus and the tray
 
@@ -548,8 +646,12 @@ Shipped since Step 50 ([ADR 0026](adr/0026-noeul-capture-overlay.md)): `capture.
 Step 51 ([ADR 0032](adr/0032-noeul-double-click-pin-and-outputs.md)) added `capture.copy`,
 `capture.save` and `capture.quick-save`, and the toolbar's navigation: `Tab`/`Shift+Tab` and the
 arrows move the focus, `Enter`/`Space` run the focused button, `Escape` on a button cancels,
-`Shift+F10` or the menu key open the selection's menu. The other keys of this context arrive with
-Step 52.
+`Shift+F10` or the menu key open the selection's menu. Step 52
+([ADR 0035](adr/0035-noeul-smart-selection-and-precision.md), §4.8) added `selection.mark`,
+`pointer.move-*` (physical keys, matched from the scan code), `detect.cycle`, `magnifier.toggle`,
+`history.previous` and `history.next`, and acceleration of every held key with `repeat` (1 device
+pixel for the press and nine repeats, then 2, 5 and 10). `color.copy` and `color.format-next`
+arrive with the colour picker (N3); the magnifier shows HEX and RGB together until then.
 
 **Context `annotate`** (while a drawing tool is active, in the overlay or on a pin; it is inside
 the other contexts, so its keys win there):
@@ -649,7 +751,8 @@ when a capture starts.
 | Frozen picture, selection, annotations | memory | while the overlay is open | freed when it closes |
 | UI state ("first-run keyboard help seen") | `%LOCALAPPDATA%\mouv\noeul\ui-state.json` | once, after the first capture finished from the overlay | no picture, no content |
 | Pins, closed pins (for reopen) | memory | while open; reopen memory default 1 | freed at quit |
-| Capture history | memory (20 captures) | after a successful capture | disk: **off** |
+| Capture history | memory (20 captures) | after a successful capture | disk: **off**; since Step 52 the rectangles only (images are N4) |
+| Detection | memory: rectangles and flags of the windows on the desktop, UI element rectangles | while the overlay is open | never stored or logged; no title, name, value or text is read |
 | History on disk, auto-save | `%LOCALAPPDATA%\mouv\noeul\history\` or the chosen folder | only after the user turned it on | **off** |
 | Pin backup | `%LOCALAPPDATA%\mouv\noeul\pins\` (atomic, user-only) | only after the user turned it on | **off** |
 | Copy as file | `%LOCALAPPDATA%\mouv\noeul\outbox\`, deleted at quit | only after the user turned it on | **off** |

@@ -38,6 +38,11 @@
 use crate::capture::Monitor;
 use crate::frame::{Frame, Rect};
 use serde_json::{Value, json};
+use std::collections::VecDeque;
+
+/// How many rectangles of successful captures the instance remembers, in memory only
+/// (`selection.last`, `history.*`; NOEUL-FR-014, NOEUL-FR-050, NOEUL-SEC-005).
+pub const HISTORY: usize = crate::overlay::HISTORY;
 
 /// Who asked for the capture (NOEUL-SEC-001: always an explicit action).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -172,7 +177,9 @@ pub enum SessionError {
 pub struct Captures {
     open: Option<Session>,
     next_id: u64,
-    last: Option<Rect>,
+    /// Rectangles of successful captures, oldest first, at most [`HISTORY`]; never written
+    /// anywhere (Step 52).
+    history: VecDeque<Rect>,
     started: u64,
     pinned: u64,
     cancelled: u64,
@@ -268,7 +275,9 @@ impl Captures {
                     Outcome::Copied => self.copied += 1,
                     _ => self.saved += 1,
                 }
-                self.last = rect.or(self.last);
+                if let Some(r) = rect {
+                    self.remember(r);
+                }
             }
             Outcome::Cancelled => self.cancelled += 1,
         }
@@ -310,9 +319,20 @@ impl Captures {
             self.open = None;
             out
         };
-        self.last = Some(rect);
+        self.remember(rect);
         self.pinned += 1;
         Ok(out)
+    }
+
+    /// Adds a successful capture's rectangle to the history (a repeat of the newest is not
+    /// added again; the oldest falls out beyond [`HISTORY`]).
+    fn remember(&mut self, r: Rect) {
+        if self.history.back() != Some(&r) {
+            self.history.push_back(r);
+        }
+        while self.history.len() > HISTORY {
+            self.history.pop_front();
+        }
     }
 
     /// A pin could not be created from `frame`: reopen the session with it so the user can try
@@ -337,7 +357,12 @@ impl Captures {
 
     /// The rectangle of the last successful capture.
     pub fn last(&self) -> Option<Rect> {
-        self.last
+        self.history.back().copied()
+    }
+
+    /// The rectangles of earlier successful captures, oldest first (memory only).
+    pub fn history(&self) -> Vec<Rect> {
+        self.history.iter().copied().collect()
     }
 
     /// `(started, pinned, cancelled)` since the instance started (a local metric, ADR 0012);
@@ -467,5 +492,44 @@ mod tests {
         assert_eq!(c.complete(id, Outcome::Pinned), Err(SessionError::NotOpen));
         c.note_ignored();
         assert_eq!(c.ignored(), 1);
+    }
+
+    #[test]
+    fn the_history_keeps_successful_rectangles_in_memory_bounded() {
+        let ledger = Ledger::new();
+        let mut c = Captures::new();
+        let pic = Rect::new(0, 0, 100, 100);
+        let run = |c: &mut Captures, r: Rect, how: Outcome| {
+            let f = Frame::solid(&ledger, pic, [0; 4]).unwrap();
+            let id = c.begin(Origin::Hotkey, f, Vec::new()).unwrap();
+            c.select(id, r).unwrap();
+            if how == Outcome::Cancelled {
+                c.cancel();
+            } else {
+                c.complete(id, how).unwrap();
+            }
+        };
+        run(&mut c, Rect::new(0, 0, 10, 10), Outcome::Pinned);
+        run(&mut c, Rect::new(1, 1, 10, 10), Outcome::Copied);
+        run(&mut c, Rect::new(1, 1, 10, 10), Outcome::Saved); // a repeat of the newest
+        run(&mut c, Rect::new(2, 2, 10, 10), Outcome::Cancelled); // never recorded
+        assert_eq!(
+            c.history(),
+            [Rect::new(0, 0, 10, 10), Rect::new(1, 1, 10, 10)],
+            "only successful captures, oldest first, no repeated newest"
+        );
+        assert_eq!(c.last(), Some(Rect::new(1, 1, 10, 10)));
+        for i in 0..30 {
+            run(&mut c, Rect::new(i, 0, 5, 5), Outcome::Pinned);
+        }
+        let h = c.history();
+        assert_eq!(h.len(), HISTORY, "bounded");
+        assert_eq!(
+            h.first(),
+            Some(&Rect::new(10, 0, 5, 5)),
+            "the oldest fell out"
+        );
+        assert_eq!(c.last(), Some(Rect::new(29, 0, 5, 5)));
+        assert_eq!(ledger.live(), (0, 0), "rectangles only: no picture is kept");
     }
 }

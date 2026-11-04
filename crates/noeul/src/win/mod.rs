@@ -4,6 +4,7 @@
 
 pub mod client;
 pub mod clipboard;
+pub mod detect;
 pub mod files;
 pub mod gdi;
 pub mod overlay;

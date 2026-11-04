@@ -24,6 +24,7 @@ the requirements it serves. ADRs are immutable once **Accepted**; a later ADR ma
 | [0016](0016-conpty-host-validation.md) | ConPTY ownership and the detached Host, validated on Windows | Accepted |
 | [0017](0017-universal-customizable-hotkeys.md) | Universal customizable hotkeys without a shared hook or daemon | Accepted (implemented from Step 46) |
 | [0019](0019-secure-host-supervisor-and-ipc-v1.md) | Secure Host supervisor and IPC v1 | Accepted |
+| [0021](0021-noeul-product-definition.md) | Noeul product definition: double-click pins, privacy defaults and a clean-room boundary | Accepted (implemented from Step 49) |
 
 "Accepted (validated in Step N)" means the decision is made, but the named Step must confirm it
 on real Windows; if validation fails, that Step writes a superseding ADR.

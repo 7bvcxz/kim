@@ -744,3 +744,32 @@ fn a_large_blur_and_mosaic_stay_exact_on_a_flat_picture() {
     let f = flatten(&flat, &objects, r).unwrap();
     assert!(f.pixels() == flat.pixels());
 }
+
+#[test]
+fn the_row_by_row_column_pass_equals_a_column_by_column_box() {
+    // Odd sizes, radii from 1 to beyond the height (edges repeated).
+    for (w, h) in [(13usize, 29usize), (1, 7), (5, 1), (40, 3)] {
+        let src: Vec<u8> = (0..w * h * 4)
+            .map(|i| ((i * 37 + i / 7 * 11) % 256) as u8)
+            .collect();
+        for r in [1usize, 2, 5, 12, 40] {
+            let mut fast = src.clone();
+            let (mut ring, mut sums) = (Vec::new(), Vec::new());
+            effects::box_columns(&mut fast, w, h, r, &mut ring, &mut sums);
+            let mut naive = src.clone();
+            let (mut col, mut out) = (vec![0u8; h * 4], vec![0u8; h * 4]);
+            for x in 0..w {
+                for y in 0..h {
+                    col[y * 4..y * 4 + 4]
+                        .copy_from_slice(&src[(y * w + x) * 4..(y * w + x) * 4 + 4]);
+                }
+                effects::box_row(&col, &mut out, h, r);
+                for y in 0..h {
+                    naive[(y * w + x) * 4..(y * w + x) * 4 + 4]
+                        .copy_from_slice(&out[y * 4..y * 4 + 4]);
+                }
+            }
+            assert!(fast == naive, "{w} x {h}, radius {r}");
+        }
+    }
+}

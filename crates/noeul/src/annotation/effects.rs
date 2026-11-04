@@ -18,7 +18,7 @@
 //!
 //! Everything runs on the caller's thread when an edit or an output asks for pixels: no thread,
 //! no timer, no cache that outlives the call. A blur allocates one copy of its area (4 bytes per
-//! pixel) for the call; nothing touches the disk.
+//! pixel) and a ring of a few rows for the call; nothing touches the disk.
 
 use super::{Area, Effect, Mask, Object, Shape};
 use crate::frame::Rect;
@@ -380,16 +380,101 @@ pub(super) fn box_radii(sigma: f32) -> [usize; 3] {
     out
 }
 
-/// One box pass of radius `r` over `n` pixels of `src` (edges repeated) into `dst`.
-fn box_line(src: &[u8], dst: &mut [u8], n: usize, r: usize) {
-    let win = (2 * r + 1) as u32;
+/// Divides sums of a box `win` wide by `win`, rounded, with one multiplication (exact for the
+/// sums a box of 8-bit values can reach).
+#[derive(Clone, Copy)]
+struct Div {
+    half: u64,
+    inv: u64,
+}
+
+impl Div {
+    fn new(win: u32) -> Div {
+        let win = u64::from(win.max(1));
+        Div {
+            half: win / 2,
+            inv: (1u64 << 32).div_ceil(win),
+        }
+    }
+
+    #[inline]
+    fn of(self, sum: u32) -> u8 {
+        (((u64::from(sum) + self.half) * self.inv) >> 32).min(255) as u8
+    }
+}
+
+/// One box pass of radius `r` along a row of `n` pixels of `src` (edges repeated) into `dst`.
+pub(super) fn box_row(src: &[u8], dst: &mut [u8], n: usize, r: usize) {
+    let div = Div::new((2 * r + 1) as u32);
     let last = n - 1;
-    for ch in 0..4 {
-        let v = |i: usize| u32::from(src[i.min(last) * 4 + ch]);
-        let mut sum = (r as u32 + 1) * v(0) + (1..=r).map(v).sum::<u32>();
-        for i in 0..n {
-            dst[i * 4 + ch] = ((sum + win / 2) / win) as u8;
-            sum = sum + v(i + r + 1) - v(i.saturating_sub(r));
+    let at = |i: usize| -> [u32; 4] {
+        let j = i.min(last) * 4;
+        [
+            u32::from(src[j]),
+            u32::from(src[j + 1]),
+            u32::from(src[j + 2]),
+            u32::from(src[j + 3]),
+        ]
+    };
+    let first = at(0);
+    let mut sum = first.map(|v| v * (r as u32 + 1));
+    for i in 1..=r {
+        let p = at(i);
+        for k in 0..4 {
+            sum[k] += p[k];
+        }
+    }
+    for i in 0..n {
+        for k in 0..4 {
+            dst[i * 4 + k] = div.of(sum[k]);
+        }
+        let (add, sub) = (at(i + r + 1), at(i.saturating_sub(r)));
+        for k in 0..4 {
+            sum[k] = sum[k] + add[k] - sub[k];
+        }
+    }
+}
+
+/// One box pass of radius `r` down the columns of a `w` × `h` picture, in place and row by row
+/// (cache-friendly): running column sums, and a ring of the last `r + 1` original rows for the
+/// rows that leave the window after they were overwritten.
+pub(super) fn box_columns(
+    px: &mut [u8],
+    w: usize,
+    h: usize,
+    r: usize,
+    ring: &mut Vec<u8>,
+    sums: &mut Vec<u32>,
+) {
+    let stride = w * 4;
+    let rows = r + 1;
+    let last = h - 1;
+    let div = Div::new((2 * r + 1) as u32);
+    ring.clear();
+    ring.resize(rows * stride, 0);
+    sums.clear();
+    sums.extend(px[..stride].iter().map(|v| u32::from(*v) * (r as u32 + 1)));
+    for i in 1..=r {
+        let row = i.min(last) * stride;
+        for (s, v) in sums.iter_mut().zip(&px[row..row + stride]) {
+            *s += u32::from(*v);
+        }
+    }
+    for y in 0..h {
+        let slot = (y % rows) * stride;
+        let line = y * stride;
+        ring[slot..slot + stride].copy_from_slice(&px[line..line + stride]);
+        for (o, s) in px[line..line + stride].iter_mut().zip(sums.iter()) {
+            *o = div.of(*s);
+        }
+        if y == last {
+            break;
+        }
+        // The row entering the window lies below (still original); the one leaving was saved.
+        let add = (y + r + 1).min(last) * stride;
+        let sub = (y.saturating_sub(r) % rows) * stride;
+        for k in 0..stride {
+            sums[k] = sums[k] + u32::from(px[add + k]) - u32::from(ring[sub + k]);
         }
     }
 }
@@ -411,25 +496,17 @@ fn blur(c: &mut Canvas, o: &Object, area: &Area, clip: Rect) {
             px.extend_from_slice(&premul(*p));
         }
     }
-    let mut a = vec![0u8; w.max(h) * 4];
-    let mut b = vec![0u8; w.max(h) * 4];
+    let mut line = vec![0u8; w * 4];
+    let (mut ring, mut sums) = (Vec::new(), Vec::new());
     for r in box_radii(o.strength().max(1) as f32) {
         if r == 0 {
             continue;
         }
         for row in px.chunks_exact_mut(w * 4) {
-            a[..w * 4].copy_from_slice(row);
-            box_line(&a, row, w, r);
+            line.copy_from_slice(row);
+            box_row(&line, row, w, r);
         }
-        for x in 0..w {
-            for y in 0..h {
-                a[y * 4..y * 4 + 4].copy_from_slice(&px[(y * w + x) * 4..(y * w + x) * 4 + 4]);
-            }
-            box_line(&a, &mut b, h, r);
-            for y in 0..h {
-                px[(y * w + x) * 4..(y * w + x) * 4 + 4].copy_from_slice(&b[y * 4..y * 4 + 4]);
-            }
-        }
+        box_columns(&mut px, w, h, r, &mut ring, &mut sums);
     }
     let m = match area {
         Area::Box(_) => None,

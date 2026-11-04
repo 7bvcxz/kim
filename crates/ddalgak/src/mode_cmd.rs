@@ -201,8 +201,75 @@ pub fn run(cmd: Cmd, a: &Args, paths: &Paths, notify: Notify<'_>, active: Active
                 mode_edit::delete(doc, profile, &id, delete_rules)
             })
         }
+        Cmd::ModeEnable | Cmd::ModeDisable => {
+            let id = a.positional[0].clone();
+            let on = cmd == Cmd::ModeEnable;
+            rule_cmd::write(cmd, a, &files, &ctx, notify, |doc| {
+                mode_edit::set_enabled(doc, profile, &id, on)
+            })
+        }
         _ => unreachable!("not a mode file command"),
     }
+}
+
+/// `ddalgak enable|disable` with a scope (Step 73): `--rule <id>…` (like `rule enable|disable`),
+/// `--mode <id> [--profile <p>]` (like `mode enable|disable`) or `--profile <id>`. They change
+/// `rules.json` through the rule store and work without the app; a running app reloads. Without a
+/// scope the CLI turns the engine itself on or off (`main.rs`).
+pub fn scope(cmd: Cmd, a: &Args, paths: &Paths, notify: Notify<'_>) -> Outcome {
+    let on = cmd == Cmd::Enable;
+    let rules = a.all("--rule").to_vec();
+    let mode = a.get("--mode").map(str::to_string);
+    let profile = a.get("--profile").map(str::to_string);
+    if !rules.is_empty() && (mode.is_some() || profile.is_some()) {
+        return Err(CliError::usage(
+            "one scope at a time: --rule <id>..., --mode <id> [--profile <p>] or --profile <id>",
+        ));
+    }
+    if a.has("--allow") && rules.is_empty() {
+        return Err(CliError::usage(
+            "--allow gives consent to rules: use it with --rule <id>",
+        ));
+    }
+    let files = Files::new(paths);
+    let ctx = rule_cmd::context(paths);
+    let (scope, mut out) = if !rules.is_empty() {
+        let allow = rule_cmd::permissions(a)?;
+        let r = rule_cmd::write(cmd, a, &files, &ctx, notify, |doc| {
+            ddalgak::edit::set_enabled(doc, &rules, on, &allow)
+        })?;
+        ("rule", r)
+    } else if let Some(m) = mode {
+        let as_mode = if on {
+            Cmd::ModeEnable
+        } else {
+            Cmd::ModeDisable
+        };
+        let p = profile.clone();
+        let r = rule_cmd::write(as_mode, a, &files, &ctx, notify, |doc| {
+            mode_edit::set_enabled(doc, p.as_deref(), &m, on)
+        })?;
+        ("mode", r)
+    } else if let Some(p) = profile.clone() {
+        let r = rule_cmd::write(cmd, a, &files, &ctx, notify, |doc| {
+            mode_edit::set_profile_enabled(doc, &p, on)
+        })?;
+        ("profile", r)
+    } else {
+        unreachable!("the engine scope is handled by the caller")
+    };
+    out.0["scope"] = json!(scope);
+    if scope != "rule" {
+        // The profile the change applied to (the active one unless --profile named another).
+        let l = rule_cmd::saved(&files, &ctx)?;
+        let active = l
+            .doc
+            .as_ref()
+            .map(|d| d.active_profile.clone())
+            .unwrap_or_default();
+        out.0["profile"] = json!(profile.unwrap_or(active));
+    }
+    Ok(out)
 }
 
 fn s(v: &Value) -> String {
@@ -242,6 +309,105 @@ pub fn mode_line(m: &Value) -> String {
     }
     line.push('\n');
     line
+}
+
+/// Human output of `enable|disable` (Step 73): the engine, or the scope that changed.
+pub fn scope_human(cmd: Cmd, d: &Value) -> String {
+    let mut o = String::new();
+    let verb = if cmd == Cmd::Enable {
+        "enabled"
+    } else {
+        "disabled"
+    };
+    match d["scope"].as_str() {
+        Some("engine") => {
+            if d["dry_run"] == true {
+                o.push_str(&format!(
+                    "dry run, nothing changed: engine would go {} → {}\n",
+                    s(&d["would"]["from"]),
+                    s(&d["would"]["to"])
+                ));
+            } else if d["change"]["changed"] == true {
+                o.push_str(&format!(
+                    "engine {} → {}\n",
+                    s(&d["change"]["from"]),
+                    s(&d["change"]["to"])
+                ));
+            } else {
+                o.push_str(&format!("engine already {}\n", s(&d["change"]["to"])));
+            }
+            if cmd == Cmd::Disable && d["dry_run"] == false {
+                o.push_str(
+                    "it stays off after a restart until you turn it on (ddalgak enable, the tray or your shortcut)\n",
+                );
+            }
+        }
+        Some(scope) => {
+            let what = match scope {
+                "rule" => d["rules"]
+                    .as_array()
+                    .map(|r| r.iter().map(s).collect::<Vec<_>>().join(", "))
+                    .unwrap_or_default(),
+                "mode" => format!(
+                    "mode {} of profile {}",
+                    d["modes"]
+                        .as_array()
+                        .map(|r| r.iter().map(s).collect::<Vec<_>>().join(", "))
+                        .unwrap_or_default(),
+                    s(&d["profile"])
+                ),
+                _ => format!("profile {}", s(&d["profile"])),
+            };
+            let prefix = if d["dry_run"] == true {
+                "dry run, nothing written: would have "
+            } else {
+                ""
+            };
+            if d["changed"] == false {
+                o.push_str(&format!("{prefix}nothing to change ({what})\n"));
+            } else {
+                o.push_str(&format!(
+                    "{prefix}{verb} {what}, revision {} → {}\n",
+                    s(&d["revision"]["from"]),
+                    s(&d["revision"]["to"])
+                ));
+            }
+            for n in d["notes"].as_array().into_iter().flatten() {
+                o.push_str(&format!("note: {}\n", s(n)));
+            }
+            if d["app"]["running"] == true {
+                o.push_str(&format!(
+                    "the running app reloaded: {}\n",
+                    s(&d["app"]["outcome"])
+                ));
+            }
+        }
+        None => {}
+    }
+    o
+}
+
+/// Human output of `release` (Step 73).
+pub fn release_human(d: &Value) -> String {
+    let st = &d["stale"];
+    if d["dry_run"] == true {
+        format!(
+            "dry run, nothing sent: Ddalgak holds {} key(s) or button(s); {} of {} checked keys look stuck\n",
+            d["held_by_ddalgak"], st["released"], st["checked"]
+        )
+    } else {
+        format!(
+            "released {} key(s) or button(s) Ddalgak held and {} stuck key(s) (of {} checked){}\n",
+            d["held_by_ddalgak"],
+            st["released"],
+            st["checked"],
+            if d["key_state_reset"] == true {
+                "; the engine forgot its key state"
+            } else {
+                ""
+            }
+        )
+    }
 }
 
 /// Human output of the mode commands.
@@ -334,7 +500,13 @@ pub fn human(cmd: Cmd, d: &Value) -> String {
             ));
             o.push_str(&format!("  layers over it: {}\n", list("layers")));
         }
-        Cmd::ModeAdd | Cmd::ModeEdit | Cmd::ModeRename | Cmd::ModeCopy | Cmd::ModeDelete => {
+        Cmd::ModeAdd
+        | Cmd::ModeEdit
+        | Cmd::ModeRename
+        | Cmd::ModeCopy
+        | Cmd::ModeDelete
+        | Cmd::ModeEnable
+        | Cmd::ModeDisable => {
             let verb = if d["dry_run"] == true {
                 "would change"
             } else {

@@ -39,10 +39,12 @@ pub enum Code {
     // Step 72: mode CRUD (docs/DDALGAK_RULE_MODEL.md §13).
     ModeInvalid,
     ModeInUse,
+    // Step 73: a switch to a disabled mode.
+    ModeDisabled,
 }
 
 impl Code {
-    pub const ALL: [Self; 30] = [
+    pub const ALL: [Self; 31] = [
         Self::Io,
         Self::Internal,
         Self::PermissionDenied,
@@ -73,6 +75,7 @@ impl Code {
         Self::Cancelled,
         Self::ModeInvalid,
         Self::ModeInUse,
+        Self::ModeDisabled,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -107,6 +110,7 @@ impl Code {
             Self::Cancelled => "cancelled",
             Self::ModeInvalid => "mode_invalid",
             Self::ModeInUse => "mode_in_use",
+            Self::ModeDisabled => "mode_disabled",
         }
     }
 
@@ -138,7 +142,8 @@ impl Code {
             | Self::ConsentRequired
             | Self::ConfirmationRequired
             | Self::Busy
-            | Self::ModeInUse => 7,
+            | Self::ModeInUse
+            | Self::ModeDisabled => 7,
             Self::Cancelled => 8,
         }
     }

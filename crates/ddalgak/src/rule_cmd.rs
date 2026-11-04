@@ -476,7 +476,7 @@ fn steps(a: &Args) -> Result<Option<Vec<Action>>, CliError> {
     }
 }
 
-fn permissions(a: &Args) -> Result<Vec<Permission>, CliError> {
+pub(crate) fn permissions(a: &Args) -> Result<Vec<Permission>, CliError> {
     a.all("--allow")
         .iter()
         .map(|p| {

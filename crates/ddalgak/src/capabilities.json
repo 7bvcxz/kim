@@ -6,7 +6,7 @@
   "cli_contract": 1,
   "json_schema_version": 1,
   "implementation": "implemented",
-  "summary": "Pre-alpha: engine status, health and control of the tray app, opt-in sign-in start, rule store (CRUD, validation, drafts, history, live reload); engine, remap, block, typing, launch and mouse rules",
+  "summary": "Pre-alpha: engine status, health and control of the tray app, opt-in sign-in start, rule store (CRUD, validation, drafts, history, live reload); rules of every core action; enable, disable and release",
   "commands": [
     {
       "name": "capabilities",
@@ -72,6 +72,36 @@
       "name": "engine.stop",
       "usage": "ddalgak engine stop [--endpoint <name>] [--dry-run] [--json]",
       "summary": "Turn the engine off: remove the hook, release held keys, cancel runs",
+      "effect": "write",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "enable",
+      "usage": "ddalgak enable [--rule <id>... [--allow <permission>]... | --mode <id> [--profile <p>] | --profile <id>] [--endpoint <name>] [--dry-run] [--draft] [--if-revision <n>] [--json]",
+      "summary": "Turn the engine on in the running app, or with a scope turn rules, a mode or a profile on in rules.json",
+      "effect": "write",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "disable",
+      "usage": "ddalgak disable [--rule <id>... | --mode <id> [--profile <p>] | --profile <id>] [--endpoint <name>] [--dry-run] [--draft] [--if-revision <n>] [--json]",
+      "summary": "Turn the engine off and keep it off across restarts until turned on, or with a scope turn rules, a mode or a profile off in rules.json",
+      "effect": "write",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "release",
+      "usage": "ddalgak release [--endpoint <name>] [--dry-run] [--json]",
+      "summary": "Release every key and button Ddalgak holds and keys Windows still considers pressed that nobody holds",
       "effect": "write",
       "network": false,
       "dry_run": true,
@@ -366,6 +396,26 @@
       "network": false,
       "dry_run": true,
       "requires_yes": true,
+      "opens_window": false
+    },
+    {
+      "name": "mode.enable",
+      "usage": "ddalgak mode enable <id> [--profile <p>] [--dry-run] [--draft] [--if-revision <n>] [--json]",
+      "summary": "Turn a disabled mode on again in rules.json",
+      "effect": "write",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": false,
+      "opens_window": false
+    },
+    {
+      "name": "mode.disable",
+      "usage": "ddalgak mode disable <id> [--profile <p>] [--dry-run] [--draft] [--if-revision <n>] [--json]",
+      "summary": "Turn a mode off in rules.json: its own rules stop and nothing switches to it (never the default mode)",
+      "effect": "write",
+      "network": false,
+      "dry_run": true,
+      "requires_yes": false,
       "opens_window": false
     },
     {

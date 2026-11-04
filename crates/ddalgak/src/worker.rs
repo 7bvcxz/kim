@@ -2077,6 +2077,7 @@ mod tests {
             title: "P".into(),
             description: None,
             default_mode: "base".into(),
+            enabled: None,
             modes: vec![
                 ModeDoc::new("base", "Base"),
                 ModeDoc::new("nav", "Navigation"),

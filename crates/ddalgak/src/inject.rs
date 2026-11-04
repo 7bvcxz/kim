@@ -370,6 +370,12 @@ impl<B: Backend> Drop for Injector<B> {
     }
 }
 
+/// Every key and button an injector of this process holds right now (Step 73: a release of
+/// stale keys leaves these to the worker, which releases its own ledger).
+pub fn held_global() -> Vec<OutCode> {
+    HELD.lock().map(|g| g.clone()).unwrap_or_default()
+}
+
 /// Registers the backend [`release_all_global`] uses (the host does this at start).
 pub fn set_panic_backend(backend: Box<dyn Backend>) {
     if let Ok(mut g) = PANIC_BACKEND.lock() {

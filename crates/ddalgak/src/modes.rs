@@ -45,6 +45,9 @@ pub struct ModeDef {
     pub parent: Option<u8>,
     pub one_shot: bool,
     pub timeout_ms: Option<u32>,
+    /// Step 73: `false` when the user disabled the mode (`enabled: false`): rules limited to it
+    /// alone are inactive and nothing switches to it. The default mode is always enabled.
+    pub enabled: bool,
 }
 
 impl ModeDef {
@@ -57,6 +60,7 @@ impl ModeDef {
             parent: None,
             one_shot: false,
             timeout_ms: None,
+            enabled: true,
         }
     }
 
@@ -182,6 +186,8 @@ impl ModeSet {
                     } else {
                         m.timeout_ms.map(|t| t.clamp(1000, 3_600_000))
                     },
+                    // The default mode is where every exit ends: never disabled (Step 73).
+                    enabled: base || m.enabled != Some(false),
                 }
             })
             .collect();
@@ -220,6 +226,22 @@ impl ModeSet {
 
     pub fn index(&self, id: &str) -> Option<u8> {
         self.modes.iter().position(|m| m.id == id).map(idx)
+    }
+
+    /// Whether mode `i` is enabled (Step 73); an index this set does not have is not.
+    pub fn is_enabled(&self, i: u8) -> bool {
+        self.get(i).is_some_and(|m| m.enabled)
+    }
+
+    /// `mask` without the disabled modes (Step 73): a rule limited to disabled modes only
+    /// gets 0 here although its `mask` is not 0.
+    pub fn enabled_mask(&self, mask: u32) -> u32 {
+        self.modes
+            .iter()
+            .enumerate()
+            .take(32)
+            .filter(|(_, m)| !m.enabled)
+            .fold(mask, |acc, (i, _)| acc & !(1 << i))
     }
 
     /// The mode and its parents, nearest first: the precedence of mode-scoped rules in it.
@@ -346,6 +368,15 @@ impl ModeAction {
     pub fn holds(&self) -> bool {
         matches!(self, ModeAction::Hold(_))
     }
+
+    /// Step 73: the step can only switch to disabled modes (the rule is then `mode_disabled`).
+    pub fn targets_disabled(&self, set: &ModeSet) -> bool {
+        match self {
+            ModeAction::Set(m) | ModeAction::Toggle(m) | ModeAction::Hold(m) => !set.is_enabled(*m),
+            ModeAction::Cycle(list) => !list.iter().any(|m| set.is_enabled(*m)),
+            ModeAction::Previous | ModeAction::Default => false,
+        }
+    }
 }
 
 /// Why the mode changed (status and the indicator name it; never keys).
@@ -449,9 +480,11 @@ impl ModeStatus {
     pub fn carried(&self, set: &ModeSet) -> ModeStatus {
         let latched = set
             .index(&self.latched)
+            .filter(|i| set.is_enabled(*i))
             .unwrap_or_else(|| set.default_mode());
         let previous = set
             .index(&self.previous)
+            .filter(|i| set.is_enabled(*i))
             .unwrap_or_else(|| set.default_mode());
         let mut st = ModeState::new(set);
         st.latched = latched;
@@ -640,6 +673,13 @@ impl ModeState {
     ) -> Option<Change> {
         let before = self.shape();
         let active = self.active();
+        // Nothing switches to a disabled mode (Step 73); switching away from one still works.
+        match action {
+            ModeAction::Set(m) | ModeAction::Hold(m) if !set.is_enabled(*m) => return None,
+            ModeAction::Toggle(m) if active != *m && !set.is_enabled(*m) => return None,
+            ModeAction::Cycle(list) if !list.iter().any(|m| set.is_enabled(*m)) => return None,
+            _ => {}
+        }
         match action {
             ModeAction::Set(m) => self.latch(set, *m, now, true),
             ModeAction::Toggle(m) => {
@@ -660,10 +700,15 @@ impl ModeState {
                 }
             }
             ModeAction::Cycle(list) => {
-                let next = list
+                // The next enabled mode after the active one (disabled modes are skipped).
+                let start = list
                     .iter()
                     .position(|m| *m == active)
-                    .map_or(list[0], |i| list[(i + 1) % list.len()]);
+                    .map_or(list.len() - 1, |i| i);
+                let next = (1..=list.len())
+                    .map(|k| list[(start + k) % list.len()])
+                    .find(|m| set.is_enabled(*m))
+                    .unwrap_or(set.default_mode());
                 self.latch(set, next, now, true);
             }
             ModeAction::Hold(m) => {
@@ -803,7 +848,12 @@ impl ModeState {
     /// The state for new rules (a reload): the latched and previous modes by ID when they still
     /// exist (else the default), held layers and a pending one-shot exit ended.
     pub fn carry(&self, old: &ModeSet, new: &ModeSet, now: u32) -> ModeState {
-        let map = |m: u8| new.index(old.id(m)).unwrap_or_else(|| new.default_mode());
+        // A mode that is gone or was disabled (Step 73) gives way to the default mode.
+        let map = |m: u8| {
+            new.index(old.id(m))
+                .filter(|i| new.is_enabled(*i))
+                .unwrap_or_else(|| new.default_mode())
+        };
         let latched = map(self.latched);
         let mut st = ModeState::new(new);
         st.latched = latched;
@@ -932,11 +982,13 @@ pub struct MenuEntry {
     pub checked: bool,
 }
 
-/// The mode menu: every mode, the active one checked, in profile order.
+/// The mode menu: every enabled mode, the active one checked, in profile order (a disabled mode
+/// is not offered, Step 73).
 pub fn menu(set: &ModeSet, s: &ModeStatus) -> Vec<MenuEntry> {
     set.modes()
         .iter()
         .enumerate()
+        .filter(|(_, m)| m.enabled)
         .map(|(i, m)| {
             let mut label = match &m.icon {
                 Some(icon) => format!("{icon} {}", m.title),

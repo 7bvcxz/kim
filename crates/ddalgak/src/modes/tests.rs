@@ -28,6 +28,7 @@ fn profile() -> Profile {
         title: "P".into(),
         description: None,
         default_mode: "base".into(),
+        enabled: None,
         modes: vec![
             mode("base", "Base"),
             nav,

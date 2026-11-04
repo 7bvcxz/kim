@@ -7,6 +7,11 @@
 //!   or an emergency off it always starts `off` and says why (`DDALGAK-FR-003`).
 //! - A rule can pause, resume or turn the engine off, **never on** (`DDALGAK-FR-004`).
 //! - The emergency chord turns it off from any state (`DDALGAK-SEC-003`).
+//! - Step 73: an explicit turn-off by the user (the tray, the CLI, a shortcut or a rule) is
+//!   remembered (`engine.disabled`) until the user turns the engine on again, so a restart, a
+//!   sign-out or a reboot never turns it back on by itself, not even with `engine_on_start: on`
+//!   (DDALGAK_SAFETY §4). A turn-off by the app itself (quitting, the session ending, a lost
+//!   hook) is not a user choice and is not remembered.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -98,6 +103,9 @@ pub enum Origin {
     Shutdown,
     /// The session was locked or the user signed out.
     Session,
+    /// Step 73: a hook callback took as long as Windows' `LowLevelHooksTimeout`, after which
+    /// Windows removes a low-level hook silently; the engine turned itself off.
+    HookLost,
 }
 
 impl Origin {
@@ -111,7 +119,17 @@ impl Origin {
             Origin::Startup => "startup".into(),
             Origin::Shutdown => "shutdown".into(),
             Origin::Session => "session".into(),
+            Origin::HookLost => "hook_lost".into(),
         }
+    }
+
+    /// The user asked (tray, CLI, one of Ddalgak's shortcuts, a rule the user wrote): a turn-off
+    /// from here is remembered across restarts (Step 73).
+    pub fn is_user(&self) -> bool {
+        matches!(
+            self,
+            Origin::Tray | Origin::Cli | Origin::Shortcut(_) | Origin::Rule(_)
+        )
     }
 }
 
@@ -188,6 +206,12 @@ pub enum OffReason {
     Elevated,
     /// Turned off by the user or a rule.
     Stopped,
+    /// Step 73: the user turned the engine off last time and has not turned it on since; a
+    /// restart keeps it off even with `engine_on_start: on`.
+    Disabled,
+    /// Step 73: a hook callback took as long as `LowLevelHooksTimeout`; Windows may have removed
+    /// the hook silently, so the engine turned itself off and released everything.
+    HookLost,
 }
 
 impl OffReason {
@@ -199,6 +223,8 @@ impl OffReason {
             OffReason::NoHotkeys => "no_hotkeys",
             OffReason::Elevated => "elevated",
             OffReason::Stopped => "stopped",
+            OffReason::Disabled => "disabled",
+            OffReason::HookLost => "hook_lost",
         }
     }
 }
@@ -262,6 +288,8 @@ impl Lifecycle {
         if change.to == State::Off && (change.changed() || request == Request::Emergency) {
             self.off_reason = Some(if request == Request::Emergency {
                 OffReason::Emergency
+            } else if *origin == Origin::HookLost {
+                OffReason::HookLost
             } else {
                 OffReason::Stopped
             });
@@ -281,6 +309,8 @@ pub struct StartFacts {
     pub unclean_exit: bool,
     /// The emergency marker is present.
     pub emergency: bool,
+    /// Step 73: the user turned the engine off last time (`engine.disabled`).
+    pub disabled: bool,
     /// `--no-hotkeys` / `KIM_NO_HOTKEYS`.
     pub no_hotkeys: bool,
     /// The app runs elevated.
@@ -296,6 +326,9 @@ pub fn start_policy(f: StartFacts) -> Result<(), OffReason> {
         Err(OffReason::Emergency)
     } else if f.unclean_exit {
         Err(OffReason::UncleanExit)
+    } else if f.disabled {
+        // Never silently re-enabled (Step 73): the user's last choice wins over the setting.
+        Err(OffReason::Disabled)
     } else if f.no_hotkeys {
         Err(OffReason::NoHotkeys)
     } else if f.engine_on_start {
@@ -316,6 +349,18 @@ pub struct Markers {
 pub const RUN_MARKER: &str = "engine.running";
 /// Written by the emergency off; removed when the user turns the engine on again.
 pub const EMERGENCY_MARKER: &str = "engine.emergency";
+/// Step 73: written when the user turns the engine off; removed when the user turns it on again.
+pub const DISABLED_MARKER: &str = "engine.disabled";
+
+/// What the markers said at app start.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct Found {
+    /// The run marker was left behind: the previous run did not stop cleanly.
+    pub unclean_exit: bool,
+    pub emergency: bool,
+    /// The user turned the engine off last time.
+    pub disabled: bool,
+}
 
 impl Markers {
     pub fn new(dir: impl Into<PathBuf>) -> Markers {
@@ -347,14 +392,25 @@ impl Markers {
         self.path(EMERGENCY_MARKER).exists()
     }
 
+    pub fn disabled(&self) -> bool {
+        self.path(DISABLED_MARKER).exists()
+    }
+
     /// The engine turned on: a later start without a clean stop sees an unclean exit.
     pub fn engine_on(&self) -> std::io::Result<()> {
         self.remove(EMERGENCY_MARKER)?;
+        self.remove(DISABLED_MARKER)?;
         self.write(RUN_MARKER)
     }
 
     /// The engine turned off cleanly.
     pub fn engine_off(&self) -> std::io::Result<()> {
+        self.remove(RUN_MARKER)
+    }
+
+    /// The user turned the engine off (Step 73): a restart keeps it off.
+    pub fn engine_off_by_user(&self) -> std::io::Result<()> {
+        self.write(DISABLED_MARKER)?;
         self.remove(RUN_MARKER)
     }
 
@@ -365,11 +421,14 @@ impl Markers {
     }
 
     /// At app start: reads the facts and clears the run marker (it described the previous run).
-    pub fn take_start_facts(&self) -> (bool, bool) {
-        let unclean = self.running();
-        let emergency = self.emergency();
+    pub fn take_start_facts(&self) -> Found {
+        let found = Found {
+            unclean_exit: self.running(),
+            emergency: self.emergency(),
+            disabled: self.disabled(),
+        };
         let _ = self.remove(RUN_MARKER);
-        (unclean, emergency)
+        found
     }
 
     pub fn dir(&self) -> &Path {
@@ -417,6 +476,25 @@ mod tests {
         assert!(c.removes_hook() && c.releases_keys());
         assert_eq!(l.off_reason(), Some(OffReason::Stopped));
         assert!(!l.apply(Request::Stop, &Origin::Cli).unwrap().changed());
+        // Step 73: a lost hook turns the engine off and says so; it is not a user turn-off.
+        l.apply(Request::Start, &Origin::Cli).unwrap();
+        let c = l.apply(Request::Stop, &Origin::HookLost).unwrap();
+        assert!(c.removes_hook() && c.releases_keys());
+        assert_eq!(l.off_reason(), Some(OffReason::HookLost));
+        assert_eq!(l.last().unwrap().1, "hook_lost");
+        for (o, user) in [
+            (Origin::Tray, true),
+            (Origin::Cli, true),
+            (Origin::Shortcut("engine.toggle"), true),
+            (Origin::Rule("r".into()), true),
+            (Origin::Shutdown, false),
+            (Origin::Session, false),
+            (Origin::HookLost, false),
+            (Origin::Startup, false),
+            (Origin::Emergency, false),
+        ] {
+            assert_eq!(o.is_user(), user, "{o:?}");
+        }
     }
 
     #[test]
@@ -493,6 +571,22 @@ mod tests {
                 },
                 OffReason::Elevated,
             ),
+            // Step 73: never silently re-enabled after the user turned it off.
+            (
+                StartFacts {
+                    disabled: true,
+                    ..on
+                },
+                OffReason::Disabled,
+            ),
+            (
+                StartFacts {
+                    disabled: true,
+                    unclean_exit: true,
+                    ..on
+                },
+                OffReason::UncleanExit,
+            ),
         ] {
             assert_eq!(start_policy(facts), Err(reason), "{facts:?}");
         }
@@ -507,23 +601,38 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&dir);
         let m = Markers::new(&dir);
-        assert_eq!(m.take_start_facts(), (false, false));
+        let none = Found::default();
+        let f = |unclean_exit, emergency, disabled| Found {
+            unclean_exit,
+            emergency,
+            disabled,
+        };
+        assert_eq!(m.take_start_facts(), none);
         m.engine_on().unwrap();
         // The process "crashes" here: the next start sees the marker once.
-        assert_eq!(m.take_start_facts(), (true, false));
-        assert_eq!(m.take_start_facts(), (false, false));
+        assert_eq!(m.take_start_facts(), f(true, false, false));
+        assert_eq!(m.take_start_facts(), none);
         m.engine_on().unwrap();
         m.engine_off().unwrap();
-        assert_eq!(m.take_start_facts(), (false, false));
+        assert_eq!(m.take_start_facts(), none);
         m.engine_on().unwrap();
         m.emergency_off().unwrap();
-        assert_eq!(m.take_start_facts(), (false, true));
+        assert_eq!(m.take_start_facts(), f(false, true, false));
         assert!(
             m.emergency(),
             "the emergency marker stays until the engine is turned on"
         );
         m.engine_on().unwrap();
         assert!(!m.emergency());
+        // Step 73: the user's turn-off is remembered over any number of restarts (a reboot)
+        // until the user turns the engine on again; quitting is no turn-off.
+        m.engine_off_by_user().unwrap();
+        assert_eq!(m.take_start_facts(), f(false, false, true));
+        assert_eq!(m.take_start_facts(), f(false, false, true));
+        m.engine_on().unwrap();
+        assert!(!m.disabled());
+        m.engine_off().unwrap();
+        assert_eq!(m.take_start_facts(), none);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

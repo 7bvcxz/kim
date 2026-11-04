@@ -15,11 +15,16 @@
 //! active one checked) and "Back to <default>", the safe reset. The tray is never shown by the
 //! automated tests (the test host has no tray); its texts and shapes are unit-tested.
 //!
-//! Step 73 refines the indicator (optional compact indicator, notices); Step 74 adds the editor.
+//! **Step 73** (ADR 0046): the icon and tooltip come from [`crate::indicator`]: after an
+//! emergency off, a lost hook or an unclean exit the ring is struck through until the engine is
+//! turned on again, and the tooltip names what needs attention in words (a disabled profile, a
+//! shortcut another program owns, a locked session). The menu adds *Release stuck keys*. Step 74
+//! adds the editor and draws the optional floating badge.
 
 use super::wide;
+use crate::indicator::{self, Shape};
 use crate::lifecycle::State;
-use crate::modes::{self, Indicator, MenuEntry};
+use crate::modes::MenuEntry;
 use std::io;
 use windows_sys::Win32::Foundation::{HWND, POINT};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -43,7 +48,30 @@ pub enum MenuCmd {
     Mode(String),
     /// Back to the default mode (the safe reset).
     ResetMode,
+    /// Step 73: release every key Ddalgak holds and stale keys Windows still considers pressed.
+    ReleaseKeys,
 }
+
+/// Step 73: off after an emergency, a lost hook or an unclean exit: the ring struck through
+/// (DDALGAK_GUI_JOURNEYS J8), so it differs from a plain "off" by shape.
+const OFF_ALERT: [&str; 16] = [
+    "................",
+    ".....++++++..++.",
+    "...++######++##+",
+    "..+##++++++#####",
+    "..+#+.....+###+.",
+    ".+#+.....+###+#+",
+    ".+#+....+###+.#+",
+    ".+#+...+###+..#+",
+    ".+#+..+###+...#+",
+    ".+#+.+###+....#+",
+    ".+#++###+.....#+",
+    "..+####+.....+#+",
+    ".+####+++++++#+.",
+    "+##++######++...",
+    ".++..++++++.....",
+    "................",
+];
 
 /// The menu IDs of mode entries start here (one per mode, at most 32).
 const MODE_ID: usize = 100;
@@ -165,9 +193,9 @@ fn make_icon(art: &[&str; 16]) -> io::Result<HICON> {
     }
 }
 
-/// The state icons (off, on, paused, on outside the default mode).
+/// The state icons (off, on, paused, on outside the default mode, off needing attention).
 #[derive(Debug)]
-pub struct Icons([HICON; 4]);
+pub struct Icons([HICON; 5]);
 
 impl Icons {
     pub fn new() -> io::Result<Icons> {
@@ -176,6 +204,7 @@ impl Icons {
             make_icon(&ON)?,
             make_icon(&PAUSED)?,
             make_icon(&ON_MODE)?,
+            make_icon(&OFF_ALERT)?,
         ]))
     }
 
@@ -190,6 +219,17 @@ impl Icons {
             State::Running if away => self.0[3],
             State::Running => self.0[1],
             State::Paused => self.0[2],
+        }
+    }
+
+    /// The icon of an indicator shape (Step 73).
+    pub fn for_shape(&self, s: Shape) -> HICON {
+        match s {
+            Shape::Off => self.0[0],
+            Shape::Running => self.0[1],
+            Shape::Paused => self.0[2],
+            Shape::RunningAway => self.0[3],
+            Shape::OffAlert => self.0[4],
         }
     }
 }
@@ -224,9 +264,9 @@ pub struct Tray {
     hwnd: HWND,
     callback: u32,
     icons: Icons,
-    state: State,
-    /// The mode indicator (Step 72); `None` while the engine is off.
-    mode: Option<Indicator>,
+    /// What the icon and tooltip show (Step 73: [`crate::indicator`], which includes the mode
+    /// of Step 72).
+    status: indicator::Status,
     added: bool,
 }
 
@@ -234,13 +274,12 @@ const ID: u32 = 1;
 
 impl Tray {
     /// Adds the icon. `callback` is the window message the shell sends for mouse events.
-    pub fn new(hwnd: HWND, callback: u32, state: State) -> io::Result<Tray> {
+    pub fn new(hwnd: HWND, callback: u32, status: indicator::Status) -> io::Result<Tray> {
         let mut t = Tray {
             hwnd,
             callback,
             icons: Icons::new()?,
-            state,
-            mode: None,
+            status,
             added: false,
         };
         t.add()?;
@@ -248,29 +287,25 @@ impl Tray {
     }
 
     fn data(&self) -> NOTIFYICONDATAW {
-        let away = self.mode.as_ref().is_some_and(|m| m.visible && m.away);
         let mut d = NOTIFYICONDATAW {
             cbSize: u32::try_from(size_of::<NOTIFYICONDATAW>()).expect("small"),
             hWnd: self.hwnd,
             uID: ID,
             uFlags: NIF_MESSAGE | NIF_ICON | NIF_TIP,
             uCallbackMessage: self.callback,
-            hIcon: self.icons.for_state_in_mode(self.state, away),
+            hIcon: self.icons.for_shape(self.status.shape),
             ..Default::default()
         };
-        copy_into(
-            &mut d.szTip,
-            &modes::tooltip(self.state, self.mode.as_ref()),
-        );
+        copy_into(&mut d.szTip, &self.status.tooltip);
         d
     }
 
-    /// Shows the active mode (or none) in the tooltip and the icon shape (Step 72).
-    pub fn set_mode(&mut self, mode: Option<Indicator>) {
-        if self.mode == mode {
+    /// Shows a new state, mode or notice (event-driven: the host calls it after a change).
+    pub fn set(&mut self, status: indicator::Status) {
+        if self.status == status {
             return;
         }
-        self.mode = mode;
+        self.status = status;
         let d = self.data();
         // SAFETY: as in `add`.
         unsafe { Shell_NotifyIconW(NIM_MODIFY, &raw const d) };
@@ -284,14 +319,6 @@ impl Tray {
         }
         self.added = true;
         Ok(())
-    }
-
-    /// Shows the new state.
-    pub fn update(&mut self, state: State) {
-        self.state = state;
-        let d = self.data();
-        // SAFETY: as in `add`.
-        unsafe { Shell_NotifyIconW(NIM_MODIFY, &raw const d) };
     }
 
     /// Adds the icon again after Explorer restarted (`TaskbarCreated`).
@@ -374,6 +401,8 @@ impl Tray {
             },
             state != State::Off,
         );
+        // Step 73: the way out of a stuck key, also while the engine is off.
+        item(4, "Release stuck keys", true);
         // SAFETY: as above.
         unsafe { AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null()) };
         item(3, "Quit Ddalgak", true);
@@ -401,6 +430,7 @@ impl Tray {
             1 => Some(MenuCmd::ToggleEngine),
             2 => Some(MenuCmd::TogglePause),
             3 => Some(MenuCmd::Quit),
+            4 => Some(MenuCmd::ReleaseKeys),
             RESET_MODE_ID => Some(MenuCmd::ResetMode),
             n if n >= MODE_ID => modes
                 .and_then(|(e, _)| e.get(n - MODE_ID))
@@ -426,7 +456,13 @@ mod tests {
 
     #[test]
     fn icons_differ_by_shape_and_are_created_without_showing_anything() {
-        let shapes = [masks(&ON), masks(&PAUSED), masks(&OFF), masks(&ON_MODE)];
+        let shapes = [
+            masks(&ON),
+            masks(&PAUSED),
+            masks(&OFF),
+            masks(&ON_MODE),
+            masks(&OFF_ALERT),
+        ];
         for (i, a) in shapes.iter().enumerate() {
             for b in &shapes[i + 1..] {
                 assert_ne!(a, b, "each state has its own shape");
@@ -434,8 +470,21 @@ mod tests {
             // Every icon has transparent, white and black pixels.
             assert!(a.0.iter().any(|b| *b != 0) && a.1.iter().any(|b| *b != 0));
         }
-        for art in [ON, PAUSED, OFF, ON_MODE] {
+        for art in [ON, PAUSED, OFF, ON_MODE, OFF_ALERT] {
             assert!(art.iter().all(|r| r.len() == 16));
+        }
+        // Step 73: every indicator shape has its own icon.
+        let icons = Icons::new().unwrap();
+        let all = [
+            Shape::Off,
+            Shape::OffAlert,
+            Shape::Running,
+            Shape::RunningAway,
+            Shape::Paused,
+        ]
+        .map(|s| icons.for_shape(s));
+        for (i, a) in all.iter().enumerate() {
+            assert!(!all[i + 1..].contains(a));
         }
         // CreateIcon only builds the images; no icon is added to the notification area here.
         let icons = Icons::new().unwrap();

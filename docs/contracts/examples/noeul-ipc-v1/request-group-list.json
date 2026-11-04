@@ -1,0 +1,6 @@
+{
+  "type": "request",
+  "id": 25,
+  "method": "group.list",
+  "params": {}
+}

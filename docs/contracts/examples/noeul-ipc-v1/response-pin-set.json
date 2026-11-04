@@ -1,0 +1,44 @@
+{
+  "type": "response",
+  "id": 21,
+  "result": {
+    "dry_run": false,
+    "targets": [
+      "pin-3"
+    ],
+    "changed": [
+      "pin-3"
+    ],
+    "pins": [
+      {
+        "id": "pin-3",
+        "rect": {
+          "x": 900,
+          "y": 640,
+          "width": 64,
+          "height": 64
+        },
+        "image": {
+          "width": 32,
+          "height": 32
+        },
+        "zoom": 200,
+        "visible": true,
+        "on_screen": true,
+        "source": "clipboard",
+        "created_at": "2026-11-04T10:17:42Z",
+        "annotations": 0,
+        "editing": false,
+        "orientation": {
+          "rotation": 90,
+          "mirrored": false
+        },
+        "opacity": 60,
+        "thumbnail": false,
+        "click_through": false,
+        "group": "default",
+        "animation": null
+      }
+    ]
+  }
+}

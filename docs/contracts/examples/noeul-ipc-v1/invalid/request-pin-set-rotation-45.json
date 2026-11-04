@@ -1,0 +1,9 @@
+{
+  "type": "request",
+  "id": 27,
+  "method": "pin.set",
+  "params": {
+    "id": "pin-1",
+    "rotation": 45
+  }
+}

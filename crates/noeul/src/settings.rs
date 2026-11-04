@@ -660,7 +660,7 @@ fn checked_edit(
                 path.display()
             ),
         )
-        .hint("edit the file by hand (keys go under [general], [capture] and [gestures])")
+        .hint("edit the file by hand (keys go under [general], [capture], [gestures] and [pins])")
     };
     let before: toml::Table = text.parse().map_err(|_| refuse("not valid TOML"))?;
     let mut out = text.to_string();
@@ -1056,7 +1056,7 @@ mod tests {
                 .unwrap()
                 .contains("# keep this comment")
         );
-        assert_eq!(reset(&f, Some("pins")).unwrap_err().code, Code::Usage);
+        assert_eq!(reset(&f, Some("history")).unwrap_err().code, Code::Usage);
         let e = reset(&f, None).unwrap();
         write(&f, &e.text).unwrap();
         assert_eq!(load(&f).settings, Settings::default());

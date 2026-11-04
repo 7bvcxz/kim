@@ -1,0 +1,11 @@
+{
+  "type": "request",
+  "id": 21,
+  "method": "pin.set",
+  "params": {
+    "id": "pin-3",
+    "rotate": "cw",
+    "opacity": 60,
+    "thumbnail": false
+  }
+}

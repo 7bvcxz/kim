@@ -21,7 +21,16 @@
         "source": "capture",
         "created_at": "2026-11-04T10:16:01Z",
         "annotations": 3,
-        "editing": false
+        "editing": false,
+        "orientation": {
+          "rotation": 0,
+          "mirrored": false
+        },
+        "opacity": 100,
+        "thumbnail": false,
+        "click_through": false,
+        "group": "default",
+        "animation": null
       },
       {
         "id": "pin-3",
@@ -41,15 +50,27 @@
         "source": "clipboard",
         "created_at": "2026-11-04T10:17:42Z",
         "annotations": 0,
-        "editing": false
+        "editing": false,
+        "orientation": {
+          "rotation": 90,
+          "mirrored": true
+        },
+        "opacity": 60,
+        "thumbnail": false,
+        "click_through": true,
+        "group": "default",
+        "animation": {
+          "frames": 12,
+          "shown": "first_frame"
+        }
       },
       {
         "id": "pin-4",
         "rect": {
           "x": -1700,
           "y": 200,
-          "width": 320,
-          "height": 180
+          "width": 96,
+          "height": 54
         },
         "image": {
           "width": 640,
@@ -61,9 +82,19 @@
         "source": "capture",
         "created_at": "2026-11-04T10:18:30Z",
         "annotations": 0,
-        "editing": false
+        "editing": false,
+        "orientation": {
+          "rotation": 0,
+          "mirrored": false
+        },
+        "opacity": 100,
+        "thumbnail": true,
+        "click_through": false,
+        "group": "research",
+        "animation": null
       }
     ],
-    "reopenable": "pin-2"
+    "reopenable": "pin-2",
+    "group": "default"
   }
 }

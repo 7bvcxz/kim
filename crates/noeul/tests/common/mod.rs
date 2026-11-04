@@ -20,6 +20,20 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::time::{Duration, Instant};
 
+/// How much larger than its picture a pin window is on each side at 100 % (Step 54): the
+/// one-pixel outline and the 12-pixel soft shadow (`noeul::transform::View::margin`).
+pub const PIN_MARGIN: i32 = 13;
+
+/// The window rectangle `(x, y, width, height)` of a pin whose picture is at `r` (100 %).
+pub fn framed(r: (i32, i32, i32, i32)) -> (i32, i32, i32, i32) {
+    (
+        r.0 - PIN_MARGIN,
+        r.1 - PIN_MARGIN,
+        r.2 + 2 * PIN_MARGIN,
+        r.3 + 2 * PIN_MARGIN,
+    )
+}
+
 pub fn exe() -> &'static str {
     env!("CARGO_BIN_EXE_noeul")
 }

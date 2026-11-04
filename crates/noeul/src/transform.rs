@@ -290,9 +290,11 @@ pub fn edge_at(r: Rect, outside: u32, inside: u32, p: (i32, i32)) -> Option<Edge
     if !(l || rr || t || b) {
         return None;
     }
+    // A corner's zone runs twice the band along each side, at most a quarter of that side.
     let corner = 2 * (out + inner).max(1) - out;
-    let (near_t, near_b) = (y < corner, y >= h - corner);
-    let (near_l, near_r) = (x < corner, x >= w - corner);
+    let (cy, cx) = (corner.min(h / 4).max(inner), corner.min(w / 4).max(inner));
+    let (near_t, near_b) = (y < cy, y >= h - cy);
+    let (near_l, near_r) = (x < cx, x >= w - cx);
     Some(
         match (l || (near_l && (t || b)), rr || (near_r && (t || b))) {
             (true, _) if t || near_t => Edge::TopLeft,

@@ -4342,7 +4342,18 @@ pub(crate) mod tests {
                 ("", false),
                 ("Zoom in\tPlus", true),
                 ("Zoom out\tMinus", true),
-                ("Zoom 100 %\t0", false),
+                ("Zoom 100 %, opaque\t0", false),
+                ("Rotate right\t1", true),
+                ("Rotate left\t2", true),
+                ("Flip horizontally\t3", true),
+                ("Flip vertically\t4", true),
+                ("More opaque\tCtrl+Plus", false),
+                ("More transparent\tCtrl+Minus", true),
+                ("", false),
+                ("Thumbnail\tT", true),
+                // No tray and no `pins.clickable` key: no way back, so it cannot be turned on.
+                ("Click-through\tCtrl+Shift+T", false),
+                ("Move to a new group (now in default)", true),
                 ("", false),
                 ("Hide\tH", true),
                 ("Close\tEscape", true),
@@ -4361,7 +4372,7 @@ pub(crate) mod tests {
         assert_eq!(a.pins.info(id).unwrap().zoom, 110);
         a.pin_event(PinEvent::Menu(id, None));
         let items = a.take_pin_menu().unwrap().items;
-        assert!(items[6].enabled, "100 % is offered once zoomed");
+        assert!(items[8].enabled, "100 % is offered once zoomed");
         a.pin_menu_choice(id, "capture.region");
         assert!(
             !a.overlay_open(),
@@ -4662,7 +4673,10 @@ pub(crate) mod tests {
         // The next instance starts with no pins, no reopen memory and fresh IDs.
         let mut b = app(&dir, DesktopState::Available);
         let list = b.request("pin.list", &json!({})).unwrap();
-        assert_eq!(list, json!({"pins": [], "reopenable": null}));
+        assert_eq!(
+            list,
+            json!({"pins": [], "reopenable": null, "group": "default"})
+        );
         let e = b.request("pin.reopen", &json!({})).unwrap_err();
         assert_eq!(e.code, Code::PinNotFound);
         let r = b

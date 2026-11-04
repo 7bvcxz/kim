@@ -60,6 +60,10 @@
       "reopenable": null,
       "hidden": 0,
       "off_screen": 0,
+      "click_through": 0,
+      "thumbnails": 0,
+      "group": "default",
+      "groups": 1,
       "editor": null
     },
     "captures": {
@@ -219,6 +223,10 @@
       "quick_save_folder": null,
       "detection": "window",
       "magnifier": "on",
+      "pins": {
+        "border": "on",
+        "shadow": "on"
+      },
       "gestures": {
         "double_click": "pin",
         "middle_click": "pin",

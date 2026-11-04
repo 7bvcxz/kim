@@ -323,7 +323,7 @@ fn b_scripts_drive_independent_off_screen_pins_and_a_restart_restores_nothing() 
     n.start();
     assert_eq!(
         n.list(),
-        json!({"pins": [], "reopenable": null}),
+        json!({"pins": [], "reopenable": null, "group": "default"}),
         "pins live in memory only"
     );
     assert_eq!(n.files("Temp"), 0, "no temporary files");

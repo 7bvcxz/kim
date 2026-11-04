@@ -1054,10 +1054,28 @@ mod tests {
             keys.lookup(&c("H", false, false, false), false),
             Some("pin.hide")
         );
+        // Step 54: the transforms.
+        for (chord, want) in [
+            (c("T", false, false, false), "pin.thumbnail"),
+            (c("1", false, false, false), "pin.rotate-cw"),
+            (c("2", false, false, false), "pin.rotate-ccw"),
+            (c("3", false, false, false), "pin.flip-horizontal"),
+            (c("4", false, false, false), "pin.flip-vertical"),
+            (c("Plus", true, false, false), "pin.opacity-up"),
+            (c("Minus", true, false, false), "pin.opacity-down"),
+            (c("T", true, false, true), "pin.click-through"),
+        ] {
+            assert_eq!(keys.lookup(&chord, false), Some(want), "{chord:?}");
+        }
         assert_eq!(
-            keys.lookup(&c("T", false, false, false), false),
+            keys.lookup(&c("Plus", false, false, false), false),
+            Some("pin.zoom-in"),
+            "Ctrl tells opacity from zoom: no conflict"
+        );
+        assert_eq!(
+            keys.lookup(&c("1", false, false, false), true),
             None,
-            "thumbnails are not in this build"
+            "a held 1 turns the pin once"
         );
         assert_eq!(
             keys.lookup(&c("F3", false, false, false), false),

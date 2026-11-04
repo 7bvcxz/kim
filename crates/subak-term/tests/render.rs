@@ -327,6 +327,23 @@ fn geometry_scales_with_dpi() {
     assert!(r.memory_bytes() >= r.frame().bytes());
 }
 
+#[test]
+fn font_size_changes_the_cells_and_redraws() {
+    // The Subak window's zoom (Step 16): a larger font, larger cells, the same padding.
+    let v = view(10, 2, b"zoom");
+    let mut r = builtin(1.0);
+    r.render(&v);
+    let small = r.metrics();
+    r.set_font_size(20.0);
+    assert!(r.render(&v).full, "a size change redraws everything");
+    let big = r.metrics();
+    assert_eq!(big.height, (20.0f32 * 1.2).ceil() as u32);
+    assert!(big.width > small.width, "{small:?} {big:?}");
+    assert_eq!(r.padding(), 8);
+    assert_eq!(r.options().font_size, 20.0);
+    assert_eq!(r.frame().height, 2 * big.height + 16);
+}
+
 #[cfg(windows)]
 #[test]
 fn system_fonts_draw_korean_emoji_and_symbols_in_their_cells() {

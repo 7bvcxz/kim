@@ -224,10 +224,29 @@ pub fn occupied(endpoint: &str) -> CliError {
     }
 }
 
+/// Who a client says it is in `hello` (IPC_PROTOCOL §2): the CLI, or the Subak window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Identity {
+    pub kind: ClientKind,
+    pub name: &'static str,
+}
+
+impl Identity {
+    pub const CLI: Self = Self {
+        kind: ClientKind::Cli,
+        name: "subak-cli",
+    };
+    /// `subak-gui` (Step 16, ADR 0039).
+    pub const GUI: Self = Self {
+        kind: ClientKind::Gui,
+        name: "subak-gui",
+    };
+}
+
 /// One connection to a Host, after the identity checks and the handshake.
 #[derive(Debug)]
 pub struct Session {
-    pipe: Arc<Pipe>,
+    pub(crate) pipe: Arc<Pipe>,
     next_id: Arc<AtomicU64>,
     pub welcome: Value,
     pub host_pid: u32,
@@ -245,6 +264,11 @@ impl Session {
 
     /// Connects; `wait` bounds the wait while every pipe instance is busy.
     pub fn try_open(endpoint: &str, wait: Duration) -> Result<Self, Failure> {
+        Self::try_open_as(endpoint, wait, Identity::CLI)
+    }
+
+    /// Connects as `who` (the `client` of `hello`).
+    pub fn try_open_as(endpoint: &str, wait: Duration, who: Identity) -> Result<Self, Failure> {
         let pipe = pipe::connect(endpoint, wait).map_err(|e| match e.kind() {
             io::ErrorKind::NotFound => Failure {
                 why: Why::NotRunning,
@@ -275,7 +299,7 @@ impl Session {
             )),
         })?;
         let pid = verify_host(&pipe, endpoint).map_err(other)?;
-        send(&pipe, &proto::hello(ClientKind::Cli, "subak-cli")).map_err(other)?;
+        send(&pipe, &proto::hello(who.kind, who.name)).map_err(other)?;
         let deadline = Instant::now() + proto::HANDSHAKE_TIMEOUT;
         let welcome = match proto::read_frame(&mut &pipe, Some(deadline), |_| deadline) {
             Ok(Some(Frame::Control(m))) if m["type"] == "welcome" => m,
@@ -419,10 +443,10 @@ impl Plan {
 }
 
 /// Waits until a stopping Host has released the endpoint.
-fn wait_gone(endpoint: &str) -> Result<(), CliError> {
+fn wait_gone(endpoint: &str, who: Identity) -> Result<(), CliError> {
     let until = Instant::now() + STOPPING_TIMEOUT;
     loop {
-        match Session::try_open(endpoint, Duration::from_millis(100)) {
+        match Session::try_open_as(endpoint, Duration::from_millis(100), who) {
             Err(Failure {
                 why: Why::NotRunning,
                 ..
@@ -458,7 +482,18 @@ pub struct Connected {
 /// before spawning. A stopping Host is waited for; any other refusal (identity mismatch, an
 /// unresponsive or incompatible Host) is returned as is: nothing is killed or replaced.
 pub fn connect_or_start(endpoint: &str, plan: &Plan) -> Result<Connected, CliError> {
-    let attempt = |wait| match Session::try_open(endpoint, wait) {
+    connect_or_start_as(endpoint, plan, Identity::CLI, &host_exe()?)
+}
+
+/// [`connect_or_start`] for any client: it says it is `who`, and a Host it starts runs `exe`
+/// (`subak.exe`; the CLI is that program itself, `subak-gui` finds it next to its own).
+pub fn connect_or_start_as(
+    endpoint: &str,
+    plan: &Plan,
+    who: Identity,
+    exe: &std::path::Path,
+) -> Result<Connected, CliError> {
+    let attempt = |wait| match Session::try_open_as(endpoint, wait, who) {
         Ok(s) => Ok(Some(s)),
         Err(Failure {
             why: Why::NotRunning,
@@ -466,7 +501,7 @@ pub fn connect_or_start(endpoint: &str, plan: &Plan) -> Result<Connected, CliErr
         }) => Ok(None),
         Err(Failure {
             why: Why::Stopping, ..
-        }) => wait_gone(endpoint).map(|()| None),
+        }) => wait_gone(endpoint, who).map(|()| None),
         Err(f) => Err(f.err),
     };
     if let Some(session) = attempt(Duration::from_millis(500))? {
@@ -494,10 +529,10 @@ pub fn connect_or_start(endpoint: &str, plan: &Plan) -> Result<Connected, CliErr
             lock_abandoned: lock.abandoned,
         });
     }
-    let spawned = spawn_host(endpoint, plan)?;
+    let spawned = spawn_host(endpoint, plan, exe)?;
     let deadline = Instant::now() + START_TIMEOUT;
     loop {
-        match Session::try_open(endpoint, Duration::from_millis(200)) {
+        match Session::try_open_as(endpoint, Duration::from_millis(200), who) {
             Ok(session) => {
                 let started = (session.host_pid == spawned.pid).then_some(spawned.pid);
                 return Ok(Connected {
@@ -543,12 +578,15 @@ fn host_exe() -> Result<PathBuf, CliError> {
         .map_err(|e| CliError::new(Code::Io, format!("cannot locate subak.exe: {e}")))
 }
 
-fn spawn_host(endpoint: &str, plan: &Plan) -> Result<spawn::Spawned, CliError> {
-    let exe = host_exe()?;
+fn spawn_host(
+    endpoint: &str,
+    plan: &Plan,
+    exe: &std::path::Path,
+) -> Result<spawn::Spawned, CliError> {
     // ADR 0003 §6: the Host gets the user's logon environment, not this terminal's.
     let env = EnvBlock::for_current_user().ok();
     let cwd = host_cwd(env.as_ref())?;
-    spawn::spawn_detached(&exe, |b| plan.args(endpoint, b), &cwd, env.as_ref())
+    spawn::spawn_detached(exe, |b| plan.args(endpoint, b), &cwd, env.as_ref())
         .map_err(|e| CliError::new(Code::SpawnFailed, format!("cannot start the Host: {e}")))
 }
 

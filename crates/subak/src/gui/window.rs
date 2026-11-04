@@ -2072,10 +2072,15 @@ impl App {
         let title = match self.model.terminal() {
             Some(t) if self.model.phase.shows_pane() => {
                 let program = self.pane.screen().title().trim().to_string();
+                // Step 21: which internal window and pane is shown, when there are several.
+                let name = match &t.place {
+                    Some(p) => format!("{} [{p}]", t.name),
+                    None => t.name.clone(),
+                };
                 if program.is_empty() || program == t.name {
-                    format!("{} — Subak", t.name)
+                    format!("{name} — Subak")
                 } else {
-                    format!("{program} — {} — Subak", t.name)
+                    format!("{program} — {name} — Subak")
                 }
             }
             _ => "Subak".to_string(),
@@ -3796,7 +3801,12 @@ impl App {
         let mut dump = json!({
             "event": "dump",
             "phase": self.model.phase.name(),
-            "terminal": self.model.terminal().map(|t| json!({"id": t.id, "name": t.name, "pid": t.pid})),
+            "terminal": self.model.terminal().map(|t| json!({"id": t.id, "name": t.name, "pid": t.pid,
+                "place": t.place, "active_pane": t.active_pane})),
+            "pane_id": match &self.model.phase {
+                Phase::Attached { pane_id, .. } => Some(pane_id.clone()),
+                _ => None,
+            },
             "stream": self.model.input_stream(),
             "grid": [self.grid.0, self.grid.1],
             "pane_size": [self.pane.size().0, self.pane.size().1],

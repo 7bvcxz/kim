@@ -2150,3 +2150,87 @@ fn a_large_history_stays_responsive_while_it_is_searched() {
     assert!(us < 2_000_000, "{us} µs");
     assert!(answer < Duration::from_millis(1000), "{answer:?}");
 }
+
+/// Step 21 (ADR 0054): a Terminal with internal windows and panes. The window shows the active
+/// window's active pane, names it in the title, follows the Host's selection when the CLI (or
+/// any client) changes it — detaching one pane and attaching the next, ending nothing — and
+/// closing the window ends no window's or pane's process.
+#[test]
+fn the_window_follows_internal_windows_and_panes_and_closing_ends_none() {
+    let host = Host::start("gui-panes", &["--no-shell"]);
+    let ep = host.ep.clone();
+    let (_, first) = new_terminal(&ep, "work");
+    let (code, doc) = sub(&ep, &["window", "new", "work", "--name", "logs"]);
+    assert_eq!(code, 0, "{doc}");
+    let (code, doc) = sub(&ep, &["pane", "new", "work:logs"]);
+    assert_eq!(code, 0, "{doc}");
+    let logs_1 = doc["data"]["pane_id"].as_str().unwrap().to_string();
+    let pids: Vec<u32> = info(&ep, "work")["windows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|w| w["panes"].as_array().unwrap().clone())
+        .map(|p| pid_of(&p["pid"]))
+        .collect();
+    assert_eq!(pids.len(), 3);
+    let appdata = sandbox("panes");
+    let mut gui = Gui::start(&ep, Some("work"), &appdata);
+    gui.state("attached");
+    let d = gui.until("the active pane is shown", |d| {
+        d["pane_id"] == logs_1.as_str()
+    });
+    assert!(
+        d["title"]
+            .as_str()
+            .unwrap()
+            .contains("[window 1:logs pane 1 (2 windows, 3 panes)]"),
+        "{}",
+        d["title"]
+    );
+    // The CLI selects window 0: the window follows, by detaching and attaching only.
+    let (code, doc) = sub(&ep, &["window", "select", "work:0"]);
+    assert_eq!(code, 0, "{doc}");
+    let w0 = info(&ep, "work")["windows"][0]["panes"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let d = gui.until("window 0 is shown", |d| {
+        d["pane_id"] == w0.as_str() && d["phase"] == "attached"
+    });
+    assert!(
+        d["title"]
+            .as_str()
+            .unwrap()
+            .contains("[window 0:cmd pane 0"),
+        "{}",
+        d["title"]
+    );
+    gui.type_text("echo on-window-zero\r");
+    wait_for("input reached window 0's pane", || {
+        capture(&ep, "work:0.0").contains("on-window-zero")
+    });
+    assert!(!capture(&ep, "work:1.1").contains("on-window-zero"));
+    let (code, doc) = sub(&ep, &["pane", "select", "work:1.0"]);
+    assert_eq!(code, 0, "{doc}");
+    gui.until("pane 1.0 is shown", |d| {
+        d["phase"] == "attached" && d["pane_id"] != w0.as_str()
+    });
+    for p in &pids {
+        assert!(Proc::open(*p).alive(), "switching ended nothing ({p})");
+    }
+    // Closing the window is a detach: every pane keeps running.
+    assert_eq!(gui.close(), 0);
+    wait_for("no client left", || {
+        info(&ep, "work")["clients"].as_u64() == Some(0)
+    });
+    for p in &pids {
+        assert!(
+            Proc::open(*p).alive(),
+            "closing the window ended nothing ({p})"
+        );
+    }
+    assert!(pids.contains(&first));
+    println!(
+        "EVIDENCE gui panes: followed window 0 and pane 1.0 selected by the CLI; closing the window kept pids {pids:?}"
+    );
+}

@@ -40,11 +40,16 @@ pub enum Code {
     HotkeyUnsupported,
     HotkeysFromNewerVersion,
     HotkeyConflict,
+    // The `config` and `profile` commands and `new --profile` (Step 20, ADR 0051).
+    ConfigInvalid,
+    ConfigFromNewerVersion,
+    ProfileNotFound,
+    SecretInConfig,
 }
 
 impl Code {
     #[cfg(test)]
-    pub const ALL: [Self; 30] = [
+    pub const ALL: [Self; 34] = [
         Self::Io,
         Self::Internal,
         Self::PermissionDenied,
@@ -75,6 +80,10 @@ impl Code {
         Self::HotkeyUnsupported,
         Self::HotkeysFromNewerVersion,
         Self::HotkeyConflict,
+        Self::ConfigInvalid,
+        Self::ConfigFromNewerVersion,
+        Self::ProfileNotFound,
+        Self::SecretInConfig,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -109,6 +118,10 @@ impl Code {
             Self::HotkeyUnsupported => "hotkey_unsupported",
             Self::HotkeysFromNewerVersion => "hotkeys_from_newer_version",
             Self::HotkeyConflict => "hotkey_conflict",
+            Self::ConfigInvalid => "config_invalid",
+            Self::ConfigFromNewerVersion => "config_from_newer_version",
+            Self::ProfileNotFound => "profile_not_found",
+            Self::SecretInConfig => "secret_in_config",
         }
     }
 
@@ -121,13 +134,21 @@ impl Code {
             | Self::AmbiguousTarget
             | Self::HotkeyInvalid
             | Self::HotkeyReserved => 2,
-            Self::HostNotRunning | Self::TargetNotFound | Self::ActionNotFound => 3,
-            Self::ProtocolError | Self::HostIdentityMismatch | Self::HotkeysInvalid => 4,
+            Self::HostNotRunning
+            | Self::TargetNotFound
+            | Self::ActionNotFound
+            | Self::ProfileNotFound => 3,
+            Self::ProtocolError
+            | Self::HostIdentityMismatch
+            | Self::HotkeysInvalid
+            | Self::ConfigInvalid
+            | Self::SecretInConfig => 4,
             Self::UnsupportedPlatform
             | Self::HostTooOld
             | Self::HostTooNew
             | Self::HotkeyUnsupported
-            | Self::HotkeysFromNewerVersion => 5,
+            | Self::HotkeysFromNewerVersion
+            | Self::ConfigFromNewerVersion => 5,
             Self::HostDisconnected | Self::HostUnresponsive | Self::Timeout => 6,
             Self::HostAlreadyRunning
             | Self::NameConflict

@@ -24,6 +24,8 @@ mod cli;
 /// `config.toml`: the window's settings and the basic shell profiles (Step 20, ADR 0051).
 /// Portable; read by the window and the `subak config`/`profile` commands, never by the Host.
 mod config;
+/// `subak config …` and `subak profile …` (Step 20): portable, never contacts a Host.
+mod config_cmd;
 /// Subak's keyboard shortcuts (hotkey contract; `subak hotkeys`, the window's dispatch).
 pub mod hotkeys;
 /// `subak hotkeys …` (Step 17): portable, never contacts a Host.
@@ -106,8 +108,13 @@ USAGE:
     subak hotkeys reset (<action> [--profile <name>] | --all [--yes]) [--dry-run] [--json]
     subak hotkeys check [--all-tools] [--min-severity error|warning|info] [--profile <name>]
     subak hotkeys export [--json]  |  subak hotkeys import <file> [--dry-run] [--json]
+    subak config show|check|export [--json]
+    subak config set <key> <value> [--dry-run] [--json]      (also <key>=<value>)
+    subak config reset (<key> | <section> | --all [--yes]) [--dry-run] [--json]
+    subak config import <file> [--dry-run] [--json]
+    subak profile list [--json]  |  subak profile show <name> [--json]
     subak capabilities [--json]
-    Every command except `hotkeys` also takes --endpoint <name>. `subak terminal new|list|info|rename|attach|
+    Every command except `hotkeys`, `config` and `profile` also takes --endpoint <name>. `subak terminal new|list|info|rename|attach|
     stop|kill|rm` is the deprecated Step 10 spelling of the same commands (a warning says so).
 
 TERMINALS (Windows only; docs/SUBAK_CLI.md, docs/SESSION_MODEL.md):
@@ -196,6 +203,19 @@ HOTKEYS (docs/SUBAK_CLI.md §3.12, docs/HOTKEY_CONTRACT.md):
     window or register a hotkey; an open window applies a change when it regains focus.
     KIM_NO_HOTKEYS=1 (or subak-gui --no-hotkeys) starts the window with every shortcut off.
 
+SETTINGS AND PROFILES (docs/SUBAK_CLI.md §3.13, docs/SUBAK_GUI.md §13):
+    %APPDATA%\\mouv\\subak\\config.toml holds the window's appearance (theme, font, size, line
+    height, padding, opacity, motion), mouse and keyboard choices (copy on select, smart
+    Ctrl+C, right/middle click, word separators) and basic shell profiles ([[profiles]]: name,
+    program, args, cwd, env, unset_env). Hand-edit it or use these commands; the window's
+    settings menu writes the same keys. An invalid value falls back to its default alone and is
+    named with its line (`config check`); a broken or newer file is never rewritten by an edit.
+    `reset --all` and `import` keep a backup in backups\\ (the newest 5). Secrets do not belong
+    in profiles: import refuses them (`secret_in_config`) and every value that looks secret is
+    shown as ***. Nothing here contacts a Host or changes a running Terminal: the window applies
+    changes when it gets the focus, and a profile is used only when a Terminal is created
+    (`new --profile <name>`, Ctrl+T, the window's New Terminal menu).
+
 HOST (Windows only; docs/contracts/IPC_PROTOCOL.md, docs/CONPTY_PROOF.md):
     host start    Start a detached per-user Host, unless one already serves the endpoint
                   (`host_already_running`). Starters take a per-endpoint lock, so several at
@@ -234,6 +254,9 @@ OPTIONS:
     --remain-on-exit   Keep a new Terminal as `stopped` when its program exits by itself.
     --keep-on-failure  Keep a Terminal whose program could not start, as `failed`.
     --history-limit <n> new: history rows the Host keeps for the pane (0..100000, default 2000).
+    --profile <name>   new: start a profile of config.toml (its program, args, cwd and env;
+                       -- <program>, --command-line, --cwd and --env given here win). Without
+                       a program, new uses terminal.default_profile unless --no-profile.
     --start/--end <l>  capture: first/last line (a number, negative for history, or -).
     --history          capture: from the oldest history line.
     --vt / --join      capture: keep escape sequences / join wrapped rows.
@@ -307,16 +330,27 @@ pub fn cli_main() -> ExitCode {
                  Commands: new, ls, info, status, attach, detach, rename, stop, kill, rm \
                  (named Terminals in the Host); capture, history, clear-history (scrollback); \
                  host start|status|health|attach|stop|serve; hotkeys list|show|set|disable|\
-                 enable|reset|check|export|import (the window's shortcuts); capabilities.\n\
+                 enable|reset|check|export|import (the window's shortcuts); config show|check|\
+                 set|reset|export|import and profile list|show (settings and shell profiles);\
+                 capabilities.\n\
                  The window is the separate program subak-gui (Terminals as tabs); no splits,\n\
                  persistence or recovery yet.\n",
                 env!("CARGO_PKG_VERSION")
             );
             ExitCode::SUCCESS
         }
-        _ if cmd.is_hotkeys() => {
+        _ if cmd.is_hotkeys() || cmd.is_settings() => {
             drop(out);
-            match hotkeys_cmd::run(cmd, &args) {
+            let ran = if cmd.is_hotkeys() {
+                hotkeys_cmd::run(cmd, &args)
+            } else {
+                config_cmd::run(cmd, &args).map(|o| hotkeys_cmd::Outcome {
+                    data: o.data,
+                    human: o.human,
+                    warnings: o.warnings,
+                })
+            };
+            match ran {
                 Ok(o) => {
                     let mut warnings = o.warnings;
                     warnings.extend(deprecation);
@@ -425,10 +459,22 @@ fn run_host(_cmd: Cmd, _a: &Args) -> Result<Value, CliError> {
     ))
 }
 
+/// Warnings a command found while it ran (Step 20: a default profile that cannot be used),
+/// reported with its result.
+static LATER: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// Adds a warning to the running command's result.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn warn_later(w: String) {
+    if let Ok(mut l) = LATER.lock() {
+        l.push(w);
+    }
+}
+
 /// Risk R-03 (measured in Step 08, ADR 0016): a Host inside a job it could not leave dies when
 /// that job is closed with kill-on-close.
 fn host_warnings(cmd: Cmd, d: &Value) -> Vec<String> {
-    let mut w = Vec::new();
+    let mut w: Vec<String> = LATER.lock().map(|l| l.clone()).unwrap_or_default();
     if matches!(cmd, Cmd::HostStart | Cmd::HostStatus) && d["host"]["environment"] == "inherited" {
         w.push(
             "the user's logon environment could not be built, so the Host inherited its \

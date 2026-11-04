@@ -101,8 +101,8 @@ SEARCH, SELECTION, CLIPBOARD AND LINKS (docs/SUBAK_GUI.md §12):
                     PageUp/PageDown; Enter copies, Esc leaves.
     Ctrl+Shift+A    Select all.
     Paste           Plain text only. Asks first when lines would run at once, the text hides
-                    control characters (removed) or is large; Cancel is the default; "As one
-                    line" joins the lines.
+                    control characters (removed) or is large; Cancel is the default; As one
+                    line joins the lines.
     Ctrl+click      Open a link: http/https only, through Windows' open handler; a hyperlink
                     shows its target first.
     Menu key, Ctrl+right-click   The pane menu: copy with colours (HTML), paste as one line,

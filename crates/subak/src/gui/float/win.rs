@@ -2478,13 +2478,20 @@ impl Float {
                 let y = cmd["y"].as_i64().unwrap_or(0) as u16 as usize;
                 self.on_tray(x | (y << 16), u32_of("code", NIN_SELECT) as LPARAM);
             }
+            // Without an id: the menu is reported (its own event, no dump follows).
             "menu" => match cmd["id"].as_u64() {
                 Some(id) => self.menu_command(id as u32),
-                None => self.icon_menu(self.pos),
+                None => {
+                    self.icon_menu(self.pos);
+                    return;
+                }
             },
             "row_menu" => match cmd["id"].as_u64() {
                 Some(id) => self.menu_command(id as u32),
-                None => self.row_menu(None),
+                None => {
+                    self.row_menu(None);
+                    return;
+                }
             },
             "taskbar_created" => {
                 self.tray.delete();
@@ -2535,11 +2542,11 @@ impl Float {
                     self.prefs.tray = tray;
                     self.save_prefs();
                 }
+                self.event(&json!({"event": "forwarded", "op": req["op"]}));
                 self.apply_presence();
                 if req["op"] == "manager" {
                     self.open_manager(None);
                 }
-                self.event(&json!({"event": "forwarded", "op": req["op"]}));
                 1
             }
             _ => 0,
@@ -2997,11 +3004,14 @@ fn handle(f: &mut Float, hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> Option
             Some(0)
         }
         WM_COPYDATA if is_icon => {
-            // SAFETY: the lParam of this WM_COPYDATA.
-            if let Some(req) = unsafe { copydata(lp, COPYDATA_OPEN) } {
-                return Some(f.open_request(&req));
+            // SAFETY: `lp` points at the COPYDATASTRUCT of this message.
+            let kind = unsafe { (*(lp as *const COPYDATASTRUCT)).dwData };
+            if kind == COPYDATA_OPEN {
+                // SAFETY: the lParam of this WM_COPYDATA. A body that is not a valid, small
+                // request is not answered.
+                return Some(unsafe { copydata(lp, COPYDATA_OPEN) }.map_or(0, |r| f.open_request(&r)));
             }
-            if f.opts.test {
+            if f.opts.test && kind == COPYDATA_TEST {
                 // SAFETY: as above.
                 match unsafe { copydata(lp, COPYDATA_TEST) } {
                     Some(cmd) => f.test_command(&cmd),

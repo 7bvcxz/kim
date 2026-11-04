@@ -3,9 +3,10 @@
 Status: **current** (inventory) · Reference: tmux 3.8 · Matrix version: 1 (2026-11-03) · Owner:
 mouv · Tracks [SUBAK-FR-060](PRODUCT_REQUIREMENTS.md)
 
-> **No tmux functionality is implemented in Subak yet.** The only Subak code today is a
-> placeholder CLI. Every row below is `planned`, `deferred` or `unsupported`, and every
-> Evidence cell is `—`. This document is an inventory and a plan, not a compatibility claim.
+> **Only the session basics are implemented, partially** (Step 10: named Terminals in the Host
+> and `subak terminal new|list|info|rename|attach|stop|kill|rm`). Eight rows are `partial` with
+> automated evidence; every other row is `planned`, `deferred` or `unsupported`. This document is
+> an inventory and a plan, not a compatibility claim.
 
 ## 0. How to read this matrix
 
@@ -35,7 +36,7 @@ appears as one GUI tab. A Subak internal **Window** is a tmux **window**; it is 
 **Status values.** `planned` — intended, not built · `partial` — some documented behaviour has
 automated evidence · `implemented` — the whole row has automated evidence · `deferred` — not
 planned before Step 26; may be revisited · `unsupported` — will not be provided, by design.
-Today only `planned`, `deferred` and `unsupported` are used.
+`implemented` is not used yet.
 
 **Target Steps.**
 
@@ -89,24 +90,24 @@ Grouped by the manual page section that documents them. `set-window-option` and
 
 | tmux feature | tmux reference | Subak equivalent (planned) | Status | Target Step | Evidence |
 | --- | --- | --- | --- | --- | --- |
-| Attach a client to a session | `attach-session` (`attach`) | `subak attach <terminal>`; GUI opens or focuses the Terminal's tab | planned | 12 | — |
+| Attach a client to a session | `attach-session` (`attach`) | `subak attach <terminal>`; GUI opens or focuses the Terminal's tab. *Partial:* `subak terminal attach <terminal>` (Step 10); the short form, `-d`/`-r` and the GUI later | partial | 12 | `crates/subak/tests/session_lifecycle.rs::detach_disconnect_and_client_crash_never_stop_a_terminal` (2026-11-04) |
 | Detach a client | `detach-client` (`detach`) | `subak detach`; closing the GUI is a detach (SUBAK-FR-015) | planned | 12 | — |
-| Test whether a session exists | `has-session` (`has`) | `subak info <terminal>` exit code | planned | 12 | — |
+| Test whether a session exists | `has-session` (`has`) | `subak info <terminal>` exit code. *Partial:* `subak terminal info <terminal>` exits 0, or 3 (`target_not_found`) | partial | 12 | `crates/subak/tests/session_lifecycle.rs::names_are_unique_ignoring_case_and_composition_and_renames_keep_ids` (2026-11-04) |
 | Kill the server and every session | `kill-server` | Kill every Terminal (explicit, confirmed when busy; SUBAK-FR-014); the Host then exits (SUBAK-FR-002). CLI verb TBD | planned | 25 | — |
-| Kill a session | `kill-session` | Host delete op; `subak kill <terminal>` with `--dry-run` and `--force` (SUBAK-FR-014) | planned | 10, 12 | — |
+| Kill a session | `kill-session` | Host delete op; `subak kill <terminal>` with `--dry-run` and `--force` (SUBAK-FR-014). *Partial:* `terminal.kill` and `subak terminal kill <terminal>` (`--dry-run`, consent or `--yes`; busy Terminals need it); `-a`, `-C` not yet | partial | 10, 12 | `crates/subak/tests/session_lifecycle.rs::stop_kill_and_rm_have_distinct_explicit_guarded_meanings` (2026-11-04) |
 | List clients | `list-clients` (`lsc`) | `subak host status` lists attached clients | planned | 12 | — |
 | List commands | `list-commands` (`lscm`) | List supported tmux-syntax commands with usage | planned | 24 | — |
-| List sessions | `list-sessions` (`ls`) | `subak ls` (human and `--json`; SUBAK-FR-012) | planned | 12 | — |
+| List sessions | `list-sessions` (`ls`) | `subak ls` (human and `--json`; SUBAK-FR-012). *Partial:* `terminal.list` and `subak terminal list` (human and `--json`); Claude status (Step 28) and `-F`/`-f` not yet | partial | 12 | `crates/subak/tests/session_lifecycle.rs::zero_one_and_many_terminals_have_isolated_process_trees` (2026-11-04) |
 | Lock a client | `lock-client` (`lockc`) | *Rationale:* the OS lock screen protects the desktop; Subak never locks a session | unsupported | — | — |
 | Lock the server | `lock-server` (`lock`) | *Rationale:* as `lock-client` | unsupported | — | — |
 | Lock a session | `lock-session` (`locks`) | *Rationale:* as `lock-client` | unsupported | — | — |
-| Create a session | `new-session` (`new`) | Host create op from a profile; `subak new` and GUI `Ctrl+T` (SUBAK-FR-011) | planned | 10, 12 | — |
+| Create a session | `new-session` (`new`) | Host create op from a profile; `subak new` and GUI `Ctrl+T` (SUBAK-FR-011). *Partial:* `terminal.create` and `subak terminal new [<name>] [-- <command>]`; profiles (Step 33) and `Ctrl+T` (Step 16) not yet | partial | 10, 12 | `crates/subak/tests/session_lifecycle.rs::zero_one_and_many_terminals_have_isolated_process_trees` (2026-11-04) |
 | Redraw, resize or pan a client | `refresh-client` (`refresh`) | Redraw and client flags; control-mode parts (`-A`, `-B`, `-C`) deferred with §19 | planned | 25 | — |
-| Rename a session | `rename-session` (`rename`) | Host rename op; `subak rename` and GUI tab rename | planned | 10, 12 | — |
+| Rename a session | `rename-session` (`rename`) | Host rename op; `subak rename` and GUI tab rename. *Partial:* `terminal.rename` and `subak terminal rename`; the GUI later | partial | 10, 12 | `crates/subak/tests/session_lifecycle.rs::names_are_unique_ignoring_case_and_composition_and_renames_keep_ids` (2026-11-04) |
 | Grant other users access | `server-access` | *Rationale:* the Host is per-user by design; IPC is restricted to the same user (SUBAK-SEC-010) | unsupported | — | — |
 | Show the message log | `show-messages` (`showmsgs`) | Host message log, local only | planned | 25 | — |
 | Run commands from a file | `source-file` (`source`) | Parse a tmux-syntax file (§17) | planned | 25 | — |
-| Start the server | `start-server` (`start`) | The Host starts on demand (SUBAK-FR-002); explicit start verb TBD | planned | 10 | — |
+| Start the server | `start-server` (`start`) | The Host starts on demand (SUBAK-FR-002); explicit start verb TBD. *Partial:* `subak terminal new` starts it on demand and `subak host start` explicitly | partial | 10 | `crates/subak/tests/session_lifecycle.rs::exits_restarts_and_reconnects_leave_no_stale_state` (2026-11-04) |
 | Suspend a client | `suspend-client` (`suspendc`) | *Rationale:* no SIGTSTP or job control on Windows; minimizing the GUI is the analogue | unsupported | — | — |
 | Switch a client to another session | `switch-client` (`switchc`) | Show another Terminal in the current client; `-T` (key table) is part of Step 23 | planned | 25 | — |
 
@@ -219,7 +220,7 @@ Grouped by the manual page section that documents them. `set-window-option` and
 | Create or attach if it exists | `new-session -A` | Attach when the named Terminal exists (flag TBD) | planned | 12 | — |
 | Create without attaching | `new-session -d` | Detached creation (the CLI default) | planned | 12 | — |
 | Session and first window names | `new-session -s name -n name` | Terminal name and first Window name | planned | 12 | — |
-| Start directory, environment, size | `new-session -c`, `-e VAR=val`, `-x`, `-y` | Profile cwd and environment (SUBAK-FR-011); default size | planned | 10 | — |
+| Start directory, environment, size | `new-session -c`, `-e VAR=val`, `-x`, `-y` | Profile cwd and environment (SUBAK-FR-011); default size. *Partial:* `--cwd` and `--size`; `-e` (environment overrides) with Step 11 | partial | 10 | `crates/subak/tests/session_lifecycle.rs::names_are_unique_ignoring_case_and_composition_and_renames_keep_ids` (2026-11-04) |
 | Print the created object | `new-session -P -F format`, `new-window -P` | `--json` output (KIM-FR-010); `-F` formats in Step 25 | planned | 12 | — |
 | Command given as argv (no shell) | `new-window vi file`, `split-window cmd args` | Start the program directly without a shell | planned | 21 | — |
 | Session groups | `new-session -t target-session` | *Rationale:* grouped sessions share windows with independent current windows; linked windows (Step 25) come first | deferred | post-26 | — |
@@ -924,38 +925,38 @@ whenever a row or Status changes.
 
 | Status | Rows |
 | --- | --- |
-| `planned` | 528 |
-| `partial` | 0 |
+| `planned` | 520 |
+| `partial` | 8 |
 | `implemented` | 0 |
 | `deferred` | 55 |
 | `unsupported` | 23 |
 | **Total** | **606** |
 
-| Section | planned | deferred | unsupported | Total |
-| --- | --- | --- | --- | --- |
-| §1 Invocation | 12 | 2 | 3 | 17 |
-| §2 Commands | 82 | 5 | 5 | 92 |
-| §3 Notable command flags | 18 | 1 | 1 | 20 |
-| §4 Prefix table | 62 | 9 | 1 | 72 |
-| §5 Root table (mouse) | 12 | 7 | 0 | 19 |
-| §6 Key tables overview | 7 | 1 | 0 | 8 |
-| §7 Copy mode | 29 | 0 | 0 | 29 |
-| §8 Other pane modes | 5 | 2 | 0 | 7 |
-| §9 Options | 81 | 9 | 5 | 95 |
-| §10 Formats | 40 | 2 | 2 | 44 |
-| §11 Status line and styles | 17 | 0 | 0 | 17 |
-| §12 Hooks | 53 | 4 | 0 | 57 |
-| §13 Target syntax | 24 | 0 | 0 | 24 |
-| §14 Mouse | 7 | 0 | 0 | 7 |
-| §15 Environment | 15 | 0 | 1 | 16 |
-| §16 Buffers and clipboard | 8 | 0 | 0 | 8 |
-| §17 Configuration file and parsing | 12 | 1 | 1 | 14 |
-| §18 Command chaining and scripting | 12 | 0 | 0 | 12 |
-| §19 Control mode | 0 | 8 | 0 | 8 |
-| §20 Multiple clients and access control | 8 | 2 | 4 | 14 |
-| §21 Layouts, names, alerts, pane lifecycle | 22 | 1 | 0 | 23 |
-| §22 Terminal integration and exit messages | 2 | 1 | 0 | 3 |
-| **Total** | **528** | **55** | **23** | **606** |
+| Section | planned | partial | deferred | unsupported | Total |
+| --- | --- | --- | --- | --- | --- |
+| §1 Invocation | 12 | 0 | 2 | 3 | 17 |
+| §2 Commands | 75 | 7 | 5 | 5 | 92 |
+| §3 Notable command flags | 17 | 1 | 1 | 1 | 20 |
+| §4 Prefix table | 62 | 0 | 9 | 1 | 72 |
+| §5 Root table (mouse) | 12 | 0 | 7 | 0 | 19 |
+| §6 Key tables overview | 7 | 0 | 1 | 0 | 8 |
+| §7 Copy mode | 29 | 0 | 0 | 0 | 29 |
+| §8 Other pane modes | 5 | 0 | 2 | 0 | 7 |
+| §9 Options | 81 | 0 | 9 | 5 | 95 |
+| §10 Formats | 40 | 0 | 2 | 2 | 44 |
+| §11 Status line and styles | 17 | 0 | 0 | 0 | 17 |
+| §12 Hooks | 53 | 0 | 4 | 0 | 57 |
+| §13 Target syntax | 24 | 0 | 0 | 0 | 24 |
+| §14 Mouse | 7 | 0 | 0 | 0 | 7 |
+| §15 Environment | 15 | 0 | 0 | 1 | 16 |
+| §16 Buffers and clipboard | 8 | 0 | 0 | 0 | 8 |
+| §17 Configuration file and parsing | 12 | 0 | 1 | 1 | 14 |
+| §18 Command chaining and scripting | 12 | 0 | 0 | 0 | 12 |
+| §19 Control mode | 0 | 0 | 8 | 0 | 8 |
+| §20 Multiple clients and access control | 8 | 0 | 2 | 4 | 14 |
+| §21 Layouts, names, alerts, pane lifecycle | 22 | 0 | 1 | 0 | 23 |
+| §22 Terminal integration and exit messages | 2 | 0 | 1 | 0 | 3 |
+| **Total** | **520** | **8** | **55** | **23** | **606** |
 
 Coverage checks for matrix version 1: all 92 commands and their aliases, all 184 options in
 `options-table.c`, all 51 named hooks and all 99 copy-mode commands of tmux 3.8 appear in the

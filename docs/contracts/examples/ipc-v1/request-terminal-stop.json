@@ -1,0 +1,1 @@
+{"type": "request", "id": 7, "method": "terminal.stop", "params": {"target": "work", "force": true, "dry_run": false}}

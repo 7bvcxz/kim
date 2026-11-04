@@ -1,5 +1,6 @@
 //! Clients of the Host — the client SDK (ADR 0003, ADR 0005, ADR 0019) and the
-//! `host start | status | health | stop | attach` commands.
+//! `host start | status | health | stop | attach` commands. The `terminal` commands build on it
+//! (`terminal.rs`).
 //!
 //! Connecting is: open the pipe, **verify who serves it** before sending a single byte (the
 //! server process must run as this user and be a `subak.exe`), then `hello` → `welcome` with
@@ -14,7 +15,7 @@
 use crate::cli::Args;
 use crate::host::{self, default_shell, profile_dir};
 use crate::output::{CliError, Code};
-use crate::proto::{self, ClientKind, DetachKeys, FLAG_INPUT, Frame, STREAM};
+use crate::proto::{self, ClientKind, DetachKeys, FLAG_INPUT, Frame};
 use crate::win::pipe::{self, Pipe};
 use crate::win::{self, EnvBlock, NamedLock, console, spawn};
 use serde_json::{Value, json};
@@ -33,8 +34,9 @@ const START_TIMEOUT: Duration = Duration::from_secs(10);
 const LOCK_TIMEOUT: Duration = Duration::from_secs(20);
 /// How long a client waits for a stopping Host to release the endpoint.
 const STOPPING_TIMEOUT: Duration = Duration::from_secs(15);
-/// `host.stop` answers once the panes have ended (grace period plus forced end).
-const STOP_TIMEOUT: Duration = Duration::from_secs(30);
+/// `host.stop` and `terminal.stop|kill|remove` answer once the panes have ended (grace period
+/// plus forced end).
+pub const STOP_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The endpoint from `--endpoint`, or the per-user default.
 pub fn endpoint(a: &Args) -> Result<String, CliError> {
@@ -64,8 +66,9 @@ fn disconnected() -> CliError {
         .hint("check `subak host status`; a stopped or crashed Host ends its panes")
 }
 
-/// Maps a Host-side IPC error code to a CLI error.
-fn host_error(code: &str, message: &str) -> CliError {
+/// Maps a Host-side IPC error to a CLI error (IPC_PROTOCOL §6); its `details` become detail
+/// lines (`key: value`).
+fn host_error(code: &str, message: &str, details: &Value) -> CliError {
     let c = match code {
         "protocol_error" | "protocol_unsupported" | "unknown_request" => Code::ProtocolError,
         "host_stopping" => Code::HostDisconnected,
@@ -74,10 +77,22 @@ fn host_error(code: &str, message: &str) -> CliError {
         "unauthorized" => Code::PermissionDenied,
         "target_not_found" => Code::TargetNotFound,
         "busy" => Code::ConfirmationRequired,
+        "name_conflict" => Code::NameConflict,
+        "invalid_name" => Code::InvalidName,
+        "ambiguous_target" => Code::AmbiguousTarget,
+        "invalid_state" => Code::InvalidState,
+        "spawn_failed" => Code::SpawnFailed,
         _ => Code::Internal,
     };
-    CliError::new(c, format!("the Host refused the request: {message}"))
-        .detail(format!("ipc error code: {code}"))
+    let mut e = CliError::new(c, format!("the Host refused the request: {message}"))
+        .detail(format!("ipc error code: {code}"));
+    if let Some(map) = details.as_object() {
+        for (k, v) in map {
+            let text = v.as_str().map_or_else(|| v.to_string(), String::from);
+            e = e.detail(format!("{k}: {text}"));
+        }
+    }
+    e
 }
 
 /// The CLI error for a refused handshake. A protocol range mismatch says which side is older,
@@ -101,7 +116,7 @@ fn handshake_refused(err: &Value) -> CliError {
             .hint("use the subak.exe that matches the running Host, or update this one")
         };
     }
-    host_error(code, message)
+    host_error(code, message, &err["details"])
 }
 
 /// Why a connection attempt failed, for start-on-demand decisions.
@@ -332,6 +347,7 @@ impl Session {
                         Err(host_error(
                             m["error"]["code"].as_str().unwrap_or("?"),
                             m["error"]["message"].as_str().unwrap_or("request failed"),
+                            &m["error"]["details"],
                         ))
                     };
                 }
@@ -625,7 +641,8 @@ pub fn health(endpoint: &str) -> Result<Value, CliError> {
     }))
 }
 
-fn can_prompt(a: &Args) -> bool {
+/// Whether this command may ask the user (CLI_CONTRACT §4.4).
+pub fn can_prompt(a: &Args) -> bool {
     let env_no_input = std::env::var("KIM_NO_INPUT")
         .is_ok_and(|v| !(v.is_empty() || v == "0" || v.eq_ignore_ascii_case("false")));
     !a.json
@@ -635,7 +652,29 @@ fn can_prompt(a: &Args) -> bool {
         && io::stderr().is_terminal()
 }
 
-/// `host stop`: ends the panes (destructive, needs consent) and then the Host.
+/// Asks a yes/no question on stderr when allowed (CLI_CONTRACT §4), or fails with
+/// `confirmation_required` naming what `--yes` would confirm. `--yes` skips the question.
+pub fn confirm(a: &Args, question: &str, what: &str, hint: &str) -> Result<(), CliError> {
+    if a.yes {
+        return Ok(());
+    }
+    if !can_prompt(a) {
+        return Err(
+            CliError::new(Code::ConfirmationRequired, what.to_string()).hint(hint.to_string())
+        );
+    }
+    eprint!("{question} [y/N] ");
+    let mut line = String::new();
+    let _ = io::stdin().read_line(&mut line);
+    if matches!(line.trim(), "y" | "Y" | "yes") {
+        Ok(())
+    } else {
+        Err(CliError::new(Code::Cancelled, "nothing changed"))
+    }
+}
+
+/// `host stop`: ends the live Terminals (only with `--kill-terminals`, destructive, needs
+/// consent; ADR 0003 §7) and then the Host.
 pub fn stop(a: &Args, endpoint: &str) -> Result<Value, CliError> {
     let mut s = Session::open(endpoint, Duration::from_secs(2))?;
     let st = s.request("host.status", &json!({}))?;
@@ -643,32 +682,51 @@ pub fn stop(a: &Args, endpoint: &str) -> Result<Value, CliError> {
         let plan = s.request("host.stop", &json!({"dry_run": true}))?;
         return Ok(json!({"dry_run": true, "would_stop": {
             "host": st["host"], "pane": st["pane"], "clients": st["clients"],
-            "would_kill": plan["would_kill"],
+            "would_kill": plan["would_kill"], "would_end": plan["would_end"],
+            "needs_kill_terminals": !plan["would_end"].as_array().is_none_or(Vec::is_empty),
         }}));
     }
-    let live = st["terminals"].as_u64().unwrap_or(0) > 0;
-    if live && !a.yes {
-        let question = format!(
-            "Stop the Subak Host (pid {}) and end its shell (pid {}, {} process(es))? [y/N] ",
-            st["host"]["pid"], st["pane"]["pid"], st["pane"]["job_processes"]
-        );
-        if !can_prompt(a) {
-            return Err(CliError::new(
-                Code::ConfirmationRequired,
-                "stopping the Host ends its shell and every process started in it",
+    let plan = s.request("host.stop", &json!({"dry_run": true}))?;
+    let ending = plan["would_end"].as_array().cloned().unwrap_or_default();
+    if !ending.is_empty() {
+        let names: Vec<String> = ending
+            .iter()
+            .map(|t| {
+                format!(
+                    "`{}` ({})",
+                    t["name"].as_str().unwrap_or("?"),
+                    t["terminal_id"].as_str().unwrap_or("?")
+                )
+            })
+            .collect();
+        if !a.kill_terminals {
+            let mut e = CliError::new(
+                Code::TerminalsRunning,
+                format!(
+                    "the Host owns {} live Terminal(s); stopping it would end them",
+                    ending.len()
+                ),
             )
-            .hint("re-run with --yes, or with --dry-run to see what would end"));
+            .hint("stop or kill them first (`subak terminal stop|kill`), or pass --kill-terminals (with --yes when it cannot ask)");
+            for n in &names {
+                e = e.detail(format!("live Terminal: {n}"));
+            }
+            return Err(e);
         }
-        eprint!("{question}");
-        let mut line = String::new();
-        let _ = io::stdin().read_line(&mut line);
-        if !matches!(line.trim(), "y" | "Y" | "yes") {
-            return Err(CliError::new(
-                Code::Cancelled,
-                "not stopped; nothing changed",
-            ));
-        }
+        let processes: u64 = ending.iter().filter_map(|t| t["processes"].as_u64()).sum();
+        confirm(
+            a,
+            &format!(
+                "Stop the Subak Host (pid {}) and end {} Terminal(s) ({}) with {processes} process(es)?",
+                st["host"]["pid"],
+                ending.len(),
+                names.join(", ")
+            ),
+            "stopping the Host ends every live Terminal and every process started in it",
+            "re-run with --kill-terminals --yes, or with --dry-run to see what would end",
+        )?;
     }
+    let live = !ending.is_empty();
     let host_proc = win::open_process(s.host_pid);
     let report = s.request_within(
         "host.stop",
@@ -682,6 +740,7 @@ pub fn stop(a: &Args, endpoint: &str) -> Result<Value, CliError> {
         "stopped": true,
         "host": {"pid": s.host_pid, "exited": exited},
         "shell": report["shell"],
+        "terminals": report["terminals"],
     }))
 }
 
@@ -691,9 +750,10 @@ enum End {
     Ended { exit_code: Value, stopped: Value },
 }
 
-/// `host attach`: stream the pane until detach (`Ctrl+B d`, or end of piped input), the pane's
-/// end or an explicit stop.
-pub fn attach(a: &Args, endpoint: &str) -> Result<Value, CliError> {
+/// `host attach` (`target` = `None`: the Host's only running pane) and `terminal attach
+/// <target>`: stream the pane until detach (`Ctrl+B d`, or end of piped input), the pane's end
+/// or an explicit stop. Detaching never stops anything.
+pub fn attach(a: &Args, endpoint: &str, target: Option<&str>) -> Result<Value, CliError> {
     let mut s = Session::open(endpoint, Duration::from_secs(2))?;
     let console_in = console::stdin_is_console();
     let size = a.size.or_else(|| {
@@ -705,18 +765,27 @@ pub fn attach(a: &Args, endpoint: &str) -> Result<Value, CliError> {
     });
     if a.dry_run {
         let st = s.request("host.status", &json!({}))?;
+        let terminal = match target {
+            Some(t) => s.request("terminal.info", &json!({"target": t}))?["terminal"].clone(),
+            None => Value::Null,
+        };
         return Ok(json!({"dry_run": true, "would_attach": {
-            "host": st["host"], "pane": st["pane"],
+            "host": st["host"], "pane": st["pane"], "terminal": terminal,
             "size": size.map(|(c, r)| json!({"cols": c, "rows": r})),
         }}));
     }
     s.request("events.subscribe", &json!({"topics": ["panes", "host"]}))?;
     let res = s.request(
         "pane.attach",
-        &json!({"interactive": true, "size": size.map(|(c, r)| json!({"cols": c, "rows": r}))}),
+        &json!({"target": target, "interactive": true,
+                "size": size.map(|(c, r)| json!({"cols": c, "rows": r}))}),
     )?;
     let host_pid = s.host_pid;
     let pane_id = res["pane_id"].clone();
+    let stream = res["stream_id"]
+        .as_u64()
+        .and_then(|v| u32::try_from(v).ok())
+        .ok_or_else(|| CliError::new(Code::ProtocolError, "pane.attach returned no stream id"))?;
     if !a.quiet {
         eprintln!(
             "[subak: attached to Host pid {host_pid}, shell pid {}; Ctrl+B d detaches]",
@@ -730,7 +799,7 @@ pub fn attach(a: &Args, endpoint: &str) -> Result<Value, CliError> {
         let ids = Arc::clone(&s.next_id);
         let detach_id = Arc::clone(&detach_id);
         let verbose = a.verbose;
-        move || input(&pipe, console_in, size, &ids, &detach_id, verbose)
+        move || input(&pipe, stream, console_in, size, &ids, &detach_id, verbose)
     });
     let mut stdout = io::stdout().lock();
     let mut stopped = Value::Null;
@@ -780,10 +849,13 @@ pub fn attach(a: &Args, endpoint: &str) -> Result<Value, CliError> {
     };
     drop(raw);
     Ok(match end {
-        End::Detached => json!({"detached": true, "host": {"pid": host_pid}, "pane": res["pane"]}),
+        End::Detached => json!({
+            "detached": true, "host": {"pid": host_pid}, "pane": res["pane"],
+            "terminal_id": res["terminal_id"],
+        }),
         End::Ended { exit_code, stopped } => json!({
             "detached": false, "host": {"pid": host_pid, "stopped": stopped},
-            "pane": res["pane"], "shell_exit_code": exit_code,
+            "pane": res["pane"], "terminal_id": res["terminal_id"], "shell_exit_code": exit_code,
         }),
     })
 }
@@ -791,6 +863,7 @@ pub fn attach(a: &Args, endpoint: &str) -> Result<Value, CliError> {
 /// The input side of an attach (its own thread): keys or piped bytes → data frames.
 fn input(
     pipe: &Pipe,
+    stream: u32,
     console_in: bool,
     size: Option<(u16, u16)>,
     ids: &AtomicU64,
@@ -809,7 +882,7 @@ fn input(
         let (fwd, detach) = keys.feed(bytes);
         if !fwd.is_empty() {
             for chunk in fwd.chunks(32 * 1024) {
-                pipe.write_all_bytes(&proto::encode_data(STREAM, 0, FLAG_INPUT, chunk))
+                pipe.write_all_bytes(&proto::encode_data(stream, 0, FLAG_INPUT, chunk))
                     .ok()?;
             }
         }
@@ -839,7 +912,10 @@ fn input(
                         None => return,
                     },
                     console::Input::Resize(c, r) => {
-                        if !request("pane.resize", json!({"cols": c, "rows": r})) {
+                        if !request(
+                            "pane.resize",
+                            json!({"cols": c, "rows": r, "stream_id": stream}),
+                        ) {
                             return;
                         }
                     }

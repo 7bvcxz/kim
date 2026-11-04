@@ -83,3 +83,8 @@ Bindings are configurable per profile.
   bindings, "terminal-first mode" is a preset of disabled overrides, per-profile bindings are
   `profiles` overlays, and bindings live in `hotkeys.json` instead of the `[keys]` table of
   `config.toml`.
+- 2026-11-04 (Step 10): [ADR 0020](0020-terminal-session-lifecycle.md) §7 fixes what the table
+  above left open: a tab's × button is "Hide tab" (a detach of that tab; the Terminal keeps
+  running and stays in the session manager). `Ctrl+W` / "Close Terminal" stays a kill. The Host
+  enforces "confirms when busy": `terminal.kill` of a busy Terminal is refused (`busy`) unless the
+  GUI sends `force`, which it may only after the user confirmed.

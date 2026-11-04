@@ -194,9 +194,11 @@ function Show-Reattach($state, [int]$tickBefore) {
 function Stop-SmokeHost($state) {
     Step 'Stop the Host explicitly'
     $r = Invoke-SubakJson @('host', 'stop', '--endpoint', $script:ep)
+    Check ($r.Code -eq 7 -and $r.Doc.error.code -eq 'terminals_running') 'stop without --kill-terminals is refused (exit 7)'
+    $r = Invoke-SubakJson @('host', 'stop', '--endpoint', $script:ep, '--kill-terminals')
     Check ($r.Code -eq 7 -and $r.Doc.error.code -eq 'confirmation_required') 'stop without --yes is refused (exit 7)'
-    $r = Invoke-SubakJson @('host', 'stop', '--endpoint', $script:ep, '--yes')
-    Check ($r.Code -eq 0) "host stop --yes (shell exit code $($r.Doc.data.shell.exit_code), forced: $($r.Doc.data.shell.forced))"
+    $r = Invoke-SubakJson @('host', 'stop', '--endpoint', $script:ep, '--kill-terminals', '--yes')
+    Check ($r.Code -eq 0) "host stop --kill-terminals --yes (shell exit code $($r.Doc.data.shell.exit_code), forced: $($r.Doc.data.shell.forced))"
     Start-Sleep -Milliseconds 500
     Check (-not (Test-Alive $state.host_pid)) "Host process $($state.host_pid) is gone"
     Check (-not (Test-Alive $state.shell_pid)) "shell process $($state.shell_pid) is gone"
@@ -253,7 +255,7 @@ switch ($Phase) {
         $c.Process.WaitForExit(10000) | Out-Null
 
         if ($KeepHost) {
-            Write-Host "Host kept on endpoint $($script:ep); stop it with: subak host stop --endpoint $($script:ep) --yes"
+            Write-Host "Host kept on endpoint $($script:ep); stop it with: subak host stop --endpoint $($script:ep) --kill-terminals --yes"
         } else {
             Stop-SmokeHost $state
         }
@@ -305,7 +307,7 @@ switch ($Phase) {
     if (-not $keep) {
         $st = Get-HostStatus
         if ($st) {
-            & $script:exe host stop --endpoint $script:ep --yes | Out-Null
+            & $script:exe host stop --endpoint $script:ep --kill-terminals --yes | Out-Null
             Write-Host "cleanup: stopped Host $($st.host.pid) on $($script:ep)"
         }
     }

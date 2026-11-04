@@ -27,8 +27,6 @@ const DATA_HEADER: usize = 13;
 pub const FLAG_SNAPSHOT: u8 = 0x01;
 /// Data flag: client → Host input.
 pub const FLAG_INPUT: u8 = 0x02;
-/// The prototype pane's stream id (one pane per Host until Step 10).
-pub const STREAM: u32 = 1;
 /// Recent output kept for replay on attach.
 pub const HISTORY_BYTES: usize = 64 * 1024;
 /// A connection must complete `hello` → `welcome` within this time.
@@ -45,7 +43,7 @@ pub const FEATURES: [&str; 5] = [
     "host.stats",
     "events.subscribe",
     "identity.verified",
-    "prototype.single_pane",
+    "terminal.lifecycle",
 ];
 
 /// One decoded frame.
@@ -186,8 +184,8 @@ pub fn read_frame(
     }
 }
 
-/// Stable IPC error codes (a closed set in v1; docs/contracts/IPC_PROTOCOL.md §6). The Step 09
-/// Host does not produce the Terminal-model codes yet (Steps 10+); they are part of the contract.
+/// Stable IPC error codes (a closed set in v1; docs/contracts/IPC_PROTOCOL.md §6). The Host does
+/// not produce `state_from_newer_version` (Step 29) or `unsupported_platform` (M4) yet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[allow(dead_code)]
 pub enum ErrorCode {
@@ -535,13 +533,13 @@ pub const METHODS: &[Method] = &[
     m("pane.attach", CG, true),
     m("pane.detach", CGM, true),
     m("pane.resize", CG, true),
-    m("terminal.list", CGM, false),
-    m("terminal.info", CGM, false),
-    m("terminal.create", CG, false),
-    m("terminal.rename", CG, false),
-    m("terminal.stop", CG, false),
-    m("terminal.kill", CG, false),
-    m("terminal.remove", CG, false),
+    m("terminal.list", CGM, true),
+    m("terminal.info", CGM, true),
+    m("terminal.create", CG, true),
+    m("terminal.rename", CG, true),
+    m("terminal.stop", CG, true),
+    m("terminal.kill", CG, true),
+    m("terminal.remove", CG, true),
     m("terminal.restore", CG, false),
     m("window.create", CG, false),
     m("window.list", CG, false),
@@ -749,11 +747,53 @@ pub fn rfc3339(t: std::time::SystemTime) -> String {
     )
 }
 
+/// Test support: checks `v` against one definition (`#/$defs/<def>`) of the IPC v1 schema, such
+/// as a method's result, which a whole response cannot be checked against (it does not name its
+/// method).
+#[cfg(test)]
+pub fn assert_ipc_def(def: &str, v: &Value) {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/contracts/schemas/ipc-v1.schema.json");
+    let schema: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    assert!(schema["$defs"][def].is_object(), "no definition `{def}`");
+    let wrapper = json!({"$defs": schema["$defs"], "$ref": format!("#/$defs/{def}")});
+    let errors = crate::jsonschema::Validator::new(&wrapper)
+        .validate(v)
+        .unwrap();
+    assert!(errors.is_empty(), "{def}: {errors:?}\n{v:#}");
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     use crate::jsonschema;
+
+    /// A data stream id, as the Host gives its first pane.
+    const STREAM: u32 = 1;
+
+    #[test]
+    fn result_examples_match_their_method_definitions() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/contracts/examples/ipc-v1");
+        for (file, def) in [
+            ("response-terminal-create.json", "result_terminal_create"),
+            ("response-terminal-list.json", "result_terminal_list"),
+            ("response-terminal-info.json", "result_terminal_info"),
+            ("response-terminal-stop.json", "result_terminal_end"),
+            ("response-terminal-kill.json", "result_terminal_end"),
+        ] {
+            let doc: Value =
+                serde_json::from_slice(&std::fs::read(dir.join(file)).unwrap()).unwrap();
+            assert_ipc_def(def, &doc["result"]);
+        }
+        // The busy refusal carries the same plan a dry run shows.
+        let busy: Value = serde_json::from_slice(
+            &std::fs::read(dir.join("response-terminal-busy.json")).unwrap(),
+        )
+        .unwrap();
+        assert_ipc_def("end_plan", &busy["error"]["details"]);
+    }
 
     fn read(mut r: &[u8]) -> io::Result<Option<Frame>> {
         read_frame(&mut r, None, |t| t + FRAME_TIMEOUT)
@@ -1017,10 +1057,26 @@ mod tests {
             assert_eq!(code(Mcp, m), Some(ErrorCode::Unauthorized), "mcp {m}");
         }
         assert_eq!(code(Mcp, "host.stats"), None);
+        // Step 10: the Terminal lifecycle is served to cli/gui; discovery also to mcp.
+        for m in [
+            "terminal.create",
+            "terminal.rename",
+            "terminal.stop",
+            "terminal.kill",
+            "terminal.remove",
+        ] {
+            assert_eq!(code(Cli, m), None, "cli {m}");
+            assert_eq!(code(Gui, m), None, "gui {m}");
+            assert_eq!(code(Mcp, m), Some(ErrorCode::Unauthorized), "mcp {m}");
+            assert_eq!(code(Hook, m), Some(ErrorCode::Unauthorized), "hook {m}");
+        }
+        for m in ["terminal.list", "terminal.info"] {
+            assert_eq!(code(Mcp, m), None, "mcp {m}");
+            assert_eq!(code(Hook, m), Some(ErrorCode::Unauthorized), "hook {m}");
+        }
         // Later Steps' methods: refused by kind first, then reported as not implemented.
-        assert_eq!(code(Hook, "terminal.create"), Some(ErrorCode::Unauthorized));
         assert_eq!(
-            code(Cli, "terminal.create"),
+            code(Cli, "terminal.restore"),
             Some(ErrorCode::UnknownRequest)
         );
         assert_eq!(code(Hook, "claude.report"), Some(ErrorCode::UnknownRequest));

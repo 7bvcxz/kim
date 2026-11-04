@@ -1,0 +1,1 @@
+{"type": "response", "id": 11, "ok": false, "error": {"code": "invalid_state", "message": "Terminal `work` is running; stop it first, or set force to end its processes and remove it", "details": {"terminal_id": "t-3fa9c0d21b7e", "state": "running"}}}

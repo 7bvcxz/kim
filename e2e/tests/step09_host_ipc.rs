@@ -76,7 +76,14 @@ impl Drop for Cleanup<'_> {
     fn drop(&mut self) {
         let _ = run_sandboxed(
             self.exe,
-            &["host", "stop", "--endpoint", &self.ep, "--yes"],
+            &[
+                "host",
+                "stop",
+                "--endpoint",
+                &self.ep,
+                "--kill-terminals",
+                "--yes",
+            ],
             self.sb,
         );
         if let Some(pid) = self.host_pid.filter(|p| running(*p)) {
@@ -257,6 +264,7 @@ fn two_terminals_share_a_pane_and_a_killed_one_changes_nothing() {
     assert!(running(host_pid) && running(shell_pid));
     b.send(&[0x02, b'd']);
     assert!(b.child.wait().unwrap().success(), "Ctrl+B d detaches");
+    // Step 10 (ADR 0003 §7): live Terminals end only with --kill-terminals and consent.
     let (code, doc) = json(
         &subak,
         &["host", "stop", "--endpoint", &ep, "--no-input"],
@@ -264,10 +272,38 @@ fn two_terminals_share_a_pane_and_a_killed_one_changes_nothing() {
     );
     assert_eq!(
         (code, doc["error"]["code"].as_str()),
-        (7, Some("confirmation_required")),
-        "ending a live pane needs consent"
+        (7, Some("terminals_running")),
+        "ending a live Terminal needs --kill-terminals"
     );
-    let (code, doc) = json(&subak, &["host", "stop", "--endpoint", &ep, "--yes"], &sb);
+    let (code, doc) = json(
+        &subak,
+        &[
+            "host",
+            "stop",
+            "--endpoint",
+            &ep,
+            "--kill-terminals",
+            "--no-input",
+        ],
+        &sb,
+    );
+    assert_eq!(
+        (code, doc["error"]["code"].as_str()),
+        (7, Some("confirmation_required")),
+        "and consent"
+    );
+    let (code, doc) = json(
+        &subak,
+        &[
+            "host",
+            "stop",
+            "--endpoint",
+            &ep,
+            "--kill-terminals",
+            "--yes",
+        ],
+        &sb,
+    );
     assert_eq!(code, 0, "{doc}");
     assert!(
         wait_gone(host_pid, Duration::from_secs(15))

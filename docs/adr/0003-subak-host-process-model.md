@@ -83,3 +83,10 @@ while it is useful (`SUBAK-FR-002`).
   implemented with `CreateEnvironmentBlock` for the Host and its panes. In §7 the IPC enforces
   `kill_terminals`, while the CLI keeps `--yes` as the consent until Terminals exist (Steps 10–12).
   Risk R-03 was measured per job level (silent breakaway, nested jobs); still no broker.
+- 2026-11-04 (Step 10): §7 is implemented. `subak host stop` with live Terminals fails with
+  `terminals_running` unless `--kill-terminals` is given, and then asks or needs `--yes`; only then
+  does it send `kill_terminals`. §4's "live Terminal" is a Terminal in state `starting`, `running`
+  or `stopping` ([SESSION_MODEL §2](../SESSION_MODEL.md)): stored `stopped`/`failed` Terminals do
+  not keep the Host, and are forgotten when it exits until Step 29 persists them. Start on demand
+  (`subak terminal new`) starts a Host with `--no-shell`. See
+  [ADR 0020](0020-terminal-session-lifecycle.md).

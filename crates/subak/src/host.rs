@@ -1,38 +1,50 @@
-//! `subak host serve` — the Host supervisor (ADR 0003, ADR 0005, ADR 0016, ADR 0019).
+//! `subak host serve` — the Host supervisor and session manager (ADR 0003, ADR 0005, ADR 0016,
+//! ADR 0019, ADR 0020; docs/SESSION_MODEL.md).
 //!
 //! The Host serves IPC v1 ([`crate::proto`]) on the per-user pipe. Every connection must pass,
 //! in this order: the pipe's owner-only DACL (kernel), a `hello` within 5 s, the user SID of the
 //! connection's own token equal to the Host's, a valid `hello`, a common protocol major. After
 //! `welcome` it may send requests; what it may call depends on its client kind
-//! ([`proto::authorize`]). Nothing in the protocol runs a command: the only way to reach a
-//! process is typing into a pane, which needs an interactive attach by a `cli` or `gui` client.
+//! ([`proto::authorize`]). A process is only ever started by `terminal.create` from a `cli` or
+//! `gui` client (or `--shell` at Host start), and only typed into by an interactively attached
+//! `cli` or `gui` connection.
 //!
-//! Lifetime (ADR 0003 §4): the Host runs while it owns a live pane or has a client. When both
+//! **Session manager.** The Host owns any number of Terminals ([`crate::session`]): each has one
+//! internal Window with one Pane, and each Pane its own pseudo console (ConPTY) and its own
+//! kill-on-close job, so every Terminal's process tree is isolated. The model and the state
+//! machine live in `session.rs`; this file owns the OS side (pseudo consoles, jobs, threads,
+//! output rings) and applies every state change under one lock, emitting its event in the same
+//! step, so a client that subscribes and then lists never misses or double-counts a change.
+//!
+//! Ending a pane is claimed once, under the lock: whoever claims it (a stop, a kill, a Host stop,
+//! or the pane's own exit waiter when its shell exits by itself) performs the teardown; anyone
+//! who arrives later waits for that result, and a kill arriving during a graceful stop escalates
+//! it. Client connections own nothing: a client that detaches, disconnects or crashes only loses
+//! its subscriptions and attachments.
+//!
+//! Lifetime (ADR 0003 §4): the Host runs while it owns a live Terminal or has a client. When both
 //! are gone it waits the idle grace period (`--idle-exit`, default 10 s) and exits. It never
 //! polls: idle, every thread is blocked in the kernel, and the only timed wait is that grace.
+//! Until Step 29 persists them, stopped Terminal records live only as long as the Host.
 //!
-//! Until the session model (Step 10) the Host owns at most one pane, the Step 08 prototype pane
-//! (`--shell`, or none with `--no-shell`). When its shell exits the pane ends and the Host
-//! idles out. Replay is raw recent output (Step 13); a lagging client is disconnected.
-//!
-//! Threads: an accept loop, a handler and a writer per connection, the pane's output reader and
-//! exit waiter, and the main thread that supervises lifetime and teardown. A panic while
+//! Threads: an accept loop, a handler and a writer per connection, an output reader and an exit
+//! waiter per pane, and the main thread that supervises lifetime and teardown. A panic while
 //! handling one request fails that request with `internal_error`; the Host continues.
 
 use crate::output::{CliError, Code};
 use crate::proto::{
-    self, ClientKind, ErrorCode, FLAG_INPUT, FLAG_SNAPSHOT, Frame, IpcError, Refusal, Request,
-    Ring, STREAM,
+    self, ClientKind, ErrorCode, FLAG_INPUT, FLAG_SNAPSHOT, Frame, IpcError, Refusal, Request, Ring,
 };
+use crate::session::{self, Command, EndCause, LastExit, Registry, Spec, Transition};
 use crate::win::conpty::{self, Pty};
 use crate::win::pipe::{self, Listener, Pipe};
 use crate::win::{self, EnvBlock, Handle, JobLimits};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap};
 use std::panic::{AssertUnwindSafe, catch_unwind};
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, mpsc};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -42,23 +54,30 @@ pub const DEFAULT_SIZE: (u16, u16) = (120, 30);
 pub const DEFAULT_IDLE_EXIT_S: u64 = 10;
 /// Most connections (in handshake or established) served at once; more get `busy`.
 pub const MAX_CONNECTIONS: usize = 64;
+/// Most Terminals (live and stored) one Host owns; more get `busy`.
+pub const MAX_TERMINALS: usize = 256;
 /// Frames and bytes queued per connection before a slow client is dropped.
 const QUEUE_FRAMES: usize = 4096;
 const QUEUE_BYTES: usize = 16 * 1024 * 1024;
-/// How long a graceful stop waits for the shell after `ClosePseudoConsole`.
+/// How long a graceful stop waits for the processes after `ClosePseudoConsole`.
 const GRACE: Duration = Duration::from_secs(5);
+/// How long a second party waits for a teardown someone else performs.
+const TEARDOWN_WAIT: Duration = Duration::from_secs(30);
+/// Longest command line `CreateProcessW` accepts.
+const MAX_COMMAND_LINE: usize = 32_767;
 
 /// What `host serve` needs.
 #[derive(Debug)]
 pub struct ServeOpts {
     pub endpoint: String,
-    /// The prototype pane's command line; `None` starts a Host that owns no pane.
+    /// The command line of a first Terminal started with the Host; `None` starts a Host that
+    /// owns no Terminal (what start on demand uses).
     pub shell: Option<String>,
     pub job_breakaway: Option<bool>,
     pub idle_exit: Duration,
 }
 
-/// The shell started when `--shell` is not given.
+/// The shell started when no command is given.
 pub fn default_shell() -> String {
     std::env::var("ComSpec").unwrap_or_else(|_| "cmd.exe".into())
 }
@@ -110,6 +129,12 @@ impl Sink {
             let _ = arx.recv_timeout(Duration::from_secs(1));
         }
     }
+
+    /// A barrier: signals once everything queued before it was written.
+    fn flushed(&self) -> Option<mpsc::Receiver<()>> {
+        let (atx, arx) = mpsc::channel();
+        self.push(Vec::new(), Some(atx)).then_some(arx)
+    }
 }
 
 struct Conn {
@@ -118,29 +143,71 @@ struct Conn {
     kind: ClientKind,
     name: String,
     version: String,
-    /// `Some(interactive)` while attached to the pane.
-    attach: Option<bool>,
+    /// Streams this connection is attached to, and whether interactively.
+    attached: BTreeMap<u32, bool>,
     topics: Vec<String>,
     event_seq: u64,
 }
 
 impl Conn {
-    fn event(&mut self, name: &str, data: &Value, ack: Option<mpsc::Sender<()>>) -> bool {
+    fn event(&mut self, name: &str, data: &Value) -> bool {
         self.event_seq += 1;
         self.sink.push(
             proto::encode_control(&proto::event(self.event_seq, name, data)),
-            ack,
+            None,
         )
     }
 }
 
-struct PaneState {
+/// Recent output and counters of one running pane.
+struct PaneOut {
     ring: Ring,
     seq: u64,
-    size: (u16, u16),
     input_bytes: u64,
-    /// `Some` once the pane ended: the exit code (if known) and the teardown report.
-    ended: Option<(Option<u32>, Value)>,
+}
+
+/// The OS side of one running pane: its pseudo console and job, its reader thread, and the
+/// result of its teardown once someone performed it.
+struct PaneRt {
+    pane_id: String,
+    terminal_id: String,
+    stream: u32,
+    pty: Arc<Pty>,
+    reader: Mutex<Option<JoinHandle<()>>>,
+    /// The job was terminated (not every process ended by itself).
+    forced: AtomicBool,
+    done: Mutex<Option<Value>>,
+    done_cv: Condvar,
+}
+
+impl PaneRt {
+    fn terminate(&self) {
+        self.forced.store(true, Ordering::SeqCst);
+        self.pty.terminate_job(1);
+    }
+
+    fn set_done(&self, report: Value) {
+        *self
+            .done
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(report);
+        self.done_cv.notify_all();
+    }
+
+    /// The teardown report of whoever claimed it, waiting (bounded) until it is there.
+    fn wait_done(&self) -> Value {
+        let guard = self
+            .done
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (guard, _) = self
+            .done_cv
+            .wait_timeout_while(guard, TEARDOWN_WAIT, |d| d.is_none())
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard.clone().unwrap_or_else(
+            || json!({"pane_id": self.pane_id, "terminal_id": self.terminal_id, "pending": true}),
+        )
+    }
 }
 
 #[derive(Default)]
@@ -156,6 +223,12 @@ struct Stats {
     panics: u64,
     input_frames_dropped: u64,
     lagging_clients_dropped: u64,
+    terminals_created: u64,
+    spawn_failures: u64,
+    terminals_removed: u64,
+    /// Output and input bytes of panes that already ended.
+    ended_output_bytes: u64,
+    ended_input_bytes: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -167,34 +240,88 @@ enum Reject {
 }
 
 struct State {
-    pane: Option<PaneState>,
+    reg: Registry,
+    out: HashMap<String, PaneOut>,
+    rt: HashMap<String, Arc<PaneRt>>,
     conns: HashMap<u64, Conn>,
     /// Accepted connections that have not finished their handshake.
     pending: usize,
     next_conn: u64,
     stopping: bool,
     stats: Stats,
+    /// The Terminal started with `--shell` (its pane is `host.status.pane`).
+    initial: Option<String>,
 }
 
 impl State {
-    fn pane_live(&self) -> bool {
-        self.pane.as_ref().is_some_and(|p| p.ended.is_none())
+    fn live_terminals(&self) -> usize {
+        self.reg
+            .terminals
+            .iter()
+            .filter(|t| t.state.is_live())
+            .count()
     }
 
     fn idle(&self) -> bool {
-        !self.pane_live() && self.conns.is_empty() && self.pending == 0
+        self.live_terminals() == 0 && self.conns.is_empty() && self.pending == 0
     }
-}
 
-struct PaneRt {
-    id: String,
-    pty: Arc<Pty>,
-    command: String,
+    fn live(&self, p: &session::Pane) -> session::Live {
+        let rt = self.rt.get(&p.id);
+        session::Live {
+            running: rt.is_some_and(|r| win::exit_code(r.pty.process_handle()).is_none()),
+            processes: rt.map_or(0, |r| r.pty.job_processes()),
+            clients: self
+                .conns
+                .values()
+                .filter(|c| c.attached.contains_key(&p.stream))
+                .count(),
+            output_bytes: self.out.get(&p.id).map_or(0, |o| o.seq),
+        }
+    }
+
+    fn terminal_json(&self, t: &session::Terminal) -> Value {
+        session::terminal_json(t, &|p| self.live(p))
+    }
+
+    fn summary_json(&self, t: &session::Terminal) -> Value {
+        session::summary_json(t, &|p| self.live(p))
+    }
+
+    fn rt_of_stream(&self, stream: u32) -> Option<&Arc<PaneRt>> {
+        self.rt.values().find(|r| r.stream == stream)
+    }
+
+    /// Sends an event to every connection subscribed to `topic`, in the same critical section
+    /// as the change it reports.
+    fn notify(&mut self, topic: &str, name: &str, data: &Value) {
+        for c in self.conns.values_mut() {
+            if c.topics.iter().any(|t| t == topic) {
+                c.event(name, data);
+            }
+        }
+    }
+
+    fn state_changed(&mut self, terminal_id: &str, previous: &str, cause: Option<EndCause>) {
+        let Some(t) = self.reg.get(terminal_id) else {
+            return;
+        };
+        let data = json!({
+            "terminal_id": t.id, "name": t.name.display, "state": t.state.as_str(),
+            "previous_state": previous, "cause": cause.map(EndCause::as_str),
+        });
+        self.notify("terminals", "terminal.state_changed", &data);
+    }
+
+    fn removed(&mut self, terminal_id: &str, name: &str, reason: &str) {
+        self.stats.terminals_removed += 1;
+        let data = json!({"terminal_id": terminal_id, "name": name, "reason": reason});
+        self.notify("terminals", "terminal.removed", &data);
+    }
 }
 
 enum Ev {
     Stop { conn: u64, id: u64 },
-    PaneExited,
     Changed,
 }
 
@@ -204,7 +331,6 @@ enum Exit {
 }
 
 struct Host {
-    pane: Option<PaneRt>,
     state: Mutex<State>,
     events: mpsc::Sender<Ev>,
     pid: u32,
@@ -218,6 +344,10 @@ struct Host {
     session: u32,
     idle_exit: Duration,
     environment: &'static str,
+    /// The user's logon environment for new panes (ADR 0003 §6).
+    env: Option<EnvBlock>,
+    /// The default working directory of new panes: the user profile.
+    home: Option<PathBuf>,
 }
 
 /// Runs the Host until it is stopped or idles out. Returns the final report.
@@ -240,40 +370,21 @@ pub fn serve(opts: &ServeOpts) -> Result<Value, CliError> {
     win::enable_ctrl_c_for_children();
     // Panes get the user's logon environment, never the launcher's (ADR 0003 §6).
     let env = EnvBlock::for_current_user().ok();
-    let cwd = profile_dir(env.as_ref());
-    let pane = match &opts.shell {
-        None => None,
-        Some(shell) => {
-            let (cols, rows) = DEFAULT_SIZE;
-            let pty = Pty::spawn(shell, cwd.as_deref(), cols, rows, env.as_ref()).map_err(|e| {
-                CliError::new(Code::SpawnFailed, format!("cannot start `{shell}`: {e}"))
-                    .hint("check the --shell command line")
-            })?;
-            Some(PaneRt {
-                id: proto::new_object_id('p'),
-                pty: Arc::new(pty),
-                command: shell.clone(),
-            })
-        }
-    };
+    let home = profile_dir(env.as_ref());
     let (ev_tx, ev_rx) = mpsc::channel();
     let host = Arc::new(Host {
         state: Mutex::new(State {
-            pane: pane.as_ref().map(|_| PaneState {
-                ring: Ring::new(proto::HISTORY_BYTES),
-                seq: 0,
-                size: DEFAULT_SIZE,
-                input_bytes: 0,
-                ended: None,
-            }),
+            reg: Registry::default(),
+            out: HashMap::new(),
+            rt: HashMap::new(),
             conns: HashMap::new(),
             pending: 0,
             next_conn: 1,
             stopping: false,
             stats: Stats::default(),
+            initial: None,
         }),
-        pane,
-        events: ev_tx.clone(),
+        events: ev_tx,
         pid: win::current_pid(),
         sid,
         started_at: proto::rfc3339(SystemTime::now()),
@@ -285,23 +396,27 @@ pub fn serve(opts: &ServeOpts) -> Result<Value, CliError> {
         session: win::session_id(),
         idle_exit: opts.idle_exit,
         environment: if env.is_some() { "user" } else { "inherited" },
+        env,
+        home,
     });
-
-    let mut reader = host.pane.as_ref().map(|p| {
-        let output = p
-            .pty
-            .take_output()
-            .expect("a fresh pseudo console has its output end");
-        let host = Arc::clone(&host);
-        thread::spawn(move || host.read_output(&output))
-    });
-    if let Some(p) = &host.pane {
-        let pty = Arc::clone(&p.pty);
-        thread::spawn(move || {
-            pty.wait_exit(None);
-            let _ = ev_tx.send(Ev::PaneExited);
-        });
+    if let Some(shell) = &opts.shell {
+        let spec = Spec {
+            name: None,
+            command: session::split_command_line(shell),
+            cwd: host.home.as_ref().map(|p| p.display().to_string()),
+            size: DEFAULT_SIZE,
+            remain_on_exit: false,
+        };
+        let created = host.create(spec, shell, false).map_err(|e| {
+            CliError::new(
+                Code::SpawnFailed,
+                format!("cannot start `{shell}`: {}", e.message),
+            )
+            .hint("check the --shell command line")
+        })?;
+        host.lock().initial = Some(created["terminal_id"].as_str().unwrap_or("").to_string());
     }
+
     let stopper = listener.stopper();
     let acceptor = thread::spawn({
         let host = Arc::clone(&host);
@@ -326,29 +441,34 @@ pub fn serve(opts: &ServeOpts) -> Result<Value, CliError> {
         }
     });
 
-    let exit = host.supervise(&ev_rx, &mut reader);
+    let exit = host.supervise(&ev_rx);
     let (requester, reason) = match exit {
         Exit::Stop { conn, id } => (Some((conn, id)), "stop_requested"),
         Exit::Idle => (None, "idle"),
     };
-    let mut acks = host.notify("host", "host.stopping", &json!({ "reason": reason }), true);
-    let was_live = host.lock().pane_live();
-    let shell = host.end_pane(&mut reader);
-    if was_live {
-        acks.extend(host.pane_exited_events(true));
-    }
-    if let Some((conn, id)) = requester {
-        let (atx, arx) = mpsc::channel();
+    host.lock()
+        .notify("host", "host.stopping", &json!({ "reason": reason }));
+    let initial = host.lock().initial.clone();
+    let ended = host.end_all();
+    let shell = initial
+        .and_then(|tid| {
+            ended
+                .iter()
+                .find(|r| r["terminal_id"] == tid.as_str())
+                .cloned()
+        })
+        .unwrap_or(Value::Null);
+    let mut acks = Vec::new();
+    {
         let st = host.lock();
-        if let Some(c) = st.conns.get(&conn) {
-            let result = json!({"stopping": true, "shell": shell});
-            if c.sink.push(
-                proto::encode_control(&proto::response(id, Ok(result))),
-                Some(atx),
-            ) {
-                acks.push(arx);
-            }
+        if let Some((conn, id)) = requester
+            && let Some(c) = st.conns.get(&conn)
+        {
+            let result = json!({"stopping": true, "shell": shell, "terminals": ended});
+            c.sink.control(&proto::response(id, Ok(result)));
         }
+        // Every event and the response reach the clients before the Host exits.
+        acks.extend(st.conns.values().filter_map(|c| c.sink.flushed()));
     }
     let until = Instant::now() + Duration::from_secs(2);
     for a in acks {
@@ -360,6 +480,7 @@ pub fn serve(opts: &ServeOpts) -> Result<Value, CliError> {
         "reason": reason,
         "host": { "pid": host.pid },
         "shell": shell,
+        "terminals": ended,
     }))
 }
 
@@ -403,9 +524,86 @@ fn size_param(v: &Value, field: &str) -> Result<Option<(u16, u16)>, IpcError> {
     }
 }
 
+/// The required `target` string.
+fn target(params: &Value) -> Result<&str, IpcError> {
+    params["target"]
+        .as_str()
+        .ok_or_else(|| IpcError::param("target", "target must be a Terminal name or id"))
+}
+
+fn optional_string<'a>(params: &'a Value, name: &str) -> Result<Option<&'a str>, IpcError> {
+    match &params[name] {
+        Value::Null => Ok(None),
+        Value::String(s) => Ok(Some(s.as_str())),
+        _ => Err(IpcError::param(name, format!("{name} must be a string"))),
+    }
+}
+
+/// The `spawn_failed` reason of a failed start (IPC_PROTOCOL §6).
+fn spawn_reason(e: &std::io::Error) -> &'static str {
+    match e.raw_os_error() {
+        Some(2 | 3 | 123 | 161) => "not_found", // file/path not found, bad name or path syntax
+        Some(5) => "access_denied",
+        Some(267) => "bad_cwd", // ERROR_DIRECTORY
+        _ => "other",
+    }
+}
+
+/// The command line `CreateProcessW` gets for `c`.
+fn command_line(c: &Command) -> String {
+    std::iter::once(&c.program)
+        .chain(&c.args)
+        .map(|a| win::quote_arg(a))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Whether `program` can be found as `CreateProcessW` would look for it: as a path, or on `PATH`
+/// (with `.exe` appended when it has no extension). Used by dry runs only; the real start
+/// reports `not_found` from the OS.
+fn program_exists(program: &str, path_var: Option<String>) -> bool {
+    let exists = |p: &Path| std::fs::symlink_metadata(p).is_ok_and(|m| !m.is_dir());
+    let variants = |p: PathBuf| {
+        let mut v = vec![p.clone()];
+        if p.extension().is_none() {
+            v.push(p.with_extension("exe"));
+        }
+        v
+    };
+    let p = Path::new(program);
+    if p.is_absolute() || program.contains(['\\', '/']) {
+        return variants(p.to_path_buf()).iter().any(|c| exists(c));
+    }
+    path_var
+        .unwrap_or_default()
+        .split(';')
+        .filter(|d| !d.is_empty())
+        .any(|d| {
+            variants(Path::new(d).join(program))
+                .iter()
+                .any(|c| exists(c))
+        })
+}
+
 enum Reply {
     Now(Result<Value, IpcError>),
     Queued,
+}
+
+/// Ends a freshly started pane that must not be kept (the Host began stopping meanwhile).
+fn discard(pty: &Arc<Pty>, output: Handle) {
+    pty.terminate_job(1);
+    let drain = thread::spawn(move || {
+        let mut buf = vec![0u8; 16 * 1024];
+        while matches!(conpty::read_output(&output, &mut buf), Ok(n) if n > 0) {}
+    });
+    let closer = thread::spawn({
+        let pty = Arc::clone(pty);
+        move || pty.close_console()
+    });
+    pty.wait_exit(Some(GRACE));
+    join_bounded(closer, GRACE);
+    join_bounded(drain, GRACE);
 }
 
 impl Host {
@@ -416,7 +614,7 @@ impl Host {
     }
 
     /// Lifetime of ADR 0003 §4. Returns why the Host stops; `stopping` is set by then.
-    fn supervise(&self, rx: &mpsc::Receiver<Ev>, reader: &mut Option<JoinHandle<()>>) -> Exit {
+    fn supervise(&self, rx: &mpsc::Receiver<Ev>) -> Exit {
         loop {
             let idle = self.lock().idle();
             let ev = if idle {
@@ -440,104 +638,303 @@ impl Host {
             };
             match ev {
                 Ev::Changed => {}
-                Ev::PaneExited => {
-                    if self.lock().pane_live() {
-                        self.end_pane(reader);
-                        self.pane_exited_events(false);
-                    }
-                }
                 Ev::Stop { conn, id } => return Exit::Stop { conn, id },
             }
         }
     }
 
-    /// Ends the pane once (graceful, then forced) and returns its report; later calls return the
-    /// same report. `ClosePseudoConsole` runs on a helper thread because on Windows 10 it blocks
-    /// until conhost exits, while the reader keeps draining.
-    fn end_pane(&self, reader: &mut Option<JoinHandle<()>>) -> Value {
-        let Some(p) = &self.pane else {
-            return Value::Null;
+    /// Creates a Terminal (`terminal.create`, or the `--shell` Terminal of `host serve`): the
+    /// name and ids are reserved under the lock (so concurrent creates with one name give one
+    /// Terminal), the pane is started outside it, and a failed start leaves nothing behind
+    /// unless `keep` asks for a `failed` record. Returns the `terminal.create` result.
+    fn create(self: &Arc<Self>, spec: Spec, line: &str, keep: bool) -> Result<Value, IpcError> {
+        let (tid, pane_id, stream, size, cwd, program) = {
+            let mut st = self.lock();
+            if st.stopping {
+                return Err(IpcError::new(
+                    ErrorCode::HostStopping,
+                    "the Host is shutting down",
+                ));
+            }
+            if st.reg.terminals.len() >= MAX_TERMINALS {
+                return Err(IpcError::new(
+                    ErrorCode::Busy,
+                    format!("this Host already owns {MAX_TERMINALS} Terminals"),
+                ));
+            }
+            let created_at = proto::rfc3339(SystemTime::now());
+            let i = st.reg.reserve(spec, created_at, proto::new_object_id)?;
+            st.stats.terminals_created += 1;
+            let t = &st.reg.terminals[i];
+            let p = t.active_pane();
+            let out = (
+                t.id.clone(),
+                p.id.clone(),
+                p.stream,
+                p.size,
+                p.cwd.clone(),
+                p.command.program.clone(),
+            );
+            let data = json!({"terminal": st.terminal_json(t)});
+            st.notify("terminals", "terminal.created", &data);
+            out
         };
-        if let Some((_, report)) = self.lock().pane.as_ref().and_then(|s| s.ended.clone()) {
-            return report;
-        }
-        let processes = p.pty.job_processes();
-        let closer = thread::spawn({
-            let pty = Arc::clone(&p.pty);
-            move || pty.close_console()
+        let spawned = match cwd.as_deref() {
+            Some(c) if !Path::new(c).is_dir() => Err((
+                "bad_cwd",
+                format!("the working directory `{c}` does not exist or is not a directory"),
+            )),
+            _ => Pty::spawn(
+                line,
+                cwd.as_deref().map(Path::new),
+                size.0,
+                size.1,
+                self.env.as_ref(),
+            )
+            .map_err(|e| (spawn_reason(&e), format!("cannot start `{program}`: {e}"))),
+        };
+        let pty = match spawned {
+            Ok(pty) => Arc::new(pty),
+            Err((reason, message)) => {
+                let mut st = self.lock();
+                st.stats.spawn_failures += 1;
+                let name = st
+                    .reg
+                    .get(&tid)
+                    .map(|t| t.name.display.clone())
+                    .unwrap_or_default();
+                let _ = st.reg.apply(&tid, Transition::SpawnFailed { keep });
+                if keep {
+                    if let Some(t) = st.reg.get_mut(&tid) {
+                        t.failure = Some(session::Failure {
+                            reason,
+                            message: message.clone(),
+                        });
+                    }
+                    st.state_changed(&tid, "starting", None);
+                } else {
+                    st.removed(&tid, &name, "spawn_failed");
+                }
+                return Err(
+                    IpcError::new(ErrorCode::SpawnFailed, message).details(json!({
+                        "reason": reason,
+                        "program": program,
+                        "kept": keep,
+                        "terminal_id": if keep { Value::from(tid) } else { Value::Null },
+                    })),
+                );
+            }
+        };
+        let output = pty
+            .take_output()
+            .expect("a fresh pseudo console has its output end");
+        let rt = Arc::new(PaneRt {
+            pane_id: pane_id.clone(),
+            terminal_id: tid.clone(),
+            stream,
+            pty: Arc::clone(&pty),
+            reader: Mutex::new(None),
+            forced: AtomicBool::new(false),
+            done: Mutex::new(None),
+            done_cv: Condvar::new(),
         });
-        let mut exit = p.pty.wait_exit(Some(GRACE));
-        let forced = exit.is_none() || p.pty.job_processes() > 0;
-        if forced {
-            p.pty.terminate_job(1);
-            exit = p.pty.wait_exit(Some(GRACE));
-        }
-        join_bounded(closer, GRACE);
-        if let Some(r) = reader.take() {
-            join_bounded(r, GRACE); // all pane output is queued before the exit event
-        }
-        let report = json!({
-            "pane_id": p.id,
-            "pid": p.pty.pid(),
-            "exit_code": exit,
-            "processes_in_job": processes,
-            "forced": forced,
-            "job_processes_left": p.pty.job_processes(),
+        let result = {
+            let mut st = self.lock();
+            if st.stopping || st.reg.get(&tid).is_none() {
+                drop(st);
+                discard(&pty, output);
+                let mut st = self.lock();
+                if let Some(i) = st.reg.index_of(&tid) {
+                    let t = st.reg.terminals.remove(i);
+                    st.removed(&tid, &t.name.display, "host_stopping");
+                }
+                return Err(IpcError::new(
+                    ErrorCode::HostStopping,
+                    "the Host began shutting down while the Terminal started",
+                ));
+            }
+            st.reg.apply(&tid, Transition::Spawned)?;
+            if let Some(t) = st.reg.get_mut(&tid) {
+                t.active_pane_mut().pid = Some(pty.pid());
+            }
+            st.out.insert(
+                pane_id.clone(),
+                PaneOut {
+                    ring: Ring::new(proto::HISTORY_BYTES),
+                    seq: 0,
+                    input_bytes: 0,
+                },
+            );
+            st.rt.insert(pane_id.clone(), Arc::clone(&rt));
+            st.state_changed(&tid, "starting", None);
+            let t = st.reg.get(&tid).expect("just registered");
+            json!({
+                "terminal_id": t.id,
+                "window_id": t.windows[0].id,
+                "pane_id": pane_id,
+                "name": t.name.display,
+                "terminal": st.terminal_json(t),
+            })
+        };
+        // The reader is registered before the exit waiter can tear the pane down.
+        let reader = thread::spawn({
+            let host = Arc::clone(self);
+            let rt = Arc::clone(&rt);
+            move || host.read_output(&rt, &output)
         });
-        let mut st = self.lock();
-        if let Some(s) = st.pane.as_mut() {
-            s.ended = Some((exit, report.clone()));
-        }
-        for c in st.conns.values_mut() {
-            c.attach = None;
-        }
+        *rt.reader
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(reader);
+        thread::spawn({
+            let host = Arc::clone(self);
+            move || {
+                rt.pty.wait_exit(None);
+                host.end_pane(&rt.pane_id, EndCause::Exited, false);
+            }
+        });
+        let _ = self.events.send(Ev::Changed);
+        Ok(result)
+    }
+
+    /// Ends one pane once and returns its report. The first caller claims the teardown and
+    /// performs it; later callers wait for its result (a later, stronger cause still decides the
+    /// Terminal's fate, and `immediate` ends the job at once).
+    fn end_pane(&self, pane_id: &str, cause: EndCause, immediate: bool) -> Value {
+        let rt = {
+            let mut st = self.lock();
+            let Some(rt) = st.rt.get(pane_id).cloned() else {
+                return Value::Null;
+            };
+            let Some(t) = st.reg.get_mut(&rt.terminal_id) else {
+                return Value::Null;
+            };
+            if let Some(prev) = t.ending {
+                if cause > prev {
+                    t.ending = Some(cause);
+                }
+                drop(st);
+                if immediate {
+                    rt.terminate();
+                }
+                return rt.wait_done();
+            }
+            t.ending = Some(cause);
+            let tid = rt.terminal_id.clone();
+            if st.reg.apply(&tid, Transition::EndBegins).is_ok() {
+                st.state_changed(&tid, "running", Some(cause));
+            }
+            rt
+        };
+        let report = self.teardown(&rt, immediate);
+        self.finish(&rt, &report);
+        rt.set_done(report.clone());
         report
     }
 
-    /// `pane.exited` to the subscribers of `panes`, once the pane ended.
-    fn pane_exited_events(&self, with_ack: bool) -> Vec<mpsc::Receiver<()>> {
-        let Some(p) = &self.pane else {
-            return Vec::new();
-        };
-        let code = self
+    /// Graceful, then forced (ADR 0004, ARCHITECTURE §5): `ClosePseudoConsole` sends
+    /// `CTRL_CLOSE_EVENT`, the processes get the grace period, and whatever is left in the job
+    /// is terminated. `immediate` terminates the job first. All output is drained before the
+    /// report, so `pane.exited` follows the pane's last output.
+    fn teardown(&self, rt: &PaneRt, immediate: bool) -> Value {
+        let processes = rt.pty.job_processes();
+        if immediate {
+            rt.terminate();
+        }
+        // On Windows 10 ClosePseudoConsole blocks until conhost exits, while the reader drains.
+        let closer = thread::spawn({
+            let pty = Arc::clone(&rt.pty);
+            move || pty.close_console()
+        });
+        let mut exit = rt.pty.wait_exit(Some(GRACE));
+        if exit.is_none() || rt.pty.job_processes() > 0 {
+            rt.terminate();
+            exit = rt.pty.wait_exit(Some(GRACE));
+        }
+        join_bounded(closer, GRACE);
+        let reader = rt
+            .reader
             .lock()
-            .pane
-            .as_ref()
-            .and_then(|s| s.ended.as_ref().map(|e| e.0));
-        let Some(code) = code else {
-            return Vec::new();
-        };
-        self.notify(
-            "panes",
-            "pane.exited",
-            &json!({"pane_id": p.id, "pid": p.pty.pid(), "exit_code": code}),
-            with_ack,
-        )
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(r) = reader {
+            join_bounded(r, GRACE);
+        }
+        json!({
+            "terminal_id": rt.terminal_id,
+            "pane_id": rt.pane_id,
+            "pid": rt.pty.pid(),
+            "exit_code": exit,
+            "processes_in_job": processes,
+            "forced": rt.forced.load(Ordering::SeqCst),
+            "job_processes_left": rt.pty.job_processes(),
+        })
     }
 
-    /// Sends an event to every client subscribed to `topic`.
-    fn notify(
-        &self,
-        topic: &str,
-        name: &str,
-        data: &Value,
-        with_ack: bool,
-    ) -> Vec<mpsc::Receiver<()>> {
-        let mut acks = Vec::new();
-        let mut st = self.lock();
-        for c in st.conns.values_mut() {
-            if !c.topics.iter().any(|t| t == topic) {
-                continue;
+    /// Applies the end of a pane to the model: detaches its clients, records how it ended, and
+    /// moves its Terminal to `stopped` or removes it, with the events, in one critical section.
+    fn finish(&self, rt: &PaneRt, report: &Value) {
+        {
+            let mut st = self.lock();
+            if let Some(o) = st.out.remove(&rt.pane_id) {
+                st.stats.ended_output_bytes += o.seq;
+                st.stats.ended_input_bytes += o.input_bytes;
             }
-            let (atx, arx) = mpsc::channel();
-            if c.event(name, data, with_ack.then_some(atx)) && with_ack {
-                acks.push(arx);
+            st.rt.remove(&rt.pane_id);
+            for c in st.conns.values_mut() {
+                c.attached.remove(&rt.stream);
+            }
+            let tid = rt.terminal_id.clone();
+            let exit_code = report["exit_code"]
+                .as_u64()
+                .and_then(|c| u32::try_from(c).ok());
+            let Some(t) = st.reg.get_mut(&tid) else {
+                return;
+            };
+            let cause = t.ending.take().unwrap_or(EndCause::Exited);
+            t.last_exit = Some(LastExit {
+                pid: Some(rt.pty.pid()),
+                exit_code,
+                forced: report["forced"] == true,
+                cause,
+            });
+            t.active_pane_mut().pid = None;
+            let (name, remain) = (t.name.display.clone(), t.remain_on_exit);
+            let data = json!({
+                "pane_id": rt.pane_id, "terminal_id": tid, "pid": rt.pty.pid(), "exit_code": exit_code,
+            });
+            st.notify("panes", "pane.exited", &data);
+            match st.reg.apply(
+                &tid,
+                Transition::Ended {
+                    cause,
+                    remain_on_exit: remain,
+                },
+            ) {
+                Ok(Some(_)) => st.state_changed(&tid, "stopping", Some(cause)),
+                Ok(None) => st.removed(&tid, &name, cause.as_str()),
+                Err(_) => {}
             }
         }
-        acks
+        let _ = self.events.send(Ev::Changed);
     }
 
-    fn read_output(&self, out: &Handle) {
+    /// Ends every running pane in parallel (Host stop or idle exit); returns their reports.
+    fn end_all(&self) -> Vec<Value> {
+        let panes: Vec<String> = self.lock().rt.keys().cloned().collect();
+        thread::scope(|s| {
+            let handles: Vec<_> = panes
+                .iter()
+                .map(|p| s.spawn(move || self.end_pane(p, EndCause::HostStop, false)))
+                .collect();
+            handles
+                .into_iter()
+                .filter_map(|h| h.join().ok())
+                .filter(|r| !r.is_null())
+                .collect()
+        })
+    }
+
+    fn read_output(&self, rt: &PaneRt, out: &Handle) {
         let mut buf = vec![0u8; 64 * 1024];
         loop {
             let n = match conpty::read_output(out, &mut buf) {
@@ -546,17 +943,17 @@ impl Host {
             };
             let mut guard = self.lock();
             let st = &mut *guard;
-            let Some(pane) = st.pane.as_mut() else {
+            let Some(pane) = st.out.get_mut(&rt.pane_id) else {
                 return;
             };
             pane.ring.push(&buf[..n]);
             let seq = pane.seq;
             pane.seq += n as u64;
-            let frame = proto::encode_data(STREAM, seq, 0, &buf[..n]);
+            let frame = proto::encode_data(rt.stream, seq, 0, &buf[..n]);
             for c in st.conns.values_mut() {
                 // Never block the pane on a client: one that lags is disconnected by its sink.
-                if c.attach.is_some() && !c.sink.push(frame.clone(), None) {
-                    c.attach = None;
+                if c.attached.contains_key(&rt.stream) && !c.sink.push(frame.clone(), None) {
+                    c.attached.clear();
                     st.stats.lagging_clients_dropped += 1;
                 }
             }
@@ -616,6 +1013,7 @@ impl Host {
             if r.is_err() {
                 st.stats.panics += 1;
             }
+            // A client that disappears owns nothing: only its subscriptions and attachments go.
             st.conns.remove(&id);
         }
         let _ = self.events.send(Ev::Changed);
@@ -702,7 +1100,7 @@ impl Host {
                 kind: hello.kind,
                 name: hello.name,
                 version: hello.version,
-                attach: None,
+                attached: BTreeMap::new(),
                 topics: Vec::new(),
                 event_seq: 0,
             },
@@ -725,7 +1123,7 @@ impl Host {
         sink.control(&proto::response(id, result));
     }
 
-    fn requests(&self, id: u64, pipe: &Arc<Pipe>, sink: &Sink) {
+    fn requests(self: &Arc<Self>, id: u64, pipe: &Arc<Pipe>, sink: &Sink) {
         loop {
             let frame = match proto::read_frame(&mut &**pipe, None, |t| t + proto::FRAME_TIMEOUT) {
                 Ok(Some(f)) => f,
@@ -782,28 +1180,34 @@ impl Host {
     }
 
     fn input(&self, conn: u64, stream: u32, bytes: &[u8]) {
-        let allowed = {
+        let rt = {
             let mut st = self.lock();
-            let ok = !st.stopping
-                && st.pane_live()
-                && stream == STREAM
-                && st.conns.get(&conn).and_then(|c| c.attach) == Some(true);
-            if ok {
-                if let Some(p) = st.pane.as_mut() {
-                    p.input_bytes += bytes.len() as u64;
+            let interactive =
+                st.conns.get(&conn).and_then(|c| c.attached.get(&stream)) == Some(&true);
+            let rt = st.rt_of_stream(stream).cloned().filter(|r| {
+                interactive
+                    && st
+                        .reg
+                        .get(&r.terminal_id)
+                        .is_some_and(|t| t.state == session::State::Running && t.ending.is_none())
+            });
+            match (&rt, st.stopping) {
+                (Some(r), false) => {
+                    if let Some(o) = st.out.get_mut(&r.pane_id) {
+                        o.input_bytes += bytes.len() as u64;
+                    }
                 }
-            } else {
-                st.stats.input_frames_dropped += 1;
+                _ => st.stats.input_frames_dropped += 1,
             }
-            ok
+            rt.filter(|_| !st.stopping)
         };
-        // Only an interactively attached cli/gui connection reaches the pane; nothing else does.
-        if allowed && let Some(p) = &self.pane {
-            let _ = p.pty.write_input(bytes);
+        // Only an interactively attached cli/gui connection reaches a pane; nothing else does.
+        if let Some(r) = rt {
+            let _ = r.pty.write_input(bytes);
         }
     }
 
-    fn handle(&self, conn: u64, req: &Request) -> Reply {
+    fn handle(self: &Arc<Self>, conn: u64, req: &Request) -> Reply {
         let method = req.method.as_str();
         if self.lock().stopping && !matches!(method, "host.status" | "host.health") {
             return Reply::Now(Err(IpcError::new(
@@ -821,6 +1225,13 @@ impl Host {
             "pane.attach" => self.attach(conn, req),
             "pane.detach" => Reply::Now(self.detach(conn, p)),
             "pane.resize" => Reply::Now(self.resize(conn, p)),
+            "terminal.list" => Reply::Now(self.list(p)),
+            "terminal.info" => Reply::Now(self.info(p)),
+            "terminal.create" => Reply::Now(self.create_request(p)),
+            "terminal.rename" => Reply::Now(self.rename(p)),
+            "terminal.stop" => Reply::Now(self.end_request(p, Op::Stop)),
+            "terminal.kill" => Reply::Now(self.end_request(p, Op::Kill)),
+            "terminal.remove" => Reply::Now(self.end_request(p, Op::Remove)),
             other => Reply::Now(Err(IpcError::new(
                 ErrorCode::UnknownRequest,
                 format!("unknown method `{other}`"),
@@ -841,38 +1252,54 @@ impl Host {
             "protocol": proto::PROTOCOL_MAX,
             "uptime_s": self.uptime_s(),
             "stopping": st.stopping,
-            "terminals": u8::from(st.pane_live()),
+            "terminals": st.live_terminals(),
             "clients": st.conns.len(),
+        })
+    }
+
+    /// `host.status.pane`: the pane of the Terminal started with `--shell`, while it exists
+    /// (the Step 09 shape).
+    fn initial_pane(&self, st: &State) -> Value {
+        let Some(t) = st.initial.as_deref().and_then(|id| st.reg.get(id)) else {
+            return Value::Null;
+        };
+        let p = t.active_pane();
+        let live = st.live(p);
+        let running = t.state.is_live() && live.running;
+        let pid = p.pid.or_else(|| t.last_exit.as_ref().and_then(|e| e.pid));
+        let line = std::iter::once(p.command.program.clone())
+            .chain(session::redact_args(&p.command.args))
+            .collect::<Vec<_>>()
+            .join(" ");
+        json!({
+            "id": p.id,
+            "terminal_id": t.id,
+            "pid": pid,
+            "command": line,
+            "running": running,
+            "exit_code": t.last_exit.as_ref().and_then(|e| e.exit_code),
+            "size": {"cols": p.size.0, "rows": p.size.1},
+            "job_processes": live.processes,
+            "output_bytes": live.output_bytes,
         })
     }
 
     fn status(&self) -> Value {
         let st = self.lock();
-        let attached = st.conns.values().filter(|c| c.attach.is_some()).count();
+        let attached = st.conns.values().filter(|c| !c.attached.is_empty()).count();
         let clients: Vec<Value> = st
             .conns
             .values()
             .map(|c| {
                 json!({
                     "pid": c.pid, "kind": c.kind.as_str(), "name": c.name, "version": c.version,
-                    "attached": c.attach.is_some(), "interactive": c.attach == Some(true),
+                    "attached": !c.attached.is_empty(),
+                    "interactive": c.attached.values().any(|i| *i),
+                    "streams": c.attached.keys().collect::<Vec<_>>(),
                     "topics": c.topics,
                 })
             })
             .collect();
-        let pane = match (&self.pane, &st.pane) {
-            (Some(p), Some(s)) => json!({
-                "id": p.id,
-                "pid": p.pty.pid(),
-                "command": p.command,
-                "running": s.ended.is_none() && win::exit_code(p.pty.process_handle()).is_none(),
-                "exit_code": s.ended.as_ref().and_then(|e| e.0),
-                "size": {"cols": s.size.0, "rows": s.size.1},
-                "job_processes": p.pty.job_processes(),
-                "output_bytes": s.seq,
-            }),
-            _ => Value::Null,
-        };
         json!({
             "protocol": proto::PROTOCOL_MAX,
             "endpoint": self.endpoint,
@@ -893,8 +1320,9 @@ impl Host {
                 "idle_exit_s": self.idle_exit.as_secs(),
                 "environment": self.environment,
             },
-            "terminals": u8::from(st.pane_live()),
-            "pane": pane,
+            "terminals": st.live_terminals(),
+            "terminals_total": st.reg.terminals.len(),
+            "pane": self.initial_pane(&st),
             "clients": {"connected": st.conns.len(), "attached": attached, "list": clients},
         })
     }
@@ -903,13 +1331,20 @@ impl Host {
     fn stats(&self) -> Value {
         let st = self.lock();
         let s = &st.stats;
-        let (out, input) = st.pane.as_ref().map_or((0, 0), |p| (p.seq, p.input_bytes));
+        let out: u64 = st.out.values().map(|o| o.seq).sum::<u64>() + s.ended_output_bytes;
+        let input: u64 = st.out.values().map(|o| o.input_bytes).sum::<u64>() + s.ended_input_bytes;
         json!({
             "host": {"uptime_s": self.uptime_s(), "handle_count": win::handle_count()},
-            "terminals": u8::from(st.pane_live()),
-            "panes": u8::from(st.pane_live()),
+            "terminals": st.live_terminals(),
+            "terminals_total": st.reg.terminals.len(),
+            "panes": st.rt.len(),
             "clients": st.conns.len(),
             "pane": {"output_bytes_total": out, "input_bytes_total": input},
+            "sessions": {
+                "created_total": s.terminals_created,
+                "spawn_failures_total": s.spawn_failures,
+                "removed_total": s.terminals_removed,
+            },
             "ipc": {
                 "connections_total": s.connections_total,
                 "rejected": {
@@ -928,13 +1363,6 @@ impl Host {
         })
     }
 
-    fn live_panes(&self) -> Vec<String> {
-        match &self.pane {
-            Some(p) if self.lock().pane_live() => vec![p.id.clone()],
-            _ => Vec::new(),
-        }
-    }
-
     fn stop(&self, conn: u64, req: &Request) -> Reply {
         let (dry_run, kill) = match (
             flag(&req.params, "dry_run"),
@@ -943,18 +1371,41 @@ impl Host {
             (Ok(d), Ok(k)) => (d, k),
             (Err(e), _) | (_, Err(e)) => return Reply::Now(Err(e)),
         };
-        let live = self.live_panes();
+        let (panes, would_end) = {
+            let st = self.lock();
+            let live: Vec<&session::Terminal> = st
+                .reg
+                .terminals
+                .iter()
+                .filter(|t| t.state.is_live())
+                .collect();
+            let panes: Vec<String> = live.iter().map(|t| t.active_pane().id.clone()).collect();
+            let would_end: Vec<Value> = live
+                .iter()
+                .map(|t| {
+                    let p = t.active_pane();
+                    let l = st.live(p);
+                    json!({
+                        "terminal_id": t.id, "name": t.name.display, "pane_id": p.id,
+                        "pid": p.pid, "processes": l.processes,
+                        "busy": session::busy(&p.command.program, l.processes),
+                    })
+                })
+                .collect();
+            (panes, would_end)
+        };
         if dry_run {
             return Reply::Now(Ok(json!({
-                "dry_run": true, "would_kill": live, "would_stop": self.status(),
+                "dry_run": true, "would_kill": panes, "would_end": would_end,
+                "would_stop": self.status(),
             })));
         }
-        if !live.is_empty() && !kill {
+        if !panes.is_empty() && !kill {
             return Reply::Now(Err(IpcError::new(
                 ErrorCode::Busy,
                 "the Host owns live Terminals; set kill_terminals to end them",
             )
-            .details(json!({ "live": live }))));
+            .details(json!({ "live": panes, "terminals": would_end }))));
         }
         {
             let mut st = self.lock();
@@ -994,21 +1445,10 @@ impl Host {
         Ok(json!({ "topics": topics }))
     }
 
+    /// `pane.attach`: a target (any level; a Terminal or window means its active pane), or none
+    /// when the Host has exactly one running pane.
     fn attach(&self, conn: u64, req: &Request) -> Reply {
         let p = &req.params;
-        let Some(pane) = &self.pane else {
-            return Reply::Now(Err(IpcError::new(
-                ErrorCode::TargetNotFound,
-                "this Host owns no pane (it was started with --no-shell)",
-            )));
-        };
-        if !(p["target"].is_null() || p["target"] == pane.id.as_str()) {
-            return Reply::Now(Err(IpcError::new(
-                ErrorCode::TargetNotFound,
-                "no pane matches the target",
-            )
-            .details(json!({"candidates": [pane.id]}))));
-        }
         let interactive = match &p["interactive"] {
             Value::Null => true,
             Value::Bool(b) => *b,
@@ -1024,14 +1464,15 @@ impl Host {
             Ok(_) => None, // a read-only viewer never resizes the pane
             Err(e) => return Reply::Now(Err(e)),
         };
-        if !self.lock().pane_live() {
-            return Reply::Now(Err(IpcError::new(
-                ErrorCode::InvalidState,
-                "the pane's process has exited",
-            )));
-        }
+        let rt = {
+            let st = self.lock();
+            match self.attach_target(&st, &p["target"]) {
+                Ok(rt) => rt,
+                Err(e) => return Reply::Now(Err(e)),
+            }
+        };
         if let Some((c, r)) = size
-            && let Err(e) = pane.pty.resize(c, r)
+            && let Err(e) = rt.pty.resize(c, r)
         {
             return Reply::Now(Err(IpcError::new(
                 ErrorCode::InternalError,
@@ -1042,51 +1483,132 @@ impl Host {
         // reader cannot interleave: no gap, no duplicate.
         let mut guard = self.lock();
         let st = &mut *guard;
-        let Some(ps) = st.pane.as_mut() else {
-            return Reply::Queued;
-        };
         // Re-checked under the lock that ends attachments, so no client stays attached to a
         // pane that ended between the check above and here.
-        if ps.ended.is_some() {
+        if !st.rt.contains_key(&rt.pane_id) {
             return Reply::Now(Err(IpcError::new(
                 ErrorCode::InvalidState,
                 "the pane's process has exited",
             )));
         }
+        let Some(t) = st.reg.get_mut(&rt.terminal_id) else {
+            return Reply::Queued;
+        };
         if let Some(s) = size {
-            ps.size = s;
+            t.active_pane_mut().size = s;
         }
-        let (seq, replay, cur) = (ps.seq, ps.ring.replay(), ps.size);
+        let pane = t.active_pane().clone();
+        let Some(out) = st.out.get(&rt.pane_id) else {
+            return Reply::Queued;
+        };
+        let (seq, replay) = (out.seq, out.ring.replay());
         let Some(c) = st.conns.get_mut(&conn) else {
             return Reply::Queued;
         };
-        c.attach = Some(interactive);
+        c.attached.insert(rt.stream, interactive);
         let result = json!({
-            "stream_id": STREAM,
-            "pane_id": pane.id,
+            "stream_id": rt.stream,
+            "pane_id": rt.pane_id,
+            "terminal_id": rt.terminal_id,
             "seq": seq,
             "interactive": interactive,
-            "pane": {"id": pane.id, "pid": pane.pty.pid(), "size": {"cols": cur.0, "rows": cur.1}},
+            "pane": {"id": rt.pane_id, "pid": rt.pty.pid(),
+                     "size": {"cols": pane.size.0, "rows": pane.size.1}},
             "replay_bytes": replay.len(),
         });
         c.sink.control(&proto::response(req.id, Ok(result)));
         if !replay.is_empty() {
             c.sink.push(
-                proto::encode_data(STREAM, seq - replay.len() as u64, FLAG_SNAPSHOT, &replay),
+                proto::encode_data(rt.stream, seq - replay.len() as u64, FLAG_SNAPSHOT, &replay),
                 None,
             );
         }
         Reply::Queued
     }
 
-    fn detach(&self, conn: u64, params: &Value) -> Result<Value, IpcError> {
-        match &params["stream_id"] {
-            Value::Null => {}
-            v if v.as_u64() == Some(u64::from(STREAM)) => {}
-            _ => return Err(IpcError::param("stream_id", "no such stream")),
+    fn attach_target(&self, st: &State, target: &Value) -> Result<Arc<PaneRt>, IpcError> {
+        let pane_id = match target {
+            Value::Null => {
+                let live: Vec<&Arc<PaneRt>> = st.rt.values().collect();
+                match live.as_slice() {
+                    [] => {
+                        return Err(IpcError::new(
+                            ErrorCode::TargetNotFound,
+                            "this Host owns no running pane (it was started with --no-shell, or every Terminal ended)",
+                        ));
+                    }
+                    [one] => one.pane_id.clone(),
+                    many => {
+                        return Err(IpcError::new(
+                            ErrorCode::AmbiguousTarget,
+                            "this Host owns several running Terminals; name one as the target",
+                        )
+                        .details(json!({
+                            "candidates": many.iter().map(|r| r.terminal_id.clone()).collect::<Vec<_>>()
+                        })));
+                    }
+                }
+            }
+            Value::String(s) => {
+                let r = st.reg.resolve(s)?;
+                st.reg.terminals[r.terminal].windows[r.window].panes[r.pane]
+                    .id
+                    .clone()
+            }
+            _ => {
+                return Err(IpcError::param(
+                    "target",
+                    "target must be a Terminal, window or pane",
+                ));
+            }
+        };
+        let t = st
+            .reg
+            .owner_of_pane(&pane_id)
+            .ok_or_else(|| IpcError::new(ErrorCode::TargetNotFound, "no such pane"))?;
+        if t.state != session::State::Running || t.ending.is_some() {
+            return Err(IpcError::new(
+                ErrorCode::InvalidState,
+                format!(
+                    "Terminal `{}` is {}; only a running Terminal can be attached",
+                    t.name.display,
+                    if t.ending.is_some() {
+                        "stopping"
+                    } else {
+                        t.state.as_str()
+                    }
+                ),
+            )
+            .details(json!({"terminal_id": t.id, "state": t.state.as_str()})));
         }
-        if let Some(c) = self.lock().conns.get_mut(&conn) {
-            c.attach = None;
+        st.rt
+            .get(&pane_id)
+            .cloned()
+            .ok_or_else(|| IpcError::new(ErrorCode::InvalidState, "the pane's process has exited"))
+    }
+
+    fn detach(&self, conn: u64, params: &Value) -> Result<Value, IpcError> {
+        let mut st = self.lock();
+        let known = |st: &State, s: u32| st.reg.pane_of_stream(s).is_some();
+        match &params["stream_id"] {
+            Value::Null => {
+                if let Some(c) = st.conns.get_mut(&conn) {
+                    c.attached.clear();
+                }
+            }
+            v => {
+                let s = v
+                    .as_u64()
+                    .and_then(|s| u32::try_from(s).ok())
+                    .ok_or_else(|| IpcError::param("stream_id", "no such stream"))?;
+                let was = st
+                    .conns
+                    .get_mut(&conn)
+                    .is_some_and(|c| c.attached.remove(&s).is_some());
+                if !was && !known(&st, s) {
+                    return Err(IpcError::param("stream_id", "no such stream"));
+                }
+            }
         }
         Ok(json!({}))
     }
@@ -1094,24 +1616,349 @@ impl Host {
     fn resize(&self, conn: u64, params: &Value) -> Result<Value, IpcError> {
         let (c, r) = size_param(params, "cols")?
             .ok_or_else(|| IpcError::param("cols", "cols and rows are required"))?;
-        let Some(pane) = &self.pane else {
-            return Err(IpcError::new(
-                ErrorCode::TargetNotFound,
-                "this Host owns no pane",
-            ));
+        let rt = {
+            let st = self.lock();
+            if st.rt.is_empty() {
+                return Err(IpcError::new(
+                    ErrorCode::TargetNotFound,
+                    "this Host owns no running pane",
+                ));
+            }
+            let mine: Vec<u32> = st
+                .conns
+                .get(&conn)
+                .map(|c| {
+                    c.attached
+                        .iter()
+                        .filter(|(_, i)| **i)
+                        .map(|(s, _)| *s)
+                        .collect()
+                })
+                .unwrap_or_default();
+            let stream = match &params["stream_id"] {
+                Value::Null => match mine.as_slice() {
+                    [one] => *one,
+                    [] => {
+                        return Err(IpcError::new(
+                            ErrorCode::InvalidState,
+                            "attach interactively before resizing the pane",
+                        ));
+                    }
+                    _ => {
+                        return Err(IpcError::param(
+                            "stream_id",
+                            "attached to several panes: name the stream_id to resize",
+                        ));
+                    }
+                },
+                v => {
+                    let s = v
+                        .as_u64()
+                        .and_then(|s| u32::try_from(s).ok())
+                        .ok_or_else(|| IpcError::param("stream_id", "no such stream"))?;
+                    if !mine.contains(&s) {
+                        return Err(IpcError::new(
+                            ErrorCode::InvalidState,
+                            "attach interactively to this stream before resizing it",
+                        ));
+                    }
+                    s
+                }
+            };
+            st.rt_of_stream(stream)
+                .cloned()
+                .ok_or_else(|| IpcError::new(ErrorCode::InvalidState, "the pane has ended"))?
         };
-        if self.lock().conns.get(&conn).and_then(|c| c.attach) != Some(true) {
-            return Err(IpcError::new(
-                ErrorCode::InvalidState,
-                "attach interactively before resizing the pane",
-            ));
-        }
-        pane.pty
+        rt.pty
             .resize(c, r)
             .map_err(|e| IpcError::new(ErrorCode::InternalError, format!("resize failed: {e}")))?;
-        if let Some(ps) = self.lock().pane.as_mut() {
-            ps.size = (c, r);
+        if let Some(t) = self.lock().reg.get_mut(&rt.terminal_id) {
+            t.active_pane_mut().size = (c, r);
         }
-        Ok(json!({"cols": c, "rows": r}))
+        Ok(json!({"cols": c, "rows": r, "stream_id": rt.stream}))
     }
+
+    fn list(&self, params: &Value) -> Result<Value, IpcError> {
+        let full = match optional_string(params, "detail")? {
+            None | Some("summary") => false,
+            Some("full") => true,
+            Some(_) => {
+                return Err(IpcError::param("detail", "detail must be summary or full"));
+            }
+        };
+        let st = self.lock();
+        let terminals: Vec<Value> = st
+            .reg
+            .terminals
+            .iter()
+            .map(|t| {
+                if full {
+                    st.terminal_json(t)
+                } else {
+                    st.summary_json(t)
+                }
+            })
+            .collect();
+        Ok(json!({ "terminals": terminals }))
+    }
+
+    fn info(&self, params: &Value) -> Result<Value, IpcError> {
+        let target = target(params)?;
+        let st = self.lock();
+        let i = st.reg.resolve_terminal(target)?;
+        Ok(json!({ "terminal": st.terminal_json(&st.reg.terminals[i]) }))
+    }
+
+    fn create_request(self: &Arc<Self>, p: &Value) -> Result<Value, IpcError> {
+        for (field, step) in [("env", "Step 11"), ("profile", "Step 33")] {
+            if !p[field].is_null() {
+                return Err(IpcError::param(
+                    field,
+                    format!(
+                        "`{field}` is part of IPC v1 but not implemented by this Host yet ({step})"
+                    ),
+                ));
+            }
+        }
+        let name = optional_string(p, "name")?
+            .map(session::parse_name)
+            .transpose()?;
+        let command = match &p["command"] {
+            Value::Null => session::split_command_line(&default_shell()),
+            Value::Object(c) => {
+                let program = c
+                    .get("program")
+                    .and_then(Value::as_str)
+                    .filter(|s| !s.trim().is_empty() && !s.contains('\0'))
+                    .ok_or_else(|| {
+                        IpcError::param("command", "command.program must be a non-empty string")
+                    })?;
+                let args = match c.get("args") {
+                    None | Some(Value::Null) => Vec::new(),
+                    Some(Value::Array(a)) => a
+                        .iter()
+                        .map(|v| v.as_str().filter(|s| !s.contains('\0')).map(String::from))
+                        .collect::<Option<Vec<_>>>()
+                        .ok_or_else(|| {
+                            IpcError::param("command", "command.args must be a list of strings")
+                        })?,
+                    Some(_) => {
+                        return Err(IpcError::param(
+                            "command",
+                            "command.args must be a list of strings",
+                        ));
+                    }
+                };
+                Command {
+                    program: program.to_string(),
+                    args,
+                }
+            }
+            _ => {
+                return Err(IpcError::param(
+                    "command",
+                    "command must be {program, args}",
+                ));
+            }
+        };
+        let line = command_line(&command);
+        if line.encode_utf16().count() >= MAX_COMMAND_LINE {
+            return Err(IpcError::param(
+                "command",
+                "the command line is longer than 32767 characters",
+            ));
+        }
+        let cwd = match optional_string(p, "cwd")? {
+            Some(c) if !Path::new(c).is_absolute() => {
+                return Err(IpcError::param("cwd", "cwd must be an absolute path"));
+            }
+            Some(c) => Some(c.to_string()),
+            None => self.home.as_ref().map(|h| h.display().to_string()),
+        };
+        let size = size_param(&p["size"], "size")?.unwrap_or(DEFAULT_SIZE);
+        let remain_on_exit = flag(p, "remain_on_exit")?;
+        let keep = flag(p, "keep_on_failure")?;
+        if flag(p, "dry_run")? {
+            let st = self.lock();
+            let name = match &name {
+                Some(n) => {
+                    st.reg.check_free(n, None)?;
+                    n.display.clone()
+                }
+                None => st.reg.default_name().display,
+            };
+            drop(st);
+            if let Some(c) = cwd.as_deref()
+                && !Path::new(c).is_dir()
+            {
+                return Err(IpcError::new(
+                    ErrorCode::SpawnFailed,
+                    format!("the working directory `{c}` does not exist or is not a directory"),
+                )
+                .details(json!({"reason": "bad_cwd", "program": command.program, "kept": false, "terminal_id": null})));
+            }
+            let path_var = self
+                .env
+                .as_ref()
+                .and_then(|e| e.get("PATH"))
+                .or_else(|| std::env::var("PATH").ok());
+            if !program_exists(&command.program, path_var) {
+                return Err(IpcError::new(
+                    ErrorCode::SpawnFailed,
+                    format!("`{}` was not found", command.program),
+                )
+                .details(json!({"reason": "not_found", "program": command.program, "kept": false, "terminal_id": null})));
+            }
+            return Ok(json!({"dry_run": true, "would_create": {
+                "name": name,
+                "command": {"program": command.program, "args": session::redact_args(&command.args)},
+                "cwd": cwd,
+                "size": {"cols": size.0, "rows": size.1},
+                "remain_on_exit": remain_on_exit,
+                "keep_on_failure": keep,
+            }}));
+        }
+        let spec = Spec {
+            name,
+            command,
+            cwd,
+            size,
+            remain_on_exit,
+        };
+        self.create(spec, &line, keep)
+    }
+
+    fn rename(&self, p: &Value) -> Result<Value, IpcError> {
+        let target = target(p)?;
+        let raw = optional_string(p, "name")?
+            .ok_or_else(|| IpcError::param("name", "name is required"))?;
+        let name = session::parse_name(raw)?;
+        let dry_run = flag(p, "dry_run")?;
+        let mut st = self.lock();
+        let i = st.reg.resolve_terminal(target)?;
+        let id = st.reg.terminals[i].id.clone();
+        st.reg.check_free(&name, Some(&id))?;
+        let previous = st.reg.terminals[i].name.display.clone();
+        if dry_run {
+            return Ok(json!({"dry_run": true, "would_rename": {
+                "terminal_id": id, "from": previous, "to": name.display,
+            }}));
+        }
+        let changed = previous != name.display;
+        if changed {
+            st.reg.terminals[i].name = name.clone();
+            let data = json!({"terminal_id": id, "name": name.display, "previous_name": previous});
+            st.notify("terminals", "terminal.renamed", &data);
+        }
+        Ok(json!({
+            "terminal_id": id, "name": name.display, "previous_name": previous, "changed": changed,
+        }))
+    }
+
+    /// `terminal.stop`, `terminal.kill` and `terminal.remove` (docs/SESSION_MODEL.md §4).
+    fn end_request(&self, p: &Value, op: Op) -> Result<Value, IpcError> {
+        let target = target(p)?;
+        let force = flag(p, "force")?;
+        let dry_run = flag(p, "dry_run")?;
+        let (tid, pane_id, name) = {
+            let mut st = self.lock();
+            let i = st.reg.resolve_terminal(target)?;
+            let t = &st.reg.terminals[i];
+            let pane = t.active_pane();
+            let live = st.live(pane);
+            let busy = t.state == session::State::Running
+                && session::busy(&pane.command.program, live.processes);
+            let plan = json!({
+                "terminal_id": t.id, "name": t.name.display, "state": t.state.as_str(),
+                "pane_id": pane.id, "pid": pane.pid, "program": pane.command.program,
+                "processes": live.processes, "busy": busy,
+                "ends_processes": t.state.is_live() && !(op == Op::Remove && !force),
+                "removes_terminal": op != Op::Stop,
+            });
+            let (tid, pane_id, name, state) = (
+                t.id.clone(),
+                pane.id.clone(),
+                t.name.display.clone(),
+                t.state,
+            );
+            match state {
+                session::State::Starting => {
+                    return Err(IpcError::new(
+                        ErrorCode::InvalidState,
+                        format!("Terminal `{name}` is still starting; try again"),
+                    )
+                    .details(json!({"terminal_id": tid, "state": "starting"})));
+                }
+                session::State::Running | session::State::Stopping
+                    if op == Op::Remove && !force =>
+                {
+                    return Err(IpcError::new(
+                        ErrorCode::InvalidState,
+                        format!(
+                            "Terminal `{name}` is {}; stop it first, or set force to end its processes and remove it",
+                            state.as_str()
+                        ),
+                    )
+                    .details(json!({"terminal_id": tid, "state": state.as_str()})));
+                }
+                session::State::Running if busy && !force => {
+                    return Err(IpcError::new(
+                        ErrorCode::Busy,
+                        format!(
+                            "Terminal `{name}` runs more than an idle shell ({} process(es) in its job); set force to end them",
+                            live.processes
+                        ),
+                    )
+                    .details(plan));
+                }
+                _ => {}
+            }
+            if dry_run {
+                let key = match op {
+                    Op::Stop => "would_stop",
+                    Op::Kill => "would_kill",
+                    Op::Remove => "would_remove",
+                };
+                return Ok(json!({"dry_run": true, key: plan}));
+            }
+            if !state.is_live() {
+                // Nothing runs: stop is a no-op; kill and remove delete the stored record.
+                if op == Op::Stop {
+                    return Ok(json!({
+                        "affected": [], "terminal": st.terminal_json(t), "removed": false,
+                        "terminal_id": tid, "name": name,
+                    }));
+                }
+                st.reg.apply(&tid, Transition::Remove)?;
+                st.removed(&tid, &name, "removed");
+                drop(st);
+                let _ = self.events.send(Ev::Changed);
+                return Ok(json!({
+                    "affected": [], "terminal": null, "removed": true,
+                    "terminal_id": tid, "name": name,
+                }));
+            }
+            (tid, pane_id, name)
+        };
+        let report = match op {
+            Op::Stop => self.end_pane(&pane_id, EndCause::Stop, false),
+            Op::Kill | Op::Remove => self.end_pane(&pane_id, EndCause::Kill, true),
+        };
+        let st = self.lock();
+        let after = st.reg.get(&tid);
+        Ok(json!({
+            "affected": if report.is_null() { vec![] } else { vec![report] },
+            "terminal": after.map(|t| st.terminal_json(t)),
+            "removed": after.is_none(),
+            "terminal_id": tid,
+            "name": name,
+        }))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Op {
+    Stop,
+    Kill,
+    Remove,
 }

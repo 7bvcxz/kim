@@ -77,7 +77,9 @@ COMMANDS:
 RULES (rules.json; these commands work without the app):
     rule list     Every rule with its trigger and state: active, disabled, inactive (with a
                   code), other_mode or other_profile. rule show prints one rule in full; the
-                  text of a type_text step only with --show-text (otherwise its counts).
+                  text of a type_text step only with --show-text (otherwise its counts), launch
+                  targets only with --show-targets (otherwise the program's file name, the
+                  number of arguments, the website's scheme and host, the variable names).
     rule check    Validate everything: the schema, IDs, mode and profile references, recursive
                   outputs, duplicate triggers, rules that can never fire (shadowed triggers,
                   hidden sequences), stale launch consent, collisions with Ddalgak's own
@@ -88,13 +90,31 @@ RULES (rules.json; these commands work without the app):
                   pause|resume|toggle_pause|disable; remap --to <key> [--tap <key>]; block;
                   send_keys --keys <seq> [--step-delay-ms <n>]; type_text --text <t>
                   [--escapes] [--variables] [--method paste] [--key-delay-ms <n>];
-                  open_program --path <exe> [--arg <a>]...; open_url --url <url>; mode --op
-                  <op> [--target-mode <m>]...; delay --ms <n>; any step as --step '<json>'.
+                  open_program --path <exe> | --app-id <id> [--arg <a>]... [--working-dir <d>]
+                  [--window normal|maximized|minimized] [--if-running start_new|activate]
+                  [--env NAME=VALUE]...; open_url --url <url>; mode --op <op>
+                  [--target-mode <m>]...; delay --ms <n>; any step as --step '<json>'.
                   Rule options: --title, --description, --on press|release|hold, --hold-ms,
                   --repeat, --pass-through, --accept-injected, --mode <m>..., --priority,
-                  --on-error stop|continue. Engine, remap, block, send_keys and type_text
-                  rules run (a typing step alone); the others stay inactive
-                  (step_unsupported) until their Step.
+                  --on-error stop|continue. Engine, remap, block, send_keys, type_text,
+                  open_program and open_url rules run (a typing step alone; launches together,
+                  in order); the others stay inactive (step_unsupported) until their Step.
+    launches      open_program starts exactly the .exe you name (an absolute path, or under
+                  %ProgramFiles%, %ProgramFiles(x86)%, %LocalAppData%, %AppData%, %UserProfile%,
+                  %SystemRoot%), as you, with each --arg quoted by Ddalgak: never a shell
+                  string, never searched for, never elevated (a program that asks for
+                  administrator rights ends with program_requires_elevation). cmd, PowerShell
+                  and other script hosts are refused. --env sets a variable for that program
+                  only. open_url hands an http or https address to your default browser
+                  (https:// is added when missing); file:, javascript:, ms-settings: and other
+                  protocols are refused, and so is a user name or password. A rule starts at
+                  most once a second (rate_limited) and never twice at once (busy). Examples
+                  (they also need --allow launch-programs):
+                    ddalgak rule add --trigger Ctrl+Shift+F6 --action open_program
+                      --path '%SystemRoot%\\System32\\notepad.exe'
+                    ddalgak rule add --trigger Ctrl+Shift+F7 --action open_program
+                      --app-id Microsoft.WindowsCalculator_8wekyb3d8bbwe!App
+                    ddalgak rule add --trigger Ctrl+Shift+F9 --action open_url --url github.com
     remaps        A key, chord or mouse button acts as another key, chord, modifier or mouse
                   button for exactly as long as it is held (keys: docs/HOTKEY_CONTRACT.md §5;
                   code:KeyJ is the key at that position on every layout; MouseLeft, MouseRight,
@@ -176,9 +196,9 @@ FILES:
     %APPDATA%\\mouv\\ddalgak\\hotkeys.json   Ddalgak's own shortcuts (engine.toggle, engine.pause)
     %LOCALAPPDATA%\\mouv\\ddalgak\\          crash and emergency markers
 
-Pre-alpha: rules can control the engine (pause, resume, turn off), remap keys and mouse buttons
-and block keys; sending key sequences, text, launches, mouse actions and modes arrive in later
-steps and stay inactive until then. Linux is not supported yet. No command opens a window,
+Pre-alpha: rules can control the engine (pause, resume, turn off), remap keys and mouse buttons,
+block keys, send key sequences, type text and open programs and websites; mouse actions and
+modes arrive in later steps and stay inactive until then. Linux is not supported yet. No command opens a window,
 installs anything or uses the network.
 ";
 

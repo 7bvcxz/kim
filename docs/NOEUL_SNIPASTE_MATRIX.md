@@ -9,8 +9,9 @@ requirement that covers it ([NOEUL_REQUIREMENTS](NOEUL_REQUIREMENTS.md)), the mi
 will be verified. It is the tracking document for parity; the Step that implements a row updates
 it in the same change.
 
-**Step 49 (the app foundation) made the first rows `partial`**, each with its evidence; nothing
-is `supported` yet, and every other row is `planned` or `not intended` with Evidence `—`. Rows marked **◆** are deliberate deviations from Snipaste's default
+**Step 49 (the app foundation) made the first rows `partial`, and Step 50 (the `F1` selection
+overlay) thirteen more**, each with its evidence; nothing is `supported` yet (the overlay rows
+still lack the manual check on the visible desktop), and every other row is `planned` or `not intended` with Evidence `—`. Rows marked **◆** are deliberate deviations from Snipaste's default
 behavior; the most important one is the signature flow (`OUT-01`, `OUT-03`): in Noeul a
 double-click inside the selection **pins**, while in Snipaste it copies to the clipboard
 ([NOEUL_PHILOSOPHY §2](NOEUL_PHILOSOPHY.md)).
@@ -65,15 +66,15 @@ Each row has a permanent ID so that commits, tests and later audits can cite it.
 
 | ID | Snipaste feature | Src | Noeul approach | Status | Requirement | MS | Verify | Evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `SNIP-01` | Start snipping with a global hotkey, `F1` by default | G, H | Global action `capture.region`, default `F1`, through `RegisterHotKey`; a taken key is reported, never stolen | planned | NOEUL-FR-010, NOEUL-FR-100 | N1 | T, M | — |
-| `SNIP-02` | Start snipping by clicking the tray icon | G | Tray left-click starts a capture; the tray icon is optional | planned | NOEUL-FR-004 | N1 | M | — |
-| `SNIP-03` | Drag a rectangle over a frozen picture of the screen | G, H | Same idea: frozen picture of every monitor, dimmed outside, live size chip in device pixels | planned | NOEUL-FR-010, NOEUL-FR-011 | N1 | T, M | — |
-| `SNIP-04` | Move and resize the selection with anchors | G, A | Drag inside to move, eight handles and the border band to resize | planned | NOEUL-FR-012 | N1 | T (FLOW-09, FLOW-11), M | — |
-| `SNIP-05` | Abort with `Esc`, the close button, or a right-click outside edit mode | G, K | `Esc` and the toolbar's ✕ cancel; right-click clears the selection, and cancels when there is none; right-click inside opens a menu ◆ | planned | NOEUL-FR-012 | N1 | T, M | — |
-| `SNIP-06` | Abort when another program's window becomes active (setting) | G | Same, default on, a setting | planned | NOEUL-FR-013 | N1 | T | — |
-| `SNIP-07` | Select the whole screen with `Ctrl+A` (again: all screens) | K, L | `selection.full` (`Ctrl+A`): the monitor under the pointer, again all monitors | planned | NOEUL-FR-014 | N1 | T | — |
-| `SNIP-08` | Reuse the last successful rectangle with `R` | K | `selection.last` (`R`) | planned | NOEUL-FR-014 | N1 | T | — |
-| `SNIP-09` | Square selection while holding `Shift` | L | Same while dragging | planned | NOEUL-FR-011 | N1 | T | — |
+| `SNIP-01` | Start snipping with a global hotkey, `F1` by default | G, H | Global action `capture.region`, default `F1`, through `RegisterHotKey`; a taken key is reported, never stolen. Step 50: `capture.region` is registered (`F1` default) through `kim-hotkeys`; a taken chord is reported with offers and never retried in the background; rapid presses never open a second overlay; missing: a manual press of the real `F1` (tests register only `Ctrl+Alt+Shift+F21`) | partial | NOEUL-FR-010, NOEUL-FR-100 | N1 | T, M | T: `crates/noeul/src/app.rs` the_registered_capture_chord_opens_the_overlay; T: `crates/noeul/tests/overlay.rs` capture_region_is_registered_on_its_chord_and_a_taken_chord_is_reported_not_stolen, rapid_triggers_open_exactly_one_overlay_and_cancel_leaves_nothing |
+| `SNIP-02` | Start snipping by clicking the tray icon | G | Tray left-click starts a capture; the tray icon is optional. Step 50: tray left-click and the menu's Capture region run `capture.region`; missing: a manual check with a real tray icon | partial | NOEUL-FR-004 | N1 | M | T: `crates/noeul/src/app.rs` ipc_and_tray_open_the_overlay_and_a_dry_run_captures_nothing |
+| `SNIP-03` | Drag a rectangle over a frozen picture of the screen | G, H | Same idea: frozen picture of every monitor, dimmed outside, live size chip in device pixels. Step 50: one GDI picture of every monitor, dimmed by a 45 % veil outside the selection, a one-pixel lilac border with a halo, a readout `W × H  at X, Y` that follows the pointer and the selection; missing: the manual check on the visible desktop (UX spec §4.5) | partial | NOEUL-FR-010, NOEUL-FR-011 | N1 | T, M | T: `crates/noeul/src/overlay.rs` press_drag_release_selects_inclusive_pixels_and_tracks_the_pointer, compose_dims_outside_keeps_inside_and_draws_the_border; T: `crates/noeul/src/win/overlay.rs` off_screen_overlay_window_turns_messages_into_a_selection_and_pixels; T: `crates/noeul/src/app.rs` f1_opens_one_overlay_over_every_monitor_and_esc_cancels_cleanly; M (off-screen window, not the visible desktop): Windows 10 Pro 19045, one 5120×1440 monitor at 100 %, first frame p95 114.8 ms, 2026-11-04 (ADR 0026) |
+| `SNIP-04` | Move and resize the selection with anchors | G, A | Drag inside to move, eight handles and the border band to resize. Step 50: drag inside to move, eight handles and the border band (9 and 3 logical pixels, per-monitor DPI) to resize, outside a selection under 27 logical pixels; missing: the manual check | partial | NOEUL-FR-012 | N1 | T (FLOW-09, FLOW-11), M | T: `crates/noeul/src/overlay.rs` a_drag_outside_replaces_inside_moves_and_handles_resize, zones_and_cursors_follow_dpi_and_small_selections |
+| `SNIP-05` | Abort with `Esc`, the close button, or a right-click outside edit mode | G, K | `Esc` and the toolbar's ✕ cancel; right-click clears the selection, and cancels when there is none; right-click inside opens a menu ◆. Step 50: `Esc` (also as the reserved `nav.cancel` with shortcuts off), `Alt+F4`, right-click without a selection cancel; right-click outside clears; missing: the toolbar's ✕ and the menu inside (Step 51), the manual check | partial | NOEUL-FR-012 | N1 | T, M | T: `crates/noeul/src/overlay.rs` escape_right_click_and_focus_loss_cancel, right_click_outside_clears_inside_keeps_and_during_a_drag_undoes_it; T: `crates/noeul/src/app.rs` f1_opens_one_overlay_over_every_monitor_and_esc_cancels_cleanly |
+| `SNIP-06` | Abort when another program's window becomes active (setting) | G | Same, default on, a setting. Step 50: activation of another program's window cancels (always on); missing: the setting (N5) and the manual check | partial | NOEUL-FR-013 | N1 | T | T: `crates/noeul/src/overlay.rs` escape_right_click_and_focus_loss_cancel; T: `crates/noeul/src/app.rs` ipc_and_tray_open_the_overlay_and_a_dry_run_captures_nothing |
+| `SNIP-07` | Select the whole screen with `Ctrl+A` (again: all screens) | K, L | `selection.full` (`Ctrl+A`): the monitor under the pointer, again all monitors. Step 50: `selection.full`, the monitor under the pointer (nearest one in a gap), again all monitors; missing: the manual check | partial | NOEUL-FR-014 | N1 | T | T: `crates/noeul/src/overlay.rs` ctrl_a_selects_the_monitor_then_all_and_r_restores_the_last; T: `crates/noeul/src/app.rs` keyboard_only_capture_with_ctrl_a_arrows_and_enter |
+| `SNIP-08` | Reuse the last successful rectangle with `R` | K | `selection.last` (`R`). Step 50: `selection.last` restores the rectangle of the last pin made from the overlay; missing: the manual check | partial | NOEUL-FR-014 | N1 | T | T: `crates/noeul/src/overlay.rs` ctrl_a_selects_the_monitor_then_all_and_r_restores_the_last; T: `crates/noeul/src/app.rs` enter_pins_exactly_the_selection_and_nothing_is_copied_or_written |
+| `SNIP-09` | Square selection while holding `Shift` | L | Same while dragging. Step 50: `Shift` while dragging keeps the sides equal inside the picture; missing: the manual check | partial | NOEUL-FR-011 | N1 | T | T: `crates/noeul/src/overlay.rs` shift_makes_a_square_inside_the_picture |
 | `SNIP-10` | Move the area while still dragging by holding `Space` | A | Planned as a refinement; `Space` without a held button marks corners for keyboard selection | planned | NOEUL-FR-046 | N4 | T | — |
 | `SNIP-11` | Delayed capture and a dialog for position, size and delay | P, C | Delayed and custom capture from tray, settings and CLI | planned | NOEUL-FR-015 | N5 | T | — |
 | `SNIP-12` | Type the region size during snipping; fixed-ratio capture (Pro) | P | Typed size and fixed aspect ratio | planned | NOEUL-FR-046 | N4 | T | — |
@@ -99,7 +100,7 @@ Each row has a permanent ID so that commits, tests and later audits can cite it.
 | `DET-05` | Browser content needs accessibility support for element detection | T | Same OS limitation, documented; falls back to the window rectangle | planned | NOEUL-FR-040 | N1 | M, D | — |
 | `DET-06` | Magnifier appears when useful; hold `Alt` to show it | G, K | Shown while selecting; `magnifier.toggle` (`M`) ◆ (the hotkey contract has no bare-modifier keys) | planned | NOEUL-FR-041 | N1 | T, M | — |
 | `DET-07` | Move the pointer one pixel with `W A S D` | G, K | `pointer.move-*` on the physical keys `W A S D` (same position on every layout), with repeat and acceleration | planned | NOEUL-FR-042 | N1 | T | — |
-| `DET-08` | Move the area with arrows, grow with `Ctrl`+arrows, shrink with `Shift`+arrows | G, K | Same keys, one device pixel, repeat | planned | NOEUL-FR-042 | N1 | T | — |
+| `DET-08` | Move the area with arrows, grow with `Ctrl`+arrows, shrink with `Shift`+arrows | G, K | Same keys, one device pixel, repeat. Step 50: arrows move, `Ctrl`+arrows grow and `Shift`+arrows shrink by one device pixel per press and per repeat; missing: acceleration (Step 52) and the manual check | partial | NOEUL-FR-042 | N1 | T | T: `crates/noeul/src/overlay.rs` keyboard_moves_grows_shrinks_and_pins; T: `crates/noeul/src/hotkeys.rs` overlay_keys_match_the_capture_overlay_context |
 | `DET-09` | Swap the roles of `W A S D` and the arrow keys (setting) | A | Every key is rebindable through the hotkey contract | planned | NOEUL-FR-100, NOEUL-FR-101 | N5 | T | — |
 | `DET-10` | Magnifier style, or hide it entirely (Pro) | P | Magnifier toggle and size setting | planned | NOEUL-FR-041 | N1 | T | — |
 | `DET-11` | Region size in device or logical pixels (Pro) | P | Device pixels by default; logical units as a refinement | planned | NOEUL-FR-046 | N4 | T | — |
@@ -134,7 +135,7 @@ Each row has a permanent ID so that commits, tests and later audits can cite it.
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `OUT-01` | Copy the snip: Copy button, `Ctrl+C`, `Enter`, or a **double-click inside the area** | G, K | ◆ Copy is `Ctrl+C`, the Copy button and the menu. `Enter` and the double-click **pin** instead. The opt-in Snipaste-style preset restores copying on both. | planned | NOEUL-FR-023, NOEUL-FR-024 | N1 | T (FLOW-19, FLOW-24), M | — |
 | `OUT-02` | Save to a file: Save button, `Ctrl+S` | G, K | Same | planned | NOEUL-FR-023, NOEUL-FR-031 | N1 | T, M | — |
-| `OUT-03` | Pin to the screen: Pin button, `Ctrl+T`, middle-click inside | G, K | ◆ **Double-click inside**, `Enter`, the Pin button (first, primary) and middle-click pin. `Ctrl+T` is bound only by the opt-in preset. | planned | NOEUL-FR-020, NOEUL-FR-021, NOEUL-FR-022 | N1 | T (FLOW-01…18), M (UX_SPEC §4.4) | — |
+| `OUT-03` | Pin to the screen: Pin button, `Ctrl+T`, middle-click inside | G, K | ◆ **Double-click inside**, `Enter`, the Pin button (first, primary) and middle-click pin. `Ctrl+T` is bound only by the opt-in preset. Step 50: `Enter` (`capture.pin`) pins the selection at the same place and size through a `CaptureSelection`, without touching the clipboard; a failed pin keeps the overlay; missing: the double-click, the Pin button and middle-click (Step 51), the manual check | partial | NOEUL-FR-020, NOEUL-FR-021, NOEUL-FR-022 | N1 | T (FLOW-01…18), M (UX_SPEC §4.4) | T: `crates/noeul/src/app.rs` enter_pins_exactly_the_selection_and_nothing_is_copied_or_written, a_failed_pin_keeps_the_overlay_and_its_selection |
 | `OUT-04` | Quick save to a folder: `Ctrl+Shift+S` or `Shift`+Save | G, K, F | Same keys; never overwrites | planned | NOEUL-FR-032 | N1 | T (FLOW-20) | — |
 | `OUT-05` | The copied image pastes into other programs | H | PNG and `CF_DIBV5` on the clipboard, alpha kept | planned | NOEUL-FR-030 | N1 | T, M | — |
 | `OUT-06` | Copy the image as a file as well (Pro) | P | Opt-in; temporary file in a user-only folder, deleted at quit | planned | NOEUL-FR-033 | N5 | T | — |
@@ -225,8 +226,8 @@ Each row has a permanent ID so that commits, tests and later audits can cite it.
 
 | ID | Snipaste feature | Src | Noeul approach | Status | Requirement | MS | Verify | Evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `DISP-01` | Several screens | H, L | Overlay over the whole virtual desktop, negative coordinates included; exact on same-scale layouts in N1 | planned | NOEUL-FR-090 | N1 | T (FLOW-31), M | — |
-| `DISP-02` | High-DPI displays | H | Per-monitor DPI awareness v2; device pixels everywhere | planned | NOEUL-FR-090 | N1 | T (FLOW-32), M | — |
+| `DISP-01` | Several screens | H, L | Overlay over the whole virtual desktop, negative coordinates included; exact on same-scale layouts in N1. Step 50: the overlay covers the virtual desktop with negative coordinates; selections cross the seam; tested with synthetic two- and three-monitor layouts only; missing: real multi-monitor hardware (manual) | partial | NOEUL-FR-090 | N1 | T (FLOW-31), M | T: `crates/noeul/src/app.rs` f1_opens_one_overlay_over_every_monitor_and_esc_cancels_cleanly; T: `crates/noeul/src/overlay.rs` ctrl_a_selects_the_monitor_then_all_and_r_restores_the_last |
+| `DISP-02` | High-DPI displays | H | Per-monitor DPI awareness v2; device pixels everywhere. Step 50: per-monitor DPI v2, device pixels everywhere, Noeul's drawing scaled by each monitor's DPI (`status.desktop.monitors[].dpi`); 150 % tested with synthetic layouts; missing: a real high-DPI monitor (manual) | partial | NOEUL-FR-090 | N1 | T (FLOW-32), M | T: `crates/noeul/src/overlay.rs` zones_and_cursors_follow_dpi_and_small_selections, the_scene_places_readout_help_and_handles_per_monitor_dpi; T: `crates/noeul/src/win/overlay.rs` off_screen_overlay_window_turns_messages_into_a_selection_and_pixels |
 | `DISP-03` | Mixed DPI: toolbar keeps its visual size; moving images across monitors | L | Same; pins keep their pixel size | planned | NOEUL-FR-091 | N4 | T (FLOW-33), M | — |
 | `DISP-04` | Monitors connected or disconnected while running | L | Handled without restart; pins stay | planned | NOEUL-FR-091, NOEUL-FR-067 | N4 | T, M | — |
 | `DISP-05` | HDR color correction | L | Converted to SDR sRGB with a stated limit | planned | NOEUL-FR-092 | N4 | T, M, D | — |
@@ -263,7 +264,7 @@ Each row has a permanent ID so that commits, tests and later audits can cite it.
 
 | ID | Snipaste feature | Src | Noeul approach | Status | Requirement | MS | Verify | Evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `CLI-01` | `snip` with a given area, size, full screen, last area, active window or screen | C | `noeul capture --region`, `--monitor`, `--window active`; `--interactive` opens the overlay. Step 49: `noeul capture --region x,y,w,h --pin` through the running instance; missing: `--monitor`, `--window active`, `--output`, `--clipboard` (N4/N5) | partial | NOEUL-FR-112 | N5 | T | T: `crates/noeul/tests/instance.rs` a_one_pixel_pin_lives_closes_and_reopens; T: `crates/noeul/tests/cli.rs` usage_errors_are_contract_documents |
+| `CLI-01` | `snip` with a given area, size, full screen, last area, active window or screen | C | `noeul capture --region`, `--monitor`, `--window active`; `--interactive` opens the overlay. Step 49: `noeul capture --region x,y,w,h --pin` through the running instance; Step 50: `--interactive` opens the overlay as `F1` does and `--cancel` closes it; missing: `--monitor`, `--window active`, `--output`, `--clipboard` (N4/N5) | partial | NOEUL-FR-112 | N5 | T | T: `crates/noeul/tests/instance.rs` a_one_pixel_pin_lives_closes_and_reopens; T: `crates/noeul/tests/cli.rs` usage_errors_are_contract_documents; T: `crates/noeul/tests/overlay.rs` rapid_triggers_open_exactly_one_overlay_and_cancel_leaves_nothing, the_overlay_needs_the_instance_and_reports_honestly |
 | `CLI-02` | Delay before snipping | C | `--delay` | planned | NOEUL-FR-015 | N5 | T | — |
 | `CLI-03` | Wait for the snip to finish before the command returns | C | Commands return when done, with a JSON result | planned | NOEUL-FR-110, NOEUL-FR-112 | N5 | T | — |
 | `CLI-04` | Show, hide or toggle all images; groups | C | `noeul pin hide`, `show`, `list`, groups | planned | NOEUL-FR-112 | N5 | T | — |
@@ -321,22 +322,22 @@ picture.
 | Status | Rows |
 | --- | --- |
 | `supported` | 0 |
-| `partial` | 18 |
-| `planned` | 129 (of which 5 are Noeul additions) |
+| `partial` | 31 |
+| `planned` | 116 (of which 5 are Noeul additions) |
 | `not intended` | 24 |
 | **Total** | **171** |
 
 | Group | partial | planned | not intended | Total |
 | --- | --- | --- | --- | --- |
-| 1. Starting and selecting (`SNIP`) | 0 | 14 | 8 | 22 |
-| 2. Detection and precision (`DET`) | 0 | 12 | 0 | 12 |
+| 1. Starting and selecting (`SNIP`) | 9 | 5 | 8 | 22 |
+| 2. Detection and precision (`DET`) | 1 | 11 | 0 | 12 |
 | 3. Color picker (`COLOR`) | 0 | 7 | 0 | 7 |
 | 4. History (`HIST`) | 0 | 6 | 0 | 6 |
-| 5. Output and clipboard (`OUT`) | 0 | 11 | 1 | 12 |
+| 5. Output and clipboard (`OUT`) | 1 | 10 | 1 | 12 |
 | 6. Annotation (`ANN`) | 0 | 17 | 0 | 17 |
 | 7. Floating pins (`PIN`) | 4 | 24 | 2 | 30 |
 | 8. Paste sources (`PASTE`) | 4 | 8 | 2 | 14 |
-| 9. Displays and color (`DISP`) | 0 | 5 | 1 | 6 |
+| 9. Displays and color (`DISP`) | 2 | 3 | 1 | 6 |
 | 10. Settings (`SET`) | 4 | 12 | 6 | 22 |
 | 11. Command line (`CLI`) | 3 | 5 | 1 | 9 |
 | 12. Application (`APP`) | 1 | 3 | 3 | 7 |
@@ -352,3 +353,4 @@ Deviations from Snipaste's defaults (**◆**) are in `SNIP-05`, `DET-02`, `DET-0
 | --- | --- | --- | --- |
 | 2026-11-04 | 2.11.3 (2026-01-18) | Step 48 | Initial inventory. Nothing implemented. |
 | 2026-11-04 | 2.11.3 (2026-01-18) | Step 49 | App foundation: 18 rows `partial` with test evidence (pins, `F3` image paste, tray, single instance, CLI, shortcuts). No row `supported`. |
+| 2026-11-04 | 2.11.3 (2026-01-18) | Step 50 | `F1` selection overlay: 13 more rows `partial` (`SNIP-01`…`09`, `DET-08`, `OUT-03`, `DISP-01`, `DISP-02`), `CLI-01` extended; 31 `partial`, none `supported` until the manual check of UX spec §4.5. |

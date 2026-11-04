@@ -3,7 +3,7 @@
 //! | What | Windows | Linux (N7, not claimed) |
 //! | --- | --- | --- |
 //! | Settings `config.toml`, shortcuts `hotkeys.json` | `%APPDATA%\mouv\noeul\` | `$XDG_CONFIG_HOME/mouv/noeul/` |
-//! | User-only data (opt-in history, pin backup; none in Step 49) | `%LOCALAPPDATA%\mouv\noeul\` | `$XDG_DATA_HOME/mouv/noeul/` |
+//! | User-only data: `ui-state.json` (Step 50); opt-in history and pin backup later | `%LOCALAPPDATA%\mouv\noeul\` | `$XDG_DATA_HOME/mouv/noeul/` |
 //!
 //! The paths come from the environment, so tests and the e2e suite redirect a whole profile by
 //! setting `APPDATA` and `LOCALAPPDATA` (Linux: `XDG_CONFIG_HOME`, `XDG_DATA_HOME`). Nothing here
@@ -22,7 +22,8 @@ pub const CONFIG_FILE: &str = "config.toml";
 pub struct Paths {
     /// `%APPDATA%\mouv\noeul`: `config.toml` and `hotkeys.json`.
     pub config_dir: PathBuf,
-    /// `%LOCALAPPDATA%\mouv\noeul`: user-only data; nothing is written there in Step 49.
+    /// `%LOCALAPPDATA%\mouv\noeul`: user-only data (`ui-state.json`; never a picture unless the
+    /// user turns on an opt-in feature of a later Step).
     pub data_dir: PathBuf,
     /// `%APPDATA%\mouv`: every Kim tool's settings folder (read by `hotkeys check --all-tools`).
     pub roaming_root: PathBuf,
@@ -58,6 +59,11 @@ impl Paths {
 
     pub fn hotkeys_file(&self) -> PathBuf {
         self.config_dir.join(kim_hotkeys::store::FILE_NAME)
+    }
+
+    /// `ui-state.json` in the data folder (what Noeul remembers about its own UI).
+    pub fn ui_state_file(&self) -> PathBuf {
+        self.data_dir.join("ui-state.json")
     }
 }
 

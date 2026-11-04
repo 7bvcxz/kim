@@ -168,7 +168,9 @@ lifecycle). `subak` also uses `io`, `internal`, `permission_denied`, `usage`, `t
 | `terminals_running` | 7 | `host stop` would end live Terminals; it does so only with `--kill-terminals` (ADR 0003 §7). |
 
 **Noeul codes** (Step 49 foundation: the resident instance, Noeul IPC v1, region pins requested
-from the CLI, `F3` image paste; [ADR 0023](adr/0023-noeul-app-foundation.md),
+from the CLI, `F3` image paste; [ADR 0023](adr/0023-noeul-app-foundation.md). Step 50's
+`noeul capture --interactive`/`--cancel` and IPC `capture.region`/`capture.cancel` add no code:
+a request while an overlay is open succeeds with `opened: false` ([ADR 0026](adr/0026-noeul-capture-overlay.md));
 [NOEUL_REQUIREMENTS §7](NOEUL_REQUIREMENTS.md#7-planned-cli-error-codes)). `noeul` also uses
 `io`, `internal`, `permission_denied`, `usage`, `protocol_error`, `unsupported_platform`,
 `timeout`, `busy`, `confirmation_required`, `cancelled` and the `hotkeys` codes below with the
@@ -229,6 +231,27 @@ familiarity and to match the IPC methods (ADR 0020, ADR 0027). `new` runs `-- <p
 `--env NAME` and `--unset-env NAME` adjust the pane's environment; `--dry-run` reports the
 resolved `executable` also without a Host ([PTY_PROCESSES](PTY_PROCESSES.md)); only `new` starts
 a Host on demand, and `--no-start` forbids even that.
+
+**Ddalgak codes** (Step 66 engine commands, [DDALGAK_ENGINE §6](DDALGAK_ENGINE.md)). `ddalgak`
+also uses `io`, `internal`, `permission_denied`, `usage`, `not_installed` (`ddalgak-gui.exe` is
+missing next to `ddalgak.exe`), `protocol_error` and `unsupported_platform` with the meaning
+and exit code above. `crates/ddalgak/src/output.rs` tests that this table matches its code;
+the `data` of every command is published as
+[ddalgak-cli-v1](contracts/schemas/ddalgak-cli-v1.schema.json), with examples generated from
+real runs. Further codes proposed in [DDALGAK_RULE_MODEL §13](DDALGAK_RULE_MODEL.md) are
+registered by the Steps that implement them (67, 81).
+
+| Code | Exit | Meaning |
+| --- | --- | --- |
+| `hook_failed` | 1 | Windows refused the low-level keyboard hook; the engine stays off. |
+| `engine_not_running` | 3 | The command needs the running tray app (`ddalgak-gui.exe`); the CLI never starts it. |
+| `app_identity_mismatch` | 4 | The endpoint is served by a process that is not `ddalgak-gui.exe` of this user. Nothing was sent to it. |
+| `rules_invalid` | 4 | `rules.json` is malformed or not a `ddalgak.rules` document; the engine cannot be turned on with it. |
+| `rules_from_newer_version` | 5 | `rules.json` was written by a newer Ddalgak; it is not run and never rewritten. |
+| `engine_elevated` | 5 | The app runs as administrator; it refuses to turn its engine on elevated (DDALGAK_SAFETY §3). |
+| `app_unresponsive` | 6 | The verified app accepted the connection but did not answer in time. It is neither stopped nor restarted. |
+| `engine_off` | 7 | Pause or resume needs the engine on; resume never turns it on. |
+| `app_already_running` | 7 | `ddalgak-gui.exe`: another instance already owns this user session; the new one exits without touching it. |
 
 ## 7. Output streams and the `--json` envelope
 

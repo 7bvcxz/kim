@@ -27,7 +27,8 @@
             "width": 1920,
             "height": 1080
           },
-          "primary": false
+          "primary": false,
+          "dpi": 96
         },
         {
           "rect": {
@@ -36,7 +37,8 @@
             "width": 2560,
             "height": 1440
           },
-          "primary": true
+          "primary": true,
+          "dpi": 144
         }
       ]
     },
@@ -46,15 +48,47 @@
       "reopenable": null
     },
     "captures": {
-      "started": 1,
+      "started": 2,
       "pinned": 1,
       "cancelled": 0,
-      "open": false
+      "open": true,
+      "ignored": 3,
+      "overlay": {
+        "session": 2,
+        "phase": "selected",
+        "selection": {
+          "x": 100,
+          "y": 120,
+          "width": 640,
+          "height": 360
+        },
+        "picture": {
+          "x": -1920,
+          "y": 0,
+          "width": 4480,
+          "height": 1440
+        },
+        "monitors": 2,
+        "buffer_bytes": 25804800,
+        "help": false
+      },
+      "first_frame": {
+        "count": 2,
+        "last": {
+          "total_us": 61200,
+          "capture_us": 38400,
+          "render_us": 22800,
+          "width": 4480,
+          "height": 1440
+        },
+        "p50_us": 58800,
+        "p95_us": 61200
+      }
     },
     "memory": {
-      "frames": 1,
-      "bytes": 480000,
-      "peak_bytes": 480000
+      "frames": 2,
+      "bytes": 26284800,
+      "peak_bytes": 26284800
     },
     "hotkeys": {
       "enabled": true,
@@ -65,6 +99,12 @@
       },
       "problem": null,
       "registrations": [
+        {
+          "action": "capture.region",
+          "keys": "F1",
+          "status": "registered",
+          "message": null
+        },
         {
           "action": "paste.float",
           "keys": "F3",
@@ -96,13 +136,7 @@
           "message": "F3 is registered by another program"
         }
       ],
-      "planned": [
-        {
-          "action": "capture.region",
-          "default": "F1",
-          "step": 50
-        }
-      ]
+      "planned": []
     },
     "tray": {
       "enabled": true,
@@ -112,6 +146,7 @@
       "path": "C:\\Users\\me\\AppData\\Roaming\\mouv\\noeul\\config.toml",
       "state": "default",
       "tray_icon": true,
+      "keyboard_help": "first-run",
       "problems": []
     },
     "last_action": {

@@ -1,0 +1,23 @@
+{
+  "command": "quit",
+  "data": {
+    "dry_run": false,
+    "engine": {
+      "hook": {
+        "installed": false,
+        "observe_only": true
+      },
+      "last_change": {
+        "origin": "cli",
+        "request": "stop"
+      },
+      "off_reason": "stopped",
+      "state": "off"
+    },
+    "pid": 75504,
+    "quitting": true
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

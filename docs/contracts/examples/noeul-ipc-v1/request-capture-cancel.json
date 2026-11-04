@@ -1,0 +1,6 @@
+{
+  "type": "request",
+  "id": 5,
+  "method": "capture.cancel",
+  "params": {}
+}

@@ -1,0 +1,61 @@
+[package]
+name = "ddalgak"
+version = "0.0.1"
+description = "Ddalgak: a native Windows-first automation engine (headless CLI and tray-app engine host)"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+# Two binaries in one package (ADR 0022): the headless CLI and the tray app that owns the engine.
+# Neither links a GUI toolkit in Step 66; the tray icon uses the Win32 shell API directly
+# (ADR 0024). Step 74 adds the editor and must keep `ddalgak` free of GUI crates.
+[[bin]]
+name = "ddalgak"
+path = "src/main.rs"
+
+[[bin]]
+name = "ddalgak-gui"
+path = "src/bin/ddalgak-gui.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+# Key syntax, reserved chords, the hotkey manifest and user layer, `RegisterHotKey` chord mapping
+# (docs/HOTKEY_CONTRACT.md, ADR 0017).
+kim-hotkeys = { version = "0.0.1", path = "../kim-hotkeys" }
+# The --json envelope (docs/CLI_CONTRACT.md §7), the local IPC messages and rules.json reading.
+serde_json = "1.0.154"
+
+[target."cfg(windows)".dependencies]
+# The engine host (ADR 0024): low-level keyboard hook and SendInput, RegisterHotKey on the host
+# window, the tray icon, WinEvent context tracking (focus, IME windows), session lock
+# notifications, the single-instance mutex, the identity-checked named pipe, the opt-in HKCU Run
+# value, integrity levels and process times.
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Performance",
+    "Win32_System_Pipes",
+    "Win32_System_Registry",
+    "Win32_System_RemoteDesktop",
+    "Win32_System_StationsAndDesktops",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_UI_Accessibility",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[dev-dependencies]
+# tests/cli.rs validates `ddalgak --json` output with xtask/src/jsonschema.rs (test-only).
+regex = "1.13.1"

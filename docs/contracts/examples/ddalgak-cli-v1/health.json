@@ -1,0 +1,83 @@
+{
+  "command": "health",
+  "data": {
+    "app": {
+      "image": "C:\\Users\\you\\AppData\\Local\\Programs\\mouv\\ddalgak\\versions\\0.0.1\\ddalgak-gui.exe",
+      "latency_ms": 0,
+      "pid": 75504,
+      "verified": true
+    },
+    "counters": {
+      "callback_us": {
+        "histogram": [
+          {
+            "bucket_us": "<=10",
+            "count": 0
+          },
+          {
+            "bucket_us": "<=50",
+            "count": 0
+          },
+          {
+            "bucket_us": "<=100",
+            "count": 0
+          },
+          {
+            "bucket_us": "<=500",
+            "count": 0
+          },
+          {
+            "bucket_us": "<=1000",
+            "count": 0
+          },
+          {
+            "bucket_us": "<=10000",
+            "count": 0
+          },
+          {
+            "bucket_us": "<=100000",
+            "count": 0
+          },
+          {
+            "bucket_us": ">100000",
+            "count": 0
+          }
+        ],
+        "max": 0,
+        "p99_at_most": null
+      },
+      "callbacks": 0,
+      "consumed": 0,
+      "dropped_signals": 0,
+      "late_events": 0,
+      "max_delay_ms": 0,
+      "other_injected": 0,
+      "own_injected": 0,
+      "panics": 0,
+      "wakeups": {
+        "hook_thread": 1,
+        "host": 11,
+        "worker": 2
+      }
+    },
+    "engine": {
+      "context_watchers": 3,
+      "hook": {
+        "installed": true,
+        "observe_only": true,
+        "thread_alive": true
+      },
+      "state": "running"
+    },
+    "healthy": true,
+    "problems": [],
+    "process": {
+      "cpu_ms": 15,
+      "pid": 75504,
+      "uptime_s": 0
+    }
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

@@ -19,8 +19,10 @@ pub const GUI_CRATES: &[&str] = &[
 ];
 
 /// Packages that must not reach GUI framework crates: the headless tools and libraries, and
-/// Noeul, whose windows are plain Win32 (ADR 0023: no framework, a 20 MB idle budget).
-pub const HEADLESS: &[&str] = &["kim", "kim-hotkeys", "noeul", "subak"];
+/// Noeul and Ddalgak, whose windows are plain Win32 (ADR 0023: no framework, a 20 MB idle
+/// budget; ADR 0024: the Ddalgak tray app has no editor before Step 74, which must keep the
+/// `ddalgak` CLI free of GUI crates).
+pub const HEADLESS: &[&str] = &["ddalgak", "kim", "kim-hotkeys", "noeul", "subak"];
 
 /// Parses `[[package]]` entries of a Cargo.lock into name → dependency names.
 pub fn parse_lock(text: &str) -> BTreeMap<String, Vec<String>> {

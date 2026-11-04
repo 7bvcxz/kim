@@ -1,0 +1,19 @@
+{
+  "type": "response",
+  "id": 3,
+  "result": {
+    "dry_run": false,
+    "opened": true,
+    "reason": null,
+    "session": 2,
+    "picture": {
+      "x": 0,
+      "y": 0,
+      "width": 2,
+      "height": 1
+    },
+    "monitors": 1,
+    "first_frame_us": 1000,
+    "pixels": "AAAA/wAAAP8="
+  }
+}

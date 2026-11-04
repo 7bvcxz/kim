@@ -131,6 +131,9 @@ thread_local! {
     static TASKBAR_CREATED: Cell<u32> = const { Cell::new(0) };
     static ENDED_BY: Cell<&'static str> = const { Cell::new("quit") };
     static MENU_OPEN: Cell<bool> = const { Cell::new(false) };
+    /// A display notification arrived while the core was busy (Step 58): it is noted when the
+    /// display timer fires.
+    static DISPLAY_MISSED: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Where Copy writes and a paste reads.
@@ -429,12 +432,7 @@ fn pump(app: &mut App<WinShell>) {
         }
     }
     if let Some(delay) = app.take_display_timer() {
-        // A display change is pending (Step 58): (re)arm the one-shot timer of the control window
-        // (an existing timer with this ID is replaced, *documented*); it is killed when it fires,
-        // so an idle Noeul has no timer (NOEUL-NFR-001).
-        let ms = u32::try_from(delay.as_millis()).unwrap_or(u32::MAX);
-        // SAFETY: a timer of our own control window, no callback (WM_TIMER is posted).
-        unsafe { SetTimer(CONTROL.get() as HWND, DISPLAY_TIMER, ms, None) };
+        arm_display_timer(CONTROL.get() as HWND, delay);
     }
     if app.quitting() {
         // SAFETY: ends this thread's message loop.
@@ -522,6 +520,24 @@ fn pin_menus() {
     }
 }
 
+/// (Re)arms the control window's one-shot display timer (Step 58): an existing timer with this ID
+/// is replaced (*documented*), and the timer is killed when it fires, so an idle Noeul has no
+/// timer (NOEUL-NFR-001).
+fn arm_display_timer(control: HWND, delay: Duration) {
+    let ms = u32::try_from(delay.as_millis()).unwrap_or(u32::MAX);
+    // SAFETY: a timer of our own control window, no callback (WM_TIMER is posted).
+    unsafe { SetTimer(control, DISPLAY_TIMER, ms, None) };
+}
+
+/// A display notification reached the control window: the core notes it (and the pump arms the
+/// timer); when the core is busy, it is remembered and the timer is armed here.
+fn note_display(control: HWND) {
+    if with_app(|a| a.note_display_change(Instant::now())).is_none() {
+        DISPLAY_MISSED.set(true);
+        arm_display_timer(control, crate::displays::SETTLE);
+    }
+}
+
 unsafe extern "system" fn control_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     match msg {
         WM_NOEUL_WAKE => {
@@ -554,18 +570,31 @@ unsafe extern "system" fn control_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPA
         // Monitors attached, removed, rearranged, turned or rescaled; a taskbar moved or
         // resized. Noted only: the core looks once the layout has been quiet (Step 58).
         WM_DISPLAYCHANGE | WM_DPICHANGED => {
-            with_app(|a| a.note_display_change(Instant::now()));
+            note_display(hwnd);
             return 0;
         }
         WM_SETTINGCHANGE if wp == SPI_SETWORKAREA as usize => {
-            with_app(|a| a.note_display_change(Instant::now()));
+            note_display(hwnd);
             return 0;
         }
-        // The layout has been quiet: the one-shot timer ends, the change is handled once.
+        // The layout has been quiet: the one-shot timer ends, the change is handled once. When
+        // the core is busy (a modal loop it runs, such as the quit question), the timer is armed
+        // again so the change is not lost.
         WM_TIMER if wp == DISPLAY_TIMER => {
             // SAFETY: our own window's timer.
             unsafe { KillTimer(hwnd, DISPLAY_TIMER) };
-            with_app(App::display_settled);
+            let missed = DISPLAY_MISSED.take();
+            let done = with_app(|a| {
+                if missed {
+                    a.note_display_change(Instant::now());
+                    let _ = a.take_display_timer();
+                }
+                a.display_settled();
+            });
+            if done.is_none() {
+                DISPLAY_MISSED.set(missed);
+                arm_display_timer(hwnd, crate::displays::SETTLE);
+            }
             return 0;
         }
         WM_QUERYENDSESSION => return 1,

@@ -5,7 +5,8 @@ mouv · Tracks [SUBAK-FR-060](PRODUCT_REQUIREMENTS.md)
 
 > **Only the session basics are implemented, partially** (Step 10: named Terminals in the Host;
 > Step 11: pane programs and environment; Step 12: the CLI `subak new|ls|info|status|attach|
-> detach|rename|stop|kill|rm`). 10 rows are `implemented` and 21 are `partial`, all with
+> detach|rename|stop|kill|rm`; Step 13: scrollback, replay, `capture`, `clear-history`,
+> `--history-limit`). 10 rows are `implemented` and 27 are `partial`, all with
 > automated evidence; every other row is `planned`, `deferred` or `unsupported`. This document
 > is an inventory and a plan, not a compatibility claim.
 
@@ -37,7 +38,7 @@ appears as one GUI tab. A Subak internal **Window** is a tmux **window**; it is 
 **Status values.** `planned` — intended, not built · `partial` — some documented behaviour has
 automated evidence · `implemented` — the whole row has automated evidence · `deferred` — not
 planned before Step 26; may be revisited · `unsupported` — will not be provided, by design.
-`implemented` is used since Step 11 (four environment rows) and Step 12 (invocation, `has-session`, `new -d`).
+`implemented` is used since Step 11 (four environment rows) and Step 12 (invocation, `has-session`, `new -d`); Step 13 made six scrollback rows `partial`.
 
 **Target Steps.**
 
@@ -57,7 +58,7 @@ planned before Step 26; may be revisited · `unsupported` — will not be provid
 
 **Conventions.** "Host op" = an operation of the Host's IPC API (Step 10), later exposed by the
 CLI and GUI. "CLI verb TBD" = the CLI spelling is decided in the listed Step; fixed names are the Step 12
-verbs above and `subak capture` (ADR 0008). Keys written `Ctrl+B x` are Subak GUI keys; `C-b x` are tmux keys.
+verbs above and the Step 13 verbs `subak capture`, `subak history` and `subak clear-history` (ADR 0030). Keys written `Ctrl+B x` are Subak GUI keys; `C-b x` are tmux keys.
 "tmux-syntax commands" = tmux command lines accepted by Subak's prompt (`Ctrl+B :`) and by
 `source-file`; a CLI entry point for them is TBD.
 
@@ -119,7 +120,7 @@ Grouped by the manual page section that documents them. `set-window-option` and
 | --- | --- | --- | --- | --- | --- |
 | Enter copy mode | `copy-mode` | Copy mode with vi and emacs tables (§7) | planned | 24 | — |
 | Break a pane out into a new window | `break-pane` (`breakp`) | Move a Pane into a new internal Window | planned | 24 | — |
-| Capture pane contents | `capture-pane` (`capturep`) | `subak capture`: screen/scrollback as text or JSON (SUBAK-FR-012, ADR 0008) | planned | 13 | — |
+| Capture pane contents | `capture-pane` (`capturep`) | `subak capture`: screen/scrollback as text or JSON (SUBAK-FR-012, ADR 0030). *Partial:* `subak capture [<target>]` and IPC `pane.capture` (screen, history ranges, text or VT, joined rows, redaction by default; also of a stopped Terminal, [SCROLLBACK §4](SCROLLBACK.md)); buffers (`-b`) and the GUI later | partial | 13 | `crates/subak/tests/scrollback_replay.rs::history_is_bounded_evicts_the_oldest_lines_and_clears_on_request`, `crates/subak/tests/subak_cli.rs::every_command_answers_one_schema_valid_document_with_stable_exit_codes` (2026-11-04) |
 | Choose a client from a list | `choose-client` | Client chooser overlay | planned | 25 | — |
 | Choose a session, window or pane from a tree | `choose-tree` | Tree chooser overlay; the GUI session manager covers Terminals (SUBAK-FR-032) | planned | 25 | — |
 | Customize options interactively | `customize-mode` | *Rationale:* a native settings UI is the natural home; revisit after the options engine | deferred | post-26 | — |
@@ -197,7 +198,7 @@ Grouped by the manual page section that documents them. `set-window-option` and
 | tmux feature | tmux reference | Subak equivalent (planned) | Status | Target Step | Evidence |
 | --- | --- | --- | --- | --- | --- |
 | Choose a paste buffer | `choose-buffer` | Buffer chooser overlay | planned | 24 | — |
-| Clear pane history | `clear-history` (`clearhist`) | Clear the Pane's scrollback; `-H` also clears hyperlinks | planned | 13 | — |
+| Clear pane history | `clear-history` (`clearhist`) | Clear the Pane's scrollback; `-H` also clears hyperlinks. *Partial:* `subak clear-history [<target>]` (asks or `--yes`, `--dry-run`) and IPC `pane.clear_history`; the screen stays; no hyperlinks are kept, so `-H` has nothing to clear yet | partial | 13 | `crates/subak/tests/scrollback_replay.rs::history_is_bounded_evicts_the_oldest_lines_and_clears_on_request` (2026-11-04) |
 | Delete a paste buffer | `delete-buffer` (`deleteb`) | Delete a buffer | planned | 24 | — |
 | List paste buffers | `list-buffers` (`lsb`) | List buffers (`-F`, `-f`, `-O`) | planned | 24 | — |
 | Load a buffer from a file | `load-buffer` (`loadb`) | Load a file or stdin (`-`); `-w` also sets the clipboard | planned | 24 | — |
@@ -235,7 +236,7 @@ Grouped by the manual page section that documents them. `set-window-option` and
 | Window placement and reuse | `new-window -a`, `-b`, `-d`, `-k`, `-S` | Insert after/before, do not focus, replace, select existing | planned | 21 | — |
 | Split size, side and span | `split-window -l N`, `-l N%`, `-b`, `-f`, `-d` | Split options | planned | 22 | — |
 | Keep zoom while navigating | `-Z` on `select-pane`, `last-pane`, `swap-pane`, `rotate-window`, `split-window` | Zoom-preserving navigation | planned | 22 | — |
-| Capture options | `capture-pane -p -e -J -N -S -E -a -b -C -M -P -q -T` | Text (`-p`), styles (`-e`), joined lines (`-J`), ranges (`-S`/`-E`), alternate screen (`-a`) | planned | 13 | — |
+| Capture options | `capture-pane -p -e -J -N -S -E -a -b -C -M -P -q -T` | Text (`-p`), styles (`-e`), joined lines (`-J`), ranges (`-S`/`-E`), alternate screen (`-a`). *Partial:* `-p` (always), `-e` = `--vt`, `-J` = `--join`, `-S`/`-E` = `--start`/`--end` with the same numbering and `-`; `-N`, `-a`, `-b`, `-C`, `-M`, `-P`, `-q`, `-T` later | partial | 13 | `crates/subak/tests/scrollback_replay.rs::history_is_bounded_evicts_the_oldest_lines_and_clears_on_request`, `crates/subak/src/screen.rs::tests::capture_ranges_join_and_edges` (2026-11-04) |
 | Copy-mode entry options | `copy-mode -u -d -e -H -M -q -S -s -k` | Scroll on entry, exit at bottom, mouse entry, quit all modes | planned | 24 | — |
 | List filters and sort order | `list-* -f filter -O order -r` | CLI filter and sort; format filters in Step 25 | planned | 25 | — |
 | Send keys to a client's key table | `send-keys -K -c target-client` | Inject keys into a client's key handling | planned | 23 | — |
@@ -468,7 +469,7 @@ command (`send-keys -X <command>`) documented in tmux 3.8 is named in this table
 | Behaviour when the session is destroyed | `detach-on-destroy` | What the client shows next (GUI: close the tab or switch) | planned | 25 | — |
 | Message display time | `display-time` | Same | planned | 25 | — |
 | Focus follows mouse | `focus-follows-mouse` | Same | planned | 25 | — |
-| Scrollback length | `history-limit` | Same | planned | 13 | — |
+| Scrollback length | `history-limit` | Same. *Partial:* per Terminal at creation, `subak new --history-limit <rows>` (0–100 000, default 2 000, plus a 4 MiB cap per pane); changing it later with an option command later (Step 25) | partial | 13 | `crates/subak/tests/scrollback_replay.rs::history_is_bounded_evicts_the_oldest_lines_and_clears_on_request` (2026-11-04) |
 | Repeat timing | `repeat-time`, `initial-repeat-time` | Same | planned | 23 | — |
 | Default key table | `key-table` | Same | planned | 23 | — |
 | Automatic locking | `lock-after-time`, `lock-command` | *Rationale:* as `lock-client` | unsupported | — | — |
@@ -748,7 +749,7 @@ a family is scheduled in detail.
 | Line-ending handling on paste | `paste-buffer -r`, `-s separator` | Same; CRLF handling for Windows programs TBD | planned | 24 | — |
 | System clipboard | `set-clipboard`, `set-buffer -w`, `load-buffer -w`, OSC 52 | Windows clipboard | planned | 24 | — |
 | Clipboard read by programs | `get-clipboard` | Opt-in only (privacy) | planned | 24 | — |
-| Per-pane history buffer | `history-limit` | Scrollback | planned | 13 | — |
+| Per-pane history buffer | `history-limit` | Scrollback. *Partial:* the Host keeps each pane's history in memory, bounded and evicted oldest first ([SCROLLBACK §1](SCROLLBACK.md)); copying from it into buffers with copy mode later (Step 24) | partial | 13 | `crates/subak/tests/scrollback_replay.rs::reattach_after_shell_output_and_scrolling_reproduces_history_and_screen` (2026-11-04) |
 
 ## 17. Configuration file and parsing syntax
 
@@ -851,8 +852,8 @@ a family is scheduled in detail.
 | tmux feature | tmux reference | Subak equivalent (planned) | Status | Target Step | Evidence |
 | --- | --- | --- | --- | --- | --- |
 | Outer-terminal terminfo extensions | `AX`, `Bidi`, `Cs`/`Cr`, `Cmg`/`Clmg`/`Dsmg`/`Enmg`, `Dsbp`/`Enbp`, `Dseks`/`Eneks`, `Dsesc`/`Enesc`, `Dsfcs`/`Enfcs`, `Hls`, `Nobr`, `Rect`, `Smol`, `Smulx`, `Setulc`/`Setulc1`/`ol`, `Ss`/`Se`, `Spb`, `Swd`, `Sxl`, `Sync`, `Tc`, `Ms`, `XT` | *Rationale:* describe an outer terminal; the GUI renders natively. Revisit for a console client | deferred | post-26 | — |
-| Pane terminal emulation | VT/xterm sequences inside panes | ConPTY output rendered by the GUI (SUBAK-FR-016) | planned | 13 | — |
-| Client exit messages | `[detached (from session …)]`, `[detached and SIGHUP]`, `[lost tty]`, `[terminated]`, `[too far behind]`, `[exited]`, `[server exited]`, `[server exited unexpectedly]` | Equivalent CLI messages and exit codes; no SIGHUP or tty variants. *Partial:* `[subak: detached …]`, `[… detached from `<name>` by another client …]`, `[… the program … ended (exit code n) …]`, `[… the Host stopped (reason)]` (exit 0) and `host_disconnected` (exit 6); `[too far behind]` is a disconnect until Step 13 | partial | 12 | `crates/subak/tests/subak_cli.rs::a_user_creates_attaches_detaches_lists_renames_and_kills_with_the_cli_only` (2026-11-04) |
+| Pane terminal emulation | VT/xterm sequences inside panes | ConPTY output rendered by the GUI (SUBAK-FR-016). *Partial:* the Host models every pane's terminal (xterm subset: screens, colours, modes, regions) and reproduces it on attach ([SCROLLBACK §2](SCROLLBACK.md)); the GUI renderer later (Steps 15–16) | partial | 13 | `crates/subak/tests/scrollback_replay.rs::reattach_during_and_after_a_full_screen_program` (2026-11-04) |
+| Client exit messages | `[detached (from session …)]`, `[detached and SIGHUP]`, `[lost tty]`, `[terminated]`, `[too far behind]`, `[exited]`, `[server exited]`, `[server exited unexpectedly]` | Equivalent CLI messages and exit codes; no SIGHUP or tty variants. *Partial:* `[subak: detached …]`, `[… detached from `<name>` by another client …]`, `[… the program … ended (exit code n) …]`, `[… the Host stopped (reason)]` (exit 0) and `host_disconnected` (exit 6); `[too far behind]` does not end a client since Step 13: it is resynced (`pane.resync`, a fresh snapshot) | partial | 12, 13 | `crates/subak/tests/subak_cli.rs::a_user_creates_attaches_detaches_lists_renames_and_kills_with_the_cli_only` (2026-11-04) |
 
 ## 23. Subak-specific differences
 
@@ -927,8 +928,8 @@ whenever a row or Status changes.
 
 | Status | Rows |
 | --- | --- |
-| `planned` | 496 |
-| `partial` | 21 |
+| `planned` | 490 |
+| `partial` | 27 |
 | `implemented` | 10 |
 | `deferred` | 55 |
 | `unsupported` | 24 |
@@ -937,28 +938,28 @@ whenever a row or Status changes.
 | Section | planned | partial | implemented | deferred | unsupported | Total |
 | --- | --- | --- | --- | --- | --- | --- |
 | §1 Invocation | 4 | 3 | 4 | 2 | 4 | 17 |
-| §2 Commands | 73 | 8 | 1 | 5 | 5 | 92 |
-| §3 Notable command flags | 13 | 4 | 1 | 1 | 1 | 20 |
+| §2 Commands | 71 | 10 | 1 | 5 | 5 | 92 |
+| §3 Notable command flags | 12 | 5 | 1 | 1 | 1 | 20 |
 | §4 Prefix table | 62 | 0 | 0 | 9 | 1 | 72 |
 | §5 Root table (mouse) | 12 | 0 | 0 | 7 | 0 | 19 |
 | §6 Key tables overview | 7 | 0 | 0 | 1 | 0 | 8 |
 | §7 Copy mode | 29 | 0 | 0 | 0 | 0 | 29 |
 | §8 Other pane modes | 5 | 0 | 0 | 2 | 0 | 7 |
-| §9 Options | 80 | 1 | 0 | 9 | 5 | 95 |
+| §9 Options | 79 | 2 | 0 | 9 | 5 | 95 |
 | §10 Formats | 40 | 0 | 0 | 2 | 2 | 44 |
 | §11 Status line and styles | 17 | 0 | 0 | 0 | 0 | 17 |
 | §12 Hooks | 53 | 0 | 0 | 4 | 0 | 57 |
 | §13 Target syntax | 23 | 0 | 1 | 0 | 0 | 24 |
 | §14 Mouse | 7 | 0 | 0 | 0 | 0 | 7 |
 | §15 Environment | 11 | 1 | 3 | 0 | 1 | 16 |
-| §16 Buffers and clipboard | 8 | 0 | 0 | 0 | 0 | 8 |
+| §16 Buffers and clipboard | 7 | 1 | 0 | 0 | 0 | 8 |
 | §17 Configuration file and parsing | 12 | 0 | 0 | 1 | 1 | 14 |
 | §18 Command chaining and scripting | 12 | 0 | 0 | 0 | 0 | 12 |
 | §19 Control mode | 0 | 0 | 0 | 8 | 0 | 8 |
 | §20 Multiple clients and access control | 5 | 3 | 0 | 2 | 4 | 14 |
 | §21 Layouts, names, alerts, pane lifecycle | 22 | 0 | 0 | 1 | 0 | 23 |
-| §22 Terminal integration and exit messages | 1 | 1 | 0 | 1 | 0 | 3 |
-| **Total** | **496** | **21** | **10** | **55** | **24** | **606** |
+| §22 Terminal integration and exit messages | 0 | 2 | 0 | 1 | 0 | 3 |
+| **Total** | **490** | **27** | **10** | **55** | **24** | **606** |
 
 Coverage checks for matrix version 1: all 92 commands and their aliases, all 184 options in
 `options-table.c`, all 51 named hooks and all 99 copy-mode commands of tmux 3.8 appear in the

@@ -1134,8 +1134,10 @@ fn resize_storms_and_input_floods_never_block_the_host() {
     );
 }
 
+/// Step 13 (ADR 0030) changed what happens to the stalled clients: they are no longer
+/// disconnected; their output is skipped and they are resynced with a snapshot once they read.
 #[test]
-fn large_output_streams_to_fast_clients_while_stalled_ones_are_dropped() {
+fn large_output_streams_to_fast_clients_while_stalled_ones_are_resynced() {
     let lab = Lab::start("big");
     let dir = Scratch::new("big");
     let file = dir.path("big.txt");
@@ -1150,7 +1152,7 @@ fn large_output_streams_to_fast_clients_while_stalled_ones_are_dropped() {
     fast.send(b"echo ready-mark^er\r");
     fast.expect("ready-marker");
     // Two clients that attach and then never read again.
-    let stalled: Vec<Raw> = (0..2)
+    let stalled: Vec<(Raw, u64)> = (0..2)
         .map(|_| {
             let r = Raw::handshake(&lab.ep, "gui");
             let a = r.request(
@@ -1159,7 +1161,8 @@ fn large_output_streams_to_fast_clients_while_stalled_ones_are_dropped() {
                 &json!({"target": "big", "interactive": false}),
             );
             assert_eq!(a["ok"], true, "{a}");
-            r
+            let seq = a["result"]["seq"].as_u64().unwrap();
+            (r, seq)
         })
         .collect();
     fast.clear();
@@ -1207,32 +1210,63 @@ fn large_output_streams_to_fast_clients_while_stalled_ones_are_dropped() {
     let secs = t0.elapsed().as_secs_f64();
     let s = lab.stats();
     let dropped = s["ipc"]["lagging_clients_dropped"].as_u64().unwrap();
+    let skipped = s["ipc"]["output_frames_skipped"].as_u64().unwrap();
     let peak = s["host"]["memory"]["peak_private_bytes"].as_u64().unwrap();
     let peak0 = base["host"]["memory"]["peak_private_bytes"]
         .as_u64()
         .unwrap();
-    // The stalled clients were disconnected; their pipes report the end once drained.
-    assert_eq!(dropped, 2, "{s}");
-    for r in &stalled {
-        let until = Instant::now() + LONG;
-        loop {
-            match r.next(Duration::from_millis(500)) {
-                Got::Eof => break,
-                _ => assert!(Instant::now() < until, "a stalled client was not dropped"),
-            }
-        }
-    }
+    // The stalled clients stayed connected; their output was skipped, not queued without end.
+    assert_eq!(dropped, 0, "{s}");
+    assert!(skipped > 0, "{s}");
     let grew = peak.saturating_sub(peak0);
     assert!(
         grew < 64 << 20,
         "two stalled clients share one bounded queue of output (peak grew by {grew} bytes)"
+    );
+    // Once they read again they get a fresh snapshot, then live output that continues it.
+    fast.send(b"echo after-resync-mark^er\r");
+    fast.expect("after-resync-marker");
+    for (r, attach_seq) in &stalled {
+        let until = Instant::now() + Duration::from_secs(120);
+        let snap_seq = loop {
+            assert!(Instant::now() < until, "no resync snapshot");
+            match r.next(Duration::from_millis(500)) {
+                Got::Data(_) => {
+                    if let Some((_, seq, 1)) = r.last_data.get()
+                        && seq > *attach_seq
+                    {
+                        break seq;
+                    }
+                }
+                Got::Eof => panic!("a stalled client was disconnected"),
+                _ => {}
+            }
+        };
+        // Everything after the snapshot continues at its sequence number, without a gap.
+        let mut next = snap_seq;
+
+        while let Got::Data(b) = r.next(Duration::from_millis(1500)) {
+            let (_, seq, flags) = r.last_data.get().unwrap();
+            if flags == 1 {
+                continue; // the rest of a snapshot spanning several frames
+            }
+            assert_eq!(seq, next, "live output continues the snapshot exactly");
+            next += b.len() as u64;
+        }
+        assert!(next >= snap_seq);
+    }
+    let resyncs = lab.stats()["ipc"]["lagging_resyncs"].as_u64().unwrap();
+    assert!(
+        resyncs >= 2,
+        "both stalled clients were resynced ({resyncs})"
     );
     assert!(health_worst < Duration::from_secs(2), "{health_worst:?}");
     assert!(total as u64 >= size / 2, "received {total} of {size} bytes");
     eprintln!(
         "EVIDENCE output: {size} bytes typed through ConPTY, {total} bytes of VT output received by \
          the fast client in {secs:.1} s ({:.2} MiB/s) as {frames} data frames (avg {} bytes); \
-         2 stalled clients dropped (lagging_clients_dropped {dropped}); Host peak private bytes \
+         2 stalled clients kept and resynced ({skipped} frames skipped, {resyncs} resyncs, \
+         lagging_clients_dropped {dropped}); Host peak private bytes \
          grew by {:.1} MiB; host.health worst {health_worst:?}",
         total as f64 / secs / 1_048_576.0,
         total / frames.max(1),

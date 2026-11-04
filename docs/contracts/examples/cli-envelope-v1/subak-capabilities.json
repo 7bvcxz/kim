@@ -21,7 +21,7 @@
         "opens_window": false,
         "requires_yes": false,
         "summary": "Create a named Terminal running a program (resolved on its PATH, never through a shell; or one verbatim command line) in its own pseudo console and job; starts a Host on demand",
-        "usage": "subak new [<name>] [--cwd <dir>] [--env NAME[=VALUE]]... [--unset-env NAME]... [--size <cols>x<rows>] [--remain-on-exit] [--keep-on-failure] [--no-start] [--attach [--read-only]] [--dry-run] [--json] [-- <program> [args...] | --command-line <line>]"
+        "usage": "subak new [<name>] [--cwd <dir>] [--env NAME[=VALUE]]... [--unset-env NAME]... [--size <cols>x<rows>] [--remain-on-exit] [--keep-on-failure] [--no-start] [--history-limit <lines>] [--attach [--read-only]] [--dry-run] [--json] [-- <program> [args...] | --command-line <line>]"
       },
       {
         "dry_run": false,
@@ -60,7 +60,7 @@
         "network": false,
         "opens_window": false,
         "requires_yes": false,
-        "summary": "Interactive attach to a Terminal's pane in this terminal; Ctrl+B d detaches, Ctrl+C goes to the program, nothing is stopped",
+        "summary": "Interactive attach to a Terminal's pane in this terminal: the screen and history are reproduced, then live output; Ctrl+B d detaches, Ctrl+C goes to the program, nothing is stopped",
         "usage": "subak attach [<target>] [--size <cols>x<rows>] [--read-only] [--dry-run [--json]]"
       },
       {
@@ -112,6 +112,36 @@
         "requires_yes": true,
         "summary": "Remove a Terminal that runs nothing; --force also ends a running one",
         "usage": "subak rm <target> [--force] [--yes] [--dry-run] [--json]"
+      },
+      {
+        "dry_run": false,
+        "effect": "read",
+        "name": "capture",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "Lines of a pane's screen and history kept by the Host (tmux capture-pane); secret-looking values shown as *** unless --no-redact",
+        "usage": "subak capture [<target>] [--start <line>|-] [--end <line>|-] [--history] [--vt] [--join] [--no-redact] [--json]"
+      },
+      {
+        "dry_run": false,
+        "effect": "read",
+        "name": "history",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "How much of a pane's output the Host keeps (lines, bytes, limits, evictions) and its screen; never the content",
+        "usage": "subak history [<target>] [--json]"
+      },
+      {
+        "dry_run": true,
+        "effect": "destructive",
+        "name": "clear-history",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": true,
+        "summary": "Delete the history the Host keeps for a pane (tmux clear-history); the screen and processes stay",
+        "usage": "subak clear-history [<target>] [--yes] [--dry-run] [--json]"
       },
       {
         "dry_run": true,
@@ -178,7 +208,7 @@
     "json_schema_version": 1,
     "schema": "kim.capabilities",
     "schema_version": 1,
-    "summary": "Pre-alpha: per-user Host with IPC v1 and named Terminals (new, ls, attach, detach, rename, stop, kill, rm), one window and pane each; no GUI, splits or recovery yet",
+    "summary": "Pre-alpha: per-user Host with IPC v1 and named Terminals (new, ls, attach, detach, rename, stop, kill, rm, capture, history), one pane each; no GUI, splits or recovery yet",
     "tool": "subak",
     "version": "0.0.1"
   },

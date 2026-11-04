@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/hellomouv/kim/blob/main/docs/contracts/schemas/subak-cli-v1.schema.json",
   "title": "subak --json output, schema_version 1",
-  "description": "Every document `subak ... --json` prints (Step 12, docs/SUBAK_CLI.md, docs/CLI_CONTRACT.md): the cli-envelope-v1 envelope, the `data` of each command (selected by `command`; the deprecated `subak terminal <verb>` spelling reports the canonical name), and Subak's error-code registry with its exit codes. Terminal objects are the ipc-v1 definitions, copied verbatim (a test keeps them identical); the capabilities document is tool-capabilities-v1. Objects are closed so regression tests notice any change; consumers must still ignore unknown fields and tolerate new enum values (CLI_CONTRACT §8).",
+  "description": "Every document `subak ... --json` prints (Step 12; capture, history and clear-history since Step 13; docs/SUBAK_CLI.md, docs/CLI_CONTRACT.md): the cli-envelope-v1 envelope, the `data` of each command (selected by `command`; the deprecated `subak terminal <verb>` spelling reports the canonical name), and Subak's error-code registry with its exit codes. Terminal objects are the ipc-v1 definitions, copied verbatim (a test keeps them identical); the capabilities document is tool-capabilities-v1. Objects are closed so regression tests notice any change; consumers must still ignore unknown fields and tolerate new enum values (CLI_CONTRACT §8).",
   "oneOf": [
     {
       "$ref": "#/$defs/failure"
@@ -33,6 +33,15 @@
     },
     {
       "$ref": "#/$defs/ok_end"
+    },
+    {
+      "$ref": "#/$defs/ok_clear_history"
+    },
+    {
+      "$ref": "#/$defs/ok_history"
+    },
+    {
+      "$ref": "#/$defs/ok_capture"
     },
     {
       "$ref": "#/$defs/ok_host_start"
@@ -206,6 +215,57 @@
             },
             "data": {
               "$ref": "#/$defs/result_terminal_end"
+            }
+          }
+        }
+      ]
+    },
+    "ok_capture": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/success"
+        },
+        {
+          "properties": {
+            "command": {
+              "const": "capture"
+            },
+            "data": {
+              "$ref": "#/$defs/data_capture"
+            }
+          }
+        }
+      ]
+    },
+    "ok_history": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/success"
+        },
+        {
+          "properties": {
+            "command": {
+              "const": "history"
+            },
+            "data": {
+              "$ref": "#/$defs/data_history"
+            }
+          }
+        }
+      ]
+    },
+    "ok_clear_history": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/success"
+        },
+        {
+          "properties": {
+            "command": {
+              "const": "clear-history"
+            },
+            "data": {
+              "$ref": "#/$defs/data_clear_history"
             }
           }
         }
@@ -657,6 +717,60 @@
         "output_bytes": {
           "type": "integer",
           "minimum": 0
+        },
+        "history": {
+          "description": "Step 13: the pane's history counters while the Host keeps its screen (also for a stopped Terminal); null before it started. Hosts before Step 13 omit it.",
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/history"
+            }
+          ]
+        }
+      }
+    },
+    "history": {
+      "description": "Step 13 (docs/SCROLLBACK.md): numbers about a pane's history, never its content. Lines are rows that scrolled off the top of the primary screen; the oldest are evicted first once either limit is reached.",
+      "type": "object",
+      "required": [
+        "lines",
+        "bytes",
+        "limit_lines",
+        "limit_bytes",
+        "evicted_lines",
+        "cleared_lines",
+        "total_lines",
+        "persisted"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "lines": {
+          "$ref": "#/$defs/u64"
+        },
+        "bytes": {
+          "$ref": "#/$defs/u64"
+        },
+        "limit_lines": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
+        },
+        "limit_bytes": {
+          "$ref": "#/$defs/u64"
+        },
+        "evicted_lines": {
+          "$ref": "#/$defs/u64"
+        },
+        "cleared_lines": {
+          "$ref": "#/$defs/u64"
+        },
+        "total_lines": {
+          "$ref": "#/$defs/u64"
+        },
+        "persisted": {
+          "const": false
         }
       }
     },
@@ -1249,6 +1363,222 @@
         }
       ]
     },
+    "screen_info": {
+      "description": "Step 13: the pane's screen as the Host's terminal model has it.",
+      "type": "object",
+      "required": [
+        "size",
+        "alternate",
+        "cursor"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "size": {
+          "$ref": "#/$defs/size"
+        },
+        "alternate": {
+          "type": "boolean"
+        },
+        "cursor": {
+          "type": "object",
+          "required": [
+            "x",
+            "y",
+            "visible"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "x": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "y": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "visible": {
+              "type": "boolean"
+            }
+          }
+        }
+      }
+    },
+    "result_pane_capture": {
+      "description": "Step 13: pane.capture. Line numbers: screen rows from 0, history lines from -1 (newest) down; start and end are those captured (null when the range was empty). Lines are redacted unless redact is false; redacted counts hidden values. truncated: older lines were left out to fit one message; capture again with an earlier end.",
+      "type": "object",
+      "required": [
+        "terminal_id",
+        "pane_id",
+        "format",
+        "join",
+        "redact",
+        "redacted",
+        "start",
+        "end",
+        "truncated",
+        "lines",
+        "screen",
+        "history"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "terminal_id": {
+          "$ref": "#/$defs/terminal_id"
+        },
+        "pane_id": {
+          "$ref": "#/$defs/pane_id"
+        },
+        "format": {
+          "enum": [
+            "text",
+            "vt"
+          ]
+        },
+        "join": {
+          "type": "boolean"
+        },
+        "redact": {
+          "type": "boolean"
+        },
+        "redacted": {
+          "$ref": "#/$defs/u64"
+        },
+        "start": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "end": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "lines": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "screen": {
+          "$ref": "#/$defs/screen_info"
+        },
+        "history": {
+          "$ref": "#/$defs/history"
+        }
+      }
+    },
+    "result_pane_clear_history": {
+      "description": "Step 13: pane.clear_history. Only the Host's copy is cleared; the screen stays.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "terminal_id",
+            "pane_id",
+            "cleared_lines",
+            "cleared_bytes",
+            "history"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "terminal_id": {
+              "$ref": "#/$defs/terminal_id"
+            },
+            "pane_id": {
+              "$ref": "#/$defs/pane_id"
+            },
+            "cleared_lines": {
+              "$ref": "#/$defs/u64"
+            },
+            "cleared_bytes": {
+              "$ref": "#/$defs/u64"
+            },
+            "history": {
+              "$ref": "#/$defs/history"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "dry_run",
+            "would_clear"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "dry_run": {
+              "const": true
+            },
+            "would_clear": {
+              "type": "object",
+              "required": [
+                "terminal_id",
+                "pane_id",
+                "lines",
+                "bytes"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "terminal_id": {
+                  "$ref": "#/$defs/terminal_id"
+                },
+                "pane_id": {
+                  "$ref": "#/$defs/pane_id"
+                },
+                "lines": {
+                  "$ref": "#/$defs/u64"
+                },
+                "bytes": {
+                  "$ref": "#/$defs/u64"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "scrollback": {
+      "description": "Step 13: host.status scrollback: what the Host keeps of terminal output (in its memory only; never on disk).",
+      "type": "object",
+      "required": [
+        "panes",
+        "lines",
+        "bytes",
+        "memory_bytes",
+        "default_limit_lines",
+        "limit_bytes_per_pane",
+        "persisted"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "panes": {
+          "$ref": "#/$defs/u64"
+        },
+        "lines": {
+          "$ref": "#/$defs/u64"
+        },
+        "bytes": {
+          "$ref": "#/$defs/u64"
+        },
+        "memory_bytes": {
+          "$ref": "#/$defs/u64"
+        },
+        "default_limit_lines": {
+          "$ref": "#/$defs/u64"
+        },
+        "limit_bytes_per_pane": {
+          "$ref": "#/$defs/u64"
+        },
+        "persisted": {
+          "const": false
+        }
+      }
+    },
     "would_create": {
       "type": "object",
       "required": [
@@ -1296,6 +1626,12 @@
         },
         "keep_on_failure": {
           "type": "boolean"
+        },
+        "history_limit": {
+          "description": "Step 13.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100000
         }
       }
     },
@@ -1916,6 +2252,9 @@
             },
             "clients": {
               "$ref": "#/$defs/clients"
+            },
+            "scrollback": {
+              "$ref": "#/$defs/scrollback"
             }
           }
         },
@@ -2105,6 +2444,9 @@
         },
         "clients": {
           "$ref": "#/$defs/clients"
+        },
+        "scrollback": {
+          "$ref": "#/$defs/scrollback"
         }
       }
     },
@@ -2525,6 +2867,195 @@
                 "environment": {
                   "type": "string",
                   "minLength": 1
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "data_history": {
+      "description": "history: what the Host keeps of one Terminal's output (numbers only, never content): its history counters and limits and its screen. Kept in the Host's memory only, never on disk (docs/SCROLLBACK.md).",
+      "type": "object",
+      "required": [
+        "terminal_id",
+        "name",
+        "state",
+        "pane_id",
+        "history",
+        "screen"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "terminal_id": {
+          "$ref": "#/$defs/terminal_id"
+        },
+        "name": {
+          "$ref": "#/$defs/terminal_name"
+        },
+        "state": {
+          "$ref": "#/$defs/terminal_state"
+        },
+        "pane_id": {
+          "$ref": "#/$defs/pane_id"
+        },
+        "history": {
+          "$ref": "#/$defs/history"
+        },
+        "screen": {
+          "$ref": "#/$defs/screen_info"
+        }
+      }
+    },
+    "data_capture": {
+      "description": "capture: pane.capture with every page joined (truncated is then false unless --max-lines cut it), plus the Terminal's name and how many requests it took.",
+      "type": "object",
+      "required": [
+        "terminal_id",
+        "pane_id",
+        "format",
+        "join",
+        "redact",
+        "redacted",
+        "start",
+        "end",
+        "truncated",
+        "lines",
+        "screen",
+        "history",
+        "name",
+        "requests"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "terminal_id": {
+          "$ref": "#/$defs/terminal_id"
+        },
+        "pane_id": {
+          "$ref": "#/$defs/pane_id"
+        },
+        "format": {
+          "enum": [
+            "text",
+            "vt"
+          ]
+        },
+        "join": {
+          "type": "boolean"
+        },
+        "redact": {
+          "type": "boolean"
+        },
+        "redacted": {
+          "$ref": "#/$defs/u64"
+        },
+        "start": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "end": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "lines": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "screen": {
+          "$ref": "#/$defs/screen_info"
+        },
+        "history": {
+          "$ref": "#/$defs/history"
+        },
+        "name": {
+          "$ref": "#/$defs/terminal_name"
+        },
+        "requests": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "data_clear_history": {
+      "description": "clear-history: pane.clear_history plus the Terminal's name; or a dry run.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "terminal_id",
+            "name",
+            "pane_id",
+            "cleared_lines",
+            "cleared_bytes",
+            "history"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "terminal_id": {
+              "$ref": "#/$defs/terminal_id"
+            },
+            "name": {
+              "$ref": "#/$defs/terminal_name"
+            },
+            "pane_id": {
+              "$ref": "#/$defs/pane_id"
+            },
+            "cleared_lines": {
+              "$ref": "#/$defs/u64"
+            },
+            "cleared_bytes": {
+              "$ref": "#/$defs/u64"
+            },
+            "history": {
+              "$ref": "#/$defs/history"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "dry_run",
+            "would_clear"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "dry_run": {
+              "const": true
+            },
+            "would_clear": {
+              "type": "object",
+              "required": [
+                "terminal_id",
+                "name",
+                "pane_id",
+                "lines",
+                "bytes"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "terminal_id": {
+                  "$ref": "#/$defs/terminal_id"
+                },
+                "name": {
+                  "$ref": "#/$defs/terminal_name"
+                },
+                "pane_id": {
+                  "$ref": "#/$defs/pane_id"
+                },
+                "lines": {
+                  "$ref": "#/$defs/u64"
+                },
+                "bytes": {
+                  "$ref": "#/$defs/u64"
                 }
               }
             }

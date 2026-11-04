@@ -64,3 +64,10 @@ never stall the program running in the Pane, or other clients.
   Output frames are shared by every client of a pane. A lagging client is still
   disconnected until this ADR's resync arrives in Step 13
   ([ADR 0025](0025-pane-programs-environment-and-backpressure.md) §6).
+- 2026-11-04 (Step 13): implemented by [ADR 0030](0030-host-terminal-model-scrollback-and-replay.md).
+  §1: the emulator is an in-house model (`crates/subak/src/screen.rs`), not `alacritty_terminal`
+  or `vt100`; the raw history ring is gone, and the scrollback is the model's history (default
+  2 000 rows and 4 MiB per pane). §2: as decided, with the snapshot spanning several data frames
+  at one `seq`. §3: the per-connection queue stays 16 MiB (ADR 0025); a lagging stream's queued
+  output is dropped and it is resynced once its queue drained to 4 MiB. `subak capture` is
+  implemented (§4 names it). Evidence: [SCROLLBACK.md](../SCROLLBACK.md) §8.

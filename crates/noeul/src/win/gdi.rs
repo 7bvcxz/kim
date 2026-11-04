@@ -10,6 +10,11 @@
 //!   kept between captures (NOEUL-NFR-002). Windows that exclude themselves from capture
 //!   (display affinity) and DRM content come out exactly as GDI delivers them (black), and are
 //!   never worked around (NOEUL-SEC-004).
+//! - **Step 58** (ADR 0050): GDI stays the only backend, with no fallback to another API. A
+//!   capture can have the user's pointer drawn into the DIB right after the copy
+//!   (`win::displays::draw_pointer`); the parts of the picture no monitor shows are made opaque
+//!   black; monitors are listed left to right, then top to bottom, each with its rotation and
+//!   advanced-colour state from the display configuration (`win::displays::details`).
 
 use crate::capture::{
     CaptureBackend, CaptureError, Desktop, DesktopState, Monitor, PointerOutcome, check_region,

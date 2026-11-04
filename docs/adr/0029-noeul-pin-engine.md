@@ -231,3 +231,9 @@ Idle (NOEUL-NFR-001): with twenty pins open, the measuring process waited for me
   kept, any whole percent between 10 and 800. §2's surface now also holds the outline and the pin
   shadow around the picture (§3 there), and §5's menu gained the transforms; `pin.zoom-reset` also
   restores opacity and ends thumbnail mode, as NOEUL-FR-061 says.
+- 2026-11-04 (Step 58): [ADR 0050](0050-noeul-displays-and-capture-backends.md) debounces the
+  display-change handling (one look once the displays have been quiet for 250 ms, at most 1 s
+  after the first notification; a one-shot timer, no polling) and counts `WM_DPICHANGED` of a
+  pin as a notification: its suggested rectangle is still ignored, and the core redraws the
+  pin's outline, shadow and resize band for its monitor's scale. Pins still keep their place and
+  pixel size; IPC `capture` also pins a whole monitor or the active window in place.

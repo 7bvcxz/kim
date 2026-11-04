@@ -1,7 +1,7 @@
 [package]
 name = "noeul"
 version = "0.0.1"
-description = "Noeul: small native screenshot and floating-pin tool (pre-alpha, Steps 49-57)"
+description = "Noeul: small native screenshot and floating-pin tool (pre-alpha, Steps 49-58)"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true

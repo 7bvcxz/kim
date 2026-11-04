@@ -10,6 +10,8 @@
 //!   (`DWMWA_EXTENDED_FRAME_BOUNDS`, the visible frame without the invisible resize border), else
 //!   `GetWindowRect`. Both are device pixels for a per-monitor-aware process, whatever the
 //!   window's own DPI awareness. No title, class name, process name or content is ever read.
+//!   The same facts describe the window that has the keyboard focus for `capture.window`
+//!   ([`foreground`], Step 58; the desktop's shell window counts as no window).
 //!   [`Scope::Processes`] restricts the list to some processes and checks the owner's process id
 //!   **before** anything else, so tests and the debug-build test hook never look at the user's
 //!   windows at all.

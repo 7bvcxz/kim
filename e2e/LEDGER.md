@@ -36,6 +36,7 @@ Run with `cargo xtask e2e`, which refuses unless the counter below has reached 1
 | 23 | #13 Step 13 – Scrollback and terminal replay | `step13_scrollback_replay.rs` (2 tests): reattach replays the screen and history exactly once and the CLI reads and clears it (`capture`/`history`/`clear-history`); captures hide secrets and stopped Terminals can still be captured | 8 |
 | 24 | #73 Step 68 – Ddalgak key and mouse button remapping actions (merged; issue open for the maintainer's physical keyboard/IME/mouse checks, `DDALGAK_ENGINE.md` §11) | `step68_ddalgak_remap.rs` (2 tests): an agent builds remaps headlessly and is refused unsafe ones; the running app holds remaps and the mouse hook only while needed | 9 |
 | 25 | #56 Step 51 – Noeul double-click to floating pin workflow (merged; issue open for the maintainer's real-desktop check, `NOEUL_UX_SPEC.md` §4.7) | `step51_noeul_double_click_pin.rs` (2 tests): the flow and its settings are discoverable headlessly (`noeul config`, gesture setting, Snipaste preset); the double-click → pin path runs against the real binary on the debug off-screen desktop | 10 |
+| 26 | #14 Step 14 – Persistent sessions and reconnection validation, Milestone A (merged; issue open, Milestone A NOT complete until the maintainer's Windows Terminal + Claude Code run, `MILESTONE_A_VALIDATION.md` §6) | `step14_milestone_a.rs` (2 tests): a detached Host keeps shells and an interactive program through client events; concurrent Terminals and clients stay independent | 11 |
 
 ## E2E runs
 

@@ -1,6 +1,6 @@
 # Ddalgak and AutoHotkey v2: feature matrix
 
-Status: **current** (inventory) · **Matrix v3, 2026-11-04** (Step 68: remap rows; Step 69: hotstring and sending rows; Step 70: `Run` rows; Step 71: mouse rows; Step 72: mode rows; Step 73: suspend, pause and tray rows; Step 74: the editor rows) · Reference: AutoHotkey **v2.0.31**
+Status: **current** (inventory) · **Matrix v4, 2026-11-04** (Step 68: remap rows; Step 69: hotstring and sending rows; Step 70: `Run` rows; Step 71: mouse rows; Step 72: mode rows; Step 73: suspend, pause and tray rows; Step 74: the editor rows; Step 75: the profile row) · Reference: AutoHotkey **v2.0.31**
 (the newest v2 entry of the official changelog, dated 2026-10-25) · Owner: mouv · Applies to:
 Ddalgak · Created in Step 65
 
@@ -222,7 +222,7 @@ Where a page did not state something, the row says so instead of filling the gap
 | 10.3 | Explicit, per-rule consent for injection, launching and clipboard; fingerprinted launch targets | RULE_MODEL §6 | 67–70 |
 | 10.4 | A non-remappable emergency chord that removes the hook and releases every held key | [DDALGAK_SAFETY §7](DDALGAK_SAFETY.md) | 73 |
 | 10.5 | Conflict reports across Kim tools and reserved keys, with non-destructive offers | HOTKEY_CONTRACT §9 | 67, 81 |
-| 10.6 | Profiles with history, rollback, export and safe import | RULE_MODEL §10 | 75 |
+| 10.6 | Profiles with history, rollback, export and safe import | RULE_MODEL §10 (implemented, Step 75: `ddalgak profile …`, the editor's Profiles page; evidence `profile::tests`, `core::tests::a_profile_switch_…`, `tests/cli.rs` profile tests, `flows::j6_profiles_…`, `e2e/tests/step75_ddalgak_profiles.rs`) | 75 |
 | 10.7 | Versioned JSON rules, `--json` CLI and machine-checked schemas | RULE_MODEL §13–§14 | 67, 81 |
 | 10.8 | Activity list without keys or text | RULE_MODEL §12 | 66 |
 
@@ -233,3 +233,4 @@ Where a page did not state something, the row says so instead of filling the gap
 | v1 | 2026-11-04 | v2.0.31 | First inventory (Step 65). Nothing implemented. |
 | v2 | 2026-11-04 | v2.0.31 | Steps 68–73 filled in the evidence of the rows they implemented; Step 73: `Suspend`, `Pause` and the tray row (7.2 is `partial` until the editor of Step 74). |
 | v3 | 2026-11-04 | v2.0.31 | Step 74: the editor rows (1.12, 7.3, 10.1) gained evidence; the tray row 7.2 is `supported` (the tray opens the editor). |
+| v4 | 2026-11-04 | v2.0.31 | Step 75: the profiles row 10.6 is implemented (switch, versions, rollback, export, import), with evidence. |

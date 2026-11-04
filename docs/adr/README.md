@@ -53,6 +53,7 @@ the requirements it serves. ADRs are immutable once **Accepted**; a later ADR ma
 | [0047](0047-noeul-clipboard-paste-and-rich-sources.md) | Noeul clipboard paste and rich sources: one user-triggered read, pure-Rust decoders with limits, cards from Noeul's own sanitizer and layout | Accepted (Step 55; real-clipboard checks with real applications manual) |
 | [0048](0048-subak-search-clipboard-and-links.md) | Subak search, clipboard and links: a headless bounded search over the view's model, questions before acting on terminal content, the clipboard, opener and save dialog behind traits | Accepted (Step 19; the visible window, real clipboard, browser and save dialog pending the maintainer) |
 | [0049](0049-ddalgak-editor-process-and-toolkit.md) | The Ddalgak rule editor: its own on-demand process, egui + glow, store writes and a confirmed reload | Accepted (Step 74; visible-window usability and the memory budget with rules pending, see the ADR) |
+| [0052](0052-ddalgak-profiles-switch-versions-and-transfer.md) | Ddalgak profiles: an atomic switch in the hook, versions from the history and save points, inert and portable export, imports never activated | Accepted (Step 75; the visible profile browser pending the maintainer) |
 
 "Accepted (validated in Step N)" means the decision is made, but the named Step must confirm it
 on real Windows; if validation fails, that Step writes a superseding ADR.

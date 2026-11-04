@@ -18,7 +18,9 @@ physical emergency-chord, real lock, sign-out, reboot and stuck-key checks are m
 verified; the rule editor (`DDALGAK-FR-050…053`, the GUI half of `DDALGAK-FR-007` with undo,
 the export and import hooks of `DDALGAK-FR-032`, `DDALGAK-NFR-007`) since Step 74, whose visible
 window, screen-reader and real-IME checks are manual and whose `DDALGAK-NFR-003` editor budget is
-met only without rules so far, see [DDALGAK_GUI_JOURNEYS §7](DDALGAK_GUI_JOURNEYS.md)) · Owner: mouv ·
+met only without rules so far, see [DDALGAK_GUI_JOURNEYS §7](DDALGAK_GUI_JOURNEYS.md); profiles
+with switch, versions, rollback, export and import (`DDALGAK-FR-030…032`, `DDALGAK-SEC-013`) since
+Step 75, whose visible profile browser is checked manually, see [DDALGAK_ENGINE §17](DDALGAK_ENGINE.md)) · Owner: mouv ·
 Derived from [DDALGAK_PHILOSOPHY](DDALGAK_PHILOSOPHY.md) · Decisions:
 [ADR 0022](adr/0022-ddalgak-rule-model-and-safety.md), [ADR 0028](adr/0028-ddalgak-rule-store-validation-and-reload.md),
 [ADR 0031](adr/0031-ddalgak-remap-execution-and-mouse-hook.md),
@@ -26,7 +28,8 @@ Derived from [DDALGAK_PHILOSOPHY](DDALGAK_PHILOSOPHY.md) · Decisions:
 [ADR 0037](adr/0037-ddalgak-program-and-website-launches.md),
 [ADR 0040](adr/0040-ddalgak-mouse-actions.md),
 [ADR 0046](adr/0046-ddalgak-enable-disable-and-recovery.md),
-[ADR 0049](adr/0049-ddalgak-editor-process-and-toolkit.md)
+[ADR 0049](adr/0049-ddalgak-editor-process-and-toolkit.md),
+[ADR 0052](adr/0052-ddalgak-profiles-switch-versions-and-transfer.md)
 
 ## 0. How to read this document
 
@@ -102,9 +105,9 @@ Until D6 ships, the Kim catalog lists Ddalgak as *planned* (`KIM-FR-051`).
 
 | ID | Requirement | Pri | MS | Verify |
 | --- | --- | --- | --- | --- |
-| DDALGAK-FR-030 | Profiles: create, rename, duplicate, delete and switch; a switch is atomic (all rules of the old profile stop, held keys are released, then the new profile applies). | P0 | D4 | T, M |
-| DDALGAK-FR-031 | History: every applied change keeps a snapshot; the user can compare and restore an earlier state, which is itself a new, undoable change. | P1 | D4 | T |
-| DDALGAK-FR-032 | Export writes a portable `ddalgak.rules` document without consent or settings. Import validates, shows a diff and adds profiles with every rule disabled until reviewed; it never activates a profile or grants consent. | P0 | D4 | T |
+| DDALGAK-FR-030 | Profiles: create, rename, duplicate, delete and switch; a switch is atomic (all rules of the old profile stop, held keys are released, then the new profile applies). Step 75: implemented (`ddalgak profile …`, the editor's Profiles page; the switch ends every pending and held action of the old profile between two hook callbacks and starts the new one in its default mode; ADR 0052). | P0 | D4 | T, M |
+| DDALGAK-FR-031 | History: every applied change keeps a snapshot; the user can compare and restore an earlier state, which is itself a new, undoable change. Step 75: per-profile versions from the history and labelled save points, a side-by-side comparison, restore and rollback to the newest working version. | P1 | D4 | T |
+| DDALGAK-FR-032 | Export writes a portable `ddalgak.rules` document without consent or settings. Import validates, shows a diff and adds profiles with every rule disabled until reviewed; it never activates a profile or grants consent. Step 75: whole profiles, with known-folder paths and environment values withheld on export; corrupt and newer files refused; a validation preview. | P0 | D4 | T |
 
 ### 2.5 Test playground
 

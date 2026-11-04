@@ -672,6 +672,82 @@ fn resize_and_readers_with_different_sizes_follow_the_pane_size() {
     );
 }
 
+/// A reattach (or a resize) at the pane's own size changes nothing: no model resize, no PTY
+/// resize, so ConPTY sends no repaint after the snapshot and the on-screen lines arrive once
+/// (the master's e2e run 2 saw line 60 twice: the snapshot, then the repaint). A real size
+/// change still resizes the pseudo console.
+#[test]
+fn a_same_size_reattach_gets_no_repaint_and_a_new_size_still_resizes() {
+    let h = host("samesize");
+    let ep = h.ep.as_str();
+    new_terminal(
+        ep,
+        "work",
+        &["--size", "80x24", "--", "cmd.exe", "/d", "/q"],
+    );
+    let mut a = Viewer::attach(ep, "work", true, Some((80, 24)));
+    a.wait_for(">", LONG);
+    a.send(b"for /L %i in (1,1,60) do @echo line-%i\r");
+    a.wait_for("line-60", LONG);
+    settle(ep, "work", &mut [&mut a]);
+    drop(a);
+    std::thread::sleep(Duration::from_millis(300));
+    let before = output_bytes(ep, "work");
+    // Reattach interactively at the same size: the snapshot, then nothing.
+    let mut b = Viewer::attach(ep, "work", true, Some((80, 24)));
+    b.pump(Duration::from_millis(1500));
+    assert_eq!(
+        output_bytes(ep, "work"),
+        before,
+        "the same-size attach made ConPTY repaint"
+    );
+    assert_eq!(b.next, before, "no live output after the snapshot");
+    let all = b.all();
+    assert_eq!(
+        all.iter().filter(|l| l.as_str() == "line-60").count(),
+        1,
+        "{all:?}"
+    );
+    // pane.resize to the same size: nothing either.
+    let r = b.raw.request(
+        7,
+        "pane.resize",
+        &json!({"cols": 80, "rows": 24, "stream_id": b.stream}),
+    );
+    assert_eq!(r["ok"], true, "{r}");
+    b.pump(Duration::from_millis(1000));
+    assert_eq!(
+        output_bytes(ep, "work"),
+        before,
+        "a same-size resize repainted"
+    );
+    drop(b);
+    // Another size: the pseudo console follows (the shell reports it) and so does the pane.
+    let mut c = Viewer::attach(ep, "work", true, Some((100, 30)));
+    assert_eq!(
+        c.result["snapshot"]["size"],
+        json!({"cols": 100, "rows": 30})
+    );
+    c.send(b"mode con | find \"Col\"\r");
+    c.wait_for("Columns:", LONG);
+    let cols_line = c
+        .text()
+        .into_iter()
+        .find(|l| l.contains("Columns:"))
+        .unwrap();
+    assert!(cols_line.trim_end().ends_with("100"), "{cols_line}");
+    let st = ok(ep, &["info", "work"]);
+    assert_eq!(
+        st["terminal"]["windows"][0]["panes"][0]["size"],
+        json!({"cols": 100, "rows": 30})
+    );
+    eprintln!(
+        "EVIDENCE same-size reattach: {before} output bytes before and after an 80x24 reattach and \
+         an 80x24 pane.resize (no repaint); an attach at 100x30 reached cmd (`{}`)",
+        cols_line.trim()
+    );
+}
+
 /// Deterministic eviction at the line limit, `clear-history`, and a limit of 0.
 #[test]
 fn history_is_bounded_evicts_the_oldest_lines_and_clears_on_request() {

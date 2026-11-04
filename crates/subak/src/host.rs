@@ -705,6 +705,20 @@ fn flag(params: &Value, name: &str) -> Result<bool, IpcError> {
     }
 }
 
+/// Resizes the pane's terminal model to `size` and says whether its pseudo console must follow:
+/// not when the model already has that size (a reattach or resize at the same size would make
+/// ConPTY repaint the whole screen for nothing).
+fn resize_model(st: &mut State, pane_id: &str, (c, r): (u16, u16)) -> bool {
+    match st.out.get_mut(pane_id) {
+        Some(o) if o.screen.size() == (c, r) => false,
+        Some(o) => {
+            o.screen.resize(c, r);
+            true
+        }
+        None => true,
+    }
+}
+
 fn size_param(v: &Value, field: &str) -> Result<Option<(u16, u16)>, IpcError> {
     if v.is_null() {
         return Ok(None);
@@ -1783,7 +1797,7 @@ impl Host {
                 }
             },
         };
-        let rt = {
+        let (rt, resize) = {
             let mut st = self.lock();
             let rt = match self.attach_target(&st, &p["target"]) {
                 Ok(rt) => rt,
@@ -1791,14 +1805,12 @@ impl Host {
             };
             // The model takes the new size first, as a terminal does before it tells its PTY;
             // output still formatted for the old size is repainted by ConPTY after the resize.
-            if let Some((c, r)) = size
-                && let Some(o) = st.out.get_mut(&rt.pane_id)
-            {
-                o.screen.resize(c, r);
-            }
-            rt
+            // The same size is no change: no model resize, and no PTY resize (ConPTY would
+            // repaint the whole screen after the snapshot for nothing).
+            let resize = size.filter(|s| resize_model(&mut st, &rt.pane_id, *s));
+            (rt, resize)
         };
-        if let Some((c, r)) = size
+        if let Some((c, r)) = resize
             && let Err(e) = rt.pty.resize(c, r)
         {
             return Reply::Now(Err(IpcError::new(
@@ -2237,7 +2249,7 @@ impl Host {
     fn resize(&self, conn: u64, params: &Value) -> Result<Value, IpcError> {
         let (c, r) = size_param(params, "cols")?
             .ok_or_else(|| IpcError::param("cols", "cols and rows are required"))?;
-        let rt = {
+        let (rt, changed) = {
             let mut st = self.lock();
             if st.rt.is_empty() {
                 return Err(IpcError::new(
@@ -2290,15 +2302,15 @@ impl Host {
                 .rt_of_stream(stream)
                 .cloned()
                 .ok_or_else(|| IpcError::new(ErrorCode::InvalidState, "the pane has ended"))?;
-            // The model first, as a terminal does (see `attach`).
-            if let Some(o) = st.out.get_mut(&rt.pane_id) {
-                o.screen.resize(c, r);
-            }
-            rt
+            // The model first, as a terminal does (see `attach`); the same size changes nothing.
+            let changed = resize_model(&mut st, &rt.pane_id, (c, r));
+            (rt, changed)
         };
-        rt.pty
-            .resize(c, r)
-            .map_err(|e| IpcError::new(ErrorCode::InternalError, format!("resize failed: {e}")))?;
+        if changed {
+            rt.pty.resize(c, r).map_err(|e| {
+                IpcError::new(ErrorCode::InternalError, format!("resize failed: {e}"))
+            })?;
+        }
         if let Some(t) = self.lock().reg.get_mut(&rt.terminal_id) {
             t.active_pane_mut().size = (c, r);
         }

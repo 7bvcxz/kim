@@ -80,7 +80,10 @@ with their alternate screen.
 - The Host resizes the **model first**, then the pseudo console, as a terminal does. Rows above
   the cursor that no longer fit move into the history; the screen is cut or padded without reflow;
   the scroll region becomes the whole screen. ConPTY then repaints the screen at the new size, and
-  every attached client receives that repaint as live output.
+  every attached client receives that repaint as live output. An attach or `pane.resize` at the
+  pane's current size is no change (since Step 16): neither the model nor the pseudo console is
+  resized, so no repaint follows the snapshot (`a_same_size_reattach_gets_no_repaint_and_a_new_size_still_resizes`:
+  0 bytes after an 80×24 reattach, 301 repaint bytes before the fix).
 - **History rows re-wrap** at the width of the client they are replayed to: a 100-column row
   from before a resize to 80 columns wraps into two rows in a new 80-column client and joins back
   with `capture --join` (measured, §8). On Windows 10, ConPTY ends long lines with explicit line

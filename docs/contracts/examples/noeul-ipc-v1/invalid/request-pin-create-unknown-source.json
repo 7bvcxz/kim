@@ -1,0 +1,8 @@
+{
+  "type": "request",
+  "id": 13,
+  "method": "pin.create",
+  "params": {
+    "source": "file"
+  }
+}

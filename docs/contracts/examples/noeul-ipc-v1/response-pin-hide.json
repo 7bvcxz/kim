@@ -1,0 +1,10 @@
+{
+  "type": "response",
+  "id": 11,
+  "result": {
+    "dry_run": false,
+    "hidden": [
+      "pin-3"
+    ]
+  }
+}

@@ -24,6 +24,11 @@
 //! take focus or stay on top. Everything it shows lies far off-screen, nothing reads the real
 //! screen, and release builds do not contain the hook. Tests and the e2e suite use it to drive the
 //! real binary's overlay without anything appearing on the user's desktop.
+//!
+//! **Pins** (Step 53, ADR 0029): a pin's context menu is modal, so the pump only records the
+//! request and [`wake`] shows it after releasing the core (one menu at a time), as for the tray
+//! menu. `WM_DISPLAYCHANGE` and a work-area change (`WM_SETTINGCHANGE` with `SPI_SETWORKAREA`)
+//! reach the core as [`App::display_changed`]: pins keep their place, nothing moves by itself.
 
 use crate::app::{App, Identity, OverlayWindow, Shell};
 use crate::capture::{CaptureBackend, Synthetic};
@@ -35,7 +40,7 @@ use crate::paths::Paths;
 use crate::pins::PinWindows;
 use crate::settings;
 use crate::win::overlay::{self, Placement, WinOverlay};
-use crate::win::pinwnd::{self, WinPins};
+use crate::win::pinwnd::{self, Style, WinPins};
 use crate::win::pipe::{self, Listener, Pipe, Until};
 use crate::win::tray::TrayIcon;
 use crate::win::{Event, client, gdi, per_monitor_dpi_awareness, session_id, user_sid, wide};
@@ -57,8 +62,9 @@ use windows_sys::Win32::System::Threading::{INFINITE, WaitForMultipleObjects};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetCursorPos, GetMessageW,
     IDYES, MB_ICONQUESTION, MB_SETFOREGROUND, MB_YESNO, MSG, MessageBoxW, PostMessageW,
-    PostQuitMessage, RegisterClassExW, RegisterWindowMessageW, TranslateMessage, WM_APP, WM_CLOSE,
-    WM_ENDSESSION, WM_QUERYENDSESSION, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_POPUP,
+    PostQuitMessage, RegisterClassExW, RegisterWindowMessageW, SPI_SETWORKAREA, TranslateMessage,
+    WM_APP, WM_CLOSE, WM_DISPLAYCHANGE, WM_ENDSESSION, WM_QUERYENDSESSION, WM_SETTINGCHANGE,
+    WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_POPUP,
 };
 
 /// Runs the pump (IPC jobs, hotkey presses, reloads, pin events).
@@ -96,6 +102,7 @@ thread_local! {
     static CONTROL: Cell<usize> = const { Cell::new(0) };
     static TASKBAR_CREATED: Cell<u32> = const { Cell::new(0) };
     static ENDED_BY: Cell<&'static str> = const { Cell::new("quit") };
+    static MENU_OPEN: Cell<bool> = const { Cell::new(false) };
 }
 
 /// The Win32 [`Shell`]: pin windows, the overlay, clipboard, pointer, tray notices.
@@ -264,6 +271,23 @@ fn with_app<R>(f: impl FnOnce(&mut App<WinShell>) -> R) -> Option<R> {
 
 fn wake() {
     with_app(|_| ());
+    pin_menus();
+}
+
+/// Shows the pin context menus the core asked for, one at a time, with the core released (the
+/// menu is modal; IPC and other pins keep working meanwhile), then runs the choice.
+fn pin_menus() {
+    if MENU_OPEN.get() {
+        return; // the open menu's loop picks the next request up when it returns
+    }
+    while let Some(Some(menu)) = with_app(App::take_pin_menu) {
+        MENU_OPEN.set(true);
+        let choice = pinwnd::track_menu(menu.pin, &menu.items, menu.at);
+        MENU_OPEN.set(false);
+        if let Some(action) = choice {
+            with_app(|a| a.pin_menu_choice(menu.pin, action));
+        }
+    }
 }
 
 unsafe extern "system" fn control_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
@@ -293,6 +317,15 @@ unsafe extern "system" fn control_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPA
                     }
                 }
             }
+            return 0;
+        }
+        // Monitors attached, removed or rearranged; a taskbar moved or resized.
+        WM_DISPLAYCHANGE => {
+            with_app(App::display_changed);
+            return 0;
+        }
+        WM_SETTINGCHANGE if wp == SPI_SETWORKAREA as usize => {
+            with_app(App::display_changed);
             return 0;
         }
         WM_QUERYENDSESSION => return 1,
@@ -564,7 +597,13 @@ pub fn run(opts: &RunOpts) -> Result<Value> {
     };
     let app = App::new(
         WinShell {
-            windows: WinPins,
+            windows: WinPins {
+                style: if dev {
+                    Style::OFF_SCREEN_TEST
+                } else {
+                    Style::INTERACTIVE
+                },
+            },
             interactive: !dev,
         },
         backend,

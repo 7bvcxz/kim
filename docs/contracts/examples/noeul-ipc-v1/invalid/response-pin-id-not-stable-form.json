@@ -11,6 +11,13 @@
           "width": 400,
           "height": 300
         },
+        "image": {
+          "width": 400,
+          "height": 300
+        },
+        "zoom": 100,
+        "visible": true,
+        "on_screen": true,
         "source": "capture",
         "created_at": "2026-11-04T10:16:01Z"
       }

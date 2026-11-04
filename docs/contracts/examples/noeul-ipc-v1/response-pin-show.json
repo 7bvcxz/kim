@@ -1,0 +1,14 @@
+{
+  "type": "response",
+  "id": 12,
+  "result": {
+    "dry_run": false,
+    "shown": [
+      "pin-3",
+      "pin-4"
+    ],
+    "moved": [
+      "pin-4"
+    ]
+  }
+}

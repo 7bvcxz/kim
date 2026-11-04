@@ -6,14 +6,22 @@
 //! the core's reactions, `app::tests`). With the icon off (`[general] tray_icon = false`, or
 //! `noeul start --no-tray`), the CLI and the hotkeys still reach everything.
 //!
-//! Capture region (and left click to capture) since Step 50. Not in this build: Show or hide all
-//! pins, Make all pins clickable, Bring pins on screen (N2/N4), Settings (N5).
+//! Capture region (and left click to capture) since Step 50; Show or hide all pins and Bring
+//! pins on screen since Step 53 (the pin engine, ADR 0029). Not in this build: Make all pins
+//! clickable (N2), Settings (N5).
 
 /// One menu entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MenuItem {
     CaptureRegion,
     PinClipboard,
+    /// Shown while every open pin is visible.
+    HideAllPins,
+    /// Shown while a pin is hidden.
+    ShowAllPins,
+    /// Shown while a pin lies where no monitor shows it (NOEUL-FR-067): shows and moves it into
+    /// the nearest work area.
+    BringPinsOnScreen,
     ReopenClosedPin,
     /// The full shortcut switch (HOTKEY_CONTRACT §12.4); `on` is the current state.
     Shortcuts {
@@ -27,6 +35,9 @@ impl MenuItem {
         match self {
             MenuItem::CaptureRegion => "Capture region\tF1",
             MenuItem::PinClipboard => "Pin clipboard\tF3",
+            MenuItem::HideAllPins => "Hide all pins",
+            MenuItem::ShowAllPins => "Show all pins",
+            MenuItem::BringPinsOnScreen => "Bring pins on screen",
             MenuItem::ReopenClosedPin => "Reopen closed pin",
             MenuItem::Shortcuts { on: true } => "Keyboard shortcuts: on",
             MenuItem::Shortcuts { on: false } => "Keyboard shortcuts: off",
@@ -39,6 +50,9 @@ impl MenuItem {
         match self {
             MenuItem::CaptureRegion => 4,
             MenuItem::PinClipboard => 1,
+            MenuItem::HideAllPins => 5,
+            MenuItem::ShowAllPins => 6,
+            MenuItem::BringPinsOnScreen => 7,
             MenuItem::ReopenClosedPin => 2,
             MenuItem::Shortcuts { .. } => 3,
             MenuItem::Quit => 9,
@@ -61,10 +75,22 @@ pub struct MenuState {
     pub shortcuts_on: bool,
     /// `false` when shortcuts are off by a start flag or safe mode: the tray cannot change that.
     pub shortcuts_switchable: bool,
+    /// Open pins, how many of them are hidden, and how many no monitor shows.
+    pub open: usize,
+    pub hidden: usize,
+    pub off_screen: usize,
 }
 
 pub fn menu(s: &MenuState) -> Vec<MenuItem> {
     let mut items = vec![MenuItem::CaptureRegion, MenuItem::PinClipboard];
+    if s.hidden > 0 {
+        items.push(MenuItem::ShowAllPins);
+    } else if s.open > 0 {
+        items.push(MenuItem::HideAllPins);
+    }
+    if s.off_screen > 0 {
+        items.push(MenuItem::BringPinsOnScreen);
+    }
     if s.reopenable {
         items.push(MenuItem::ReopenClosedPin);
     }
@@ -85,6 +111,9 @@ mod tests {
             reopenable: false,
             shortcuts_on: true,
             shortcuts_switchable: true,
+            open: 0,
+            hidden: 0,
+            off_screen: 0,
         };
         assert_eq!(
             menu(&base),
@@ -99,6 +128,7 @@ mod tests {
             reopenable: true,
             shortcuts_on: false,
             shortcuts_switchable: true,
+            ..base
         });
         assert_eq!(m[2], MenuItem::ReopenClosedPin);
         assert_eq!(m[3].label(), "Keyboard shortcuts: off");
@@ -112,5 +142,24 @@ mod tests {
             .iter()
             .any(|i| matches!(i, MenuItem::Shortcuts { .. }))
         );
+        // Pin items follow the pins: hide while all show, show while one is hidden, bring
+        // back while one is lost.
+        let with = |open, hidden, off_screen| {
+            menu(&MenuState {
+                open,
+                hidden,
+                off_screen,
+                ..base
+            })
+        };
+        assert!(with(2, 0, 0).contains(&MenuItem::HideAllPins));
+        assert!(!with(2, 0, 0).contains(&MenuItem::ShowAllPins));
+        assert!(with(2, 1, 0).contains(&MenuItem::ShowAllPins));
+        assert!(!with(2, 1, 0).contains(&MenuItem::HideAllPins));
+        assert!(with(2, 0, 1).contains(&MenuItem::BringPinsOnScreen));
+        assert!(!with(2, 0, 0).contains(&MenuItem::BringPinsOnScreen));
+        let all = with(3, 1, 1);
+        let ids: std::collections::BTreeSet<u32> = all.iter().map(|i| i.command_id()).collect();
+        assert_eq!(ids.len(), all.len(), "command ids stay unique");
     }
 }

@@ -1,0 +1,9 @@
+{
+  "type": "request",
+  "id": 12,
+  "method": "pin.show",
+  "params": {
+    "all": true,
+    "on_screen": true
+  }
+}

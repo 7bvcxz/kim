@@ -27,7 +27,13 @@
             "width": 1920,
             "height": 1080
           },
-          "primary": false
+          "primary": false,
+          "work": {
+            "x": -1920,
+            "y": 0,
+            "width": 1920,
+            "height": 1080
+          }
         },
         {
           "rect": {
@@ -36,14 +42,22 @@
             "width": 2560,
             "height": 1440
           },
-          "primary": true
+          "primary": true,
+          "work": {
+            "x": 0,
+            "y": 0,
+            "width": 2560,
+            "height": 1392
+          }
         }
       ]
     },
     "capture_backend": "gdi",
     "pins": {
       "open": 1,
-      "reopenable": null
+      "reopenable": null,
+      "hidden": 0,
+      "off_screen": 0
     },
     "captures": {
       "started": 1,

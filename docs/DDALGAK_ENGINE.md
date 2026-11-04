@@ -171,10 +171,13 @@ actions; all ship unbound. Example:
                  { "action": "engine.pause",  "bindings": ["Ctrl+Alt+Shift+F10"] } ] }
 ```
 
-The app registers `engine.toggle` and `engine.pause` with `RegisterHotKey` at start, so they work
-while the hook is off. `status` shows each as `registered`, `taken` (another program owns it;
-nothing is retried or stolen), `unsupported` (left/right modifiers or `code:` keys, which
-`RegisterHotKey` cannot express) or `unavailable` (`editor.open` before Step 74). An invalid file
+The app registers `engine.toggle`, `engine.pause` and (since Step 74) `editor.open` with
+`RegisterHotKey` at start, so they work while the hook is off; `editor.open` and the tray menu's
+**Open rule editor** start `ddalgak-editor.exe` from the app's folder (its own process, ADR 0049;
+the debug test host registers the chord but never opens a window). `status` shows each as
+`registered`, `taken` (another program owns it; nothing is retried or stolen), `unsupported`
+(left/right modifiers or `code:` keys, which `RegisterHotKey` cannot express) or, from an app
+older than Step 74, `unavailable` for `editor.open`. An invalid file
 is safe mode: nothing is registered. Since Step 73 a `taken` shortcut is also named once in a tray
 notice at start, in `health.problems` (`shortcut_taken`) and in the indicator's attention; it is
 never registered later, not even when the other program lets go (tested,

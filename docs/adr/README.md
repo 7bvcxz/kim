@@ -26,7 +26,7 @@ the requirements it serves. ADRs are immutable once **Accepted**; a later ADR ma
 | [0019](0019-secure-host-supervisor-and-ipc-v1.md) | Secure Host supervisor and IPC v1 | Accepted |
 | [0020](0020-terminal-session-lifecycle.md) | Terminal session lifecycle and the meaning of every end | Accepted (CLI verbs top level since Step 12, see 0027) |
 | [0021](0021-noeul-product-definition.md) | Noeul product definition: double-click pins, privacy defaults and a clean-room boundary | Accepted (implemented from Step 49; manifest extended by 0038) |
-| [0022](0022-ddalgak-rule-model-and-safety.md) | Ddalgak: declarative rules, a tray-app engine and safety by construction | Accepted (implemented from Steps 66–83; process model refined by 0024; key translation for hotstrings refined by 0034) |
+| [0022](0022-ddalgak-rule-model-and-safety.md) | Ddalgak: declarative rules, a tray-app engine and safety by construction | Accepted (implemented from Steps 66–83; process model refined by 0024 and, for the editor, 0049; key translation for hotstrings refined by 0034) |
 | [0023](0023-noeul-app-foundation.md) | Noeul app foundation: plain Win32, GDI capture on demand, one instance per user session | Accepted (Step 49; overlay measured in Step 50, see 0026; pin engine in Step 53, see 0029; capture APIs in Step 58) |
 | [0024](0024-ddalgak-windows-input-apis-and-permissions.md) | Ddalgak engine: Windows input APIs, threads, IPC and permissions | Accepted (implemented in Step 66) |
 | [0025](0025-pane-programs-environment-and-backpressure.md) | Pane programs, their environment, and backpressure | Accepted (verbatim command lines added in Step 12, see 0027; lagging clients resynced since Step 13, see 0030) |
@@ -50,6 +50,7 @@ the requirements it serves. ADRs are immutable once **Accepted**; a later ADR ma
 | [0044](0044-noeul-pin-transforms-and-control.md) | Noeul pin transforms and control: an orientation group, a picture that never changes, click-through only with a way back, groups in memory | Accepted (Step 54; real-desktop checks manual) |
 | [0045](0045-subak-floating-icon-and-terminal-manager.md) | Subak's floating icon, tray icon and Terminal manager: a tiny optional process of the window's binary, system controls for the manager, delete that always asks, the foreground handed on explicitly | Accepted (Step 18; visible icon, real tray and drags pending the maintainer) |
 | [0046](0046-ddalgak-enable-disable-and-recovery.md) | Ddalgak enable, disable and recovery: a remembered turn-off, scoped `enabled`, a lost hook turns the engine off, stale keys released on demand | Accepted (validated in Step 73 by automated tests; physical chord, real lock, sign-out, reboot and stuck-key checks manual) |
+| [0049](0049-ddalgak-editor-process-and-toolkit.md) | The Ddalgak rule editor: its own on-demand process, egui + glow, store writes and a confirmed reload | Accepted (Step 74; visible-window usability and the memory budget with rules pending, see the ADR) |
 
 "Accepted (validated in Step N)" means the decision is made, but the named Step must confirm it
 on real Windows; if validation fails, that Step writes a superseding ADR.

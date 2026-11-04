@@ -1,6 +1,6 @@
 # Ddalgak and AutoHotkey v2: feature matrix
 
-Status: **current** (inventory) · **Matrix v2, 2026-11-04** (Step 68: remap rows; Step 69: hotstring and sending rows; Step 70: `Run` rows; Step 71: mouse rows; Step 72: mode rows; Step 73: suspend, pause and tray rows) · Reference: AutoHotkey **v2.0.31**
+Status: **current** (inventory) · **Matrix v3, 2026-11-04** (Step 68: remap rows; Step 69: hotstring and sending rows; Step 70: `Run` rows; Step 71: mouse rows; Step 72: mode rows; Step 73: suspend, pause and tray rows; Step 74: the editor rows) · Reference: AutoHotkey **v2.0.31**
 (the newest v2 entry of the official changelog, dated 2026-10-25) · Owner: mouv · Applies to:
 Ddalgak · Created in Step 65
 
@@ -14,7 +14,7 @@ names its source.
 by the specification in [DDALGAK_RULE_MODEL](DDALGAK_RULE_MODEL.md), to be implemented by the Step
 named; it is usable today only when its Evidence names a Step that shipped it (Steps 66–73 so far:
 the engine, the rule store, remaps and blocks, sending and hotstrings, launches, mouse actions,
-modes, enable/disable and recovery). Every Step that implements a row updates its
+modes, enable/disable and recovery, and since Step 74 the visual rule editor). Every Step that implements a row updates its
 Evidence, and the matrix version and date go up with every change of a status.
 
 ## Sources and method
@@ -82,7 +82,7 @@ Where a page did not state something, the row says so instead of filling the gap
 | 1.9 | Long-press detection (scripted with key-state waits) | H | `on: hold` with `hold_ms` 200–5000, no script | supported | 66 | — |
 | 1.10 | Custom combinations `a & b`, where any key acts as a prefix | H | Real modifiers only. The main use, a layer while a key is held, is `mode` `hold` (CapsLock held → Navigation). A non-modifier prefix key in a chord is not in v1 | partial | 72 | Step 72: `mode` `hold` layers (stacked, ending with their own key-up, released outputs on the way out) in core, worker and CLI tests and through the real hook with injected obscure keys; real typing manual (DDALGAK_ENGINE §15) |
 | 1.11 | Multi-key sequences (no built-in hotkey syntax; scripts use Input hooks) | H, IH | Up to four chords: `Ctrl+K Ctrl+U` | supported | 66 | — |
-| 1.12 | Creating, changing, enabling and disabling hotkeys at run time with the `Hotkey` function | H | Rule CRUD in the GUI and CLI with live reload | supported | 67 | — |
+| 1.12 | Creating, changing, enabling and disabling hotkeys at run time with the `Hotkey` function | H | Rule CRUD in the GUI and CLI with live reload | supported | 67, 74 | Step 67: the CLI and live reload; Step 74: the editor's create, edit, duplicate, enable, disable and delete through the same store, active only after the app's reload (`crates/ddalgak-editor/tests/flows.rs`, e2e `step74`) |
 | 1.13 | Calling a named function with `ThisHotkey` | H | No functions: a rule has declarative steps | not intended | — | — |
 | 1.14 | Hotkey, timer and menu subroutines run as threads that can interrupt one another | CO, ST | One run per rule; a trigger during a run is `busy` | partial | 67 | — |
 | 1.15 | Mouse-button hotkeys (`LButton`, `XButton1`; always through the mouse hook) | H, KL | `MouseMiddle`, `MouseX1`, `MouseX2` as triggers, with modifiers, through a low-level mouse hook that exists only while such a rule is active (permission `mouse-hook`, ADR 0031). The primary and secondary buttons are never triggers, so no rule can take away clicking | partial | 68 | Step 68: core tests; the on-demand mouse hook tested in the real test host (no mouse input injected; real buttons are a manual check) |
@@ -185,8 +185,8 @@ Where a page did not state something, the row says so instead of filling the gap
 | # | AutoHotkey v2 behavior | Src | Ddalgak | Status | Step | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
 | 7.1 | Scripts build their own windows with the `Gui` object (controls, events, menus) | G | Ddalgak's own editor manages rules; users do not build windows | not intended | — | — |
-| 7.2 | A script's tray icon, with suspend and pause | SU | Ddalgak's tray icon with the engine states (shape and words; struck through after an emergency or a lost hook), turn on/off, pause/resume, release stuck keys; the rule editor in Step 74 | partial | 66, 73, 74 | Step 73: the indicator model is tested (`indicator::tests`, `status.indicator`); the real tray icon is a manual check (DDALGAK_ENGINE §16) |
-| 7.3 | Writing hotkeys requires a text editor and the script syntax | SC | A visual editor with key capture, effect tiles and a test playground | supported | 74, 76 | — |
+| 7.2 | A script's tray icon, with suspend and pause | SU | Ddalgak's tray icon with the engine states (shape and words; struck through after an emergency or a lost hook), turn on/off, pause/resume, release stuck keys, and **Open rule editor** (Step 74) | supported | 66, 73, 74 | Step 73: the indicator model is tested (`indicator::tests`, `status.indicator`); Step 74: `editor.open` registered (`tests/cli.rs`); the real tray icon and the editor window it opens are manual checks (DDALGAK_ENGINE §16, DDALGAK_GUI_JOURNEYS §8) |
+| 7.3 | Writing hotkeys requires a text editor and the script syntax | SC | A visual editor with key capture, effect tiles and a test playground | supported | 74, 76 | Step 74: the editor with key capture, eight effect tiles and their validated forms, simulation from the detail panel (headless flow tests, `crates/ddalgak-editor/tests/flows.rs`); the playground is Step 76 |
 
 ## 8. Scripting language
 
@@ -217,7 +217,7 @@ Where a page did not state something, the row says so instead of filling the gap
 
 | # | Capability | Ddalgak | Step |
 | --- | --- | --- | --- |
-| 10.1 | Visual rule editor with key capture, effect tiles and validation | [GUI_JOURNEYS](DDALGAK_GUI_JOURNEYS.md) | 74 |
+| 10.1 | Visual rule editor with key capture, effect tiles and validation | [GUI_JOURNEYS §7](DDALGAK_GUI_JOURNEYS.md) (implemented, Step 74) | 74 |
 | 10.2 | Test playground: simulate without side effects, live test confined to the playground | RULE_MODEL §11 | 76 |
 | 10.3 | Explicit, per-rule consent for injection, launching and clipboard; fingerprinted launch targets | RULE_MODEL §6 | 67–70 |
 | 10.4 | A non-remappable emergency chord that removes the hook and releases every held key | [DDALGAK_SAFETY §7](DDALGAK_SAFETY.md) | 73 |
@@ -232,3 +232,4 @@ Where a page did not state something, the row says so instead of filling the gap
 | --- | --- | --- | --- |
 | v1 | 2026-11-04 | v2.0.31 | First inventory (Step 65). Nothing implemented. |
 | v2 | 2026-11-04 | v2.0.31 | Steps 68–73 filled in the evidence of the rows they implemented; Step 73: `Suspend`, `Pause` and the tray row (7.2 is `partial` until the editor of Step 74). |
+| v3 | 2026-11-04 | v2.0.31 | Step 74: the editor rows (1.12, 7.3, 10.1) gained evidence; the tray row 7.2 is `supported` (the tray opens the editor). |

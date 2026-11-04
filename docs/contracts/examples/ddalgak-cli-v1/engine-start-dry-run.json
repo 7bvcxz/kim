@@ -5,6 +5,7 @@
     "engine": {
       "hook": {
         "installed": false,
+        "mouse_installed": false,
         "observe_only": true
       },
       "last_change": null,

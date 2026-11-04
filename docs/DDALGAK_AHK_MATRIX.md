@@ -1,6 +1,6 @@
 # Ddalgak and AutoHotkey v2: feature matrix
 
-Status: **current** (inventory) · **Matrix v1, 2026-11-04** · Reference: AutoHotkey **v2.0.31**
+Status: **current** (inventory) · **Matrix v2, 2026-11-04** (Step 68: remap rows) · Reference: AutoHotkey **v2.0.31**
 (the newest v2 entry of the official changelog, dated 2026-10-25) · Owner: mouv · Applies to:
 Ddalgak · Created in Step 65
 
@@ -10,11 +10,11 @@ does not embed an interpreter and does not claim compatibility with the AutoHotk
 descriptions below are written in our own words from the official documentation; every row
 names its source.
 
-**Nothing in this matrix is implemented yet.** Ddalgak has no code in Step 65. A row marked
-`supported` is a commitment backed by the specification in [DDALGAK_RULE_MODEL](DDALGAK_RULE_MODEL.md),
-to be implemented by the Step named, not a feature anyone can use today. Every Step that
-implements a row updates its Evidence, and the matrix version and date go up with every change
-of a status.
+**Most of this matrix is not implemented yet.** A row marked `supported` is a commitment backed
+by the specification in [DDALGAK_RULE_MODEL](DDALGAK_RULE_MODEL.md), to be implemented by the Step
+named; it is usable today only when its Evidence names a Step that shipped it (Steps 66–68 so far:
+the engine, the rule store, remaps and blocks). Every Step that implements a row updates its
+Evidence, and the matrix version and date go up with every change of a status.
 
 ## Sources and method
 
@@ -72,10 +72,10 @@ Where a page did not state something, the row says so instead of filling the gap
 | --- | --- | --- | --- | --- | --- | --- |
 | 1.1 | Hotkeys with Ctrl, Alt and Shift via the symbols `^`, `!`, `+` | H | Canonical text `Ctrl+Alt+Shift+J` (hotkey contract syntax) | supported | 66 | — |
 | 1.2 | Win-key hotkeys via `#` (`#n::`) | H | Not as triggers in v1: the hotkey contract reserves every `Win` chord. Win chords can be *sent* (`send_keys` `Win+D`). A later contract revision may allow selected ones (ADR 0022) | not intended | — | — |
-| 1.3 | Left/right-specific modifiers via `<` and `>` | H, KL | `LCtrl+`, `RAlt+`, … in chords; bare `RAlt`, `LCtrl` as remap or tap triggers | supported | 66, 68 | — |
+| 1.3 | Left/right-specific modifiers via `<` and `>` | H, KL | `LCtrl+`, `RAlt+`, … in chords; bare `RAlt`, `LCtrl` as remap or tap triggers; side-specific remap outputs (`RCtrl+Up`) | supported | 66, 68 | Step 68: core tests (DDALGAK_ENGINE §11) |
 | 1.4 | AltGr via `<^>!` | H, KL | `AltGr+` in the canonical syntax; `altgr_collision` warning for `Ctrl+Alt` chords | supported | 66 | — |
-| 1.5 | Wildcard `*`: fire even with extra modifiers held | H | Remap and block triggers without modifiers are wildcards by design; other rules match exactly. No general flag. Reserved chords are never captured by the widening | partial | 68 | — |
-| 1.6 | `~`: the key keeps its native function | H | `pass_through: true` | supported | 66 | — |
+| 1.5 | Wildcard `*`: fire even with extra modifiers held | H | Remap and block triggers without modifiers are wildcards by design; other rules match exactly, and an exact chord wins over the wildcard. No general flag. Reserved chords and `Win` chords are never captured by the widening | partial | 68 | Step 68: core tests (DDALGAK_ENGINE §11) |
+| 1.6 | `~`: the key keeps its native function | H | `pass_through: true`, since Step 68 also for a remap without a tap alternative (the original key and the target are both held) | supported | 66, 68 | Step 68: core tests (DDALGAK_ENGINE §11) |
 | 1.7 | `$`: force the hook so `Send` cannot re-trigger the hotkey | H | Always the case: every rule uses the hook, and Ddalgak's own input never triggers a rule (RULE_MODEL §7.4) | supported | 66 | — |
 | 1.8 | `UP`: fire on key release | H | `on: release` fires when the chord is released with no other key in between (a tap). A release after other keys is not a trigger in v1 | partial | 66 | — |
 | 1.9 | Long-press detection (scripted with key-state waits) | H | `on: hold` with `hold_ms` 200–5000, no script | supported | 66 | — |
@@ -84,12 +84,12 @@ Where a page did not state something, the row says so instead of filling the gap
 | 1.12 | Creating, changing, enabling and disabling hotkeys at run time with the `Hotkey` function | H | Rule CRUD in the GUI and CLI with live reload | supported | 67 | — |
 | 1.13 | Calling a named function with `ThisHotkey` | H | No functions: a rule has declarative steps | not intended | — | — |
 | 1.14 | Hotkey, timer and menu subroutines run as threads that can interrupt one another | CO, ST | One run per rule; a trigger during a run is `busy` | partial | 67 | — |
-| 1.15 | Mouse-button hotkeys (`LButton`, `XButton1`; always through the mouse hook) | H, KL | Mouse buttons as triggers, through a low-level mouse hook disclosed in the catalog first | planned | 68 | — |
-| 1.16 | Wheel hotkeys (`WheelUp`…, down events only) | H, KL | With mouse triggers | planned | 68 | — |
+| 1.15 | Mouse-button hotkeys (`LButton`, `XButton1`; always through the mouse hook) | H, KL | `MouseMiddle`, `MouseX1`, `MouseX2` as triggers, with modifiers, through a low-level mouse hook that exists only while such a rule is active (permission `mouse-hook`, ADR 0031). The primary and secondary buttons are never triggers, so no rule can take away clicking | partial | 68 | Step 68: core tests; the on-demand mouse hook tested in the real test host (no mouse input injected; real buttons are a manual check) |
+| 1.16 | Wheel hotkeys (`WheelUp`…, down events only) | H, KL | Wheel notches as triggers, through the same on-demand mouse hook | planned | 71 | — |
 | 1.17 | Game controller buttons (`Joy1`…) | KL | — | not intended | — | — |
 | 1.18 | Hotkeys by scan code or virtual key (`SC159::`, `vk24::`) | KL | Physical keys by W3C name (`code:KeyQ`) and named keys; raw numbers are never stored (`KIM-NFR-022`) | partial | 66 | — |
 | 1.19 | Media and browser keys (`Media_Play_Pause`, `Volume_Up`, `Browser_Back`, `Launch_App1`) | KL | The contract's media and volume keys; browser and launch keys are an additive key-name change | partial | 66 | — |
-| 1.20 | Lock keys as hotkeys; forcing a lock state on or off | KL, KH | `CapsLock` and `NumLock` (and `ScrollLock`) as triggers and outputs; forcing a lock state is not in v1 | partial | 68 | — |
+| 1.20 | Lock keys as hotkeys; forcing a lock state on or off | KL, KH | `CapsLock` and `NumLock` (and `ScrollLock`) as triggers and outputs (a remapped CapsLock never toggles); forcing a lock state is not in v1 | partial | 68 | Step 68: core tests (DDALGAK_ENGINE §11) |
 | 1.21 | `Suspend` with `#SuspendExempt` hotkeys | SU | Engine `pause`; engine-control rules (pause, resume, turn off) stay active | supported | 73 | — |
 | 1.22 | Pausing running threads (`Pause`) | SU | Pausing cancels running rules; no thread suspension | partial | 73 | — |
 | 1.23 | `ListHotkeys` | H, KH | Rule list, `ddalgak rule list --json`, `ddalgak hotkeys list --json` | supported | 67 | — |
@@ -113,31 +113,31 @@ Where a page did not state something, the row says so instead of filling the gap
 
 | # | AutoHotkey v2 behavior | Src | Ddalgak | Status | Step | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
-| 3.1 | `a::b`: a key behaves as another, implemented as a down/up hotkey pair | RM | `remap`: target down while the trigger is down | supported | 68 | — |
-| 3.2 | Modifiers on the origin are released while the destination is sent; held modifiers combine with the destination | RM | Same semantics (RULE_MODEL §3.2, §5.1) | supported | 68 | — |
-| 3.3 | An upper-case destination forces Shift (`a::B`) | RM | Write the chord explicitly: `to: "Shift+B"` | partial | 68 | — |
-| 3.4 | A key to a modifier (`CapsLock::Ctrl`) | RM | `remap` to `LCtrl`, with an optional tap alternative (dual role) | supported | 68 | — |
+| 3.1 | `a::b`: a key behaves as another, implemented as a down/up hotkey pair | RM | `remap`: target down while the trigger is down, repeated with it, up with it | supported | 68 | Step 68: core and worker tests; real-input smoke on obscure keys (DDALGAK_ENGINE §11) |
+| 3.2 | Modifiers on the origin are released while the destination is sent; held modifiers combine with the destination | RM | Same semantics (RULE_MODEL §3.2, §5.1), restored afterwards if still held | supported | 68 | Step 68: core tests (DDALGAK_ENGINE §11) |
+| 3.3 | An upper-case destination forces Shift (`a::B`) | RM | Write the chord explicitly: `to: "Shift+B"` | partial | 68 | Step 68: core tests (DDALGAK_ENGINE §11) |
+| 3.4 | A key to a modifier (`CapsLock::Ctrl`) | RM | `remap` to `LCtrl`, with an optional tap alternative (dual role); the injected modifier combines with other rules (a `Ctrl+J` rule fires while CapsLock is held) | supported | 68 | Step 68: core tests (DDALGAK_ENGINE §11) |
 | 3.5 | A key to a mouse button (`RCtrl::RButton`) | RM | `mouse_click` with `op: hold` on that key | supported | 71 | — |
-| 3.6 | A mouse button to another button or key (`XButton1::LButton`) | RM | With mouse triggers | planned | 68 | — |
-| 3.7 | The mouse wheel cannot be remapped | RM | Wheel as output: `mouse_scroll`. Wheel as trigger with mouse triggers | partial | 68, 71 | — |
-| 3.8 | Disabling a key (`RWin::return`) | RM | `block`, for any key except reserved ones (the Win keys among them) | partial | 68 | — |
+| 3.6 | A mouse button to another button or key (`XButton1::LButton`) | RM | `remap` from `MouseMiddle`/`MouseX1`/`MouseX2` to a key, chord or any mouse button (`MouseLeft`/`MouseRight` are the logical primary and secondary buttons); a key can also act as a mouse button | supported | 68 | Step 68: core and worker tests (no mouse input injected; real buttons are a manual check) |
+| 3.7 | The mouse wheel cannot be remapped | RM | Wheel as output: `mouse_scroll`. Wheel as trigger: Step 71 | partial | 71 | — |
+| 3.8 | Disabling a key (`RWin::return`) | RM | `block`, for any key except reserved ones (the Win keys among them), and for the middle and X mouse buttons; a plain trigger is widened (Ctrl+Insert too) | partial | 68 | Step 68: core and worker tests; real-input smoke on obscure keys (DDALGAK_ENGINE §11) |
 | 3.9 | Context-specific remaps (`#HotIf` around remaps) | RM, HI | Modes now; app conditions in Step 77 | supported | 72, 77 | — |
 | 3.10 | Remaps do not trigger other hook hotkeys unless `#InputLevel` is raised | RM, IL, SL | Ddalgak's own output never triggers rules; no levels. `injected: accept` admits only other programs' input, for rules that inject nothing | partial | 66 | — |
 | 3.11 | Registry `Scancode Map` as an alternative (needs a reboot, applies to all users) | RM | Ddalgak never edits system-wide keyboard settings | not intended | — | — |
-| 3.12 | Tap for one key, hold for another (scripted in AutoHotkey) | RM | `remap` with `tap`, `tap_ms` | supported | 68 | — |
-| 3.13 | Known issues: remapping to Alt can disturb Alt+Tab; some games ignore remaps | RM | Reserved chords pass unchanged even under a widened remap; games: see 9.3 | partial | 68 | — |
+| 3.12 | Tap for one key, hold for another (scripted in AutoHotkey) | RM | `remap` with `tap`, `tap_ms`: another key pressed during the hold is sent after the target, unchanged | supported | 68 | Step 68: core and worker tests; real-input smoke on obscure keys (DDALGAK_ENGINE §11) |
+| 3.13 | Known issues: remapping to Alt can disturb Alt+Tab; some games ignore remaps | RM | Reserved chords pass unchanged even under a widened remap; games: see 9.3 | partial | 68 | Step 68: core tests (DDALGAK_ENGINE §11) |
 
 ## 4. Sending input and commands
 
 | # | AutoHotkey v2 behavior | Src | Ddalgak | Status | Step | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
-| 4.1 | `Send` keys with modifiers (`Send "^c"`) | SD | `send_keys` with up to eight chords | supported | 68 | — |
+| 4.1 | `Send` keys with modifiers (`Send "^c"`) | SD | `send_keys` with up to eight chords | supported | 69 | — |
 | 4.2 | Literal text (`SendText`, `{Text}`) and Unicode characters (`{U+nnnn}`) | SD | `type_text`, Unicode events independent of layout and IME | supported | 69 | — |
-| 4.3 | Send modes Input (default, buffers user input), Event and Play (Play may not work under UAC or on Windows 11) | SD, F | `SendInput` only, inserted serially (M2) | partial | 68 | — |
+| 4.3 | Send modes Input (default, buffers user input), Event and Play (Play may not work under UAC or on Windows 11) | SD, F | `SendInput` only, inserted serially (M2); one call per remap change | partial | 68 | Step 68: core and worker tests; real-input smoke on obscure keys (DDALGAK_ENGINE §11) |
 | 4.4 | `{Blind}`: keep physically held modifiers | SD | Fixed, documented modifier handling per action (RULE_MODEL §5.1, §5.3); no per-call flag | partial | 68 | — |
-| 4.5 | `{Key down}` / `{Key up}` | SD | Only through `remap` and `hold`, which always release; no stray key-down | partial | 68 | — |
+| 4.5 | `{Key down}` / `{Key up}` | SD | Only through `remap` and `hold`, which always release; no stray key-down | partial | 68 | Step 68: core and worker tests; real-input smoke on obscure keys (DDALGAK_ENGINE §11) |
 | 4.6 | `SendLevel` / `#InputLevel` | SL, IL | No levels: own input never triggers rules | not intended | — | — |
-| 4.7 | Key delays (`SetKeyDelay`) | SD | `key_delay_ms` (text), `step_delay_ms` (sequences) | partial | 68, 69 | — |
+| 4.7 | Key delays (`SetKeyDelay`) | SD | `key_delay_ms` (text), `step_delay_ms` (sequences) | partial | 69 | — |
 | 4.8 | `ControlSend`: keys to a window or control without focusing it (listed in the FAQ as a workaround for programs that ignore `Send`) | F | Not in v1; may be considered with window actions | not intended | — | — |
 | 4.9 | `Click` with button, count, down/up and relative coordinates | C | `mouse_click` (`click`, `double_click`, `hold`; optional point) | supported | 71 | — |
 | 4.10 | `MouseMove` absolute or relative, with a speed in Event mode | MM | `mouse_move` absolute, relative, or continuous while held with speed and acceleration | supported | 71 | — |
@@ -204,7 +204,7 @@ Where a page did not state something, the row says so instead of filling the gap
 | 9.1 | A non-elevated script cannot send to or receive hotkeys from elevated windows (UAC/UIPI); `SendInput` fails silently | F, M2 | Same OS rule. Ddalgak detects an elevated foreground window, skips injecting rules and says so (`skipped_elevated_target`) | supported | 66 | — |
 | 9.2 | Workarounds: "Run with UI access" (signed `_UIA.exe` in Program Files) or running as administrator | P, F | No `UIAccess`, no elevation (`DDALGAK-SEC-007`) | not intended | — | — |
 | 9.3 | Games with anti-cheat (GameGuard, Hackshield) are likely to block AutoHotkey; some games ignore sent input | F | Same limitation, documented; Ddalgak never hides from or evades anti-cheat (`DDALGAK-SEC-012`) | supported | 82 | — |
-| 9.4 | The OS does not allow simulating Ctrl+Alt+Del | SD | The Secure Attention Sequence is refused as an output | supported | 68 | — |
+| 9.4 | The OS does not allow simulating Ctrl+Alt+Del | SD | The Secure Attention Sequence is refused as an output (schema `output_reserved`; the CLI refuses it with `rule_invalid`) | supported | 67, 68 | Step 68: fixture `remap-to-emergency-chord`, CLI refusal (e2e scenario A) |
 | 9.5 | Win hotkeys delay the L key to avoid locking the PC | H | Win chords are not triggers; nothing to work around | not intended | — | — |
 | 9.6 | Input method editors are not supported by InputHook | IH | IME guard (no rule during a composition) and layout-independent Unicode typing | supported | 66, 69 | — |
 | 9.7 | Keyboard hook timeout: Windows removes a hook that does not answer within `LowLevelHooksTimeout` (at most 1000 ms since Windows 10 1709), silently on Windows 7 and later | M1 | The hook callback only classifies the event and returns (< 1 ms, `DDALGAK-NFR-002`); rules run on a worker thread | supported | 66 | — |

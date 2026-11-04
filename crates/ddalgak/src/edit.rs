@@ -138,7 +138,8 @@ pub fn canonical_trigger(input: &str) -> Result<String, TriggerError> {
 }
 
 /// Canonical output text (`remap` target, `send_keys`): one to eight chords; bare modifiers
-/// including `LWin`/`RWin` and `Win` chords are allowed (§5.1, §5.3).
+/// including `LWin`/`RWin` and `Win` chords are allowed (§5.1, §5.3). Mouse buttons are remap
+/// outputs only (`max == 1`); `send_keys` presses keys.
 pub fn canonical_output(input: &str, max: usize) -> Result<String, String> {
     let parts: Vec<&str> = input.split_whitespace().collect();
     if parts.is_empty() || parts.len() > max {
@@ -146,7 +147,16 @@ pub fn canonical_output(input: &str, max: usize) -> Result<String, String> {
     }
     let mut out = Vec::new();
     for p in parts {
-        out.push(canonical_step(p, true).map_err(|e| e.to_string())?);
+        let step = canonical_step(p, true).map_err(|e| e.to_string())?;
+        if max > 1 && MOUSE.iter().any(|(n, _)| step.ends_with(n)) {
+            return Err(format!(
+                "`{input}`: mouse buttons are remap targets; send_keys presses keys only"
+            ));
+        }
+        if max == 1 {
+            crate::remap::Output::parse(&step)?;
+        }
+        out.push(step);
     }
     Ok(out.join(" "))
 }
@@ -155,6 +165,40 @@ const BARE: [&str; 8] = [
     "LCtrl", "RCtrl", "LAlt", "RAlt", "LShift", "RShift", "LWin", "RWin",
 ];
 const LOCKS: [&str; 2] = ["CapsLock", "NumLock"];
+
+/// Mouse button names with the AutoHotkey-style aliases the CLI also accepts (Step 68). Triggers
+/// may use only the middle and X buttons; outputs may use all five.
+const MOUSE: [(&str, &[&str]); 5] = [
+    ("MouseLeft", &["lbutton"]),
+    ("MouseRight", &["rbutton"]),
+    ("MouseMiddle", &["mbutton"]),
+    ("MouseX1", &["xbutton1"]),
+    ("MouseX2", &["xbutton2"]),
+];
+
+/// Canonical text of a step that ends in a mouse button, if it does.
+fn canonical_mouse(step: &str) -> Option<Result<String, TriggerError>> {
+    let lower = step.to_ascii_lowercase();
+    let (prefix, name) = MOUSE.iter().find_map(|(name, aliases)| {
+        std::iter::once(name.to_ascii_lowercase())
+            .chain(aliases.iter().map(|a| (*a).to_string()))
+            .find(|n| lower == *n || lower.ends_with(&format!("+{n}")))
+            .map(|n| (&step[..step.len() - n.len()], *name))
+    })?;
+    if prefix.is_empty() {
+        return Some(Ok(name.to_string()));
+    }
+    Some(
+        Sequence::parse_input(&format!("{prefix}F1"))
+            .map_err(|e| TriggerError::Invalid(e.message))
+            .map(|seq| {
+                format!(
+                    "{}{name}",
+                    seq.to_string().strip_suffix("F1").unwrap_or_default()
+                )
+            }),
+    )
+}
 
 fn canonical_step(step: &str, output: bool) -> Result<String, TriggerError> {
     if let Some(b) = BARE.iter().find(|b| b.eq_ignore_ascii_case(step)) {
@@ -178,6 +222,9 @@ fn canonical_step(step: &str, output: bool) -> Result<String, TriggerError> {
             "{}{lock}",
             shown.strip_suffix("F1").unwrap_or_default()
         ));
+    }
+    if let Some(m) = canonical_mouse(step) {
+        return m;
     }
     let seq = Sequence::parse_input(step).map_err(|e| TriggerError::Invalid(e.message))?;
     if seq.len() != 1 {
@@ -809,6 +856,89 @@ mod tests {
             "Ctrl+K Ctrl+V"
         );
         assert!(canonical_output("a b", 1).is_err());
+    }
+
+    #[test]
+    fn mouse_buttons_are_triggers_and_outputs_with_their_limits() {
+        // Step 68: the middle and X buttons as triggers (with modifiers), all five as remap
+        // outputs; AutoHotkey-style names are accepted and stored canonically.
+        assert_eq!(canonical_trigger("mousex1").unwrap(), "MouseX1");
+        assert_eq!(canonical_trigger("XButton2").unwrap(), "MouseX2");
+        assert_eq!(
+            canonical_trigger("shift+ctrl+mbutton").unwrap(),
+            "Ctrl+Shift+MouseMiddle"
+        );
+        for refused in ["MouseLeft", "ctrl+lbutton", "RButton", "MouseX1 F13"] {
+            assert_eq!(
+                canonical_trigger(refused).unwrap_err().code(),
+                "trigger_invalid",
+                "{refused}"
+            );
+        }
+        assert_eq!(
+            canonical_trigger("Win+MouseX1").unwrap_err().code(),
+            "trigger_reserved"
+        );
+        assert_eq!(canonical_output("lbutton", 1).unwrap(), "MouseLeft");
+        assert_eq!(
+            canonical_output("ctrl+mouseright", 1).unwrap(),
+            "Ctrl+MouseRight"
+        );
+        assert!(
+            canonical_output("Ctrl+C MouseLeft", 8).is_err(),
+            "send_keys presses keys only"
+        );
+        assert_eq!(canonical_output("code:KeyH", 1).unwrap(), "code:KeyH");
+    }
+
+    #[test]
+    fn remap_rules_with_pass_through_and_dual_roles_are_checked_on_add() {
+        let mut doc = Document::empty();
+        let step = |to: &str, tap: Option<&str>| {
+            build_step(
+                "remap",
+                &StepInputs {
+                    to: Some(to.into()),
+                    tap: tap.map(str::to_string),
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        };
+        let mut n = new_rule("F14", vec![step("F16", None)]);
+        n.rule.trigger.pass_through = Some(true);
+        n.allow = vec![Permission::InputInjection];
+        assert!(add(&mut doc, n).unwrap().consent_needed.is_empty());
+        // A dual role cannot also pass the original key through (schema, ADR 0031): the CLI's
+        // review of the change refuses it.
+        let report = |d: &Document| check(&d.to_value(), &Context::default());
+        let before = report(&doc);
+        let mut tried = doc.clone();
+        let mut n = new_rule("F15", vec![step("LCtrl", Some("Escape"))]);
+        n.rule.trigger.pass_through = Some(true);
+        n.allow = vec![Permission::InputInjection];
+        add(&mut tried, n).unwrap();
+        let refused = review(&before, &report(&tried)).unwrap_err();
+        assert_eq!(refused.code(), "rule_invalid", "{refused:?}");
+        // A mouse-button trigger remapped to a key.
+        let mut n = new_rule("MouseX1", vec![step("Alt+Left", None)]);
+        n.allow = vec![Permission::InputInjection];
+        assert!(add(&mut doc, n).is_ok());
+        // `block` needs no consent.
+        let block = build_step("block", &StepInputs::default()).unwrap();
+        assert!(
+            add(&mut doc, new_rule("Insert", vec![block]))
+                .unwrap()
+                .consent_needed
+                .is_empty()
+        );
+        let l = crate::rules::from_store(&crate::store::interpret(
+            doc.to_text().as_bytes(),
+            &Context::default(),
+            crate::store::MIGRATIONS,
+        ));
+        let active: Vec<String> = l.bindings.iter().map(|b| b.trigger.to_string()).collect();
+        assert_eq!(active, ["F14", "MouseX1", "Insert"], "{:?}", l.inactive);
     }
 
     #[test]

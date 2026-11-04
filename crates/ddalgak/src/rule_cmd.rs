@@ -418,10 +418,21 @@ fn canonical(keys: &str) -> Result<String, CliError> {
     edit::canonical_trigger(keys).map_err(|e| trigger_err(&e))
 }
 
-/// A short default title: `F13: engine pause`.
+/// A short default title: `F13: engine pause`; remaps and blocks get the editor's summary
+/// sentence ("CapsLock acts as Left Ctrl; a quick tap is Escape").
 fn default_title(keys: &str, steps: &[Action]) -> String {
     let what = match steps.first() {
         Some(Action::Engine(e)) => format!("engine {}", e.op.as_str()),
+        Some(Action::Remap(r)) if steps.len() == 1 => {
+            let t = ddalgak::remap::summary(keys, &r.to, r.tap.as_deref(), false);
+            return t.chars().take(80).collect();
+        }
+        Some(Action::Block(_)) if steps.len() == 1 => {
+            return ddalgak::remap::block_summary(keys)
+                .chars()
+                .take(80)
+                .collect();
+        }
         Some(Action::Remap(r)) => format!("acts as {}", r.to),
         Some(Action::SendKeys(s)) => format!("sends {}", s.keys),
         Some(s) => s.kind().replace('_', " "),

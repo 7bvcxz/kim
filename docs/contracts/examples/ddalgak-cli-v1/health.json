@@ -4,7 +4,7 @@
     "app": {
       "image": "C:\\Users\\you\\AppData\\Local\\Programs\\mouv\\ddalgak\\versions\\0.0.1\\ddalgak-gui.exe",
       "latency_ms": 0,
-      "pid": 62368,
+      "pid": 49740,
       "verified": true
     },
     "counters": {
@@ -64,6 +64,7 @@
       "context_watchers": 4,
       "hook": {
         "installed": true,
+        "mouse_installed": false,
         "observe_only": true,
         "thread_alive": true
       },
@@ -72,8 +73,8 @@
     "healthy": true,
     "problems": [],
     "process": {
-      "cpu_ms": 31,
-      "pid": 62368,
+      "cpu_ms": 62,
+      "pid": 49740,
       "uptime_s": 0
     }
   },

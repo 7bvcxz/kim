@@ -1,7 +1,7 @@
 # Ddalgak safety: risks, scope and policies
 
 Status: **current** (Step 65, specification; Step 66 ran the engine checks it owns on real
-Windows, §11) · Requirements: `DDALGAK-SEC-001…014`, `DDALGAK-NFR-002`, `DDALGAK-NFR-006`,
+Windows, Step 68 the remap checks, §11) · Requirements: `DDALGAK-SEC-001…014`, `DDALGAK-NFR-002`, `DDALGAK-NFR-006`,
 `DDALGAK-NFR-009`, `KIM-SEC-020…023` · Decision: [ADR 0022](adr/0022-ddalgak-rule-model-and-safety.md)
 
 A keyboard hook sees every key, and an injector can type into any window the user can reach.
@@ -16,7 +16,7 @@ documentation is marked *documented*; the sources are listed in
 | Ddalgak does | Ddalgak never does |
 | --- | --- |
 | Run as the signed-in user, without elevation, inside `ddalgak-gui.exe` that the user started (or opt-in start at sign-in) | Install a service, driver, scheduled task, `UIAccess` binary, SYSTEM or elevated component |
-| Install one low-level keyboard hook (`WH_KEYBOARD_LL`) while the engine is on, and (from Step 68, after catalog disclosure) a low-level mouse hook for mouse triggers | Hook into other processes (no DLL injection), read other programs' memory, or use kernel input filters |
+| Install one low-level keyboard hook (`WH_KEYBOARD_LL`) while the engine is on, and (since Step 68) a low-level mouse hook only while the engine is on and an active rule has a mouse-button trigger (permission `mouse-hook`; the catalog disclosure is listed in [ADR 0031](adr/0031-ddalgak-remap-execution-and-mouse-hook.md)) | Hook into other processes (no DLL injection), read other programs' memory, or use kernel input filters |
 | Inject keyboard and mouse input with `SendInput` when the user's rule says so and the user consented | Inject on the secure desktop, into password fields, or into elevated windows by any workaround |
 | Start programs and hand `http(s)` links to the browser, as the user | Run shell strings, scripts or elevated programs; open network connections itself |
 | Keep rules, history and an optional outcome list in the user's profile | Keep, log or transmit keystrokes, typed text, clipboard contents, window titles or URLs |
@@ -37,8 +37,11 @@ CLI follows the identity checks of [ADR 0005](adr/0005-local-ipc.md)/[ADR 0019](
   `Alt+Escape` variants, `Alt+Shift+PrintScreen` (High Contrast), `Alt+F4`, the IME mode keys,
   global `F12` and the emergency chord. The schema rejects them (`schema-check` proves it with
   invalid examples).
-- **Widened remaps never capture them**: with `Tab` remapped, `Alt+Tab` still switches windows
-  (RULE_MODEL §3.2).
+- **Widened remaps never capture them**: with `Tab` remapped, `Alt+Tab` still switches windows,
+  and no `Win` chord is captured through a remapped lock key or mouse button (RULE_MODEL §3.2;
+  tested in the core, Step 68).
+- **The primary and secondary mouse buttons are never triggers** (Step 68): no rule can take away
+  clicking. Only the middle and X buttons can be remapped or blocked.
 - **Outputs never produce** the Secure Attention Sequence (Windows does not let programs
   synthesize it; *documented* for AutoHotkey's `Send`) or the emergency chord. Other chords,
   including `Win` chords such as `Win+D`, may be sent: sending them is what the user's own keys
@@ -95,7 +98,8 @@ CLI follows the identity checks of [ADR 0005](adr/0005-local-ipc.md)/[ADR 0019](
 - **IME mode keys** (`HangulMode` 한/영, `Hanja` 한자, `code:Lang1`–`code:Lang5`, …) are never
   triggers, but may be remap **outputs**: Right Alt acting as 한/영 on a US-layout keyboard is
   one of the most common Korean remaps (example `01-remap.json`). Whether the Korean IME accepts
-  an injected `VK_HANGUL` must be verified on real Windows (Step 68).
+  an injected `VK_HANGUL` is **not tested** yet: Step 68 ships the output and lists it as a manual
+  check (DDALGAK_ENGINE §11, check 5); automated tests may not drive the IME on this machine.
 - **Typed text** uses Unicode key events (`KEYEVENTF_UNICODE`), so Hangul syllables, emoji and
   characters outside the Basic Multilingual Plane arrive independent of the active layout and
   IME mode. Applications that ignore Unicode key events get the `paste` method.
@@ -198,6 +202,15 @@ Linux build can read Windows rules and report what it cannot do.
   handler. Before typing or sending, held trigger modifiers are logically released and restored
   only if still physically down (`SendInput` does not reset keyboard state, *documented*, M2).
   A consumed key-down always has its key-up consumed.
+- **Remaps** (Step 68, [ADR 0031](adr/0031-ddalgak-remap-execution-and-mouse-hook.md)): the
+  engine core decides every output event and the worker, which owns the ledger, sends it. Shared
+  outputs are reference-counted (released when the last remap lets go); a key the user already
+  holds is never pressed or released by Ddalgak; a trigger modifier the user lets go of while a
+  remap had released it has its up consumed; a reload keeps held outputs until their trigger goes
+  up. **An elevated window taking focus** releases every output and forgets the key state,
+  because keys typed there never reach the hook (UIPI) and the trigger's up would be lost; the
+  release is sent after focus moved and may itself be refused by UIPI (not tested, no elevation
+  on this machine). The debug test host never injects.
 - **Event storms**: auto-repeat fires a rule again only with `repeat: true`, and the rate limit
   applies to it too.
 
@@ -208,7 +221,7 @@ Likelihood (L) and impact (I): **H**igh / **M**edium / **L**ow.
 | ID | Risk | L | I | Mitigation | Owner step |
 | --- | --- | --- | --- | --- | --- |
 | DR-01 | The hook is slow or blocked and Windows removes it silently, so rules stop without notice | M | M | Short callback, worker threads, hook health check on demand (§7) | 66, 82 |
-| DR-02 | A bug leaves a modifier or mouse button logically pressed | M | H | Injector ledger, release on every exit path, tests per path (§10) | 68, 71, 73 |
+| DR-02 | A bug leaves a modifier or mouse button logically pressed | M | H | Injector ledger owned by the worker, reference-counted remap outputs, release on every exit path including an elevated window taking focus, tests per path (§10; Step 68 tested the pause and key-reset paths with real input) | 68, 71, 73 |
 | DR-03 | The emergency chord does not work on some keyboards, laptops or remote sessions | M | H | Physical-state detection; Step 73 tests laptops, external keyboards, RDP; an ADR 0017 note if the chord must change | 73 |
 | DR-04 | Password-field detection misses custom controls | M | H | UI Automation plus edit styles; `except_apps`; documented as best effort (§8) | 66, 69, 82 |
 | DR-05 | Injected 한/영 (`HangulMode`) or Unicode text behaves differently across IME versions | M | M | Real-Windows tests with the Korean IME; `paste` fallback | 68, 69 |
@@ -216,7 +229,7 @@ Likelihood (L) and impact (I): **H**igh / **M**edium / **L**ow.
 | DR-07 | Games or anti-cheat flag Ddalgak | M | M | No concealment or evasion; Gaming profile and pause; honest documentation (§6) | 82 |
 | DR-08 | A malicious same-user process edits `rules.json` to add a launch rule with forged consent | L | H | Same-user trust boundary (§1); `.exe`-only launches, no shells; launch consent fingerprints; history shows origin of every change | 67, 82 |
 | DR-09 | Two automation tools (Ddalgak and another) feed each other's synthetic input | M | M | `injected: ignore` default, accept-rules cannot inject, rate limit (§10) | 66 |
-| DR-10 | Widened remaps capture an OS chord | L | H | Reserved chords pass unchanged under widening (§2) | 68 |
+| DR-10 | Widened remaps capture an OS chord | L | H | Reserved chords and every `Win` chord pass unchanged under widening; an exact chord beats a widened match (§2; core-tested in Step 68) | 68 |
 | DR-11 | UIPI failures are silent, so a rule seems to "do nothing" in admin windows | H | L | Integrity check before injecting, `skipped_elevated_target` with an explanation (§3) | 66, 70 |
 | DR-12 | Wayland makes key remapping impossible for normal clients | H | M | Linux scope per desktop, no root service, matrix marks gaps (§9) | 83 |
 
@@ -253,3 +266,14 @@ workstation locked during those runs). Password fields: Win32 `ES_PASSWORD` edit
 implemented, **not tested** (no injecting rule before Step 68; Step 70). The hook health check
 of §7 is implemented as `ddalgak health` (passive signals; ADR 0024 §8). The emergency chord with
 physical keys and the tray icon are left to the manual check of DDALGAK_ENGINE §8 and Step 73.
+
+**Step 68** (remaps, Windows 10 19045; details in [DDALGAK_ENGINE §11](DDALGAK_ENGINE.md)):
+remap press/repeat/release, a block, a dual role (tap and the real timer) and the pause and
+key-reset release paths **tested with real `SendInput`** on obscure keys (once, on an unlocked
+desktop; later runs reported skipped while the workstation was locked); the on-demand mouse hook
+**tested** through the real test host (installed only while a mouse rule is active, every event
+passed on); every timing, precedence, reference-count and release rule unit-tested in the core
+and the worker. **Not tested** (manual checks in DDALGAK_ENGINE §11): physical typing in
+applications and the shell, the Korean IME and `HangulMode` output, a layout switch, Ctrl/Win/Alt
+combinations with remaps active, real mouse buttons, an elevated window taking focus or a session
+lock while a remap holds its target, and a killed app (Step 73).

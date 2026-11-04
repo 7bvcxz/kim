@@ -22,7 +22,7 @@ use std::io::Write;
 use std::process::ExitCode;
 
 const HELP: &str = "\
-ddalgak — Ddalgak automation engine (pre-alpha: engine core and rule store, Steps 66–67)
+ddalgak — Ddalgak automation engine (pre-alpha: engine core, rule store, remaps; Steps 66–68)
 
 USAGE:
     ddalgak [--help | --version]
@@ -64,9 +64,11 @@ COMMANDS:
     engine start  Turn the engine on in the running app (alias: engine on). Reads rules.json
                   again; an invalid file keeps it off (`rules_invalid`). Refused while the app
                   runs as administrator (`engine_elevated`).
-    engine pause  Pause rules; engine-control rules keep working; held keys are released.
+    engine pause  Pause rules; engine-control rules keep working; held keys and buttons
+                  (remap targets) are released.
     engine resume Resume a paused engine. Never turns an engine on that is off.
-    engine stop   Turn the engine off (alias: engine off): the keyboard hook is removed.
+    engine stop   Turn the engine off (alias: engine off): the keyboard hook (and the mouse
+                  hook, which exists only while a mouse-button rule does) is removed.
     quit          End the tray app (the engine is turned off first).
     startup ...   Opt-in start of the tray app when you sign in, as one value under
                   HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run. No service, no task.
@@ -86,8 +88,22 @@ RULES (rules.json; these commands work without the app):
                   [--target-mode <m>]...; delay --ms <n>; any step as --step '<json>'.
                   Rule options: --title, --description, --on press|release|hold, --hold-ms,
                   --repeat, --pass-through, --accept-injected, --mode <m>..., --priority,
-                  --on-error stop|continue. Only engine rules run yet; others stay inactive
-                  (step_unsupported) until their Step.
+                  --on-error stop|continue. Engine, remap and block rules run; the others
+                  stay inactive (step_unsupported) until their Step.
+    remaps        A key, chord or mouse button acts as another key, chord, modifier or mouse
+                  button for exactly as long as it is held (keys: docs/HOTKEY_CONTRACT.md §5;
+                  code:KeyJ is the key at that position on every layout; MouseLeft, MouseRight,
+                  MouseMiddle, MouseX1, MouseX2; only the middle and X buttons are triggers).
+                  A plain trigger keeps the held modifiers (Shift+CapsLock -> Shift+Escape) but
+                  never takes a reserved chord (Alt+Tab, Win chords); a trigger with modifiers
+                  releases them while its target is held. Outputs never trigger rules, so swaps
+                  cannot loop. Examples (remaps also need --allow input-injection):
+                    ddalgak rule add --trigger CapsLock --action remap --to LCtrl --tap Escape
+                    ddalgak rule add --trigger RAlt --action remap --to HangulMode
+                    ddalgak rule add --trigger Ctrl+Shift+J --action remap --to Down
+                    ddalgak rule add --trigger MouseX1 --action remap --to Alt+Left
+                    ddalgak rule add --trigger F14 --action remap --to F16 --pass-through
+                    ddalgak rule add --trigger Insert --action block
     rule edit     Change fields with the same options, or --patch '<json merge patch>'. IDs
                   never change. Changed launch targets need a fresh --allow launch-programs.
     rule delete   Remove rules (asks, or needs --yes). duplicate makes a disabled copy.
@@ -132,9 +148,10 @@ FILES:
     %APPDATA%\\mouv\\ddalgak\\hotkeys.json   Ddalgak's own shortcuts (engine.toggle, engine.pause)
     %LOCALAPPDATA%\\mouv\\ddalgak\\          crash and emergency markers
 
-Pre-alpha: rules can only control the engine (pause, resume, turn off); remaps, text, launches,
-mouse and modes arrive in later steps and stay inactive until then. Linux is not supported yet.
-No command opens a window, installs anything or uses the network.
+Pre-alpha: rules can control the engine (pause, resume, turn off), remap keys and mouse buttons
+and block keys; sending key sequences, text, launches, mouse actions and modes arrive in later
+steps and stay inactive until then. Linux is not supported yet. No command opens a window,
+installs anything or uses the network.
 ";
 
 /// The capabilities document (`kim.capabilities` v1); a test keeps it equal to
@@ -620,10 +637,11 @@ fn human(cmd: Cmd, d: &Value) -> String {
                 d["app"]["latency_ms"]
             ));
             o.push_str(&format!(
-                "engine {}, hook installed {}, hook thread alive {}\n",
+                "engine {}, hook installed {}, hook thread alive {}, mouse hook installed {}\n",
                 s(&d["engine"]["state"]),
                 d["engine"]["hook"]["installed"],
-                d["engine"]["hook"]["thread_alive"]
+                d["engine"]["hook"]["thread_alive"],
+                d["engine"]["hook"]["mouse_installed"] == true
             ));
             let c = &d["counters"];
             o.push_str(&format!(

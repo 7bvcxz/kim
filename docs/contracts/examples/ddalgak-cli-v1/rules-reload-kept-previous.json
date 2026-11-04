@@ -7,7 +7,7 @@
       "new-key"
     ],
     "active_set": {
-      "loaded_at": "2026-11-04T03:21:16Z",
+      "loaded_at": "2026-11-04T04:40:59Z",
       "revision": 2
     },
     "code": "rules_invalid",
@@ -15,6 +15,7 @@
     "engine": {
       "hook": {
         "installed": true,
+        "mouse_installed": false,
         "observe_only": true
       },
       "last_change": {

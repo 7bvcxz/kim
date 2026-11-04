@@ -35,6 +35,7 @@ the requirements it serves. ADRs are immutable once **Accepted**; a later ADR ma
 | [0028](0028-ddalgak-rule-store-validation-and-reload.md) | Ddalgak rule store: run-time schema per rule, locked atomic writes, drafts and live reload | Accepted (Step 67) |
 | [0029](0029-noeul-pin-engine.md) | Noeul floating pin engine: one creation path, retained layered windows, focus hand-back, pins in memory only | Accepted (Step 53) |
 | [0030](0030-host-terminal-model-scrollback-and-replay.md) | The Host's terminal model, scrollback and replay | Accepted (Step 13) |
+| [0031](0031-ddalgak-remap-execution-and-mouse-hook.md) | Ddalgak remaps: decided in the hook, sent by the worker, a mouse hook only on demand | Accepted (Step 68; catalog disclosure of `mouse-hook` pending) |
 
 "Accepted (validated in Step N)" means the decision is made, but the named Step must confirm it
 on real Windows; if validation fails, that Step writes a superseding ADR.

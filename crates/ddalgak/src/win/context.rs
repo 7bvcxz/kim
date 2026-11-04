@@ -6,7 +6,7 @@
 //!
 //! | Event | Flag |
 //! | --- | --- |
-//! | `EVENT_SYSTEM_FOREGROUND` | the foreground process has a higher integrity level (`skipped_elevated_target` for injecting rules); focus epoch (cancels sequences); IME composition reset |
+//! | `EVENT_SYSTEM_FOREGROUND` | the foreground process has a higher integrity level (`skipped_elevated_target` for injecting rules; when it becomes elevated, held remap outputs are released and the key state is forgotten, because its keys never reach the hook); focus epoch (cancels sequences); IME composition reset |
 //! | `EVENT_OBJECT_FOCUS` | the focused control is a Win32 password edit (`ES_PASSWORD`; `skipped_password_field`) |
 //! | `EVENT_OBJECT_IME_SHOW` / `_HIDE` | an IME composition or candidate window is shown (`skipped_ime_composition`) |
 //! | `EVENT_SYSTEM_DESKTOPSWITCH` | input went to another desktop (lock screen, UAC, Ctrl+Alt+Del): the hook forgets its key state, because the key-ups made there never reach it |
@@ -85,10 +85,17 @@ fn focused_window() -> HWND {
 }
 
 fn refresh(ctx: &Ctx, foreground: HWND) {
-    ctx.shared
-        .set_elevated_foreground(is_elevated_window(foreground, ctx.own_il));
+    let elevated = is_elevated_window(foreground, ctx.own_il);
+    let was = ctx.shared.flags().elevated_foreground;
+    ctx.shared.set_elevated_foreground(elevated);
     ctx.shared
         .set_password_field(is_password_window(focused_window()));
+    if elevated && !was {
+        // Keys typed into an elevated window never reach this hook (UIPI), so a held remap's
+        // trigger-up would be lost: release every output and forget the key state now
+        // (`DDALGAK-SEC-005`).
+        ctx.shared.request_key_reset();
+    }
 }
 
 unsafe extern "system" fn on_event(

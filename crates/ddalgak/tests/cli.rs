@@ -283,9 +283,13 @@ fn rules_doc(on_start: &str) -> Value {
                 { "id": "physical-only", "title": "F15 pauses (physical keys only)", "enabled": true,
                   "trigger": { "keys": "F15" },
                   "steps": [ { "type": "engine", "op": "pause" } ] },
-                { "id": "caps-remap", "title": "CapsLock acts as Ctrl", "enabled": true,
-                  "trigger": { "keys": "CapsLock" },
-                  "steps": [ { "type": "remap", "to": "LCtrl" } ],
+                { "id": "f19-remap", "title": "F19 acts as F20 (an obscure remap)", "enabled": true,
+                  "trigger": { "keys": "F19" },
+                  "steps": [ { "type": "remap", "to": "F20" } ],
+                  "consent": { "input-injection": { "granted_at": "2026-11-04T09:00:00Z", "via": "gui" } } },
+                { "id": "send-later", "title": "F18 sends a key (a later Step)", "enabled": true,
+                  "trigger": { "keys": "F18" },
+                  "steps": [ { "type": "send_keys", "keys": "F20" } ],
                   "consent": { "input-injection": { "granted_at": "2026-11-04T09:00:00Z", "via": "gui" } } }
             ] } ]
     })
@@ -423,9 +427,10 @@ fn the_app_lifecycle_through_the_cli() {
     );
     assert_eq!(
         d["rules"]["active_rules"],
-        json!(["pause-key", "off-key", "physical-only"])
+        json!(["pause-key", "off-key", "physical-only", "f19-remap"]),
+        "remaps run from Step 68"
     );
-    assert_eq!(d["rules"]["inactive"][0]["rule"], "caps-remap");
+    assert_eq!(d["rules"]["inactive"][0]["rule"], "send-later");
     assert_eq!(d["rules"]["inactive"][0]["code"], "step_unsupported");
     // Ddalgak's own shortcuts are registered with RegisterHotKey (obscure chords only; never
     // pressed by this test), unless another program owns them.
@@ -933,10 +938,10 @@ fn rules_are_managed_through_the_cli_without_the_app() {
         d["data"]["rule"]["consent"]["input-injection"]["via"],
         "cli"
     );
-    // Remaps run from Step 68: valid, enabled, and honestly inactive until then.
+    // Remaps run from Step 68: valid, enabled and active.
     assert_eq!(
         (d["data"]["state"].as_str(), d["data"]["code"].as_str()),
-        (Some("inactive"), Some("step_unsupported"))
+        (Some("active"), None)
     );
     bless("rule-show", &d);
     let (_, d) = sb.json(&["rule", "list"]);
@@ -951,7 +956,7 @@ fn rules_are_managed_through_the_cli_without_the_app() {
         [
             (pause.as_str(), "active"),
             ("off-key", "active"),
-            ("caps", "inactive")
+            ("caps", "active")
         ]
     );
     bless("rule-list", &d);
@@ -1399,6 +1404,84 @@ fn read_only_files_and_folders_are_refused_and_left_alone() {
     }
     let (code, _) = sb.json(&["rule", "add", "--trigger", "F14", "--action", "block"]);
     assert_eq!(code, 0, "writable again");
+}
+
+#[test]
+fn the_mouse_hook_exists_only_while_a_mouse_button_rule_does() {
+    // Step 68 (ADR 0031): the low-level mouse hook is the `mouse-hook` permission and is
+    // installed only while the engine is on and an active rule has a mouse-button trigger. The
+    // test host never consumes an event and never injects, so the user's mouse keeps working.
+    let sb = Sandbox::new("mouse");
+    sb.write_rules(&json!({
+        "schema": "ddalgak.rules", "schema_version": 1, "hotkey_contract": 1,
+        "revision": 1, "active_profile": "default",
+        "profiles": [ { "id": "default", "title": "Test", "default_mode": "base",
+            "modes": [ { "id": "base", "title": "Base" } ],
+            "rules": [
+                { "id": "f20-pause", "title": "F20 pauses", "enabled": true,
+                  "trigger": { "keys": "F20" }, "steps": [ { "type": "engine", "op": "pause" } ] }
+            ] } ]
+    }));
+    let _host = sb.host();
+    if elevated() {
+        eprintln!("elevated: the engine stays off, so neither hook is installed; nothing to test");
+        return;
+    }
+    let hooks = |sb: &Sandbox| {
+        let (_, st) = sb.json(&["status"]);
+        (
+            st["data"]["engine"]["hook"]["installed"] == true,
+            st["data"]["engine"]["hook"]["mouse_installed"] == true,
+        )
+    };
+    let wait_for = |sb: &Sandbox, want: (bool, bool)| {
+        let until = Instant::now() + Duration::from_secs(10);
+        while hooks(sb) != want {
+            assert!(Instant::now() < until, "hooks never became {want:?}");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    };
+    let (_, d) = sb.json(&["engine", "start"]);
+    assert_eq!(d["data"]["engine"]["hook"]["installed"], true);
+    assert_eq!(
+        d["data"]["engine"]["hook"]["mouse_installed"], false,
+        "no mouse rule: no mouse hook"
+    );
+    // A mouse-button rule saved while the engine runs: the reload installs the mouse hook.
+    let (code, d) = sb.json(&[
+        "rule",
+        "add",
+        "--trigger",
+        "MouseX2",
+        "--action",
+        "block",
+        "--id",
+        "no-x2",
+    ]);
+    assert_eq!(code, 0, "{d:#}");
+    wait_for(&sb, (true, true));
+    let (_, h) = sb.json(&["health"]);
+    assert_eq!(h["data"]["engine"]["hook"]["mouse_installed"], true);
+    assert!(
+        h["data"]["problems"].as_array().unwrap().is_empty(),
+        "{h:#}"
+    );
+    // Disabled: the mouse hook goes away, the keyboard hook stays.
+    let (code, _) = sb.json(&["rule", "disable", "no-x2"]);
+    assert_eq!(code, 0);
+    wait_for(&sb, (true, false));
+    // Enabled again, then the engine is stopped: both hooks are removed.
+    sb.json(&["rule", "enable", "no-x2"]);
+    wait_for(&sb, (true, true));
+    let (_, d) = sb.json(&["engine", "stop"]);
+    assert_eq!(d["data"]["engine"]["hook"]["installed"], false);
+    assert_eq!(d["data"]["engine"]["hook"]["mouse_installed"], false);
+    // Started with the mouse rule already there: installed at once.
+    let (_, d) = sb.json(&["engine", "start"]);
+    assert_eq!(
+        d["data"]["engine"]["hook"]["mouse_installed"], true,
+        "{d:#}"
+    );
 }
 
 #[test]

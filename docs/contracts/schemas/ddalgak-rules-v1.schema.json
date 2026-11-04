@@ -79,9 +79,9 @@
       }
     },
     "trigger_syntax": {
-      "description": "Hotkey contract v1 chords and sequences (one to four chords) without char: keys or leaders, plus the lock keys CapsLock and NumLock as keys, or one bare side-specific modifier (RAlt, LCtrl, ...). DDALGAK_RULE_MODEL §3.",
+      "description": "Hotkey contract v1 chords and sequences (one to four chords) without char: keys or leaders, plus the lock keys CapsLock and NumLock as keys, one bare side-specific modifier (RAlt, LCtrl, ...), or one mouse button (MouseMiddle, MouseX1, MouseX2; never the primary or secondary button) with modifiers as a whole trigger (Step 68, ADR 0031; needs the low-level mouse hook). DDALGAK_RULE_MODEL §3.",
       "type": "string",
-      "pattern": "^((L|R)(Ctrl|Alt|Shift)|(((L|R)?Ctrl\\+)?((L|R)?Alt\\+)?|AltGr\\+)((L|R)?Shift\\+)?((L|R)?Win\\+)?([A-Z0-9]|F([1-9]|1[0-9]|2[0-4])|Escape|Tab|Enter|Space|Backspace|Insert|Delete|Home|End|PageUp|PageDown|Up|Down|Left|Right|Plus|Minus|Comma|Period|Numpad[0-9]|NumpadAdd|NumpadSubtract|NumpadMultiply|NumpadDivide|NumpadDecimal|NumpadEnter|PrintScreen|Pause|ScrollLock|CapsLock|NumLock|ContextMenu|MediaPlayPause|MediaStop|MediaNext|MediaPrevious|VolumeUp|VolumeDown|VolumeMute|HangulMode|Hanja|KanaMode|Convert|NonConvert|code:(Key[A-Z]|Digit[0-9]|Minus|Equal|BracketLeft|BracketRight|Backslash|Semicolon|Quote|Backquote|Comma|Period|Slash|IntlBackslash|IntlRo|IntlYen|Lang[1-5]))( (((L|R)?Ctrl\\+)?((L|R)?Alt\\+)?|AltGr\\+)((L|R)?Shift\\+)?((L|R)?Win\\+)?([A-Z0-9]|F([1-9]|1[0-9]|2[0-4])|Escape|Tab|Enter|Space|Backspace|Insert|Delete|Home|End|PageUp|PageDown|Up|Down|Left|Right|Plus|Minus|Comma|Period|Numpad[0-9]|NumpadAdd|NumpadSubtract|NumpadMultiply|NumpadDivide|NumpadDecimal|NumpadEnter|PrintScreen|Pause|ScrollLock|CapsLock|NumLock|ContextMenu|MediaPlayPause|MediaStop|MediaNext|MediaPrevious|VolumeUp|VolumeDown|VolumeMute|HangulMode|Hanja|KanaMode|Convert|NonConvert|code:(Key[A-Z]|Digit[0-9]|Minus|Equal|BracketLeft|BracketRight|Backslash|Semicolon|Quote|Backquote|Comma|Period|Slash|IntlBackslash|IntlRo|IntlYen|Lang[1-5]))){0,3})$"
+      "pattern": "^((L|R)(Ctrl|Alt|Shift)|(((L|R)?Ctrl\\+)?((L|R)?Alt\\+)?|AltGr\\+)((L|R)?Shift\\+)?((L|R)?Win\\+)?Mouse(Middle|X1|X2)|(((L|R)?Ctrl\\+)?((L|R)?Alt\\+)?|AltGr\\+)((L|R)?Shift\\+)?((L|R)?Win\\+)?([A-Z0-9]|F([1-9]|1[0-9]|2[0-4])|Escape|Tab|Enter|Space|Backspace|Insert|Delete|Home|End|PageUp|PageDown|Up|Down|Left|Right|Plus|Minus|Comma|Period|Numpad[0-9]|NumpadAdd|NumpadSubtract|NumpadMultiply|NumpadDivide|NumpadDecimal|NumpadEnter|PrintScreen|Pause|ScrollLock|CapsLock|NumLock|ContextMenu|MediaPlayPause|MediaStop|MediaNext|MediaPrevious|VolumeUp|VolumeDown|VolumeMute|HangulMode|Hanja|KanaMode|Convert|NonConvert|code:(Key[A-Z]|Digit[0-9]|Minus|Equal|BracketLeft|BracketRight|Backslash|Semicolon|Quote|Backquote|Comma|Period|Slash|IntlBackslash|IntlRo|IntlYen|Lang[1-5]))( (((L|R)?Ctrl\\+)?((L|R)?Alt\\+)?|AltGr\\+)((L|R)?Shift\\+)?((L|R)?Win\\+)?([A-Z0-9]|F([1-9]|1[0-9]|2[0-4])|Escape|Tab|Enter|Space|Backspace|Insert|Delete|Home|End|PageUp|PageDown|Up|Down|Left|Right|Plus|Minus|Comma|Period|Numpad[0-9]|NumpadAdd|NumpadSubtract|NumpadMultiply|NumpadDivide|NumpadDecimal|NumpadEnter|PrintScreen|Pause|ScrollLock|CapsLock|NumLock|ContextMenu|MediaPlayPause|MediaStop|MediaNext|MediaPrevious|VolumeUp|VolumeDown|VolumeMute|HangulMode|Hanja|KanaMode|Convert|NonConvert|code:(Key[A-Z]|Digit[0-9]|Minus|Equal|BracketLeft|BracketRight|Backslash|Semicolon|Quote|Backquote|Comma|Period|Slash|IntlBackslash|IntlRo|IntlYen|Lang[1-5]))){0,3})$"
     },
     "reserved_free": {
       "description": "Rejects the scope-independent reserved chords of HOTKEY_CONTRACT §7 in any step. Kept identical to `$defs.reserved_free` of kim-hotkeys-v1 (checked by `cargo xtask schema-check`).",
@@ -147,9 +147,9 @@
       ]
     },
     "output_step_syntax": {
-      "description": "One output chord, or one bare modifier including LWin/RWin. Outputs may use Win chords and IME keys (RAlt acting as HangulMode is a common Korean remap).",
+      "description": "One output chord, or one bare modifier including LWin/RWin. Outputs may use Win chords and IME keys (RAlt acting as HangulMode is a common Korean remap) and, for remaps, a mouse button with modifiers (MouseLeft and MouseRight are the logical primary and secondary buttons; Step 68).",
       "type": "string",
-      "pattern": "^((L|R)(Ctrl|Alt|Shift|Win)|(((L|R)?Ctrl\\+)?((L|R)?Alt\\+)?|AltGr\\+)((L|R)?Shift\\+)?((L|R)?Win\\+)?([A-Z0-9]|F([1-9]|1[0-9]|2[0-4])|Escape|Tab|Enter|Space|Backspace|Insert|Delete|Home|End|PageUp|PageDown|Up|Down|Left|Right|Plus|Minus|Comma|Period|Numpad[0-9]|NumpadAdd|NumpadSubtract|NumpadMultiply|NumpadDivide|NumpadDecimal|NumpadEnter|PrintScreen|Pause|ScrollLock|CapsLock|NumLock|ContextMenu|MediaPlayPause|MediaStop|MediaNext|MediaPrevious|VolumeUp|VolumeDown|VolumeMute|HangulMode|Hanja|KanaMode|Convert|NonConvert|code:(Key[A-Z]|Digit[0-9]|Minus|Equal|BracketLeft|BracketRight|Backslash|Semicolon|Quote|Backquote|Comma|Period|Slash|IntlBackslash|IntlRo|IntlYen|Lang[1-5])))$"
+      "pattern": "^((L|R)(Ctrl|Alt|Shift|Win)|(((L|R)?Ctrl\\+)?((L|R)?Alt\\+)?|AltGr\\+)((L|R)?Shift\\+)?((L|R)?Win\\+)?([A-Z0-9]|F([1-9]|1[0-9]|2[0-4])|Escape|Tab|Enter|Space|Backspace|Insert|Delete|Home|End|PageUp|PageDown|Up|Down|Left|Right|Plus|Minus|Comma|Period|Numpad[0-9]|NumpadAdd|NumpadSubtract|NumpadMultiply|NumpadDivide|NumpadDecimal|NumpadEnter|PrintScreen|Pause|ScrollLock|CapsLock|NumLock|ContextMenu|MediaPlayPause|MediaStop|MediaNext|MediaPrevious|VolumeUp|VolumeDown|VolumeMute|HangulMode|Hanja|KanaMode|Convert|NonConvert|MouseLeft|MouseRight|MouseMiddle|MouseX1|MouseX2|code:(Key[A-Z]|Digit[0-9]|Minus|Equal|BracketLeft|BracketRight|Backslash|Semicolon|Quote|Backquote|Comma|Period|Slash|IntlBackslash|IntlRo|IntlYen|Lang[1-5])))$"
     },
     "output_sequence_syntax": {
       "description": "One to eight output steps separated by one space, tapped in order.",
@@ -182,7 +182,7 @@
         "on": {"description": "press (default), release (single chord released with no other key in between; a tap of a bare modifier), hold (held for hold_ms).", "enum": ["press", "release", "hold"]},
         "hold_ms": {"type": "integer", "minimum": 200, "maximum": 5000},
         "repeat": {"description": "Auto-repeat fires the rule again (press only). Default false.", "type": "boolean"},
-        "pass_through": {"description": "The original key also reaches the application (AutoHotkey's `~`). Default false: the key is consumed when the rule fires.", "type": "boolean"},
+        "pass_through": {"description": "The original key also reaches the application (AutoHotkey's `~`). Default false: the key is consumed when the rule fires. With a remap (no `tap`), the original key and the target are both held.", "type": "boolean"},
         "injected": {
           "description": "`ignore` (default): only physical input triggers the rule. `accept`: input injected by other programs (an on-screen keyboard, remote-control software) may trigger it too. Ddalgak's own injected input never triggers any rule.",
           "enum": ["ignore", "accept"]
@@ -318,7 +318,7 @@
       "properties": {
         "type": {"const": "remap"},
         "to": {"$ref": "#/$defs/output_key"},
-        "tap": {"description": "Dual role: a quick press and release of the trigger alone sends this instead (Step 68).", "$ref": "#/$defs/output_key"},
+        "tap": {"description": "Dual role: a press and release of the trigger alone within tap_ms sends this instead; another key pressed during the hold, or tap_ms passing, makes the trigger act as `to` (Step 68).", "$ref": "#/$defs/output_key"},
         "tap_ms": {"type": "integer", "minimum": 100, "maximum": 1000}
       },
       "anyOf": [{"not": {"required": ["tap_ms"]}}, {"required": ["tap"]}]
@@ -503,7 +503,7 @@
       },
       "allOf": [
         {
-          "description": "A step that lasts while the trigger is held (remap, mode hold, mouse hold, continuous move) is the rule's only step, on a single chord pressed without repeat or pass-through.",
+          "description": "A step that lasts while the trigger is held (remap, mode hold, mouse hold, continuous move) is the rule's only step, on a single chord pressed without repeat; only a remap without `tap` may also pass the original key through (Step 68, ADR 0031).",
           "anyOf": [
             {"properties": {"steps": {"items": {"not": {"$ref": "#/$defs/holds_trigger"}}}}},
             {
@@ -513,11 +513,14 @@
                   "properties": {
                     "keys": {"pattern": "^\\S+$"},
                     "on": {"const": "press"},
-                    "repeat": {"const": false},
-                    "pass_through": {"const": false}
+                    "repeat": {"const": false}
                   }
                 }
-              }
+              },
+              "anyOf": [
+                {"properties": {"trigger": {"properties": {"pass_through": {"const": false}}}}},
+                {"properties": {"steps": {"items": {"required": ["type"], "properties": {"type": {"const": "remap"}}, "not": {"required": ["tap"]}}}}}
+              ]
             }
           ]
         },

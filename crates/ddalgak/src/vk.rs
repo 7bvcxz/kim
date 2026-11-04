@@ -263,6 +263,29 @@ pub fn code_scan(code: &str) -> Option<(u16, bool)> {
     })
 }
 
+/// Virtual keys that are extended keys (their scan code has the `E0` prefix): Right Alt and
+/// Right Ctrl, the navigation cluster (Insert, Delete, Home, End, Page Up/Down, arrows), Num Lock,
+/// Break, Print Screen, Numpad Divide, the Windows and Application keys, and the browser, media and
+/// volume keys (*documented*, "Keyboard Input Overview: extended-key flag"). `MapVirtualKeyW`
+/// does not report the prefix for some of them (arrows on this machine), so the list decides.
+/// `NumpadEnter` shares `VK_RETURN` with Enter and is marked by its output code instead.
+pub fn is_extended_vk(vk: u16) -> bool {
+    matches!(
+        vk,
+        VK_RMENU
+            | VK_RCONTROL
+            | 0x03 // VK_CANCEL (Break)
+            | 0x21..=0x28 // Page Up, Page Down, End, Home, arrows
+            | 0x2C..=0x2E // Print Screen, Insert, Delete
+            | VK_LWIN
+            | VK_RWIN
+            | 0x5D // Applications
+            | 0x6F // Numpad Divide
+            | VK_NUMLOCK
+            | 0xA6..=0xB7 // browser, volume, media and launch keys
+    )
+}
+
 /// Virtual keys that start or switch an input method; never triggers (§7.3).
 pub fn is_ime_vk(vk: u16) -> bool {
     matches!(vk, 0x15..=0x19 | 0x1C | 0x1D | 0xE5)
@@ -336,6 +359,37 @@ mod tests {
             assert_eq!(ModKey::from_name(m.name()), Some(m));
         }
         assert_eq!(bits, 0xFF);
+    }
+
+    #[test]
+    fn extended_keys_are_the_documented_ones() {
+        for k in [
+            "Up",
+            "Down",
+            "Left",
+            "Right",
+            "Insert",
+            "Delete",
+            "Home",
+            "End",
+            "PageUp",
+            "PageDown",
+            "PrintScreen",
+            "NumLock",
+            "NumpadDivide",
+            "ContextMenu",
+            "MediaNext",
+            "VolumeUp",
+        ] {
+            assert!(is_extended_vk(named_vk(k).unwrap()), "{k}");
+        }
+        assert!(is_extended_vk(VK_RCONTROL) && is_extended_vk(VK_RMENU));
+        for k in [
+            "A", "F13", "Escape", "Enter", "Numpad8", "CapsLock", "Space",
+        ] {
+            assert!(!is_extended_vk(named_vk(k).unwrap()), "{k}");
+        }
+        assert!(!is_extended_vk(VK_LCONTROL) && !is_extended_vk(VK_RSHIFT));
     }
 
     #[test]

@@ -1,0 +1,7 @@
+{
+  "ok": true,
+  "command": "terminal.list",
+  "schema_version": 1,
+  "data": { "terminals": [], "host": null },
+  "warnings": ["the deprecated spelling reports the canonical name `ls` (ADR 0027)"]
+}

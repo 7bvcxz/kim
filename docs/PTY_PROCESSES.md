@@ -1,6 +1,6 @@
 # Subak PTY and shell process management
 
-Status: **current** (implemented in Step 11; Windows only) · Decision:
+Status: **current** (implemented in Step 11, verbatim command lines in Step 12; Windows only) · Decision:
 [ADR 0025](adr/0025-pane-programs-environment-and-backpressure.md) · Builds on
 [ADR 0004](adr/0004-pty-and-process-ownership.md), [ADR 0016](adr/0016-conpty-host-validation.md)
 ([CONPTY_PROOF](CONPTY_PROOF.md)), [ADR 0019](adr/0019-secure-host-supervisor-and-ipc-v1.md),
@@ -28,7 +28,7 @@ flowchart LR
   cwd --> env["2 environment:<br/>fresh logon block + overrides + SUBAK_*"]
   env --> res["3 program: resolved on that PATH<br/>(scripts refused)"]
   res --> img["4 file: executable by this user,<br/>has an MZ header"]
-  img --> line["5 command line: quoted words<br/>(or the verbatim --shell line)"]
+  img --> line["5 command line: quoted words<br/>(or a verbatim command_line / --shell line)"]
   line --> pty["CreatePseudoConsole, job,<br/>CreateProcessW(resolved file) suspended,<br/>assign to job, resume"]
 ```
 
@@ -44,7 +44,7 @@ then closed at once.
 | No command | `%ComSpec%` of the Host (normally `C:\Windows\system32\cmd.exe`), no arguments |
 | Command Prompt | `-- cmd.exe /d` (or `cmd`); `/d` skips `AutoRun`, without it cmd runs the user's `AutoRun` as usual |
 | Windows PowerShell 5.1 | `-- powershell` resolves to `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`; `-NoLogo`, `-NoProfile` are the user's choice |
-| PowerShell 7 | `-- pwsh`, found wherever the user installed it on `PATH` (MSI, zip, or the Store's App Execution Alias in `%LOCALAPPDATA%\Microsoft\WindowsApps`). **Subak never installs it.** When it is missing, `spawn_failed` (`not_found`) says so and names `powershell` as the inbox alternative; `terminal new --dry-run -- pwsh` detects it without starting anything |
+| PowerShell 7 | `-- pwsh`, found wherever the user installed it on `PATH` (MSI, zip, or the Store's App Execution Alias in `%LOCALAPPDATA%\Microsoft\WindowsApps`). **Subak never installs it.** When it is missing, `spawn_failed` (`not_found`) says so and names `powershell` as the inbox alternative; `subak new --dry-run -- pwsh` detects it without starting anything |
 | Any program | `-- <program> [args…]`: each argument is one word |
 
 **Resolution** (`win::launch::resolve`; the Host does it itself, ADR 0025 §1):
@@ -72,14 +72,16 @@ the rules of `CommandLineToArgvW` and the MSVC runtime (`win::quote_arg`): words
 or quotes stay as they are, others are quoted, backslashes before a quote are doubled, and quotes
 are escaped. Checked against the OS parser for 22 hand-picked and 500 generated argument lists
 (unit test), and end to end through a real child's runtime (`explicit_programs_…`, §10).
-`host serve --shell "<line>"` passes the user's line **verbatim** (only its first word is
-resolved), because a shell line may rely on the program's own parsing.
+`host serve --shell "<line>"` and, since Step 12, `terminal.create` `command_line` (`subak new
+--command-line "<line>"`) pass the user's line **verbatim** (only its first word is resolved, by
+the same rules and checks as any program), because a line may rely on the program's own parsing.
+The pane reports it as `command_line`, with secret-looking words shown as `***`.
 
-> **cmd.exe caveat.** cmd does not split its command line by those rules; it reads the text
-> after `/c` itself. An argument that contains `"` reaches cmd with MSVC escaping (`\"`), which
-> cmd does not understand. Give cmd's `/c` text as one argument without inner quotes, or use
-> `host serve --shell` with a verbatim line. A verbatim command line for `terminal new` is a
-> Step 12 candidate (tracked in §11).
+> **cmd.exe.** cmd does not split its command line by those rules; it reads the text after `/c`
+> itself. An argument that contains `"` reaches cmd with MSVC escaping (`\"`), which cmd does not
+> understand. Use a verbatim line for such text: measured, `cmd.exe /d /s /c "(echo "a  b"&echo
+> ^&x&echo two)>"…\out.txt""` wrote `"a  b"`, `&x` and `two`, while the same text as separate words
+> wrote nothing ([SUBAK_CLI §6](SUBAK_CLI.md), ADR 0027 §4).
 
 **Working directory** (`cwd`): absolute, existing, a directory, and enterable (opened for
 traversal as `CreateProcessW` does). Each failure is `bad_cwd` with the precise cause: does not
@@ -101,7 +103,7 @@ The block is sorted case-insensitively, as Windows keeps environment blocks, and
 **Not inherited:** anything only the launching terminal had (ADR 0003 §6, ADR 0019). Measured: a
 launcher with `HOME=C:\launcher-home` (a Git Bash `HOME`), `GITHUB_TOKEN`, `CLAUDE_CODE_SESSION_ID`
 and a custom variable started the Host; the pane saw none of them (§10). A Claude Code or agent
-session that runs `subak terminal new` therefore does not leak its tokens into the pane. To pass
+session that runs `subak new` therefore does not leak its tokens into the pane. To pass
 one deliberately, name it: `--env GITHUB_TOKEN` copies the caller's value, so the token never
 appears on a command line (`--env NAME=VALUE` does put the value on the CLI's own command line,
 which other processes of the same user can read; prefer `--env NAME` for secrets).
@@ -263,8 +265,9 @@ The e2e scenario is `e2e/tests/step11_pty_shells.rs` (release binaries; run only
 ## 11. Not done, limits and where they go
 
 - **Ctrl+Break** is not delivered (§4); attaching to a pane's console to raise
-  `CTRL_BREAK_EVENT` is a candidate for `pane.send_keys` (Step 12/24).
-- **A verbatim command line** for `terminal new` (for cmd's own quoting, §2) — Step 12.
+  `CTRL_BREAK_EVENT` is a candidate for `pane.send_keys` (Step 24). An attaching `subak` uses Ctrl+Break to detach itself ([SUBAK_CLI §5](SUBAK_CLI.md)).
+- **A verbatim command line** (for cmd's own quoting, §2): done in Step 12 (`command_line`,
+  [SUBAK_CLI §6](SUBAK_CLI.md)); Step 29 must persist it for respawn.
 - **Profiles** (`profile`, shell presets, `TERM`): Steps 25 and 33. **Persistence** of the
   non-secret environment (`SUBAK-FR-040`): Step 29; values are never persisted today because they
   are never stored.

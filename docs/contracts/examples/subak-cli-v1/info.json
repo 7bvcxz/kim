@@ -1,0 +1,64 @@
+{
+  "command": "info",
+  "data": {
+    "terminal": {
+      "active_window": "w-000000000001",
+      "busy": false,
+      "clients": 0,
+      "created_at": "2026-11-04T01:02:03Z",
+      "failure": null,
+      "id": "t-000000000002",
+      "last_exit": null,
+      "name": "work",
+      "profile": null,
+      "remain_on_exit": false,
+      "state": "running",
+      "windows": [
+        {
+          "active_pane": "p-000000000003",
+          "automatic_name": true,
+          "id": "w-000000000001",
+          "index": 0,
+          "layout": {
+            "pane": "p-000000000003",
+            "type": "pane"
+          },
+          "name": "cmd",
+          "panes": [
+            {
+              "clients": 0,
+              "command": {
+                "args": [
+                  "/d"
+                ],
+                "program": "cmd.exe"
+              },
+              "command_line": null,
+              "cwd": "C:\\Windows",
+              "env": {
+                "set": [],
+                "unset": []
+              },
+              "executable": "C:\\Windows\\system32\\cmd.exe",
+              "id": "p-000000000003",
+              "index": 0,
+              "output_bytes": 1024,
+              "pid": 4242,
+              "processes": 1,
+              "running": true,
+              "size": {
+                "cols": 120,
+                "rows": 30
+              },
+              "stream_id": 1,
+              "title": null
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

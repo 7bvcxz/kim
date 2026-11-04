@@ -1,0 +1,13 @@
+{
+  "ok": true,
+  "command": "status",
+  "schema_version": 1,
+  "data": {
+    "running": true,
+    "endpoint": "\\\\.\\pipe\\subak-example",
+    "host": null,
+    "terminals": [],
+    "clients": null
+  },
+  "warnings": []
+}

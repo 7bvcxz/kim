@@ -1,0 +1,25 @@
+{
+  "command": "ls",
+  "data": {
+    "host": {
+      "pid": 4242
+    },
+    "terminals": [
+      {
+        "busy": false,
+        "clients": 0,
+        "created_at": "2026-11-04T01:02:03Z",
+        "id": "t-000000000001",
+        "name": "work",
+        "panes": 1,
+        "pid": 4242,
+        "program": "cmd.exe",
+        "state": "running",
+        "windows": 1
+      }
+    ]
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

@@ -1,0 +1,1 @@
+{"type": "event", "seq": 9, "event": "pane.detached", "data": {"pane_id": "p-9b0e7d6c5a41", "terminal_id": "t-3fa9c0d21b7e", "stream_id": 1, "by": {"client_id": 5, "pid": 5555, "kind": "cli"}}}

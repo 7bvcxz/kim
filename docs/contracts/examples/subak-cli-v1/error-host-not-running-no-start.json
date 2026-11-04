@@ -1,0 +1,12 @@
+{
+  "command": "new",
+  "error": {
+    "code": "host_not_running",
+    "details": [],
+    "exit_code": 3,
+    "hint": "run without --no-start to start one on demand, or start it with `subak host start --no-shell`",
+    "message": "no Subak Host is serving `\\\\.\\pipe\\subak-example`, and --no-start forbids starting one"
+  },
+  "ok": false,
+  "schema_version": 1
+}

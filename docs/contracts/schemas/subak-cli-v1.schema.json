@@ -1,0 +1,2536 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/hellomouv/kim/blob/main/docs/contracts/schemas/subak-cli-v1.schema.json",
+  "title": "subak --json output, schema_version 1",
+  "description": "Every document `subak ... --json` prints (Step 12, docs/SUBAK_CLI.md, docs/CLI_CONTRACT.md): the cli-envelope-v1 envelope, the `data` of each command (selected by `command`; the deprecated `subak terminal <verb>` spelling reports the canonical name), and Subak's error-code registry with its exit codes. Terminal objects are the ipc-v1 definitions, copied verbatim (a test keeps them identical); the capabilities document is tool-capabilities-v1. Objects are closed so regression tests notice any change; consumers must still ignore unknown fields and tolerate new enum values (CLI_CONTRACT §8).",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/failure"
+    },
+    {
+      "$ref": "#/$defs/ok_capabilities"
+    },
+    {
+      "$ref": "#/$defs/ok_new"
+    },
+    {
+      "$ref": "#/$defs/ok_ls"
+    },
+    {
+      "$ref": "#/$defs/ok_info"
+    },
+    {
+      "$ref": "#/$defs/ok_status"
+    },
+    {
+      "$ref": "#/$defs/ok_attach"
+    },
+    {
+      "$ref": "#/$defs/ok_detach"
+    },
+    {
+      "$ref": "#/$defs/ok_rename"
+    },
+    {
+      "$ref": "#/$defs/ok_end"
+    },
+    {
+      "$ref": "#/$defs/ok_host_start"
+    },
+    {
+      "$ref": "#/$defs/ok_host_status"
+    },
+    {
+      "$ref": "#/$defs/ok_host_health"
+    },
+    {
+      "$ref": "#/$defs/ok_host_stop"
+    },
+    {
+      "$ref": "#/$defs/ok_host_serve"
+    }
+  ],
+  "$defs": {
+    "ok_capabilities": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/success"
+        },
+        {
+          "properties": {
+            "command": {
+              "const": "capabilities"
+            },
+            "data": {
+              "$ref": "#/$defs/capabilities"
+            }
+          }
+        }
+      ]
+    },
+    "ok_new": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/success"
+        },
+        {
+          "properties": {
+            "command": {
+              "const": "new"
+            },
+            "data": {
+              "$ref": "#/$defs/data_new"
+            }
+          }
+        }
+      ]
+    },
+    "ok_ls": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/success"
+        },
+        {
+          "properties": {
+            "command": {
+              "const": "ls"
+            },
+            "data": {
+              "$ref": "#/$defs/data_ls"
+            }
+          }
+        }
+      ]
+    },
+    "ok_info": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/success"
+        },
+        {
+          "properties": {
+            "command": {
+              "const": "info"
+            },
+            "data": {
+              "$ref": "#/$defs/result_terminal_info"
+            }
+          }
+        }
+      ]
+    },
+    "ok_status": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/success"
+        },
+        {
+          "properties": {
+            "command": {
+              "const": "status"
+            },
+            "data": {
+              "$ref": "#/$defs/data_status"
+            }
+          }
+        }
+      ]
+    },
+    "ok_attach": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/success"
+        },
+        {
+          "properties": {
+            "command": {
+              "enum": [
+                "attach",
+                "host.attach"
+              ]
+            },
+            "data": {
+              "$ref": "#/$defs/data_attach"
+            }
+          }
+        }
+      ]
+    },
+    "ok_detach": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/success"
+        },
+        {
+          "properties": {
+            "command": {
+              "const": "detach"
+            },
+            "data": {
+              "$ref": "#/$defs/data_detach"
+            }
+          }
+        }
+      ]
+    },
+    "ok_rename": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/success"
+        },
+        {
+          "properties": {
+            "command": {
+              "const": "rename"
+            },
+            "data": {
+              "$ref": "#/$defs/result_terminal_rename"
+            }
+          }
+        }
+      ]
+    },
+    "ok_end": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/success"
+        },
+        {
+          "properties": {
+            "command": {
+              "enum": [
+                "stop",
+                "kill",
+                "rm"
+              ]
+            },
+            "data": {
+              "$ref": "#/$defs/result_terminal_end"
+            }
+          }
+        }
+      ]
+    },
+    "ok_host_start": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/success"
+        },
+        {
+          "properties": {
+            "command": {
+              "const": "host.start"
+            },
+            "data": {
+              "$ref": "#/$defs/data_host_start"
+            }
+          }
+        }
+      ]
+    },
+    "ok_host_status": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/success"
+        },
+        {
+          "properties": {
+            "command": {
+              "const": "host.status"
+            },
+            "data": {
+              "$ref": "#/$defs/data_host_status"
+            }
+          }
+        }
+      ]
+    },
+    "ok_host_health": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/success"
+        },
+        {
+          "properties": {
+            "command": {
+              "const": "host.health"
+            },
+            "data": {
+              "$ref": "#/$defs/data_host_health"
+            }
+          }
+        }
+      ]
+    },
+    "ok_host_stop": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/success"
+        },
+        {
+          "properties": {
+            "command": {
+              "const": "host.stop"
+            },
+            "data": {
+              "$ref": "#/$defs/data_host_stop"
+            }
+          }
+        }
+      ]
+    },
+    "ok_host_serve": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/success"
+        },
+        {
+          "properties": {
+            "command": {
+              "const": "host.serve"
+            },
+            "data": {
+              "$ref": "#/$defs/data_host_serve"
+            }
+          }
+        }
+      ]
+    },
+    "tool_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{1,31}$"
+    },
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$"
+    },
+    "command_name": {
+      "description": "Dotted command path, e.g. `catalog.list`; the tool name alone (e.g. `kim`) when the arguments could not be parsed.",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*(\\.[a-z][a-z0-9-]*)*$"
+    },
+    "capability": {
+      "type": "object",
+      "required": [
+        "name",
+        "usage",
+        "summary",
+        "effect",
+        "network",
+        "dry_run",
+        "requires_yes",
+        "opens_window"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/command_name"
+        },
+        "usage": {
+          "type": "string",
+          "minLength": 1
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1
+        },
+        "effect": {
+          "enum": [
+            "read",
+            "write",
+            "install",
+            "destructive"
+          ]
+        },
+        "network": {
+          "type": "boolean"
+        },
+        "dry_run": {
+          "type": "boolean"
+        },
+        "requires_yes": {
+          "type": "boolean"
+        },
+        "opens_window": {
+          "type": "boolean"
+        }
+      },
+      "allOf": [
+        {
+          "description": "State-changing commands support --dry-run.",
+          "anyOf": [
+            {
+              "properties": {
+                "effect": {
+                  "const": "read"
+                }
+              }
+            },
+            {
+              "properties": {
+                "dry_run": {
+                  "const": true
+                }
+              }
+            }
+          ]
+        },
+        {
+          "description": "Destructive commands need --yes when the tool cannot ask.",
+          "anyOf": [
+            {
+              "properties": {
+                "effect": {
+                  "enum": [
+                    "read",
+                    "write",
+                    "install"
+                  ]
+                }
+              }
+            },
+            {
+              "properties": {
+                "requires_yes": {
+                  "const": true
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "capabilities": {
+      "description": "The `data` of `<tool> capabilities --json`, and the optional `capabilities.json` manifest at the root of an installed version (docs/CLI_CONTRACT.md §9). Every command that is not `read` supports --dry-run; every `destructive` command needs --yes when the tool cannot ask. The same definitions are embedded in kim-cli-v1 (a test keeps them identical).",
+      "type": "object",
+      "required": [
+        "schema",
+        "schema_version",
+        "tool",
+        "version",
+        "cli_contract",
+        "json_schema_version",
+        "implementation",
+        "summary",
+        "commands"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "kim.capabilities"
+        },
+        "schema_version": {
+          "const": 1
+        },
+        "tool": {
+          "$ref": "#/$defs/tool_id"
+        },
+        "version": {
+          "$ref": "#/$defs/semver"
+        },
+        "cli_contract": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "json_schema_version": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "implementation": {
+          "enum": [
+            "implemented",
+            "placeholder"
+          ]
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "commands": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/capability"
+          }
+        }
+      }
+    },
+    "u64": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "version_string": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+([-+][0-9A-Za-z.-]+)?$"
+    },
+    "timestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$"
+    },
+    "terminal_id": {
+      "type": "string",
+      "pattern": "^t-[0-9a-f]{12}$"
+    },
+    "window_id": {
+      "type": "string",
+      "pattern": "^w-[0-9a-f]{12}$"
+    },
+    "pane_id": {
+      "type": "string",
+      "pattern": "^p-[0-9a-f]{12}$"
+    },
+    "terminal_name": {
+      "description": "A Terminal name (docs/SESSION_MODEL.md §3); the Host enforces the full rules.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[^\\-:.\\x00-\\x1f\\x7f][^:.\\x00-\\x1f\\x7f]*$"
+    },
+    "terminal_state": {
+      "enum": [
+        "starting",
+        "running",
+        "stopping",
+        "stopped",
+        "failed"
+      ]
+    },
+    "end_cause": {
+      "enum": [
+        "host_stopped",
+        "exited",
+        "stopped",
+        "killed"
+      ]
+    },
+    "size": {
+      "type": "object",
+      "required": [
+        "cols",
+        "rows"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "cols": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        },
+        "rows": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000
+        }
+      }
+    },
+    "command": {
+      "type": "object",
+      "required": [
+        "program",
+        "args"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "program": {
+          "type": "string",
+          "minLength": 1
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "env_names": {
+      "description": "The names (never the values) of a pane's environment overrides (Step 11, docs/PTY_PROCESSES.md).",
+      "type": "object",
+      "required": [
+        "set",
+        "unset"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "set": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "unset": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "pane": {
+      "description": "A pane of a Terminal object: stored fields (STATE_SCHEMA.md) plus volatile ones.",
+      "type": "object",
+      "required": [
+        "id",
+        "index",
+        "cwd",
+        "command",
+        "executable",
+        "env",
+        "title",
+        "stream_id",
+        "pid",
+        "running",
+        "processes",
+        "size",
+        "clients",
+        "output_bytes"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/pane_id"
+        },
+        "index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "command": {
+          "$ref": "#/$defs/command"
+        },
+        "command_line": {
+          "description": "Step 12: the verbatim command line the pane was started with (terminal.create command_line, host serve --shell), with secret-looking words as ***; null when command was quoted word by word. Hosts before Step 12 omit it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "executable": {
+          "description": "The program file that runs (command.program resolved on the pane's PATH); null before it started.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "env": {
+          "$ref": "#/$defs/env_names"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "stream_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "pid": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "running": {
+          "type": "boolean"
+        },
+        "processes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "size": {
+          "$ref": "#/$defs/size"
+        },
+        "clients": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "output_bytes": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "window": {
+      "type": "object",
+      "required": [
+        "id",
+        "index",
+        "name",
+        "automatic_name",
+        "active_pane",
+        "layout",
+        "panes"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/window_id"
+        },
+        "index": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "automatic_name": {
+          "type": "boolean"
+        },
+        "active_pane": {
+          "$ref": "#/$defs/pane_id"
+        },
+        "layout": {
+          "type": "object",
+          "required": [
+            "type",
+            "pane"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "pane"
+            },
+            "pane": {
+              "$ref": "#/$defs/pane_id"
+            }
+          }
+        },
+        "panes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/pane"
+          }
+        }
+      }
+    },
+    "terminal": {
+      "description": "The Terminal object of terminal.info, terminal.list (detail full), terminal.create and terminal.created.",
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "created_at",
+        "state",
+        "profile",
+        "remain_on_exit",
+        "busy",
+        "clients",
+        "active_window",
+        "windows",
+        "failure",
+        "last_exit"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/terminal_id"
+        },
+        "name": {
+          "$ref": "#/$defs/terminal_name"
+        },
+        "created_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "state": {
+          "$ref": "#/$defs/terminal_state"
+        },
+        "profile": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "remain_on_exit": {
+          "type": "boolean"
+        },
+        "busy": {
+          "type": "boolean"
+        },
+        "clients": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "active_window": {
+          "$ref": "#/$defs/window_id"
+        },
+        "windows": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/window"
+          }
+        },
+        "failure": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "required": [
+                "code",
+                "reason",
+                "message"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "code": {
+                  "const": "spawn_failed"
+                },
+                "reason": {
+                  "enum": [
+                    "not_found",
+                    "access_denied",
+                    "bad_cwd",
+                    "not_executable",
+                    "other"
+                  ]
+                },
+                "message": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          ]
+        },
+        "last_exit": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "required": [
+                "pid",
+                "exit_code",
+                "forced",
+                "cause"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "pid": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 1
+                },
+                "exit_code": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0
+                },
+                "forced": {
+                  "type": "boolean"
+                },
+                "cause": {
+                  "$ref": "#/$defs/end_cause"
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "terminal_summary": {
+      "description": "A Terminal in terminal.list with detail summary (the default).",
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "state",
+        "created_at",
+        "busy",
+        "clients",
+        "windows",
+        "panes",
+        "pid",
+        "program"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/terminal_id"
+        },
+        "name": {
+          "$ref": "#/$defs/terminal_name"
+        },
+        "state": {
+          "$ref": "#/$defs/terminal_state"
+        },
+        "created_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "busy": {
+          "type": "boolean"
+        },
+        "clients": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "windows": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "panes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "pid": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "program": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "pane_end_report": {
+      "description": "How one pane's processes ended (terminal.stop/kill/remove, host.stop).",
+      "type": "object",
+      "required": [
+        "terminal_id",
+        "pane_id"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "terminal_id": {
+          "$ref": "#/$defs/terminal_id"
+        },
+        "pane_id": {
+          "$ref": "#/$defs/pane_id"
+        },
+        "pid": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "exit_code": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "processes_in_job": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "forced": {
+          "type": "boolean"
+        },
+        "job_processes_left": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "pending": {
+          "const": true
+        }
+      }
+    },
+    "end_plan": {
+      "type": "object",
+      "required": [
+        "terminal_id",
+        "name",
+        "state",
+        "pane_id",
+        "pid",
+        "program",
+        "processes",
+        "busy",
+        "ends_processes",
+        "removes_terminal"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "terminal_id": {
+          "$ref": "#/$defs/terminal_id"
+        },
+        "name": {
+          "$ref": "#/$defs/terminal_name"
+        },
+        "state": {
+          "$ref": "#/$defs/terminal_state"
+        },
+        "pane_id": {
+          "$ref": "#/$defs/pane_id"
+        },
+        "pid": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "program": {
+          "type": "string",
+          "minLength": 1
+        },
+        "processes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "busy": {
+          "type": "boolean"
+        },
+        "ends_processes": {
+          "type": "boolean"
+        },
+        "removes_terminal": {
+          "type": "boolean"
+        }
+      }
+    },
+    "result_terminal_info": {
+      "type": "object",
+      "required": [
+        "terminal"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "terminal": {
+          "$ref": "#/$defs/terminal"
+        }
+      }
+    },
+    "result_terminal_rename": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "terminal_id",
+            "name",
+            "previous_name",
+            "changed"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "terminal_id": {
+              "$ref": "#/$defs/terminal_id"
+            },
+            "name": {
+              "$ref": "#/$defs/terminal_name"
+            },
+            "previous_name": {
+              "$ref": "#/$defs/terminal_name"
+            },
+            "changed": {
+              "type": "boolean"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "dry_run",
+            "would_rename"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "dry_run": {
+              "const": true
+            },
+            "would_rename": {
+              "type": "object",
+              "required": [
+                "terminal_id",
+                "from",
+                "to"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "terminal_id": {
+                  "$ref": "#/$defs/terminal_id"
+                },
+                "from": {
+                  "$ref": "#/$defs/terminal_name"
+                },
+                "to": {
+                  "$ref": "#/$defs/terminal_name"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "result_terminal_end": {
+      "description": "The result of terminal.stop, terminal.kill and terminal.remove.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "affected",
+            "terminal",
+            "removed",
+            "terminal_id",
+            "name"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "affected": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/pane_end_report"
+              }
+            },
+            "terminal": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/$defs/terminal"
+                }
+              ]
+            },
+            "removed": {
+              "type": "boolean"
+            },
+            "terminal_id": {
+              "$ref": "#/$defs/terminal_id"
+            },
+            "name": {
+              "$ref": "#/$defs/terminal_name"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "dry_run",
+            "would_stop"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "dry_run": {
+              "const": true
+            },
+            "would_stop": {
+              "$ref": "#/$defs/end_plan"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "dry_run",
+            "would_kill"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "dry_run": {
+              "const": true
+            },
+            "would_kill": {
+              "$ref": "#/$defs/end_plan"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "dry_run",
+            "would_remove"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "dry_run": {
+              "const": true
+            },
+            "would_remove": {
+              "$ref": "#/$defs/end_plan"
+            }
+          }
+        }
+      ]
+    },
+    "client_attachment": {
+      "description": "One attachment client.detach ends (or would end).",
+      "type": "object",
+      "required": [
+        "client",
+        "stream_id",
+        "pane_id",
+        "terminal_id",
+        "interactive"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "client": {
+          "type": "object",
+          "required": [
+            "id",
+            "pid",
+            "kind",
+            "name"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "pid": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            },
+            "kind": {
+              "enum": [
+                "cli",
+                "gui",
+                "hook",
+                "mcp"
+              ]
+            },
+            "name": {
+              "type": "string"
+            }
+          }
+        },
+        "stream_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "pane_id": {
+          "$ref": "#/$defs/pane_id"
+        },
+        "terminal_id": {
+          "$ref": "#/$defs/terminal_id"
+        },
+        "interactive": {
+          "type": "boolean"
+        }
+      }
+    },
+    "detach_terminal": {
+      "description": "The Terminal a client.detach target resolved to, or null without a target.",
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "required": [
+            "id",
+            "name"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/terminal_id"
+            },
+            "name": {
+              "$ref": "#/$defs/terminal_name"
+            }
+          }
+        }
+      ]
+    },
+    "would_create": {
+      "type": "object",
+      "required": [
+        "name",
+        "command",
+        "executable",
+        "cwd",
+        "env",
+        "size",
+        "remain_on_exit",
+        "keep_on_failure"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/terminal_name"
+        },
+        "command": {
+          "$ref": "#/$defs/command"
+        },
+        "command_line": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "executable": {
+          "type": "string",
+          "minLength": 1
+        },
+        "cwd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "env": {
+          "$ref": "#/$defs/env_names"
+        },
+        "size": {
+          "$ref": "#/$defs/size"
+        },
+        "remain_on_exit": {
+          "type": "boolean"
+        },
+        "keep_on_failure": {
+          "type": "boolean"
+        }
+      }
+    },
+    "error_code": {
+      "description": "Every error code subak reports (docs/CLI_CONTRACT.md §6; crates/subak/src/output.rs).",
+      "enum": [
+        "io",
+        "internal",
+        "permission_denied",
+        "spawn_failed",
+        "usage",
+        "invalid_name",
+        "ambiguous_target",
+        "host_not_running",
+        "target_not_found",
+        "protocol_error",
+        "host_identity_mismatch",
+        "unsupported_platform",
+        "host_too_old",
+        "host_too_new",
+        "host_disconnected",
+        "host_unresponsive",
+        "timeout",
+        "host_already_running",
+        "name_conflict",
+        "invalid_state",
+        "terminals_running",
+        "confirmation_required",
+        "cancelled"
+      ]
+    },
+    "error": {
+      "type": "object",
+      "required": [
+        "code",
+        "exit_code",
+        "message",
+        "hint",
+        "details"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/error_code"
+        },
+        "exit_code": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "hint": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "details": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "exit_code": {
+              "const": 1
+            },
+            "code": {
+              "enum": [
+                "io",
+                "internal",
+                "permission_denied",
+                "spawn_failed"
+              ]
+            }
+          }
+        },
+        {
+          "properties": {
+            "exit_code": {
+              "const": 2
+            },
+            "code": {
+              "enum": [
+                "usage",
+                "invalid_name",
+                "ambiguous_target"
+              ]
+            }
+          }
+        },
+        {
+          "properties": {
+            "exit_code": {
+              "const": 3
+            },
+            "code": {
+              "enum": [
+                "host_not_running",
+                "target_not_found"
+              ]
+            }
+          }
+        },
+        {
+          "properties": {
+            "exit_code": {
+              "const": 4
+            },
+            "code": {
+              "enum": [
+                "protocol_error",
+                "host_identity_mismatch"
+              ]
+            }
+          }
+        },
+        {
+          "properties": {
+            "exit_code": {
+              "const": 5
+            },
+            "code": {
+              "enum": [
+                "unsupported_platform",
+                "host_too_old",
+                "host_too_new"
+              ]
+            }
+          }
+        },
+        {
+          "properties": {
+            "exit_code": {
+              "const": 6
+            },
+            "code": {
+              "enum": [
+                "host_disconnected",
+                "host_unresponsive",
+                "timeout"
+              ]
+            }
+          }
+        },
+        {
+          "properties": {
+            "exit_code": {
+              "const": 7
+            },
+            "code": {
+              "enum": [
+                "host_already_running",
+                "name_conflict",
+                "invalid_state",
+                "terminals_running",
+                "confirmation_required"
+              ]
+            }
+          }
+        },
+        {
+          "properties": {
+            "exit_code": {
+              "const": 8
+            },
+            "code": {
+              "enum": [
+                "cancelled"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "success": {
+      "type": "object",
+      "required": [
+        "ok",
+        "command",
+        "schema_version",
+        "data",
+        "warnings"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "ok": {
+          "const": true
+        },
+        "command": {
+          "$ref": "#/$defs/command_name"
+        },
+        "schema_version": {
+          "const": 1
+        },
+        "data": {
+          "type": "object"
+        },
+        "warnings": {
+          "$ref": "#/$defs/warnings"
+        }
+      }
+    },
+    "failure": {
+      "type": "object",
+      "required": [
+        "ok",
+        "command",
+        "schema_version",
+        "error"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "ok": {
+          "const": false
+        },
+        "command": {
+          "$ref": "#/$defs/command_name"
+        },
+        "schema_version": {
+          "const": 1
+        },
+        "error": {
+          "$ref": "#/$defs/error"
+        }
+      }
+    },
+    "pid": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "job": {
+      "description": "The limits of the job a process runs in (risk R-03), or null outside any job.",
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "required": [
+            "kill_on_close",
+            "breakaway_ok",
+            "silent_breakaway_ok"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "kill_on_close": {
+              "type": "boolean"
+            },
+            "breakaway_ok": {
+              "type": "boolean"
+            },
+            "silent_breakaway_ok": {
+              "type": "boolean"
+            }
+          }
+        }
+      ]
+    },
+    "host_info": {
+      "type": "object",
+      "required": [
+        "pid",
+        "version",
+        "started_at",
+        "uptime_s",
+        "session_id",
+        "job_breakaway",
+        "in_job",
+        "job",
+        "stopping",
+        "idle_exit_s",
+        "environment"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "pid": {
+          "$ref": "#/$defs/pid"
+        },
+        "version": {
+          "$ref": "#/$defs/version_string"
+        },
+        "started_at": {
+          "$ref": "#/$defs/timestamp"
+        },
+        "uptime_s": {
+          "$ref": "#/$defs/u64"
+        },
+        "session_id": {
+          "$ref": "#/$defs/u64"
+        },
+        "job_breakaway": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "in_job": {
+          "type": "boolean"
+        },
+        "job": {
+          "$ref": "#/$defs/job"
+        },
+        "stopping": {
+          "type": "boolean"
+        },
+        "idle_exit_s": {
+          "$ref": "#/$defs/u64"
+        },
+        "environment": {
+          "enum": [
+            "user",
+            "inherited"
+          ]
+        }
+      }
+    },
+    "initial_pane": {
+      "description": "host.status pane: the Terminal the Host was started with (--shell) while it exists.",
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "required": [
+            "id",
+            "terminal_id",
+            "pid",
+            "command",
+            "running",
+            "exit_code",
+            "size",
+            "job_processes",
+            "output_bytes"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/pane_id"
+            },
+            "terminal_id": {
+              "$ref": "#/$defs/terminal_id"
+            },
+            "pid": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            },
+            "command": {
+              "type": "string",
+              "minLength": 1
+            },
+            "running": {
+              "type": "boolean"
+            },
+            "exit_code": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            },
+            "size": {
+              "$ref": "#/$defs/size"
+            },
+            "job_processes": {
+              "$ref": "#/$defs/u64"
+            },
+            "output_bytes": {
+              "$ref": "#/$defs/u64"
+            }
+          }
+        }
+      ]
+    },
+    "client": {
+      "type": "object",
+      "required": [
+        "id",
+        "pid",
+        "kind",
+        "name",
+        "version",
+        "attached",
+        "interactive",
+        "streams",
+        "topics"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "pid": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "kind": {
+          "enum": [
+            "cli",
+            "gui",
+            "hook",
+            "mcp"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "attached": {
+          "type": "boolean"
+        },
+        "interactive": {
+          "type": "boolean"
+        },
+        "streams": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "topics": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "terminals",
+              "panes",
+              "claude",
+              "host"
+            ]
+          }
+        }
+      }
+    },
+    "clients": {
+      "type": "object",
+      "required": [
+        "connected",
+        "attached",
+        "list"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "connected": {
+          "$ref": "#/$defs/u64"
+        },
+        "attached": {
+          "$ref": "#/$defs/u64"
+        },
+        "list": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/client"
+          }
+        }
+      }
+    },
+    "host_pid": {
+      "type": "object",
+      "required": [
+        "pid"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "pid": {
+          "$ref": "#/$defs/pid"
+        }
+      }
+    },
+    "data_new": {
+      "description": "new: the terminal.create result plus host {pid, started}, or a dry run (with or without a Host).",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "terminal_id",
+            "window_id",
+            "pane_id",
+            "name",
+            "terminal",
+            "host"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "terminal_id": {
+              "$ref": "#/$defs/terminal_id"
+            },
+            "window_id": {
+              "$ref": "#/$defs/window_id"
+            },
+            "pane_id": {
+              "$ref": "#/$defs/pane_id"
+            },
+            "name": {
+              "$ref": "#/$defs/terminal_name"
+            },
+            "terminal": {
+              "$ref": "#/$defs/terminal"
+            },
+            "host": {
+              "type": "object",
+              "required": [
+                "pid",
+                "started"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "pid": {
+                  "$ref": "#/$defs/pid"
+                },
+                "started": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "dry_run",
+            "would_create",
+            "would_start_host"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "dry_run": {
+              "const": true
+            },
+            "would_create": {
+              "$ref": "#/$defs/would_create"
+            },
+            "would_start_host": {
+              "type": "boolean"
+            }
+          }
+        }
+      ]
+    },
+    "data_ls": {
+      "type": "object",
+      "required": [
+        "terminals",
+        "host"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "terminals": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/terminal_summary"
+          }
+        },
+        "host": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/host_pid"
+            }
+          ]
+        }
+      }
+    },
+    "data_status": {
+      "description": "status: the Host, every Terminal and every client; running false (and nulls) when no Host serves the endpoint.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "running",
+            "endpoint",
+            "host",
+            "terminals",
+            "clients"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "running": {
+              "const": true
+            },
+            "endpoint": {
+              "type": "string",
+              "minLength": 1
+            },
+            "host": {
+              "$ref": "#/$defs/host_info"
+            },
+            "terminals": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/terminal_summary"
+              }
+            },
+            "clients": {
+              "$ref": "#/$defs/clients"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "running",
+            "endpoint",
+            "host",
+            "terminals",
+            "clients"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "running": {
+              "const": false
+            },
+            "endpoint": {
+              "type": "string",
+              "minLength": 1
+            },
+            "host": {
+              "type": "null"
+            },
+            "terminals": {
+              "type": "array",
+              "maxItems": 0
+            },
+            "clients": {
+              "type": "null"
+            }
+          }
+        }
+      ]
+    },
+    "data_attach": {
+      "description": "attach / host attach: only a dry run prints a document (the real attach streams the terminal).",
+      "type": "object",
+      "required": [
+        "dry_run",
+        "would_attach"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "dry_run": {
+          "const": true
+        },
+        "would_attach": {
+          "type": "object",
+          "required": [
+            "host",
+            "pane",
+            "terminal",
+            "size",
+            "interactive",
+            "input"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "host": {
+              "$ref": "#/$defs/host_info"
+            },
+            "pane": {
+              "$ref": "#/$defs/initial_pane"
+            },
+            "terminal": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/$defs/terminal"
+                }
+              ]
+            },
+            "size": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/$defs/size"
+                }
+              ]
+            },
+            "interactive": {
+              "type": "boolean"
+            },
+            "input": {
+              "enum": [
+                "console",
+                "redirected",
+                "none"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "data_detach": {
+      "description": "detach: the client.detach result plus host {pid}. Detaching never stops a process.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "detached",
+            "terminal",
+            "host"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "detached": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/client_attachment"
+              }
+            },
+            "terminal": {
+              "$ref": "#/$defs/detach_terminal"
+            },
+            "host": {
+              "$ref": "#/$defs/host_pid"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "dry_run",
+            "would_detach",
+            "terminal",
+            "host"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "dry_run": {
+              "const": true
+            },
+            "would_detach": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/client_attachment"
+              }
+            },
+            "terminal": {
+              "$ref": "#/$defs/detach_terminal"
+            },
+            "host": {
+              "$ref": "#/$defs/host_pid"
+            }
+          }
+        }
+      ]
+    },
+    "data_host_status": {
+      "type": "object",
+      "required": [
+        "protocol",
+        "endpoint",
+        "host",
+        "terminals",
+        "terminals_total",
+        "pane",
+        "clients"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "protocol": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "endpoint": {
+          "type": "string",
+          "minLength": 1
+        },
+        "host": {
+          "$ref": "#/$defs/host_info"
+        },
+        "terminals": {
+          "$ref": "#/$defs/u64"
+        },
+        "terminals_total": {
+          "$ref": "#/$defs/u64"
+        },
+        "pane": {
+          "$ref": "#/$defs/initial_pane"
+        },
+        "clients": {
+          "$ref": "#/$defs/clients"
+        }
+      }
+    },
+    "data_host_health": {
+      "type": "object",
+      "required": [
+        "healthy",
+        "endpoint",
+        "host",
+        "identity",
+        "features",
+        "latency_ms"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "healthy": {
+          "const": true
+        },
+        "endpoint": {
+          "type": "string",
+          "minLength": 1
+        },
+        "host": {
+          "type": "object",
+          "required": [
+            "pid",
+            "version",
+            "protocol",
+            "uptime_s",
+            "terminals",
+            "clients"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "pid": {
+              "$ref": "#/$defs/pid"
+            },
+            "version": {
+              "$ref": "#/$defs/version_string"
+            },
+            "protocol": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "uptime_s": {
+              "$ref": "#/$defs/u64"
+            },
+            "terminals": {
+              "$ref": "#/$defs/u64"
+            },
+            "clients": {
+              "$ref": "#/$defs/u64"
+            }
+          }
+        },
+        "identity": {
+          "type": "object",
+          "required": [
+            "same_user",
+            "image"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "same_user": {
+              "const": true
+            },
+            "image": {
+              "const": "subak.exe"
+            }
+          }
+        },
+        "features": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "latency_ms": {
+          "$ref": "#/$defs/u64"
+        }
+      }
+    },
+    "data_host_start": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "started",
+            "endpoint",
+            "host",
+            "pane",
+            "launcher_job",
+            "start_lock_abandoned"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "started": {
+              "const": true
+            },
+            "endpoint": {
+              "type": "string",
+              "minLength": 1
+            },
+            "host": {
+              "$ref": "#/$defs/host_info"
+            },
+            "pane": {
+              "$ref": "#/$defs/initial_pane"
+            },
+            "launcher_job": {
+              "$ref": "#/$defs/job"
+            },
+            "start_lock_abandoned": {
+              "type": "boolean"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "dry_run",
+            "would_start"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "dry_run": {
+              "const": true
+            },
+            "would_start": {
+              "type": "object",
+              "required": [
+                "program",
+                "arguments",
+                "cwd",
+                "creation_flags",
+                "stdio",
+                "environment",
+                "endpoint",
+                "start_lock",
+                "shell",
+                "idle_exit_s",
+                "launcher_job"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "program": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "arguments": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "cwd": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "creation_flags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "stdio": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "environment": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "endpoint": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "start_lock": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "shell": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "idle_exit_s": {
+                  "$ref": "#/$defs/u64"
+                },
+                "launcher_job": {
+                  "$ref": "#/$defs/job"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "data_host_stop": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "stopped",
+            "host",
+            "shell",
+            "terminals"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "stopped": {
+              "const": true
+            },
+            "host": {
+              "type": "object",
+              "required": [
+                "pid",
+                "exited"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "pid": {
+                  "$ref": "#/$defs/pid"
+                },
+                "exited": {
+                  "type": "boolean"
+                }
+              }
+            },
+            "shell": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/$defs/pane_end_report"
+                }
+              ]
+            },
+            "terminals": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/pane_end_report"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "dry_run",
+            "would_stop"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "dry_run": {
+              "const": true
+            },
+            "would_stop": {
+              "type": "object",
+              "required": [
+                "host",
+                "pane",
+                "clients",
+                "would_kill",
+                "would_end",
+                "needs_kill_terminals"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "host": {
+                  "$ref": "#/$defs/host_info"
+                },
+                "pane": {
+                  "$ref": "#/$defs/initial_pane"
+                },
+                "clients": {
+                  "$ref": "#/$defs/clients"
+                },
+                "would_kill": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/pane_id"
+                  }
+                },
+                "would_end": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "terminal_id",
+                      "name",
+                      "pane_id",
+                      "pid",
+                      "processes",
+                      "busy"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                      "terminal_id": {
+                        "$ref": "#/$defs/terminal_id"
+                      },
+                      "name": {
+                        "$ref": "#/$defs/terminal_name"
+                      },
+                      "pane_id": {
+                        "$ref": "#/$defs/pane_id"
+                      },
+                      "pid": {
+                        "type": [
+                          "integer",
+                          "null"
+                        ],
+                        "minimum": 1
+                      },
+                      "processes": {
+                        "$ref": "#/$defs/u64"
+                      },
+                      "busy": {
+                        "type": "boolean"
+                      }
+                    }
+                  }
+                },
+                "needs_kill_terminals": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "data_host_serve": {
+      "description": "host serve: the final report when the Host ends, or a dry run.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": [
+            "reason",
+            "host",
+            "shell",
+            "terminals"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "reason": {
+              "enum": [
+                "stop_requested",
+                "idle"
+              ]
+            },
+            "host": {
+              "$ref": "#/$defs/host_pid"
+            },
+            "shell": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "$ref": "#/$defs/pane_end_report"
+                }
+              ]
+            },
+            "terminals": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/pane_end_report"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": [
+            "dry_run",
+            "would_serve"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "dry_run": {
+              "const": true
+            },
+            "would_serve": {
+              "type": "object",
+              "required": [
+                "endpoint",
+                "shell",
+                "idle_exit_s",
+                "cwd",
+                "environment"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "endpoint": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "shell": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "idle_exit_s": {
+                  "$ref": "#/$defs/u64"
+                },
+                "cwd": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "environment": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

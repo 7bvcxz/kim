@@ -71,21 +71,23 @@ fn help_is_honest_about_the_prototype_status() {
     let out = subak(&["--help"]);
     assert!(out.status.success());
     let text = String::from_utf8_lossy(&out.stdout);
-    assert!(text.contains("pre-alpha; Host, IPC v1 and the Terminal lifecycle"));
+    assert!(text.contains("pre-alpha; Host, IPC v1, the Terminal lifecycle and its CLI"));
     assert!(text.contains("No command opens a window"));
     assert!(text.contains("no GUI, windows/panes splits, persistence or recovery yet"));
     assert!(text.contains("no Windows service exists"));
     assert!(text.contains("There is no ambiguous `close`"));
     for cmd in [
         "capabilities",
-        "terminal new",
-        "terminal list",
-        "terminal info",
-        "terminal rename",
-        "terminal attach",
-        "terminal stop",
-        "terminal kill",
-        "terminal rm",
+        "new",
+        "ls",
+        "status",
+        "info",
+        "attach",
+        "detach",
+        "rename",
+        "stop",
+        "kill",
+        "rm",
         "host start",
         "host status",
         "host health",
@@ -104,13 +106,13 @@ fn help_is_honest_about_the_prototype_status() {
 
 #[test]
 fn unknown_arguments_fail_with_usage_exit_code_on_stderr() {
-    let out = subak(&["new", "work"]);
+    let out = subak(&["frobnicate", "work"]);
     assert_eq!(out.status.code(), Some(2));
     assert!(out.stdout.is_empty(), "errors must not go to stdout");
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.starts_with("subak: error:"), "{err}");
     assert!(
-        err.contains("only `capabilities`, `terminal` and `host` commands exist"),
+        err.contains("commands: new, ls, info, status, attach, detach"),
         "{err}"
     );
 }
@@ -141,14 +143,16 @@ fn capabilities_are_honest_and_follow_the_contract() {
         names,
         [
             "capabilities",
-            "terminal.new",
-            "terminal.list",
-            "terminal.info",
-            "terminal.rename",
-            "terminal.attach",
-            "terminal.stop",
-            "terminal.kill",
-            "terminal.rm",
+            "new",
+            "ls",
+            "info",
+            "status",
+            "attach",
+            "detach",
+            "rename",
+            "stop",
+            "kill",
+            "rm",
             "host.start",
             "host.status",
             "host.health",
@@ -161,7 +165,7 @@ fn capabilities_are_honest_and_follow_the_contract() {
     for c in data["commands"].as_array().unwrap() {
         let destructive = matches!(
             c["name"].as_str().unwrap(),
-            "terminal.stop" | "terminal.kill" | "terminal.rm" | "host.stop"
+            "stop" | "kill" | "rm" | "host.stop"
         );
         assert_eq!(c["effect"] == "destructive", destructive, "{c}");
         assert_eq!(c["requires_yes"] == true, destructive, "{c}");
@@ -203,7 +207,7 @@ fn capabilities_are_honest_and_follow_the_contract() {
 #[test]
 fn usage_errors_are_structured_with_json() {
     for (args, command) in [
-        (&["attach"][..], "subak"),
+        (&["frobnicate"][..], "subak"),
         (&[], "subak"),
         (&["host", "frobnicate"], "host"),
         (&["host", "status", "--yes"], "host.status"),
@@ -212,21 +216,30 @@ fn usage_errors_are_structured_with_json() {
         (&["host", "attach"], "host.attach"), // --json streams nothing; only with --dry-run
         (&["host", "stop", "--endpoint"], "host.stop"),
         (&["host", "stop", "--force"], "host.stop"),
+        (&["attach"], "attach"), // --json only with --dry-run
+        (&["attach", "a", "b"], "attach"),
+        (&["new", "--attach"], "new"),
+        (&["new", "--", ""], "new"),
+        (&["new", "--cwd"], "new"),
+        (&["new", "--command-line", "cmd", "--", "cmd.exe"], "new"),
+        (&["new", "--read-only"], "new"),
+        (&["info"], "info"),
+        (&["info", "a", "--", "cmd.exe"], "info"),
+        (&["rename", "a"], "rename"),
+        (&["rename", "a", "b", "c"], "rename"),
+        (&["stop", "a", "--force"], "stop"),
+        (&["kill", "a", "--kill-terminals"], "kill"),
+        (&["ls", "extra"], "ls"),
+        (&["status", "--yes"], "status"),
+        (&["detach", "--client", "0"], "detach"),
+        (&["detach", "--yes"], "detach"),
+        // The deprecated spelling reports the canonical command name (ADR 0027).
         (&["terminal"], "terminal"),
         (&["terminal", "close", "x"], "terminal"),
-        (&["terminal", "info"], "terminal.info"),
-        (&["terminal", "rename", "a"], "terminal.rename"),
-        (&["terminal", "rename", "a", "b", "c"], "terminal.rename"),
-        (&["terminal", "stop", "a", "--force"], "terminal.stop"),
-        (
-            &["terminal", "kill", "a", "--kill-terminals"],
-            "terminal.kill",
-        ),
-        (&["terminal", "list", "extra"], "terminal.list"),
-        (&["terminal", "attach", "a"], "terminal.attach"), // --json only with --dry-run
-        (&["terminal", "new", "--", ""], "terminal.new"),
-        (&["terminal", "info", "a", "--", "cmd.exe"], "terminal.info"),
-        (&["terminal", "new", "--cwd"], "terminal.new"),
+        (&["terminal", "status"], "terminal"),
+        (&["terminal", "info"], "info"),
+        (&["terminal", "list", "extra"], "ls"),
+        (&["terminal", "attach", "a"], "attach"),
     ] {
         let (code, doc) = json(args);
         assert_eq!(code, 2, "{args:?}");
@@ -333,19 +346,26 @@ fn host_dry_runs_describe_the_plan_and_start_nothing() {
 fn terminal_commands_without_a_host_start_nothing() {
     let ep = nobody();
     // Listing needs no Host: no Host means no Terminals, and nothing is started to find out.
-    let (code, doc) = json(&["terminal", "list", "--endpoint", &ep]);
+    let (code, doc) = json(&["ls", "--endpoint", &ep]);
     assert_eq!(code, 0, "{doc}");
     assert_eq!(doc["data"]["terminals"], serde_json::json!([]));
     assert!(doc["data"]["host"].is_null());
-    let out = subak(&["terminal", "list", "--endpoint", &ep]);
+    let out = subak(&["ls", "--endpoint", &ep]);
     assert!(String::from_utf8_lossy(&out.stdout).contains("no Terminals (no Host is running)"));
+    // `status` reports that no Host runs, with exit 0.
+    let (code, doc) = json(&["status", "--endpoint", &ep]);
+    assert_eq!((code, &doc["data"]["running"]), (0, &Value::Bool(false)));
     for args in [
-        &["terminal", "info", "work", "--endpoint", &ep][..],
-        &["terminal", "rename", "work", "x", "--endpoint", &ep],
-        &["terminal", "stop", "work", "--endpoint", &ep, "--yes"],
-        &["terminal", "kill", "work", "--endpoint", &ep, "--yes"],
-        &["terminal", "rm", "work", "--endpoint", &ep, "--yes"],
-        &["terminal", "attach", "work", "--endpoint", &ep, "--dry-run"],
+        &["info", "work", "--endpoint", &ep][..],
+        &["rename", "work", "x", "--endpoint", &ep],
+        &["stop", "work", "--endpoint", &ep, "--yes"],
+        &["kill", "work", "--endpoint", &ep, "--yes"],
+        &["rm", "work", "--endpoint", &ep, "--yes"],
+        &["attach", "work", "--endpoint", &ep, "--dry-run"],
+        &["detach", "work", "--endpoint", &ep],
+        &["new", "--no-start", "--endpoint", &ep],
+        &["new", "--no-start", "--endpoint", &ep, "--dry-run"],
+        &["terminal", "info", "work", "--endpoint", &ep],
     ] {
         let (code, doc) = json(args);
         assert_eq!(
@@ -356,7 +376,6 @@ fn terminal_commands_without_a_host_start_nothing() {
     }
     // A dry run of `new` without a Host validates the name and starts nothing.
     let (code, doc) = json(&[
-        "terminal",
         "new",
         "서버",
         "--endpoint",
@@ -371,7 +390,7 @@ fn terminal_commands_without_a_host_start_nothing() {
     assert_eq!(plan["would_start_host"], true);
     assert_eq!(plan["would_create"]["name"], "서버");
     assert_eq!(plan["would_create"]["command"]["args"][0], "/d");
-    let (code, doc) = json(&["terminal", "new", "a:b", "--endpoint", &ep, "--dry-run"]);
+    let (code, doc) = json(&["new", "a:b", "--endpoint", &ep, "--dry-run"]);
     assert_eq!(
         (code, doc["error"]["code"].as_str()),
         (2, Some("invalid_name")),

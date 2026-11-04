@@ -80,9 +80,9 @@ impl Lab {
         run_env(&a, env)
     }
 
-    /// `terminal new <name> <args…>` that must succeed; returns the created Terminal's pane.
+    /// `new <name> <args…>` that must succeed; returns the created Terminal's pane.
     fn new_terminal(&self, name: &str, args: &[&str]) -> Value {
-        let mut a = vec!["terminal", "new", name];
+        let mut a = vec!["new", name];
         a.extend_from_slice(args);
         let (code, doc) = self.cli(&a);
         assert_eq!(code, 0, "{a:?}: {doc}");
@@ -94,9 +94,9 @@ impl Lab {
         pane
     }
 
-    /// `terminal new` that must fail with `spawn_failed`; returns the error.
+    /// `new` that must fail with `spawn_failed`; returns the error.
     fn new_fails(&self, args: &[&str]) -> Value {
-        let mut a = vec!["terminal", "new"];
+        let mut a = vec!["new"];
         a.extend_from_slice(args);
         let (code, doc) = self.cli(&a);
         assert_eq!(code, 1, "{a:?}: {doc}");
@@ -105,14 +105,14 @@ impl Lab {
     }
 
     fn info(&self, target: &str) -> Value {
-        let (code, doc) = self.cli(&["terminal", "info", target]);
+        let (code, doc) = self.cli(&["info", target]);
         assert_eq!(code, 0, "{doc}");
         ipc_def("result_terminal_info", &doc["data"]);
         doc["data"]["terminal"].clone()
     }
 
     fn kill(&self, target: &str) -> Value {
-        let (code, doc) = self.cli(&["terminal", "kill", target, "--yes"]);
+        let (code, doc) = self.cli(&["kill", target, "--yes"]);
         assert_eq!(code, 0, "{doc}");
         doc["data"].clone()
     }
@@ -334,7 +334,7 @@ impl Pane {
 
 /// Whether `pwsh` (PowerShell 7) can start here; it is never installed by a test.
 fn pwsh_installed(lab: &Lab) -> bool {
-    let (code, doc) = lab.cli(&["terminal", "new", "--dry-run", "--", "pwsh", "-NoLogo"]);
+    let (code, doc) = lab.cli(&["new", "--dry-run", "--", "pwsh", "-NoLogo"]);
     if code == 0 {
         return true;
     }
@@ -707,7 +707,7 @@ fn explicit_programs_get_their_arguments_exactly_and_report_exit_codes() {
     ];
     let mut ids = Vec::new();
     for (name, command, want) in &cases {
-        let mut a = vec!["terminal", "new", name];
+        let mut a = vec!["new", name];
         if *name != "gone" {
             a.push("--remain-on-exit");
         }
@@ -752,7 +752,7 @@ fn explicit_programs_get_their_arguments_exactly_and_report_exit_codes() {
             assert_eq!(t["last_exit"]["forced"], false, "{name}");
         }
     }
-    let (code, _) = lab.cli(&["terminal", "info", &ids[3].0]);
+    let (code, _) = lab.cli(&["info", &ids[3].0]);
     assert_eq!(code, 3, "without --remain-on-exit the Terminal is removed");
     eprintln!(
         "EVIDENCE argv: {} tricky arguments round-tripped through quoting and CreateProcessW into the \
@@ -842,7 +842,7 @@ fn startup_failures_are_precise_and_leave_nothing_behind() {
         ),
     ];
     // Warm up, then measure the Host's handles over three rounds of every failure.
-    let _ = lab.cli(&["terminal", "new", "--", r"C:\subak-nope\missing.exe"]);
+    let _ = lab.cli(&["new", "--", r"C:\subak-nope\missing.exe"]);
     let before = lab.handles();
     let mut failures = 0;
     let mut messages = Vec::new();
@@ -870,18 +870,12 @@ fn startup_failures_are_precise_and_leave_nothing_behind() {
     }
     let after = lab.handles();
     // Dry runs check the same things and start nothing.
-    let (code, doc) = lab.cli(&[
-        "terminal",
-        "new",
-        "--dry-run",
-        "--",
-        dir.s("build.cmd").as_str(),
-    ]);
+    let (code, doc) = lab.cli(&["new", "--dry-run", "--", dir.s("build.cmd").as_str()]);
     assert_eq!(
         (code, detail(&doc["error"], "reason").as_deref()),
         (1, Some("not_executable"))
     );
-    let (code, doc) = lab.cli(&["terminal", "new", "--dry-run", "--", "cmd"]);
+    let (code, doc) = lab.cli(&["new", "--dry-run", "--", "cmd"]);
     assert_eq!(code, 0, "{doc}");
     assert!(
         doc["data"]["would_create"]["executable"]
@@ -891,9 +885,9 @@ fn startup_failures_are_precise_and_leave_nothing_behind() {
             .ends_with(r"\system32\cmd.exe")
     );
     // Malformed overrides never reach the Host's spawn path.
-    let (code, doc) = lab.cli(&["terminal", "new", "--env", "=x"]);
+    let (code, doc) = lab.cli(&["new", "--env", "=x"]);
     assert_eq!((code, doc["error"]["code"].as_str()), (2, Some("usage")));
-    let (code, doc) = lab.cli(&["terminal", "new", "--env", "SUBAK_PANE_ID=p-forged"]);
+    let (code, doc) = lab.cli(&["new", "--env", "SUBAK_PANE_ID=p-forged"]);
     assert_eq!(
         (code, doc["error"]["code"].as_str()),
         (2, Some("usage")),
@@ -911,7 +905,6 @@ fn startup_failures_are_precise_and_leave_nothing_behind() {
     }
     // keep_on_failure records the precise reason.
     let (code, doc) = lab.cli(&[
-        "terminal",
         "new",
         "kept",
         "--keep-on-failure",
@@ -920,10 +913,10 @@ fn startup_failures_are_precise_and_leave_nothing_behind() {
     ]);
     assert_eq!(code, 1, "{doc}");
     assert_eq!(lab.info("kept")["failure"]["reason"], "not_executable");
-    let (code, _) = lab.cli(&["terminal", "rm", "kept", "--yes"]);
+    let (code, _) = lab.cli(&["rm", "kept", "--yes"]);
     assert_eq!(code, 0);
 
-    let (code, doc) = lab.cli(&["terminal", "list"]);
+    let (code, doc) = lab.cli(&["ls"]);
     assert_eq!(code, 0);
     assert_eq!(
         doc["data"]["terminals"],
@@ -1263,7 +1256,6 @@ fn the_pane_environment_keeps_the_users_locations_and_secrets_never_leak() {
     );
     let (code, doc) = lab.cli_env(
         &[
-            "terminal",
             "new",
             "envs",
             "--env",
@@ -1347,11 +1339,7 @@ fn the_pane_environment_keeps_the_users_locations_and_secrets_never_leak() {
         "events.subscribe",
         &json!({"topics": ["terminals", "panes"]}),
     );
-    for args in [
-        vec!["terminal", "info", "envs"],
-        vec!["terminal", "list"],
-        vec!["host", "status"],
-    ] {
+    for args in [vec!["info", "envs"], vec!["ls"], vec!["host", "status"]] {
         outputs.push(lab.cli(&args).1.to_string());
     }
     let full =
@@ -1360,7 +1348,6 @@ fn the_pane_environment_keeps_the_users_locations_and_secrets_never_leak() {
     outputs.push(lab.stats().to_string());
     outputs.push(
         lab.cli(&[
-            "terminal",
             "new",
             "--dry-run",
             "--env",
@@ -1370,7 +1357,6 @@ fn the_pane_environment_keeps_the_users_locations_and_secrets_never_leak() {
         .to_string(),
     );
     let (code, doc) = lab.cli(&[
-        "terminal",
         "new",
         "second",
         "--env",
@@ -1382,15 +1368,7 @@ fn the_pane_environment_keeps_the_users_locations_and_secrets_never_leak() {
     assert_eq!(code, 0);
     outputs.push(doc.to_string());
     let verbose = std::process::Command::new(subak())
-        .args([
-            "--endpoint",
-            &lab.ep,
-            "-v",
-            "terminal",
-            "new",
-            "third",
-            "--env",
-        ])
+        .args(["--endpoint", &lab.ep, "-v", "new", "third", "--env"])
         .arg(format!("TOKEN={secret}"))
         .args(["--", "cmd.exe", "/d"])
         .stdin(std::process::Stdio::null())
@@ -1401,7 +1379,6 @@ fn the_pane_environment_keeps_the_users_locations_and_secrets_never_leak() {
     outputs.push(String::from_utf8_lossy(&verbose.stdout).into_owned());
     outputs.push(String::from_utf8_lossy(&verbose.stderr).into_owned());
     let failed = lab.cli(&[
-        "terminal",
         "new",
         "--env",
         &format!("TOKEN={secret}"),
@@ -1488,7 +1465,7 @@ fn each_new_pane_gets_a_fresh_logon_environment() {
         // No quotes inside: cmd.exe parses its own /c line and does not understand the `\"`
         // escapes of the MSVC rules (docs/PTY_PROCESSES.md §2). The temp path has no spaces.
         let line = format!("set SUBAK_STEP11_FRESH > {} 2>&1", out.display());
-        let (code, doc) = lab.cli(&["terminal", "new", name, "--", "cmd.exe", "/d", "/c", &line]);
+        let (code, doc) = lab.cli(&["new", name, "--", "cmd.exe", "/d", "/c", &line]);
         assert_eq!(code, 0, "{doc}");
         wait_until("the probe wrote its file", LONG, || {
             std::fs::read_to_string(out).is_ok_and(|s| !s.is_empty())
@@ -1520,7 +1497,7 @@ fn many_shell_runs_and_failed_launches_do_not_leak_host_handles() {
     let cycle = |i: usize| {
         // A program that exits by itself (removed), a failed launch, a shell that is used,
         // resized and killed.
-        let (code, doc) = lab.cli(&["terminal", "new", "--", "cmd.exe", "/d", "/c", "exit 3"]);
+        let (code, doc) = lab.cli(&["new", "--", "cmd.exe", "/d", "/c", "exit 3"]);
         assert_eq!(code, 0, "{doc}");
         let e = lab.new_fails(&["--", r"C:\subak-nope\missing.exe"]);
         assert_eq!(detail(&e, "reason").as_deref(), Some("not_found"));
@@ -1539,7 +1516,7 @@ fn many_shell_runs_and_failed_launches_do_not_leak_host_handles() {
     cycle(0);
     cycle(1);
     wait_until("the exited Terminals are gone", LONG, || {
-        lab.cli(&["terminal", "list"]).1["data"]["terminals"] == json!([])
+        lab.cli(&["ls"]).1["data"]["terminals"] == json!([])
     });
     // Failed launches that are refused before any OS object exists hold nothing.
     let start = lab.handles();
@@ -1556,7 +1533,7 @@ fn many_shell_runs_and_failed_launches_do_not_leak_host_handles() {
         cycle(i);
     }
     wait_until("the exited Terminals are gone", LONG, || {
-        lab.cli(&["terminal", "list"]).1["data"]["terminals"] == json!([])
+        lab.cli(&["ls"]).1["data"]["terminals"] == json!([])
     });
     let after = lab.handles();
     assert!(lab.conhosts().is_empty());

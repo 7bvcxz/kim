@@ -1,11 +1,13 @@
 # Subak IPC protocol v1
 
-Status: **implemented v1** (Step 09; Terminal methods added in Step 10 and environment overrides
-in Step 11, as additive changes; frozen: changes are additive or need major 2) · Designed in
-Step 03 · Decisions: [ADR 0005](../adr/0005-local-ipc.md),
+Status: **implemented v1** (Step 09; Terminal methods added in Step 10, environment overrides
+in Step 11, verbatim command lines and `client.detach` in Step 12, as additive changes; frozen:
+changes are additive or need major 2) · Designed in Step 03 · Decisions:
+[ADR 0005](../adr/0005-local-ipc.md),
 [ADR 0019](../adr/0019-secure-host-supervisor-and-ipc-v1.md),
 [ADR 0020](../adr/0020-terminal-session-lifecycle.md),
-[ADR 0025](../adr/0025-pane-programs-environment-and-backpressure.md) · Session semantics:
+[ADR 0025](../adr/0025-pane-programs-environment-and-backpressure.md),
+[ADR 0027](../adr/0027-subak-cli-structure-and-headless-control.md) · Session semantics:
 [SESSION_MODEL.md](../SESSION_MODEL.md) · Programs and environment:
 [PTY_PROCESSES.md](../PTY_PROCESSES.md)
 
@@ -13,7 +15,7 @@ Machine-readable schema: [schemas/ipc-v1.schema.json](schemas/ipc-v1.schema.json
 invalid example messages live in [examples/ipc-v1/](examples/ipc-v1/hello.json) and are checked by
 `cargo xtask schema-check`, which is part of `cargo test`. Beyond the examples,
 `crates/subak/src/proto.rs` validates every message this build constructs against the schema, and
-`crates/subak/tests/host_ipc.rs` and `crates/subak/tests/session_lifecycle.rs` validate every
+`crates/subak/tests/host_ipc.rs`, `crates/subak/tests/session_lifecycle.rs` and `crates/subak/tests/subak_cli.rs` validate every
 control message a real Host sends. Events with a known name have typed data in the schema; the
 results of the Terminal methods are typed by its `result_*` definitions (a response does not name
 its method, so the tests check each result against its definition directly).
@@ -84,9 +86,12 @@ handler becomes `internal_error` and the Host continues (ADR 0019 §9).
    | `busy` | 64 connections are already open |
    | `host_stopping` | the Host is shutting down |
 
-`features` of the Step 11 Host: `host.health`, `host.stats`, `events.subscribe`,
+`features` of the Step 12 Host: `host.health`, `host.stats`, `events.subscribe`,
 `identity.verified`, `terminal.lifecycle`, `terminal.environment` (Step 11: `terminal.create`
-takes `env`, panes report `executable` and their override names). The Step 10 Host lacked
+takes `env`, panes report `executable` and their override names), `terminal.command_line`
+(Step 12: `terminal.create` takes a verbatim `command_line`, panes report it redacted) and
+`client.detach` (Step 12: the `client.detach` method, the `pane.detached` event and client `id`s
+in `host.status`). The Step 11 Host lacked the last two, the Step 10 Host also
 `terminal.environment`; the Step 09 Host announced `prototype.single_pane` instead of
 `terminal.lifecycle`. Clients must ignore features they do not know.
 
@@ -124,7 +129,7 @@ Host does not implement yet answers `unknown_request`, as does any name not in t
 | `events.subscribe` | `{topics: [...]}` from `terminals`, `panes`, `claude`, `host` (replaces earlier topics) | `{topics}` | cli, gui, mcp | **09** |
 | `terminal.list` | `{detail: "summary" \| "full"}` | `{terminals: [Terminal]}` (§4.3) | cli, gui, mcp | **10** |
 | `terminal.info` | `{target}` | `{terminal: Terminal}` | cli, gui, mcp | **10** |
-| `terminal.create` | `{name?, profile?, command?, cwd?, env?, size?, remain_on_exit?, keep_on_failure?, dry_run?}` | `{terminal_id, window_id, pane_id, name, terminal}` or `{dry_run: true, would_create}` | cli, gui, mcp* | **10**, **11** (`env`) |
+| `terminal.create` | `{name?, profile?, command? \| command_line?, cwd?, env?, size?, remain_on_exit?, keep_on_failure?, dry_run?}` | `{terminal_id, window_id, pane_id, name, terminal}` or `{dry_run: true, would_create}` | cli, gui, mcp* | **10**, **11** (`env`), **12** (`command_line`) |
 | `terminal.rename` | `{target, name, dry_run?}` | `{terminal_id, name, previous_name, changed}` or `{dry_run: true, would_rename}` | cli, gui, mcp* | **10** |
 | `terminal.stop` | `{target, force, dry_run}` | `{affected, terminal, removed, terminal_id, name}` or `{dry_run: true, would_stop}` | cli, gui, mcp* | **10** |
 | `terminal.kill` | `{target, force, dry_run}` | as `terminal.stop` (`would_kill`) | cli, gui, mcp* | **10** |
@@ -134,14 +139,15 @@ Host does not implement yet answers `unknown_request`, as does any name not in t
 | `pane.split` / `.list` / `.kill` / `.select` / `.swap` / `.zoom` | target-based | objects | cli, gui, mcp* | 21–22 |
 | `pane.attach` | `{target?, interactive?, size?}` | `{stream_id, pane_id, terminal_id, seq, interactive, pane: {id, pid, size}, replay_bytes}`, then a snapshot data frame and live output | cli, gui, mcp* | **09**, **10**, 12–13 |
 | `pane.detach` | `{stream_id?}` | `{}` | cli, gui, mcp | **09**, **10** |
+| `client.detach` | `{target?, client_id?, dry_run?}` (at least one of `target`, `client_id`) | `{detached: [attachment], terminal}` or `{dry_run: true, would_detach, terminal}` | cli, gui, mcp* | **12** |
 | `pane.resize` | `{cols, rows, stream_id?}` | `{cols, rows, stream_id}` | cli, gui | **09**, **10** |
-| `pane.send_keys` | `{target, keys: [string], literal}` | `{}` | cli, gui, mcp* | 12, 24 |
+| `pane.send_keys` | `{target, keys: [string], literal}` | `{}` | cli, gui, mcp* | 24 (not in Step 12: the CLI writes input through an attach) |
 | `pane.capture` | `{target, start?, end?, format: "text" \| "vt"}` | `{text}` | cli, gui, mcp* | 13 |
 | `claude.report` | `{pane_id, session_id, event, at, reason?}` | `{}` | **hook only** | 27 |
 | `claude.status` | `{target?}` | `{panes: [{pane_id, state, since, session_id?}]}` | cli, gui, mcp | 28 |
 
 `mcp*` = only once the user granted that capability to MCP clients (Step 37). Until then MCP
-clients may call only the unstarred methods. Bold Step = implemented by the Step 11 Host.
+clients may call only the unstarred methods. Bold Step = implemented by the Step 12 Host.
 
 **Panes and streams (Step 10).** A Host owns any number of Terminals, each with one window and one
 pane (docs/SESSION_MODEL.md). Each pane has its own data stream id, unique in the Host.
@@ -156,6 +162,17 @@ several, `stream_id` names the pane. Input frames carry the stream id and reach 
 a connection interactively attached to that stream while its Terminal runs; all others are
 dropped and counted (`host.stats` `ipc.input_frames_dropped`). Detaching, disconnecting or
 crashing never changes a Terminal.
+
+**Detaching other clients (Step 12).** `client.detach` ends attachments of *other* connections:
+with `target` (any level, as for `pane.attach`) every attachment to the panes it names; with
+`client_id` (the `id` of a `host.status` client) every attachment of that connection; with both,
+that connection's attachments to that target. An unknown `client_id` is `target_not_found`; no
+matching attachment is an empty `detached` list. Each entry is `{client: {id, pid, kind, name},
+stream_id, pane_id, terminal_id, interactive}`; `terminal` is `{id, name}` of the resolved target,
+or `null`. It changes no process, Terminal or connection. A detached connection subscribed to
+`panes` receives `pane.detached` in the critical section that removes the attachment, so the
+event precedes the end of its output. `dry_run` lists what would be detached. Typed by
+`result_client_detach` in the schema.
 
 **Object shapes** (`Terminal`, `Window`, `Pane`) follow the state schema
 ([STATE_SCHEMA.md](STATE_SCHEMA.md)) plus volatile fields (`state`, `pid` hint, `exit_code`,
@@ -183,7 +200,8 @@ or `null` outside any job (risk R-03). `host.environment` is `user` (built with
 (`starting`, `running`, `stopping`) and the additive `terminals_total` all of them. `pane` is the
 pane of the Terminal the Host was started with (`--shell`; it also carries `terminal_id`) while
 that Terminal exists, else `null`; use `terminal.list` for the others. Each client lists the
-`streams` it is attached to.
+`streams` it is attached to and, since Step 12, its `id` (unique per Host for its lifetime; the
+list is ordered by it), which `client.detach` takes.
 
 ### 4.2 `host.stats` result
 
@@ -217,6 +235,12 @@ the `terminal`, `window`, `pane` and `terminal_summary` definitions of the schem
   (default: the Host's `%ComSpec%`): `program` is a path (relative to `cwd`) or a bare name the
   Host looks up on the pane's `PATH`; every argument is one word, quoted for Windows, never
   passed through a shell; batch and PowerShell scripts are refused (`not_executable`).
+  `command_line` (Step 12; exclusive with `command`, else `invalid_params` with
+  `details.field = "command_line"`) is one verbatim Windows command line, for programs that parse
+  their own (`cmd.exe /c`): it is passed to `CreateProcessW` unchanged, only its first word is
+  resolved as `program` is, and `command` becomes its split; panes and `would_create` report it
+  as `command_line` with secret-looking words as `***` (`null` for word-by-word commands; the
+  `--shell` Terminal of `host serve` reports its line too).
   `cwd` is an absolute path (default: the user profile). `env` (Step 11) is
   `{NAME: "value" | null}`: a string sets a variable, `null` removes it, on top of the user's
   fresh logon environment; `SUBAK_PANE_ID` and `SUBAK_TERMINAL_ID` are always set by the Host and
@@ -255,6 +279,7 @@ subscribes and then lists sees every later change exactly once, after its list.
 | --- | --- | --- | --- |
 | `host.stopping` | `host` | `{reason: "stop_requested" \| "idle"}`, before the Host ends its panes | 09 |
 | `pane.exited` | `panes` | `{pane_id, terminal_id, pid, exit_code}`, after the pane's last output | 09 (`terminal_id` 10) |
+| `pane.detached` | `panes` | `{pane_id, terminal_id, stream_id, by: {client_id, pid, kind} \| null}`, to the connection another client's `client.detach` detached, before its output stops | 12 |
 | `terminal.created` | `terminals` | `{terminal: Terminal}` (state `starting`) | 10 |
 | `terminal.state_changed` | `terminals` | `{terminal_id, name, state, previous_state, cause}`; `cause` is `stopped`, `killed`, `exited`, `host_stopped` or `null` | 10 |
 | `terminal.renamed` | `terminals` | `{terminal_id, name, previous_name}` | 10 |

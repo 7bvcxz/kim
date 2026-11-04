@@ -76,6 +76,36 @@
       {
         "dry_run": true,
         "effect": "write",
+        "name": "enable",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "Turn the engine on in the running app, or with a scope turn rules, a mode or a profile on in rules.json",
+        "usage": "ddalgak enable [--rule <id>... [--allow <permission>]... | --mode <id> [--profile <p>] | --profile <id>] [--endpoint <name>] [--dry-run] [--draft] [--if-revision <n>] [--json]"
+      },
+      {
+        "dry_run": true,
+        "effect": "write",
+        "name": "disable",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "Turn the engine off and keep it off across restarts until turned on, or with a scope turn rules, a mode or a profile off in rules.json",
+        "usage": "ddalgak disable [--rule <id>... | --mode <id> [--profile <p>] | --profile <id>] [--endpoint <name>] [--dry-run] [--draft] [--if-revision <n>] [--json]"
+      },
+      {
+        "dry_run": true,
+        "effect": "write",
+        "name": "release",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "Release every key and button Ddalgak holds and keys Windows still considers pressed that nobody holds",
+        "usage": "ddalgak release [--endpoint <name>] [--dry-run] [--json]"
+      },
+      {
+        "dry_run": true,
+        "effect": "write",
         "name": "quit",
         "network": false,
         "opens_window": false,
@@ -366,6 +396,26 @@
       {
         "dry_run": true,
         "effect": "write",
+        "name": "mode.enable",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "Turn a disabled mode on again in rules.json",
+        "usage": "ddalgak mode enable <id> [--profile <p>] [--dry-run] [--draft] [--if-revision <n>] [--json]"
+      },
+      {
+        "dry_run": true,
+        "effect": "write",
+        "name": "mode.disable",
+        "network": false,
+        "opens_window": false,
+        "requires_yes": false,
+        "summary": "Turn a mode off in rules.json: its own rules stop and nothing switches to it (never the default mode)",
+        "usage": "ddalgak mode disable <id> [--profile <p>] [--dry-run] [--draft] [--if-revision <n>] [--json]"
+      },
+      {
+        "dry_run": true,
+        "effect": "write",
         "name": "mode.set",
         "network": false,
         "opens_window": false,
@@ -408,7 +458,7 @@
     "json_schema_version": 1,
     "schema": "kim.capabilities",
     "schema_version": 1,
-    "summary": "Pre-alpha: engine status, health and control of the tray app, opt-in sign-in start, rule store (CRUD, validation, drafts, history, live reload); engine, remap, block, typing, launch and mouse rules",
+    "summary": "Pre-alpha: engine status, health and control of the tray app, opt-in sign-in start, rule store (CRUD, validation, drafts, history, live reload); rules of every core action; enable, disable and release",
     "tool": "ddalgak",
     "version": "0.0.1"
   },

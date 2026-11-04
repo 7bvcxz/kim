@@ -41,7 +41,7 @@ what Step 46 ran).
 | Tool | GUI shortcuts today | Contract status |
 | --- | --- | --- |
 | Kim Manager (`kim`) | Step 46: `catalog.refresh` `F5`, `help.show` `F1` (shortcut list), `tool.install`/`tool.update`/`tool.uninstall` unbound by default, plus the reserved navigation keys of §7.2. | **Conforms** since Step 46: compiled-in manifest (`crates/kim/src/hotkeys.manifest.json`), `kim hotkeys` commands, `focus` backend (§13.2, §17). The binding editor of §11.2 is not implemented yet. |
-| Subak (`subak`) | Step 17 (`subak-gui`, `app` scope): `terminal.new` `Ctrl+T`, `terminal.close` `Ctrl+W` (destructive: asks when the Host says busy), `tab.next` `Ctrl+Tab`, `tab.previous` `Ctrl+Shift+Tab`, `terminal.rename` `Ctrl+Shift+R`, `tab.hide`/`tab.move-left`/`tab.move-right` unbound; context `terminal` (passthrough): the Step 16 copy, paste, zoom and scroll keys. Specified for Step 23: the `Ctrl+B` prefix table (`SUBAK-FR-033`) and `F1` / `Ctrl+B ?` help ([DESIGN_SYSTEM §4.1](DESIGN_SYSTEM.md)). | **Conforms for the shipped subset** since Step 17: compiled-in manifest (`crates/subak/src/hotkeys.manifest.json`, the final manifest filtered to the implemented actions, without the leader until Step 23), `subak hotkeys` commands, `focus` matching in the window with reload on focus ([ADR 0042](adr/0042-subak-window-tabs-and-safe-close.md)). The prefix, its pass-through and `gui.show` are Steps 23 and 18. |
+| Subak (`subak`) | Step 17 (`subak-gui`, `app` scope): `terminal.new` `Ctrl+T`, `terminal.close` `Ctrl+W` (destructive: asks when the Host says busy), `tab.next` `Ctrl+Tab`, `tab.previous` `Ctrl+Shift+Tab`, `terminal.rename` `Ctrl+Shift+R`, `tab.hide`/`tab.move-left`/`tab.move-right` unbound; context `terminal` (passthrough): the Step 16 copy, paste, zoom and scroll keys. Specified for Step 23: the `Ctrl+B` prefix table (`SUBAK-FR-033`) and `F1` / `Ctrl+B ?` help ([DESIGN_SYSTEM §4.1](DESIGN_SYSTEM.md)). | **Conforms for the shipped subset** since Step 17: compiled-in manifest (`crates/subak/src/hotkeys.manifest.json`, the final manifest filtered to the implemented actions, without the leader until Step 23), `subak hotkeys` commands, `focus` matching in the window with reload on focus ([ADR 0042](adr/0042-subak-window-tabs-and-safe-close.md)). Step 18 adds the Terminal manager's context `manager` (`manager.open` `Enter`, `manager.new` `Ctrl+N`, `manager.rename` `F2`, `manager.delete` `Delete` (destructive: asks first), `manager.search` `Ctrl+F`/`char:/`, `manager.pin` `Ctrl+P`, `manager.close` `Escape`; [ADR 0045](adr/0045-subak-floating-icon-and-terminal-manager.md)). The prefix and its pass-through are Step 23; `gui.show` is not shipped yet (no global registration). |
 | Noeul (`noeul`) | Step 49: `paste.float` `F3` (global), `pin.close` `Escape`/`Ctrl+W` and `pin.move-*` arrows (context `pin`). Step 50: `capture.region` `F1` (global) and, in context `capture-overlay`, `capture.pin` `Enter`, `capture.cancel` `Escape`, `selection.full` `Ctrl+A`, `selection.last` `R`, `selection.move-*`/`grow-*`/`shrink-*` (arrows, `Ctrl`/`Shift`+arrows) ([ADR 0026](adr/0026-noeul-capture-overlay.md)). Step 53, context `pin`: `pin.destroy` `Shift+Escape`, `pin.zoom-in` `Plus`/`NumpadAdd`, `pin.zoom-out` `Minus`/`NumpadSubtract`, `pin.zoom-reset` `0`/`Numpad0`, `pin.hide` `H`; `Escape` closes a focused pin as the reserved navigation key even when no binding uses it ([ADR 0029](adr/0029-noeul-pin-engine.md)). Step 51: `capture.copy` `Ctrl+C`, `capture.save` `Ctrl+S`, `capture.quick-save` `Ctrl+Shift+S` (context `capture-overlay`) and `pin.copy`, `pin.save`, `pin.quick-save` with the same keys (context `pin`); navigation keys yield to a focused toolbar button (ADR 0021 §5); the opt-in "Snipaste-style gestures" preset writes `capture.pin` `Ctrl+T` and `capture.copy` `Ctrl+C`, `Enter` as user overrides, shown by name in `noeul hotkeys list` and undone by `noeul config reset gestures` ([ADR 0032](adr/0032-noeul-double-click-pin-and-outputs.md)). Step 52, context `capture-overlay`: `selection.mark` `Space`, `pointer.move-*` `code:KeyW`/`code:KeyS`/`code:KeyA`/`code:KeyD` (physical keys matched from the key message's scan code; the logical chord is tried first at each precedence level), `detect.cycle` `E`, `magnifier.toggle` `M`, `history.previous` `Comma`, `history.next` `Period`; held `repeat` keys accelerate ([ADR 0035](adr/0035-noeul-smart-selection-and-precision.md)). Step 54, context `pin`: `pin.rotate-cw`/`-ccw` `1`/`2`, `pin.flip-horizontal`/`-vertical` `3`/`4`, `pin.opacity-up`/`-down` `Ctrl+Plus`/`Ctrl+Minus`, `pin.thumbnail` `T`, `pin.click-through` `Ctrl+Shift+T`, `pin.group-new` (no default); the first global actions without defaults, `pins.clickable` and `pins.toggle-hidden` (scopes `global`, `app`; the user binds them, §7.5), the keyboard way back from click-through and hidden pins when no pin has focus ([ADR 0044](adr/0044-noeul-pin-transforms-and-control.md)). Step 55, context `pin`: `pin.copy-text` `Ctrl+Shift+C` (a card's text to the clipboard); `paste.float` pins images, image files, colour values, HTML and text ([ADR 0047](adr/0047-noeul-clipboard-paste-and-rich-sources.md)). | **Conforms for the shipped subset** since Step 49: compiled-in manifest (`crates/noeul/src/hotkeys.manifest.json`, the final manifest filtered to the implemented actions), `noeul hotkeys` commands, `register` backend with live `registered`/`taken` reporting and reload ([ADR 0023](adr/0023-noeul-app-foundation.md)). Listed in the Kim catalog with the final shortcut summary since Step 47. |
 | Ddalgak (`ddalgak`) | Planned (Steps 65+). An automation engine with its own rule model. | Steps 66, 73 and 81 follow §13.4. Listed in the Kim catalog with this shortcut summary since Step 47. |
 
@@ -363,8 +363,12 @@ any modifiers, in all scopes (§6.2).
 ### 7.4 Emergency chord
 
 `Ctrl+Alt+Shift+Escape` belongs to Ddalgak's built-in emergency switch (§12.5). It is reserved
-in every tool so that no Kim binding can hide it. This choice is **provisional**: Step 73
-verifies it on real Windows; a change is recorded in an ADR 0017 note and a contract revision.
+in every tool so that no Kim binding can hide it. This choice is **provisional**: Step 73 tested
+it in Ddalgak's decision core (decided before any rule, also with every key of the chord remapped
+or blocked) and documented its interaction with Task Manager's `Ctrl+Shift+Escape` and with
+elevated windows ([DDALGAK_ENGINE §16](DDALGAK_ENGINE.md)); the check with physical keyboards is
+the maintainer's manual script there. A change is recorded in an ADR 0017 note and a contract
+revision.
 
 ### 7.5 Rules for defaults
 
@@ -772,7 +776,7 @@ The same switch is reachable everywhere:
 | A global binding fires unwanted actions | `<tool> hotkeys disable <action>` or `--all` from any console; or end the tool (the OS releases its hotkeys when the process ends, *documented*) |
 | The configuration is broken | Safe mode (§8.3): no global hotkeys; fix it, or `hotkeys reset --all --yes` |
 | The tool cannot be reached (frozen window) | `Ctrl+Shift+Escape` (reserved, §7.1) opens Task Manager to end it |
-| A hook backend misbehaves (Ddalgak) | The non-remappable emergency chord `Ctrl+Alt+Shift+Escape` (§7.4) removes the hook, releases held keys, cancels running actions and pauses the engine before any rule runs. Then `ddalgak hotkeys disable --all`, `--no-hotkeys`, or ending the process. Windows also removes a low-level hook that stops responding (*documented* `LowLevelHooksTimeout` behavior); Ddalgak never relies on that alone. Step 73 specifies and verifies it. |
+| A hook backend misbehaves (Ddalgak) | The non-remappable emergency chord `Ctrl+Alt+Shift+Escape` (§7.4) removes the hook, releases held keys, cancels running actions and pauses the engine before any rule runs. Then `ddalgak hotkeys disable --all`, `--no-hotkeys`, or ending the process. Windows also removes a low-level hook that stops responding (*documented* `LowLevelHooksTimeout` behavior); Ddalgak never relies on that alone: since Step 73 a callback that reaches the timeout turns its engine off (`hook_lost`) and says so, and `ddalgak release` frees keys left pressed ([DDALGAK_ENGINE §16](DDALGAK_ENGINE.md)). |
 
 A tool never re-enables bindings the user disabled. Not after a crash, a reboot, an update, an
 invalid configuration or a failed registration.
@@ -798,8 +802,8 @@ Subak's keys map onto the contract without changing ADR 0009's dispatch order:
 
 Subak has **no global default**. `gui.show` (show the GUI or the floating icon) is a global
 action without a default; the user may bind it. The `[keys]` table of the draft `config.toml`
-is superseded by `hotkeys.json` (§8.4). Floating icon and session manager actions (Step 18) are
-added as actions in the same way.
+is superseded by `hotkeys.json` (§8.4). The Terminal manager's actions (Step 18) are added in the
+same way, as the context `manager` (below).
 
 **Step 17 (implemented).** The final manifest (`contracts/examples/kim-hotkey-manifest-v1/subak.json`)
 gains the window's Step 16 keys as actions of the `terminal` context (`clipboard.copy`,
@@ -814,6 +818,19 @@ gets the focus, and honours safe mode, `--no-hotkeys` and `KIM_NO_HOTKEYS`
 ([SUBAK_GUI §3](SUBAK_GUI.md), [ADR 0042](adr/0042-subak-window-tabs-and-safe-close.md)). Until
 Step 23 a shadowed key such as `Ctrl+W` reaches the program only after the action is disabled or
 rebound.
+
+**Step 18 (implemented).** The floating icon's Terminal manager (`subak-gui --float`,
+[SUBAK_GUI §11](SUBAK_GUI.md), [ADR 0045](adr/0045-subak-floating-icon-and-terminal-manager.md))
+has its own context `manager`, in the final and the shipped manifest: `manager.open` `Enter`,
+`manager.new` `Ctrl+N`, `manager.rename` `F2`, `manager.delete` `Delete` (destructive; it always
+asks first), `manager.search` `Ctrl+F` and `char:/`, `manager.pin` `Ctrl+P`, `manager.close`
+`Escape`. The manager matches only that context (its window is not a Terminal window, so the
+window's `app` actions do not apply there). Its search field takes its editing keys first
+(`Delete`, `Backspace`, arrows, `Home`/`End`, `Ctrl+A/C/V/X/Y/Z`, typed characters — so `/` types
+a slash there); `Tab`/`Shift+Tab` and `Up`/`Down`/`PageUp`/`PageDown` are reserved navigation; a
+delete question owns every key while it is open. `gui.show` stays unshipped (no global
+registration yet); the floating UI is reached by a click, the tray (`Win+B`), or
+`subak-gui --manager`.
 
 **Hand-off (Step 46 → Steps 17 and 23).** Step 46 did not change `crates/subak`. Subak's GUI
 Steps use the shared `kim-hotkeys` crate exactly as Kim does: ship the manifest

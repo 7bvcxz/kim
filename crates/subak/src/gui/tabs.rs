@@ -70,7 +70,8 @@ impl Status {
         }
     }
 
-    fn color(self) -> Rgb {
+    /// The state's colour (always beside the shape).
+    pub fn color(self) -> Rgb {
         match self {
             Self::Running => SUCCESS,
             Self::Starting | Self::Stopping => WARNING,

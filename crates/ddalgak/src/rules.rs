@@ -29,7 +29,7 @@
 //!   per mode.
 
 use crate::hotstring;
-use crate::model::{ModeIndicator, Rule};
+use crate::model::{FloatingIndicator, ModeIndicator, Rule};
 use crate::modes::{ModeAction, ModeSet};
 use crate::remap::Output;
 use crate::run::{KeysSpec, TextSpec};
@@ -63,6 +63,10 @@ pub struct Loaded {
     pub modes: ModeSet,
     /// `settings.mode_indicator` (Step 72).
     pub mode_indicator: Option<ModeIndicator>,
+    /// `settings.floating_indicator` (Step 73).
+    pub floating_indicator: Option<FloatingIndicator>,
+    /// The active profile is enabled (Step 73; `enabled: false` keeps all its rules inactive).
+    pub profile_enabled: bool,
     pub engine_on_start: bool,
     pub max_runs_per_second: u32,
     /// Active bindings (every mode) in priority and file order; the table ranks them per mode.
@@ -89,6 +93,8 @@ impl Loaded {
             mode: "base".into(),
             modes: ModeSet::single(),
             mode_indicator: None,
+            floating_indicator: None,
+            profile_enabled: true,
             engine_on_start: false,
             max_runs_per_second: 20,
             bindings: Vec::new(),
@@ -129,6 +135,11 @@ const MODE_ALONE: &str = "a `mode` step runs alone in this version; with other s
 const TYPING_ALONE: &str = "a `type_text` or `send_keys` step runs alone in this version; ordered multi-step runs arrive in Step 78";
 const HOTSTRING_STEPS: &str = "a hotstring runs one `type_text` or `send_keys` step in this version; other steps after a hotstring arrive with ordered multi-step runs (Step 78)";
 const LAUNCHES_ALONE: &str = "`open_program` and `open_url` steps run together, in order, in this version; mixed with other steps (delays, keys, modes) they wait for ordered multi-step runs (Step 78)";
+
+/// Step 73: why a rule of a disabled profile does not run.
+pub const PROFILE_DISABLED: &str = "the profile is disabled; `ddalgak enable --profile <id>` turns it on again (the rule keeps its own setting)";
+/// Step 73: why a rule limited to disabled modes does not run.
+pub const MODE_DISABLED: &str = "every mode the rule is limited to is disabled; `ddalgak enable --mode <id>` turns one on again";
 
 const MOUSE_ALONE: &str = "`mouse_move`, `mouse_scroll` and `mouse_click` steps run together, in order, in this version; mixed with other steps (delays, keys, launches, modes) they wait for ordered multi-step runs (Step 78)";
 
@@ -349,6 +360,7 @@ pub fn from_store(l: &store::Loaded) -> Loaded {
         mode: profile.default_mode.clone(),
         modes: modes.clone(),
         mode_indicator: settings.and_then(|s| s.mode_indicator),
+        floating_indicator: settings.and_then(|s| s.floating_indicator),
         engine_on_start: settings.and_then(|s| s.engine_on_start) == Some(crate::model::OnOff::On),
         max_runs_per_second: settings
             .and_then(|s| s.max_runs_per_second)
@@ -358,6 +370,7 @@ pub fn from_store(l: &store::Loaded) -> Loaded {
         warnings: l.report.count(crate::validate::Severity::Warning),
         ..Loaded::empty(l.state.clone(), l.revision, l.hash)
     };
+    out.profile_enabled = profile.is_enabled();
     let mut candidates: Vec<Candidate> = Vec::new();
     for (ri, entry) in profile.rules.iter().enumerate() {
         let id = entry.id().unwrap_or_default().to_string();
@@ -373,13 +386,31 @@ pub fn from_store(l: &store::Loaded) -> Loaded {
             });
             continue;
         }
+        // Step 73: the user disabled the whole profile; its rules keep their own `enabled`.
+        if !out.profile_enabled {
+            out.inactive.push(Inactive {
+                rule: id,
+                code: "profile_disabled",
+                reason: PROFILE_DISABLED.into(),
+            });
+            continue;
+        }
         let Some(rule) = entry.rule() else {
             continue; // a raw rule always has a schema problem (above)
         };
         let mask = match &rule.modes {
             None => 0,
             Some(m) => match modes.mask(m) {
-                Some(mask) => mask,
+                // Step 73: a rule limited to disabled modes only does not run.
+                Some(mask) if modes.enabled_mask(mask) == 0 => {
+                    out.inactive.push(Inactive {
+                        rule: id,
+                        code: "mode_disabled",
+                        reason: MODE_DISABLED.into(),
+                    });
+                    continue;
+                }
+                Some(mask) => modes.enabled_mask(mask),
                 None => {
                     out.inactive.push(Inactive {
                         rule: id,
@@ -589,6 +620,13 @@ fn compile(
                             .into(),
                     ));
                 }
+                // Step 73: nothing switches to a disabled mode.
+                if a.targets_disabled(modes) {
+                    return Err((
+                        "mode_disabled",
+                        format!("step {i}: the mode it switches to is disabled"),
+                    ));
+                }
                 mode = Some(a);
             }
             "type_text" | "send_keys" => run = Some(compile_run(s, ty)?),
@@ -707,6 +745,15 @@ pub fn to_json(l: &Loaded) -> Value {
     })
 }
 
+/// Whether a `mode` step of `rule` switches only to disabled modes (Step 73, `mode_disabled`).
+fn switches_to_disabled(rule: &Rule, modes: &ModeSet) -> bool {
+    let v = rule.to_value();
+    v["steps"].as_array().into_iter().flatten().any(|s| {
+        s["type"] == "mode"
+            && ModeAction::compile(s, modes).is_ok_and(|a| a.targets_disabled(modes))
+    })
+}
+
 /// How one rule stands with this file and this version (`rule list`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RuleState {
@@ -737,6 +784,30 @@ pub fn rule_states(l: &store::Loaded) -> Vec<RuleState> {
                 ("inactive", Some(pr.code), Some(pr.message.clone()))
             } else if !active_profile {
                 ("other_profile", None, None)
+            } else if !p.is_enabled() {
+                // Step 73: the whole profile is disabled.
+                (
+                    "inactive",
+                    Some("profile_disabled"),
+                    Some(PROFILE_DISABLED.into()),
+                )
+            } else if e
+                .rule()
+                .and_then(|r| r.modes.as_ref())
+                .and_then(|m| modes.mask(m))
+                .is_some_and(|k| modes.enabled_mask(k) == 0)
+            {
+                (
+                    "inactive",
+                    Some("mode_disabled"),
+                    Some(MODE_DISABLED.into()),
+                )
+            } else if e.rule().is_some_and(|r| switches_to_disabled(r, &modes)) {
+                (
+                    "inactive",
+                    Some("mode_disabled"),
+                    Some("the mode it switches to is disabled".into()),
+                )
             } else if e
                 .rule()
                 .and_then(|r| r.modes.as_ref())
@@ -782,6 +853,132 @@ mod tests {
     fn engine_rule(id: &str, keys: &str, op: &str) -> Value {
         json!({ "id": id, "title": id, "enabled": true, "trigger": { "keys": keys },
                 "steps": [ { "type": "engine", "op": op } ] })
+    }
+
+    #[test]
+    fn disabled_profiles_and_modes_keep_their_rules_from_running() {
+        // Step 73: per-scope enable/disable (`profile_disabled`, `mode_disabled`).
+        let rules = json!([
+            engine_rule("everywhere", "F13", "pause"),
+            { "id": "nav-only", "title": "n", "enabled": true, "modes": ["nav"],
+              "trigger": { "keys": "F14" }, "steps": [ { "type": "engine", "op": "pause" } ] },
+            { "id": "both", "title": "b", "enabled": true, "modes": ["base", "nav"],
+              "trigger": { "keys": "F15" }, "steps": [ { "type": "engine", "op": "pause" } ] },
+            { "id": "to-nav", "title": "t", "enabled": true, "trigger": { "keys": "F16" },
+              "steps": [ { "type": "mode", "op": "set", "mode": "nav" } ] },
+            { "id": "back", "title": "p", "enabled": true, "trigger": { "keys": "F17" },
+              "steps": [ { "type": "mode", "op": "default" } ] },
+            { "id": "off", "title": "o", "enabled": false, "trigger": { "keys": "F18" },
+              "steps": [ { "type": "engine", "op": "pause" } ] }
+        ]);
+        let with = |profile_enabled: Option<bool>, nav_enabled: Option<bool>| {
+            let mut d: Value = serde_json::from_slice(&doc(rules.clone())).unwrap();
+            if let Some(e) = profile_enabled {
+                d["profiles"][0]["enabled"] = json!(e);
+            }
+            if let Some(e) = nav_enabled {
+                d["profiles"][0]["modes"][1]["enabled"] = json!(e);
+            }
+            let bytes = d.to_string().into_bytes();
+            let l = parse(&bytes);
+            let states = rule_states(&store::interpret(&bytes, &Context::default(), MIGRATIONS));
+            (l, states)
+        };
+        let code = |l: &Loaded, id: &str| l.inactive.iter().find(|i| i.rule == id).map(|i| i.code);
+        // Everything enabled (absent fields mean enabled).
+        let (l, _) = with(None, None);
+        assert!(l.profile_enabled);
+        assert_eq!(l.bindings.len(), 5);
+        // A disabled mode: its own rules and switches to it are inactive; a rule that also works
+        // elsewhere keeps working there; the profile's other rules are untouched.
+        let (l, states) = with(None, Some(false));
+        assert_eq!(code(&l, "nav-only"), Some("mode_disabled"));
+        assert_eq!(code(&l, "to-nav"), Some("mode_disabled"));
+        let both = l.bindings.iter().find(|b| b.rule == "both").unwrap();
+        assert_eq!(both.modes, 0b01, "only in base now");
+        assert!(l.bindings.iter().any(|b| b.rule == "back"));
+        assert!(!l.modes.is_enabled(l.modes.index("nav").unwrap()));
+        let st = |id: &str| states.iter().find(|s| s.id == id).unwrap();
+        assert_eq!(
+            (st("nav-only").state, st("nav-only").code),
+            ("inactive", Some("mode_disabled"))
+        );
+        assert_eq!(
+            (st("to-nav").state, st("to-nav").code),
+            ("inactive", Some("mode_disabled"))
+        );
+        assert_eq!(st("both").state, "active");
+        // A disabled profile: no rule runs; every rule keeps its own `enabled`.
+        let (l, states) = with(Some(false), None);
+        assert!(!l.profile_enabled);
+        assert!(l.bindings.is_empty());
+        assert_eq!(
+            l.disabled, 1,
+            "the disabled rule stays disabled, not inactive"
+        );
+        assert_eq!(l.inactive.len(), 5);
+        assert!(l.inactive.iter().all(|i| i.code == "profile_disabled"));
+        assert!(
+            states
+                .iter()
+                .filter(|s| s.id != "off")
+                .all(|s| s.code == Some("profile_disabled"))
+        );
+        // `enabled: true` written out is the same as absent.
+        let (l, _) = with(Some(true), Some(true));
+        assert_eq!(l.bindings.len(), 5);
+    }
+
+    #[test]
+    fn the_scopes_example_loads_as_documented() {
+        let bytes =
+            std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join(
+                "../../docs/contracts/examples/ddalgak-rules-v1/16-enable-disable-scopes.json",
+            ))
+            .unwrap();
+        let l = parse(&bytes);
+        assert_eq!(l.state, FileState::Loaded);
+        assert_eq!(l.floating_indicator, Some(FloatingIndicator::Paused));
+        assert!(l.profile_enabled, "work is enabled; travel is not active");
+        let codes: Vec<(&str, &str)> = l
+            .inactive
+            .iter()
+            .map(|i| (i.rule.as_str(), i.code))
+            .collect();
+        assert_eq!(
+            codes,
+            [
+                ("game-toggle", "mode_disabled"),
+                ("game-no-win", "mode_disabled")
+            ]
+        );
+        assert_eq!(l.disabled, 1);
+        assert_eq!(l.bindings.len(), 1);
+        // Switched to the disabled travel profile, nothing runs.
+        let mut d: Value = serde_json::from_slice(&bytes).unwrap();
+        d["active_profile"] = json!("travel");
+        let l = parse(d.to_string().as_bytes());
+        assert!(!l.profile_enabled && l.bindings.is_empty());
+        assert_eq!(l.inactive[0].code, "profile_disabled");
+    }
+
+    #[test]
+    fn the_default_mode_is_never_disabled() {
+        let mut d: Value = serde_json::from_slice(&doc(json!([]))).unwrap();
+        d["profiles"][0]["modes"][0]["enabled"] = json!(false);
+        let bytes = d.to_string().into_bytes();
+        let l = parse(&bytes);
+        assert!(
+            l.modes.is_enabled(l.modes.default_mode()),
+            "ignored there (never broader)"
+        );
+        let s = store::interpret(&bytes, &Context::default(), MIGRATIONS);
+        assert!(
+            s.report
+                .all()
+                .any(|p| p.code == "mode_invalid" && p.message.contains("enabled: false")),
+            "and reported"
+        );
     }
 
     /// A launch rule with `launch-programs` consent for exactly its targets.

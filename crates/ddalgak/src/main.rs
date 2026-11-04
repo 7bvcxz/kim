@@ -27,7 +27,7 @@ use std::process::ExitCode;
 
 const HELP: &str = "\
 ddalgak — Ddalgak automation engine (pre-alpha: engine core, rule store, remaps, typing,
-hotstrings, launches, mouse actions and modes; Steps 66–72)
+hotstrings, launches, mouse actions, modes, enable/disable and recovery; Steps 66–73)
 
 USAGE:
     ddalgak [--help | --version]
@@ -35,7 +35,11 @@ USAGE:
     ddalgak status [--endpoint <name>] [--json]
     ddalgak health [--endpoint <name>] [--json]
     ddalgak engine start|pause|resume|stop [--endpoint <name>] [--dry-run] [--json]
+    ddalgak enable | disable [--endpoint <name>] [--dry-run] [--json]
+    ddalgak enable | disable --rule <id>... | --mode <id> [--profile <p>] | --profile <id>
+                     [--allow <permission>]... [write options]
     ddalgak pause | resume  [--endpoint <name>] [--dry-run] [--json]
+    ddalgak release [--endpoint <name>] [--dry-run] [--json]
     ddalgak quit [--endpoint <name>] [--dry-run] [--json]
     ddalgak startup status|enable|disable [--dry-run] [--json]
     ddalgak rule list [--profile <p>] [--mode <m>] [--draft] [--json]
@@ -62,6 +66,7 @@ USAGE:
     ddalgak mode rename <id> <title> | copy <id> [--id <new>] [--title <t>] [--without-rules]
                      [write options]
     ddalgak mode delete <id> [--delete-rules] [--yes] [write options]
+    ddalgak mode enable <id> | disable <id> [--profile <p>] [write options]
     ddalgak mode set <id> | toggle <id> | reset [--endpoint <name>] [--dry-run] [--json]
     ddalgak mode status [--endpoint <name>] [--json]
 
@@ -83,6 +88,19 @@ COMMANDS:
     engine resume Resume a paused engine. Never turns an engine on that is off.
     engine stop   Turn the engine off (alias: engine off): the keyboard hook (and the mouse
                   hook, which exists only while a mouse-button rule does) is removed.
+    enable        Turn the engine on in the running app (like engine start). With a scope,
+                  switch rules (--rule <id>..., --allow gives consent), a mode (--mode <id>:
+                  its own rules stop and nothing switches to it; never the default mode) or a
+                  whole profile (--profile <id>: none of its rules run) on in rules.json; that
+                  works without the app and a running app reloads at once.
+    disable       Turn the engine off (like engine stop). Your turn-off is remembered: a
+                  restart, sign-out or reboot keeps the engine off, even with engine_on_start:
+                  on, until you turn it on again. With a scope, switch it off in rules.json;
+                  nothing ever turns a disabled profile, mode or rule back on by itself.
+    release       Release every key and button Ddalgak holds, make the engine forget its key
+                  state, and release keys Windows still considers pressed although nobody holds
+                  them (a modifier you are pressing is left alone while the engine is on). For
+                  a key that acts stuck; the tray menu has the same item.
     quit          End the tray app (the engine is turned off first).
     startup ...   Opt-in start of the tray app when you sign in, as one value under
                   HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run. No service, no task.
@@ -256,7 +274,16 @@ MODES (Step 72):
     The CLI never starts the app: start ddalgak-gui.exe yourself (it shows a tray icon). Every
     command checks, before sending anything, that the pipe is served by ddalgak-gui.exe of this
     user (`app_identity_mismatch` otherwise). The emergency chord Ctrl+Alt+Shift+Escape always
-    turns the engine off from the keyboard, whatever the rules say.
+    turns the engine off from the keyboard, whatever the rules say: it is checked on the
+    physical keys before any rule, also with conflicting remaps or a broken rules.json.
+
+RECOVERY (Step 73):
+    After a crash or a killed app the engine starts off and releases keys Windows still
+    considers pressed. A session lock releases held keys and rules wait until you unlock; the
+    engine state does not change. A hook callback that takes as long as Windows'
+    LowLevelHooksTimeout (Windows may then remove the hook silently) turns the engine off with
+    hook_lost; turn it on again for a fresh hook. A shortcut another program owns stays
+    `taken` (status, health) and is never taken from it.
 
 OPTIONS:
     --endpoint <name>  Pipe name under \\\\.\\pipe\\ (default: mouv-ddalgak-<user SID>-s<session>).
@@ -270,7 +297,7 @@ FILES:
     %APPDATA%\\mouv\\ddalgak\\rules.json     rules (ddalgak.rules v1), with rules.json.bak, history\\,
                                          rules.draft.json and the writers' lock rules.json.lock
     %APPDATA%\\mouv\\ddalgak\\hotkeys.json   Ddalgak's own shortcuts (engine.toggle, engine.pause)
-    %LOCALAPPDATA%\\mouv\\ddalgak\\          crash and emergency markers
+    %LOCALAPPDATA%\\mouv\\ddalgak\\          crash, emergency and turned-off markers
 
 Pre-alpha: rules can control the engine (pause, resume, turn off), remap keys and mouse buttons,
 block keys, send key sequences, type text, open programs and websites, and move, scroll and
@@ -366,6 +393,45 @@ fn run(cmd: Cmd, a: &Args) -> Outcome {
         return rule_cmd::run(cmd, a, &paths, &notify);
     }
     match cmd {
+        // Step 73: with a scope, rules.json changes (no app needed); without, the engine.
+        Cmd::Enable | Cmd::Disable if a.has("--rule") || a.has("--mode") || a.has("--profile") => {
+            let paths =
+                ddalgak::paths::Paths::from_env().map_err(|e| CliError::new(Code::Io, e))?;
+            let notify = |dry_run: bool| {
+                client::call(&endpoint, Method::RulesReload, dry_run).map(|(v, _)| v)
+            };
+            mode_cmd::scope(cmd, a, &paths, &notify)
+        }
+        Cmd::Enable | Cmd::Disable => {
+            if a.has("--draft") || a.has("--if-revision") || a.has("--allow") {
+                return Err(CliError::usage(
+                    "--draft, --if-revision and --allow need a scope (--rule, --mode or --profile); without one, enable and disable turn the engine on and off",
+                ));
+            }
+            let req = if cmd == Cmd::Enable {
+                ddalgak::lifecycle::Request::Start
+            } else {
+                ddalgak::lifecycle::Request::Stop
+            };
+            let (mut v, _) = client::call(&endpoint, Method::Engine(req), a.dry_run)?;
+            v["scope"] = serde_json::json!("engine");
+            let mut warnings = Vec::new();
+            if cmd == Cmd::Enable
+                && let Ok(paths) = ddalgak::paths::Paths::from_env()
+            {
+                let l = ddalgak::rules::load(&paths.rules());
+                if !l.profile_enabled {
+                    warnings.push(format!(
+                        "profile `{}` is disabled: the engine is on but no rule runs until `ddalgak enable --profile {}`",
+                        l.profile, l.profile
+                    ));
+                }
+            }
+            Ok((v, warnings))
+        }
+        Cmd::Release => {
+            client::call(&endpoint, Method::Release, a.dry_run).map(|(v, _)| (v, Vec::new()))
+        }
         Cmd::ModeSet | Cmd::ModeToggle | Cmd::ModeReset => {
             let m = match cmd {
                 Cmd::ModeSet => ModeCmd::Set(a.positional[0].clone()),
@@ -634,9 +700,21 @@ mod client {
                             "last_change": null,
                             "hook": { "installed": false, "observe_only": false },
                         },
-                        "profile": { "id": loaded.profile, "mode": loaded.mode, "mode_state": offline_mode(&loaded) },
+                        "profile": {
+                            "id": loaded.profile,
+                            "mode": loaded.mode,
+                            "mode_state": offline_mode(&loaded),
+                            "enabled": loaded.profile_enabled,
+                        },
                         "rules": rules_json,
                         "shortcuts": shortcuts.to_json(&|_| Some("not_running")),
+                        // Step 73: what the tray would show once the app runs (engine off).
+                        "indicator": ddalgak::indicator::build(&ddalgak::indicator::Facts {
+                            profile_enabled: loaded.profile_enabled,
+                            floating: loaded.floating_indicator,
+                            ..ddalgak::indicator::Facts::default()
+                        })
+                        .to_json(),
                         "activity": [],
                         "startup": startup,
                     }),
@@ -906,6 +984,8 @@ fn human(cmd: Cmd, d: &Value) -> String {
             });
         }
         Cmd::Help | Cmd::Version => {}
+        Cmd::Enable | Cmd::Disable => return mode_cmd::scope_human(cmd, d),
+        Cmd::Release => return mode_cmd::release_human(d),
         c if c.name().starts_with("mode.") => return mode_cmd::human(cmd, d),
         _ => return rule_cmd::human(cmd, d),
     }

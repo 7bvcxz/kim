@@ -241,6 +241,12 @@ impl Identity {
         kind: ClientKind::Gui,
         name: "subak-gui",
     };
+    /// `subak-gui --float`: the floating icon and Terminal manager (Step 18, ADR 0045). A `gui`
+    /// client that lists and manages Terminals and never attaches a pane.
+    pub const FLOAT: Self = Self {
+        kind: ClientKind::Gui,
+        name: "subak-float",
+    };
 }
 
 /// One connection to a Host, after the identity checks and the handshake.

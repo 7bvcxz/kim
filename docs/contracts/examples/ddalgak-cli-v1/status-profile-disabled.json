@@ -1,0 +1,133 @@
+{
+  "command": "status",
+  "data": {
+    "activity": [],
+    "app": {
+      "elevated": false,
+      "launched_by": "user",
+      "pid": 109404,
+      "running": true,
+      "started_at": "2026-11-04T11:29:27Z",
+      "test_mode": true,
+      "tray": false,
+      "uptime_s": 0,
+      "version": "0.0.1"
+    },
+    "engine": {
+      "hook": {
+        "installed": true,
+        "mouse_installed": false,
+        "observe_only": true
+      },
+      "last_change": {
+        "origin": "startup",
+        "request": "start"
+      },
+      "off_reason": null,
+      "state": "running"
+    },
+    "indicator": {
+      "attention": "profile_disabled",
+      "floating": {
+        "label": "Ddalgak on · Base",
+        "setting": "off",
+        "visible": false
+      },
+      "shape": "disc",
+      "tooltip": "Ddalgak: engine on · mode Base (the profile is disabled, no rule runs)"
+    },
+    "profile": {
+      "enabled": false,
+      "id": "default",
+      "mode": "base",
+      "mode_state": {
+        "active": "base",
+        "chain": [
+          "base"
+        ],
+        "color": null,
+        "default": "base",
+        "held": [],
+        "icon": null,
+        "indicator": {
+          "away_from_default": false,
+          "color": null,
+          "icon": null,
+          "label": "Base",
+          "title": "Base",
+          "visible": true
+        },
+        "latched": "base",
+        "live": true,
+        "origin": "start",
+        "previous": "base",
+        "since": "2026-11-04T11:29:27Z",
+        "title": "Base"
+      }
+    },
+    "rules": {
+      "active": 0,
+      "active_rules": [],
+      "active_set": {
+        "loaded_at": "2026-11-04T11:29:27Z",
+        "revision": 6
+      },
+      "disabled": 0,
+      "draft": null,
+      "engine_on_start": "on",
+      "file": "loaded",
+      "in_sync": true,
+      "inactive": [
+        {
+          "code": "profile_disabled",
+          "reason": "the profile is disabled; `ddalgak enable --profile <id>` turns it on again (the rule keeps its own setting)",
+          "rule": "pause-key"
+        },
+        {
+          "code": "profile_disabled",
+          "reason": "the profile is disabled; `ddalgak enable --profile <id>` turns it on again (the rule keeps its own setting)",
+          "rule": "nav-only"
+        },
+        {
+          "code": "profile_disabled",
+          "reason": "the profile is disabled; `ddalgak enable --profile <id>` turns it on again (the rule keeps its own setting)",
+          "rule": "to-nav"
+        }
+      ],
+      "last_reload": null,
+      "other_modes": 0,
+      "problem": null,
+      "revision": 6,
+      "saved": {
+        "file": "loaded",
+        "interrupted_save": false,
+        "problem": null,
+        "revision": 6
+      },
+      "total": 3
+    },
+    "session": {
+      "locked": false
+    },
+    "shortcuts": {
+      "config": "default",
+      "global": [],
+      "off": false,
+      "problem": null
+    },
+    "start": {
+      "off_reason": "default",
+      "recovered": null
+    },
+    "startup": {
+      "command": null,
+      "enabled": false,
+      "foreign": false,
+      "location": "HKCU\\Software\\mouv-test\\ddalgak-cli-scopes\\Run\\mouv.ddalgak",
+      "program": "C:\\Users\\you\\AppData\\Local\\Programs\\mouv\\ddalgak\\versions\\0.0.1\\ddalgak-gui.exe"
+    }
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

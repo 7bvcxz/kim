@@ -1,0 +1,29 @@
+{
+  "command": "disable",
+  "data": {
+    "change": {
+      "changed": true,
+      "from": "running",
+      "request": "stop",
+      "to": "off"
+    },
+    "dry_run": false,
+    "engine": {
+      "hook": {
+        "installed": false,
+        "mouse_installed": false,
+        "observe_only": true
+      },
+      "last_change": {
+        "origin": "cli",
+        "request": "stop"
+      },
+      "off_reason": "stopped",
+      "state": "off"
+    },
+    "scope": "engine"
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

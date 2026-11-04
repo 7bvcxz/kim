@@ -2735,6 +2735,89 @@ mod tests {
     }
 
     #[test]
+    fn the_emergency_chord_beats_remaps_and_blocks_of_its_own_keys() {
+        // Step 73 (DDALGAK-SEC-003): every key of the chord is remapped or blocked, in every
+        // order. The chord is checked on the physical state before the table, so no rule can
+        // shadow it, and the keys a remap holds are released by the emergency path.
+        let rules = || {
+            vec![
+                remap("ctrl", "LCtrl", "F16"),
+                remap("ralt", "RAlt", "LCtrl"),
+                remap("lalt", "LAlt", "F17"),
+                remap("shift", "LShift", "RShift"),
+                remap("esc", "Escape", "F18"),
+                block("rshift", "RShift"),
+                dual("caps", "CapsLock", "LCtrl", "Escape"),
+            ]
+        };
+        let orders: [&[&str]; 4] = [
+            &["LCtrl", "LAlt", "LShift", "Escape"],
+            &["Escape", "LShift", "LCtrl", "LAlt"],
+            &["RAlt", "LCtrl", "Escape", "RShift"],
+            &["LShift", "Escape", "LAlt", "LCtrl"],
+        ];
+        for keys in orders {
+            let mut t = T::new(rules());
+            let mut last = None;
+            for (i, k) in keys.iter().enumerate() {
+                let d = t.ev(k, false);
+                if i + 1 < keys.len() {
+                    assert_ne!(d.signal, Some(Signal::Emergency), "{keys:?} {k}");
+                }
+                last = Some(d);
+            }
+            let d = last.unwrap();
+            assert_eq!(d.signal, Some(Signal::Emergency), "{keys:?}");
+            assert!(!d.consume, "the last key of the chord passes on");
+            assert!(t.core.tripped());
+            // Afterwards nothing matches: the remapped keys reach Windows as they are.
+            for k in keys.iter().rev() {
+                let up = t.ev(k, true);
+                assert!(
+                    up.signal.is_none() || matches!(up.signal, Some(Signal::Remap { .. })),
+                    "{keys:?}: {k} up: {up:?}"
+                );
+            }
+            let again = t.ev("Escape", false);
+            assert!(!again.consume && again.signal.is_none());
+        }
+        // Injected modifiers of a remap never complete the chord: only physical keys count.
+        let mut t = T::new(rules());
+        t.src("LCtrl", false, Source::Own);
+        t.src("LAlt", false, Source::Own);
+        t.src("LShift", false, Source::Own);
+        assert_ne!(t.ev("Escape", false).signal, Some(Signal::Emergency));
+        // A paused engine, a secure desktop, a password field and an IME composition never
+        // hide the chord either.
+        for flags in [
+            Flags {
+                secure_desktop: true,
+                ..Flags::default()
+            },
+            Flags {
+                password_field: true,
+                ime_composing: true,
+                elevated_foreground: true,
+                ..Flags::default()
+            },
+        ] {
+            let mut t = T::new(rules());
+            t.mode = Mode::Paused;
+            t.flags = flags;
+            assert_eq!(
+                t.down(&["LCtrl", "LAlt", "LShift", "Escape"]).signal,
+                Some(Signal::Emergency)
+            );
+        }
+        // An empty table (an invalid rules.json never loads) still trips.
+        let mut t = T::new(Vec::new());
+        assert_eq!(
+            t.down(&["RCtrl", "RShift", "LAlt", "Escape"]).signal,
+            Some(Signal::Emergency)
+        );
+    }
+
+    #[test]
     fn pause_lock_and_desktop_switches_release_every_output() {
         let mut t = T::new(vec![
             remap("down", "Ctrl+Shift+J", "Down"),
@@ -3585,6 +3668,7 @@ mod tests {
             title: "P".into(),
             description: None,
             default_mode: spec[0].0.into(),
+            enabled: None,
             modes,
             rules: Vec::new(),
             extra: serde_json::Map::new(),
@@ -3928,6 +4012,7 @@ mod tests {
             title: "P".into(),
             description: None,
             default_mode: "base".into(),
+            enabled: None,
             modes: vec![ModeDoc::new("base", "Base"), quick, timed],
             rules: Vec::new(),
             extra: serde_json::Map::new(),

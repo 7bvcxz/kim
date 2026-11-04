@@ -19,23 +19,35 @@
 //!   the previous active rules and says why (`kept_previous`). Saved and active revisions are
 //!   shown apart in `status`.
 //!
+//! - **Step 73** (ADR 0046): the user's turn-off survives restarts (`engine.disabled`); a hook
+//!   callback that reaches `LowLevelHooksTimeout` turns the engine off (`hook_lost`) and
+//!   releases everything; after an unclean exit, and on `ddalgak release` or the tray's
+//!   *Release stuck keys*, keys Windows still considers pressed that nobody holds are released;
+//!   a shortcut another program owns is reported once and never taken; the tray icon and
+//!   `status.indicator` come from [`crate::indicator`].
+//!
 //! The main thread sleeps in `GetMessageW`; the hook and worker threads sleep in their own waits.
 //! Nothing polls (`DDALGAK-NFR-001`). The engine never turns itself on: only the user (tray, CLI,
 //! `engine.toggle`) or the opt-in `engine_on_start: on` at a clean start.
 
 use super::context::Watcher;
-use super::hook::{self, HookThread, ModeRequest, STATE_OFF, STATE_PAUSED, STATE_RUNNING};
+use super::hook::{
+    self, HookThread, ModeRequest, STATE_OFF, STATE_PAUSED, STATE_RUNNING, WM_HOOK_LOST,
+};
 use super::inject::SendInputBackend;
 use super::pipe::{self, Listener};
+use super::recovery::{self as win_recovery, Released};
 use super::tray::{MenuCmd, Tray};
 use super::watch::FolderWatcher;
 use super::{instance, process_cpu_us, wide};
+use crate::indicator;
 use crate::ipc::{self, Method, ModeCmd};
 use crate::lifecycle::{
     Lifecycle, Markers, OffReason, Origin, Refusal, Request, StartFacts, State,
 };
 use crate::modes::{self, ModeOrigin, ModeStatus};
 use crate::paths::Paths;
+use crate::recovery::{self, Scope};
 use crate::rules::{self, FileState};
 use crate::shortcuts::Shortcuts;
 use crate::stats::Stats;
@@ -171,6 +183,8 @@ struct Host {
     taskbar_created: u32,
     /// The mode state as last seen (the hook thread owns it) and since when (Step 72).
     mode: Option<(ModeStatus, String)>,
+    /// Step 73: what the stale-key release after an unclean exit did (`None`: clean start).
+    recovered: Option<Released>,
 }
 
 thread_local! {
@@ -258,6 +272,9 @@ impl Host {
                 modes: self.loaded.modes.clone(),
             }));
             self.shared.set_state(STATE_RUNNING);
+            // Step 73: the hook-timeout threshold, read once per hook (never in the callback).
+            self.shared
+                .set_hook_timeout_us(win_recovery::hook_timeout_us(self.opts.observe_only));
             let table = self.loaded.table();
             match HookThread::start(
                 table,
@@ -312,13 +329,17 @@ impl Host {
             self.set_mode(None);
             let _ = if req == Request::Emergency {
                 self.markers.emergency_off()
+            } else if origin.is_user() {
+                // Step 73: the user's turn-off survives a restart, a sign-out and a reboot.
+                self.markers.engine_off_by_user()
             } else {
                 self.markers.engine_off()
             };
+        } else if req == Request::Stop && origin.is_user() && !change.changed() {
+            // "Disable" while already off is a choice too: it is remembered the same way.
+            let _ = self.markers.engine_off_by_user();
         }
-        if let Some(t) = &mut self.tray {
-            t.update(self.lifecycle.state());
-        }
+        self.refresh_indicator();
         if req == Request::Emergency {
             self.notify(
                 "Ddalgak turned the engine off",
@@ -407,6 +428,7 @@ impl Host {
                 }
                 _ => {}
             }
+            self.refresh_indicator();
         }
         let mut v = self.states_json();
         if let Some(o) = v.as_object_mut() {
@@ -469,13 +491,79 @@ impl Host {
             _ => crate::time::now_rfc3339(),
         };
         self.mode = status.map(|s| (s, since));
-        let ind = self
-            .mode
-            .as_ref()
-            .map(|(s, _)| modes::indicator(self.loaded.mode_indicator, &self.loaded.modes, s));
+        self.refresh_indicator();
+    }
+
+    /// The status indicator (Step 73) from what the host knows now.
+    fn indicator(&self) -> indicator::Status {
+        indicator::build(&indicator::Facts {
+            state: Some(self.state()),
+            off_reason: self.lifecycle.off_reason(),
+            mode: self
+                .mode
+                .as_ref()
+                .map(|(s, _)| modes::indicator(self.loaded.mode_indicator, &self.loaded.modes, s)),
+            profile_enabled: self.loaded.profile_enabled,
+            session_locked: self.locked,
+            rules_kept_previous: !self.saved.state.usable(),
+            shortcut_taken: self.registered.iter().any(|(_, _, s)| *s == "taken"),
+            floating: self.loaded.floating_indicator,
+        })
+    }
+
+    /// Shows the indicator in the tray (event-driven: called after every change).
+    fn refresh_indicator(&mut self) {
+        let status = self.indicator();
         if let Some(t) = &mut self.tray {
-            t.set_mode(ind);
+            t.set(status);
         }
+    }
+
+    /// `ddalgak release` and the tray's *Release stuck keys* (Step 73): the worker releases its
+    /// ledger, the hook forgets its key state (a key-up it never saw no longer blocks triggers),
+    /// and keys Windows still considers pressed that nobody holds get an up (a modifier the hook
+    /// saw physically pressed is left alone).
+    fn release(&mut self, dry_run: bool) -> Value {
+        let ledger = crate::inject::held_global();
+        let physical = self
+            .state()
+            .has_hook()
+            .then(|| self.worker.queue().runs().phys.load(Ordering::SeqCst));
+        let scope = if self.opts.observe_only {
+            Scope::ObscureOnly
+        } else {
+            Scope::All
+        };
+        let candidates = recovery::candidates(&self.loaded.bindings);
+        let r = win_recovery::release_stale(&candidates, physical, &ledger, scope, dry_run);
+        if !dry_run {
+            self.worker.queue().send(Msg::Cancel);
+            if let Some(h) = &self.hook {
+                h.cancel_pending();
+            }
+            self.shared.request_key_reset();
+        }
+        json!({
+            "dry_run": dry_run,
+            "held_by_ddalgak": ledger.len(),
+            "stale": { "checked": r.checked, "released": r.released },
+            "key_state_reset": !dry_run && self.state().has_hook(),
+            "engine": self.engine_json(),
+        })
+    }
+
+    /// The hook callback reached the hook timeout (Step 73): Windows may have removed the hook
+    /// without a word, so the engine turns itself off, releases everything and says so. It never
+    /// reinstalls a hook by itself; turning it on again installs a fresh one.
+    fn hook_lost(&mut self) {
+        if !self.state().has_hook() {
+            return;
+        }
+        let _ = self.engine(Request::Stop, &Origin::HookLost, false);
+        self.notify(
+            "Ddalgak turned the engine off",
+            "A key event took too long, and Windows may have removed the keyboard hook. Every key was released. Turn the engine on again from this icon.",
+        );
     }
 
     /// The live mode state from the hook thread (Step 72), or the mode the engine starts in.
@@ -522,16 +610,26 @@ impl Host {
         if !self.state().has_hook() {
             return Err(refusal(Refusal::EngineOff));
         }
-        if let ModeCmd::Set(m) | ModeCmd::Toggle(m) = &cmd
-            && self.loaded.modes.index(m).is_none()
-        {
-            return Err((
-                "mode_not_found".into(),
-                format!(
-                    "no mode `{m}` in the active profile `{}`",
-                    self.loaded.profile
-                ),
-            ));
+        if let ModeCmd::Set(m) | ModeCmd::Toggle(m) = &cmd {
+            match self.loaded.modes.index(m) {
+                None => {
+                    return Err((
+                        "mode_not_found".into(),
+                        format!(
+                            "no mode `{m}` in the active profile `{}`",
+                            self.loaded.profile
+                        ),
+                    ));
+                }
+                // Step 73: nothing switches to a disabled mode.
+                Some(i) if !self.loaded.modes.is_enabled(i) => {
+                    return Err((
+                        "mode_disabled".into(),
+                        format!("mode `{m}` is disabled; `ddalgak enable --mode {m}` turns it on"),
+                    ));
+                }
+                Some(_) => {}
+            }
         }
         let (req, op) = match cmd {
             ModeCmd::Set(mode) => (ModeRequest::Set { mode, origin }, "set"),
@@ -617,11 +715,21 @@ impl Host {
                 "test_mode": !self.opts.tray,
             },
             "engine": self.engine_json(),
-            "start": { "off_reason": self.start_reason.as_str() },
-            "profile": { "id": self.loaded.profile, "mode": mode["active"], "mode_state": mode },
+            "start": {
+                "off_reason": self.start_reason.as_str(),
+                // Step 73: the stale-key release after an unclean exit (null after a clean one).
+                "recovered": self.recovered.map(|r| json!({ "checked": r.checked, "released": r.released })),
+            },
+            "profile": {
+                "id": self.loaded.profile,
+                "mode": mode["active"],
+                "mode_state": mode,
+                "enabled": self.loaded.profile_enabled,
+            },
             "rules": rules_json,
             "shortcuts": self.shortcuts.to_json(&|a| self.registration(a)),
             "session": { "locked": self.locked },
+            "indicator": self.indicator().to_json(),
             "activity": activity,
         })
     }
@@ -636,6 +744,9 @@ impl Host {
         let st = &self.stats;
         if st.late.load(Ordering::Relaxed) > 0 || st.max_us.load(Ordering::Relaxed) >= 300_000 {
             problems.push(json!({ "code": "hook_may_have_been_removed", "message": "a key event reached the hook very late; Windows may have removed the hook silently. Turn the engine off and on again (`ddalgak engine stop`, then `start`); Ddalgak never reinstalls it by itself" }));
+        }
+        if st.hook_timeouts.load(Ordering::Relaxed) > 0 {
+            problems.push(json!({ "code": "hook_lost", "message": "a hook callback reached Windows' LowLevelHooksTimeout, so Windows may have removed the hook; the engine turned itself off and released every key. `ddalgak engine start` installs a fresh hook" }));
         }
         if st.dropped.load(Ordering::Relaxed) > 0 {
             problems.push(json!({ "code": "signals_dropped", "message": "an event storm filled the worker queue; some rule runs were dropped" }));
@@ -661,6 +772,8 @@ impl Host {
                     "thread_alive": alive,
                     "observe_only": self.opts.observe_only,
                     "mouse_installed": self.shared.mouse_installed.load(Ordering::SeqCst),
+                    // Step 73: the threshold a callback must stay below (µs; 0 before a hook).
+                    "timeout_us": self.shared.hook_timeout_us(),
                 },
                 "context_watchers": self.watcher.as_ref().map_or(0, Watcher::count),
             },
@@ -680,6 +793,7 @@ impl Host {
             Method::Engine(req) => self.engine(req, &Origin::Cli, dry_run),
             Method::RulesReload => Ok(self.reload("cli", dry_run)),
             Method::Mode(cmd) => self.mode_cmd(cmd, dry_run, ModeOrigin::Cli),
+            Method::Release => Ok(self.release(dry_run)),
             Method::Quit => {
                 if !dry_run {
                     // SAFETY: posts a plain message to this thread's own window.
@@ -768,6 +882,18 @@ impl Host {
             }
             (MenuCmd::Mode(id), _) => self.mode_cmd(ModeCmd::Set(id), false, ModeOrigin::Tray),
             (MenuCmd::ResetMode, _) => self.mode_cmd(ModeCmd::Reset, false, ModeOrigin::Tray),
+            (MenuCmd::ReleaseKeys, _) => {
+                let v = self.release(false);
+                let n = v["stale"]["released"].as_u64().unwrap_or(0)
+                    + v["held_by_ddalgak"].as_u64().unwrap_or(0);
+                self.notify(
+                    "Ddalgak released held keys",
+                    &format!(
+                        "{n} key(s) or button(s) were released. If a key still acts pressed, press it once."
+                    ),
+                );
+                Ok(v)
+            }
         };
         if let Err((_, msg)) = result {
             self.notify("Ddalgak", &msg);
@@ -816,6 +942,9 @@ impl Host {
             }
             _ => {}
         }
+        // The engine state never changes by a lock (rules wait; nothing is resumed by an
+        // unlock), only what the indicator says (Step 73).
+        self.refresh_indicator();
     }
 
     /// Engine off, shortcuts released: before the window goes away.
@@ -881,6 +1010,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         WM_HOST_RELOAD => {
             with_host(|h| h.reload("watcher", false));
+            0
+        }
+        WM_HOOK_LOST => {
+            with_host(Host::hook_lost);
             0
         }
         WM_WTSSESSION_CHANGE => {
@@ -1038,7 +1171,7 @@ pub fn run(opts: Options) -> Result<(), RunError> {
     })?;
     let me = super::user_sid().map_err(|e| RunError::Io(e.to_string()))?;
     let markers = Markers::new(&opts.paths.local);
-    let (unclean_exit, emergency) = markers.take_start_facts();
+    let found = markers.take_start_facts();
     let shortcuts = Shortcuts::load(&opts.paths, opts.no_hotkeys);
     let ctx = Context {
         shortcuts: shortcuts
@@ -1052,16 +1185,35 @@ pub fn run(opts: Options) -> Result<(), RunError> {
     let elevated = super::is_elevated();
     let facts = StartFacts {
         engine_on_start: loaded.engine_on_start,
-        unclean_exit,
-        emergency,
+        unclean_exit: found.unclean_exit,
+        emergency: found.emergency,
+        disabled: found.disabled,
         no_hotkeys: opts.no_hotkeys,
         elevated,
     };
     let policy = crate::lifecycle::start_policy(facts);
     let start_reason = policy.err().unwrap_or(OffReason::Default);
+    // Step 73: a previous run that was killed could not release what it held. Before anything
+    // else, keys Windows still considers pressed that this app could have pressed get an up
+    // (the test host only touches F13–F24).
+    let recovered = found.unclean_exit.then(|| {
+        let scope = if opts.observe_only {
+            Scope::ObscureOnly
+        } else {
+            Scope::All
+        };
+        win_recovery::release_stale(
+            &recovery::candidates(&loaded.bindings),
+            None,
+            &[],
+            scope,
+            false,
+        )
+    });
     let hwnd = create_window()?;
     let stats = Arc::new(Stats::default());
     let shared = hook::Shared::new(Arc::clone(&stats));
+    shared.set_host_window(hwnd as isize);
     let (control_tx, control_rx) = channel::<Control>();
     let hwnd_bits = hwnd as isize;
     let control_tx = Mutex::new(control_tx);
@@ -1110,7 +1262,14 @@ pub fn run(opts: Options) -> Result<(), RunError> {
         },
     );
     let tray = if opts.tray {
-        Some(Tray::new(hwnd, WM_TRAY, State::Off).map_err(|e| RunError::Io(e.to_string()))?)
+        let first = indicator::build(&indicator::Facts {
+            state: Some(State::Off),
+            off_reason: Some(start_reason),
+            profile_enabled: loaded.profile_enabled,
+            floating: loaded.floating_indicator,
+            ..indicator::Facts::default()
+        });
+        Some(Tray::new(hwnd, WM_TRAY, first).map_err(|e| RunError::Io(e.to_string()))?)
     } else {
         None
     };
@@ -1174,8 +1333,10 @@ pub fn run(opts: Options) -> Result<(), RunError> {
             control_rx,
             taskbar_created,
             mode: None,
+            recovered,
         });
     });
+    with_host(Host::refresh_indicator);
     if policy.is_ok() {
         with_host(|h| {
             if let Err((_, msg)) = h.engine(Request::Start, &Origin::Startup, false) {
@@ -1184,21 +1345,46 @@ pub fn run(opts: Options) -> Result<(), RunError> {
         });
     } else if matches!(
         start_reason,
-        OffReason::UncleanExit | OffReason::Emergency | OffReason::Elevated
+        OffReason::UncleanExit | OffReason::Emergency | OffReason::Elevated | OffReason::Disabled
     ) {
         with_host(|h| {
+            let released = h.recovered.map_or(0, |r| r.released);
             let text = match start_reason {
+                OffReason::UncleanExit if released > 0 => format!(
+                    "Ddalgak did not stop cleanly last time, so the engine stays off. It released {released} key(s) Windows still considered pressed. Turn it on from this icon."
+                ),
                 OffReason::UncleanExit => {
-                    "Ddalgak did not stop cleanly last time, so the engine stays off. Turn it on from this icon."
+                    "Ddalgak did not stop cleanly last time, so the engine stays off. Turn it on from this icon.".into()
                 }
                 OffReason::Emergency => {
-                    "The last stop was the emergency chord, so the engine stays off. Turn it on from this icon."
+                    "The last stop was the emergency chord, so the engine stays off. Turn it on from this icon.".into()
                 }
-                _ => "Ddalgak runs as administrator and keeps its engine off.",
+                OffReason::Disabled => {
+                    "You turned the engine off last time, so it stays off. Turn it on from this icon.".into()
+                }
+                _ => "Ddalgak runs as administrator and keeps its engine off.".into(),
             };
-            h.notify("Ddalgak engine is off", text);
+            h.notify("Ddalgak engine is off", &text);
         });
     }
+    // Step 73: a shortcut another program owns is said once; nothing is retried or taken.
+    with_host(|h| {
+        let taken: Vec<String> = h
+            .registered
+            .iter()
+            .filter(|(_, _, s)| *s == "taken")
+            .map(|(_, a, _)| a.clone())
+            .collect();
+        if !taken.is_empty() {
+            h.notify(
+                "Ddalgak shortcut not available",
+                &format!(
+                    "Another program uses the keys of {}. Ddalgak did not take them; choose other keys in hotkeys.json. The tray menu and `ddalgak enable|disable` still work.",
+                    taken.join(" and ")
+                ),
+            );
+        }
+    });
     // SAFETY: MSG is plain data; all-zero is a valid out-parameter.
     let mut msg: MSG = unsafe { std::mem::zeroed() };
     loop {

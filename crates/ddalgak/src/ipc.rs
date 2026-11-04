@@ -43,6 +43,9 @@ pub enum Method {
     RulesReload,
     /// Change the active mode of the running engine (Step 72).
     Mode(ModeCmd),
+    /// Step 73: release every key and button Ddalgak holds, forget the hook's key state and
+    /// release keys Windows still considers pressed that nobody holds (`ddalgak release`).
+    Release,
 }
 
 impl Method {
@@ -56,6 +59,7 @@ impl Method {
             Method::Mode(ModeCmd::Set(_)) => "mode.set".into(),
             Method::Mode(ModeCmd::Toggle(_)) => "mode.toggle".into(),
             Method::Mode(ModeCmd::Reset) => "mode.reset".into(),
+            Method::Release => "keys.release".into(),
         }
     }
 
@@ -65,6 +69,7 @@ impl Method {
             "health" => Method::Health,
             "app.quit" => Method::Quit,
             "rules.reload" => Method::RulesReload,
+            "keys.release" => Method::Release,
             other => {
                 let r = crate::lifecycle::Request::parse(other.strip_prefix("engine.")?)?;
                 if r == crate::lifecycle::Request::Emergency {
@@ -180,6 +185,7 @@ mod tests {
             Method::Mode(ModeCmd::Set("nav".into())),
             Method::Mode(ModeCmd::Toggle("sym-2".into())),
             Method::Mode(ModeCmd::Reset),
+            Method::Release,
         ] {
             let line = request(&m, true);
             assert!(line.ends_with('\n') && line.len() < MAX_REQUEST);

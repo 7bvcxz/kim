@@ -176,8 +176,21 @@ fn list_show_and_check_report_the_shipped_defaults_without_a_host_or_a_file() {
             .as_array()
             .unwrap()
             .iter()
-            .all(|a| a["scope"] == "context:terminal")
+            .all(|a| a["scope"] == "context:terminal" || a["scope"] == "context:manager")
     );
+    // Step 18: the Terminal manager's keys, a context of their own.
+    for (id, want) in [
+        ("manager.open", "Enter"),
+        ("manager.new", "Ctrl+N"),
+        ("manager.rename", "F2"),
+        ("manager.delete", "Delete"),
+        ("manager.close", "Escape"),
+    ] {
+        let a = action(&list, id);
+        assert_eq!(keys(a), [want], "{id}");
+        assert_eq!(a["scope"], "context:manager", "{id}");
+    }
+    assert_eq!(keys(action(&list, "manager.search")), ["Ctrl+F", "char:/"]);
     // show: one action and what involves it.
     let (_, show) = p.json(&["show", "terminal.close"]);
     assert_eq!(show["data"]["action"]["id"], "terminal.close");

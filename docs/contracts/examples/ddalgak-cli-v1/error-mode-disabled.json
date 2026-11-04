@@ -1,0 +1,12 @@
+{
+  "command": "mode.set",
+  "error": {
+    "code": "mode_disabled",
+    "details": [],
+    "exit_code": 7,
+    "hint": null,
+    "message": "mode `nav` is disabled; `ddalgak enable --mode nav` turns it on"
+  },
+  "ok": false,
+  "schema_version": 1
+}

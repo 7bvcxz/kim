@@ -7,7 +7,8 @@
   "backend": "register",
   "contexts": [
     { "id": "terminal", "title": "Terminal pane", "passthrough": true },
-    { "id": "copy-mode", "title": "Copy mode" }
+    { "id": "copy-mode", "title": "Copy mode" },
+    { "id": "manager", "title": "Terminal manager" }
   ],
   "leaders": [
     { "id": "prefix", "title": "Prefix key (tmux C-b)", "default": "Ctrl+B" }
@@ -64,6 +65,13 @@
     { "id": "scroll.top", "title": "Scroll to the oldest line", "context": "terminal", "defaults": ["Ctrl+Shift+Home"] },
     { "id": "scroll.bottom", "title": "Scroll to the live screen", "context": "terminal", "defaults": ["Ctrl+Shift+End"] },
     { "id": "copy.exit", "title": "Leave copy mode", "context": "copy-mode", "defaults": ["char:q", "Escape"] },
-    { "id": "copy.begin-selection", "title": "Begin selection", "context": "copy-mode", "defaults": ["Space"] }
+    { "id": "copy.begin-selection", "title": "Begin selection", "context": "copy-mode", "defaults": ["Space"] },
+    { "id": "manager.open", "title": "Open the selected Terminal in its window", "context": "manager", "defaults": ["Enter"] },
+    { "id": "manager.new", "title": "New Terminal (opens it)", "context": "manager", "defaults": ["Ctrl+N"] },
+    { "id": "manager.rename", "title": "Rename the selected Terminal", "context": "manager", "defaults": ["F2"] },
+    { "id": "manager.delete", "title": "Delete the selected Terminal (asks first)", "context": "manager", "defaults": ["Delete"], "destructive": true },
+    { "id": "manager.search", "title": "Search Terminals", "context": "manager", "defaults": ["Ctrl+F", "char:/"] },
+    { "id": "manager.pin", "title": "Keep the manager open (pin)", "context": "manager", "defaults": ["Ctrl+P"] },
+    { "id": "manager.close", "title": "Close the manager (Terminals keep running)", "context": "manager", "defaults": ["Escape"] }
   ]
 }

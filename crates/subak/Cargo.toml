@@ -56,7 +56,9 @@ kim-hotkeys = { version = "0.0.1", path = "../kim-hotkeys" }
 # spawn with the user's logon environment (CreateEnvironmentBlock), the start mutex, the Host's
 # own memory counters for host.stats (ProcessStatus). `subak-gui` (ADR 0039): its window, GDI
 # presentation, per-monitor DPI, IME, keyboard state, the clipboard (DataExchange, Memory, Ole),
-# High Contrast detection (Accessibility) and the dark title bar (Dwm).
+# High Contrast detection (Accessibility) and the dark title bar (Dwm). The floating icon and
+# Terminal manager (Step 18, ADR 0045): the tray icon (UI_Shell), owner-drawn system controls
+# (UI_Controls) and `PrintWindow` for the test hook's picture of the manager (Storage_Xps).
 windows-sys = { version = "0.61.2", features = [
     "Win32_Foundation",
     "Win32_Graphics_Dwm",
@@ -64,6 +66,7 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_Security",
     "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
+    "Win32_Storage_Xps",
     "Win32_System_Console",
     "Win32_System_DataExchange",
     "Win32_System_Environment",
@@ -77,9 +80,11 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_System_RemoteDesktop",
     "Win32_System_Threading",
     "Win32_UI_Accessibility",
+    "Win32_UI_Controls",
     "Win32_UI_HiDpi",
     "Win32_UI_Input_Ime",
     "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
 

@@ -26,6 +26,10 @@ pub mod tokens {
     pub const WARNING: Rgb = Rgb(0xE8, 0xC2, 0x7A);
     pub const DANGER: Rgb = Rgb(0xF0, 0x86, 0x8F);
     pub const INFO: Rgb = Rgb(0x8A, 0xB4, 0xF8);
+    /// The Terminal manager's (Step 18): rows, input boundaries, focus rings.
+    pub const BG_SELECTED: Rgb = Rgb(0x2A, 0x28, 0x38);
+    pub const BORDER_STRONG: Rgb = Rgb(0x6A, 0x66, 0x80);
+    pub const FOCUS_RING: Rgb = Rgb(0xC9, 0xBC, 0xFF);
 }
 use tokens::*;
 
@@ -658,6 +662,9 @@ mod tests {
         let want = [
             ("bg.base", BG_BASE),
             ("bg.raised", BG_RAISED),
+            ("bg.selected", BG_SELECTED),
+            ("border.strong", BORDER_STRONG),
+            ("focus.ring", FOCUS_RING),
             ("bg.overlay", BG_OVERLAY),
             ("border.subtle", BORDER_SUBTLE),
             ("text.primary", TEXT_PRIMARY),

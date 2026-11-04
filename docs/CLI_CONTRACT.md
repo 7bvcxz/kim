@@ -270,6 +270,7 @@ real runs. The mode commands (Step 72) and the profile commands (Steps 75, 81) u
 | `rule_conflict` | 7 | The change would give a rule a trigger another enabled rule (or Ddalgak's own shortcut) already has, an ID is taken, or the rules changed since the revision the caller read; nothing was written. `details` list the problems with their offers. |
 | `consent_required` | 7 | The change needs `--allow <permission>`; a new rule was saved disabled, anything else was not written. |
 | `mode_in_use` | 7 | Step 72: `mode delete` of the default mode, of a mode other modes are layers over, of a mode a rule switches to, or of a mode rules are limited to without `--delete-rules`; nothing was written. `details` name the rules and modes that use it. |
+| `mode_disabled` | 7 | Step 73: `mode set` or `mode toggle` (or the tray's mode menu) to a mode the user disabled; nothing changed. `ddalgak enable --mode <id>` turns it on again. |
 
 ## 7. Output streams and the `--json` envelope
 

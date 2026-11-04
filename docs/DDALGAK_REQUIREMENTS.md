@@ -11,7 +11,10 @@ elevation and focus checks are manual; mouse moves, wheel, clicks and holds
 (`DDALGAK-FR-015`) since Step 71, whose real-pointer, monitor, scaling and game checks are
 manual; modes and layers (`DDALGAK-FR-016`) since Step 72, whose real-typing and tray-indicator
 checks are
-manual; see [DDALGAK_ENGINE](DDALGAK_ENGINE.md) §8, §10, §11, §12, §13, §14 and §15 for what was
+manual; enable, disable, pause and recovery (the D2 rows `DDALGAK-FR-002…004`,
+`DDALGAK-SEC-003`, `DDALGAK-SEC-005`, with per-mode and per-profile `enabled`) since Step 73, whose
+physical emergency-chord, real lock, sign-out, reboot and stuck-key checks are manual; see
+[DDALGAK_ENGINE](DDALGAK_ENGINE.md) §8, §10, §11, §12, §13, §14, §15 and §16 for what was
 verified; the GUI half of `DDALGAK-FR-007` and undo arrive with the
 editor, Step 74) · Owner: mouv ·
 Derived from [DDALGAK_PHILOSOPHY](DDALGAK_PHILOSOPHY.md) · Decisions:
@@ -19,7 +22,8 @@ Derived from [DDALGAK_PHILOSOPHY](DDALGAK_PHILOSOPHY.md) · Decisions:
 [ADR 0031](adr/0031-ddalgak-remap-execution-and-mouse-hook.md),
 [ADR 0034](adr/0034-ddalgak-typing-runs-hotstrings-and-clipboard.md),
 [ADR 0037](adr/0037-ddalgak-program-and-website-launches.md),
-[ADR 0040](adr/0040-ddalgak-mouse-actions.md)
+[ADR 0040](adr/0040-ddalgak-mouse-actions.md),
+[ADR 0046](adr/0046-ddalgak-enable-disable-and-recovery.md)
 
 ## 0. How to read this document
 

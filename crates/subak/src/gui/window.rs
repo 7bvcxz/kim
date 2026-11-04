@@ -463,6 +463,8 @@ struct App {
     menu_choices: Vec<(String, String)>,
     /// The terminal families of [`MENU_FONTS`] that are installed (asked once).
     fonts: Option<Vec<&'static str>>,
+    /// The family that draws Latin text in the terminal renderer (the user's, or a fallback).
+    face: String,
 }
 
 thread_local! {
@@ -1512,12 +1514,12 @@ impl App {
         if a.font_family != b.font_family {
             let mut r = make_term_renderer(self.theme(), self.term_opts(), &b.font_family);
             r.set_focused(self.focused);
+            self.face = r.face_for('A').family;
             self.renderer = r;
-            if !b.font_family.is_empty() && self.renderer.face_for('A').family != b.font_family {
+            if !b.font_family.is_empty() && !self.face.eq_ignore_ascii_case(&b.font_family) {
                 self.notice = Some(format!(
                     "The font `{}` is not installed; {} is used",
-                    b.font_family,
-                    self.renderer.face_for('A').family
+                    b.font_family, self.face
                 ));
             }
         } else if look {
@@ -3889,10 +3891,7 @@ impl App {
                 "foreground": format!("{:06X}", self.theme().foreground.to_u32()),
                 "chrome": self.chrome().name,
             },
-            "face": self.renderer.rasterizer_name().eq("gdi").then(|| {
-                let mut r = make_term_renderer(Theme::kim_dark(), self.term_opts(), &a.font_family);
-                r.face_for('A').family
-            }),
+            "face": self.face,
             "cell_height_ratio": f64::from(m.height) / f64::from(a.font_size * self.scale()),
             "opacity_applied": if layered { u32::from(alpha) } else { 255 },
             "motion": {
@@ -5168,6 +5167,7 @@ pub fn run(o: Options) -> ExitCode {
         toast: false,
         menu_choices: Vec::new(),
         fonts: None,
+        face: String::new(),
     };
     if let Some(m) = &migration {
         app.event(m);
@@ -5184,6 +5184,7 @@ pub fn run(o: Options) -> ExitCode {
         &app.settings.appearance.font_family,
     );
     app.renderer.set_focused(false);
+    app.face = app.renderer.face_for('A').family;
     app.pane
         .set_word_delimiters(&app.settings.terminal.word_separators);
     // The tab bar's height is known before the first size is chosen.

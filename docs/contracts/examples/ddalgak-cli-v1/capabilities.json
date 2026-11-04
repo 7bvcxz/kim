@@ -50,7 +50,7 @@
         "network": false,
         "opens_window": false,
         "requires_yes": false,
-        "summary": "Pause all rules except engine-control rules; held keys are released",
+        "summary": "Pause all rules except engine-control rules; held keys and buttons are released and pointer moves stop",
         "usage": "ddalgak engine pause [--endpoint <name>] [--dry-run] [--json]"
       },
       {
@@ -298,7 +298,7 @@
     "json_schema_version": 1,
     "schema": "kim.capabilities",
     "schema_version": 1,
-    "summary": "Pre-alpha: engine status, health and control of the tray app, opt-in sign-in start, the rule store (CRUD, validation, drafts, history, live reload); runs engine-control, remap and block rules",
+    "summary": "Pre-alpha: engine status, health and control of the tray app, opt-in sign-in start, rule store (CRUD, validation, drafts, history, live reload); engine, remap, block, typing, launch and mouse rules",
     "tool": "ddalgak",
     "version": "0.0.1"
   },

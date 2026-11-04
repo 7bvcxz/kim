@@ -66,7 +66,7 @@ COMMANDS:
                   again; an invalid file keeps it off (`rules_invalid`). Refused while the app
                   runs as administrator (`engine_elevated`).
     engine pause  Pause rules; engine-control rules keep working; held keys and buttons
-                  (remap targets) are released.
+                  (remap targets, held mouse buttons) are released and pointer moves stop.
     engine resume Resume a paused engine. Never turns an engine on that is off.
     engine stop   Turn the engine off (alias: engine off): the keyboard hook (and the mouse
                   hook, which exists only while a mouse-button rule does) is removed.
@@ -92,13 +92,45 @@ RULES (rules.json; these commands work without the app):
                   [--escapes] [--variables] [--method paste] [--key-delay-ms <n>];
                   open_program --path <exe> | --app-id <id> [--arg <a>]... [--working-dir <d>]
                   [--window normal|maximized|minimized] [--if-running start_new|activate]
-                  [--env NAME=VALUE]...; open_url --url <url>; mode --op <op>
-                  [--target-mode <m>]...; delay --ms <n>; any step as --step '<json>'.
+                  [--env NAME=VALUE]...; open_url --url <url>; mouse_move --dx <n> --dy <n>
+                  [--grid <cols>x<rows>] [--speed <px/s> [--acceleration <0-10>] |
+                  --repeat-ms <ms> [--delay-ms <ms>]] or --x <n> --y <n> [--relative-to
+                  virtual_screen|primary_monitor|active_window]; mouse_scroll --direction
+                  up|down|left|right [--notches <1-50>]; mouse_click --button
+                  left|right|middle|x1|x2 [--op click|double_click|hold] [--x <n> --y <n>];
+                  mode --op <op> [--target-mode <m>]...; delay --ms <n>; any step as
+                  --step '<json>'.
                   Rule options: --title, --description, --on press|release|hold, --hold-ms,
                   --repeat, --pass-through, --accept-injected, --mode <m>..., --priority,
                   --on-error stop|continue. Engine, remap, block, send_keys, type_text,
-                  open_program and open_url rules run (a typing step alone; launches together,
-                  in order); the others stay inactive (step_unsupported) until their Step.
+                  open_program, open_url and mouse rules run (a typing step alone; launches
+                  together, in order; mouse steps together, in order); the others stay
+                  inactive (step_unsupported) until their Step.
+    mouse         mouse_move moves the pointer by --dx/--dy logical pixels (scaled by the
+                  monitor's display scale; with --grid, cells of a virtual grid, landing on
+                  cell centres) or to --x/--y (desktop pixels, or relative to the primary
+                  monitor or the active window's content area). Targets never leave the
+                  visible desktop: a point beside every monitor lands on the nearest edge, a
+                  move stops where its path leaves the desktop. While the trigger is held:
+                  --speed glides (--acceleration speeds it up over the first second, at most
+                  10000 px/s), --repeat-ms repeats the step after --delay-ms (default 300),
+                  whatever the keyboard's repeat settings. mouse_scroll sends wheel notches;
+                  mouse_click clicks, double-clicks or holds a button exactly as long as the
+                  trigger (released on pause, stop, lock, the emergency chord and every other
+                  way out). Positions are read only when a rule runs; mouse actions need no
+                  mouse hook and never track the pointer. Nothing is sent to the secure
+                  desktop or to an administrator window under the pointer. Examples (they
+                  also need --allow input-injection):
+                    ddalgak rule add --trigger Ctrl+Alt+Shift+Right --action mouse_move
+                      --dx 1 --dy 0 --speed 600 --acceleration 3
+                    ddalgak rule add --trigger Ctrl+Alt+Shift+L --action mouse_move --dx 1
+                      --grid 16x9 --repeat-ms 150
+                    ddalgak rule add --trigger Ctrl+Alt+Shift+Home --action mouse_move
+                      --x 960 --y 540 --relative-to primary_monitor
+                    ddalgak rule add --trigger Ctrl+Alt+Shift+PageDown --action mouse_scroll
+                      --direction down --notches 3
+                    ddalgak rule add --trigger Ctrl+Alt+Shift+Space --action mouse_click
+                      --button left --op hold
     launches      open_program starts exactly the .exe you name (an absolute path, or under
                   %ProgramFiles%, %ProgramFiles(x86)%, %LocalAppData%, %AppData%, %UserProfile%,
                   %SystemRoot%), as you, with each --arg quoted by Ddalgak: never a shell
@@ -197,9 +229,9 @@ FILES:
     %LOCALAPPDATA%\\mouv\\ddalgak\\          crash and emergency markers
 
 Pre-alpha: rules can control the engine (pause, resume, turn off), remap keys and mouse buttons,
-block keys, send key sequences, type text and open programs and websites; mouse actions and
-modes arrive in later steps and stay inactive until then. Linux is not supported yet. No command opens a window,
-installs anything or uses the network.
+block keys, send key sequences, type text, open programs and websites, and move, scroll and
+click the mouse; modes arrive in a later step and stay inactive until then. Linux is not
+supported yet. No command opens a window, installs anything or uses the network.
 ";
 
 /// The capabilities document (`kim.capabilities` v1); a test keeps it equal to

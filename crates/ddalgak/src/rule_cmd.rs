@@ -430,6 +430,19 @@ fn inputs(a: &Args) -> Result<StepInputs, CliError> {
             Vec::new()
         },
         ms: num(a, "--ms")?,
+        dx: num(a, "--dx")?,
+        dy: num(a, "--dy")?,
+        x: num(a, "--x")?,
+        y: num(a, "--y")?,
+        relative_to: a.get("--relative-to").map(str::to_string),
+        grid: a.get("--grid").map(str::to_string),
+        speed: num(a, "--speed")?,
+        acceleration: num(a, "--acceleration")?,
+        repeat_ms: num(a, "--repeat-ms")?,
+        delay_ms: num(a, "--delay-ms")?,
+        direction: a.get("--direction").map(str::to_string),
+        notches: num(a, "--notches")?,
+        button: a.get("--button").map(str::to_string),
     })
 }
 
@@ -527,6 +540,29 @@ fn default_title(keys: &str, steps: &[Action]) -> String {
         // and host only, never the path, the arguments or the URL's path (Step 70).
         Some(s @ (Action::OpenProgram(_) | Action::OpenUrl(_))) => {
             let mut t = ddalgak::launch::summary(&serde_json::to_value(s).unwrap_or_default());
+            if let Some(first) = t.get(..1) {
+                t = first.to_lowercase() + &t[1..];
+            }
+            if steps.len() > 1 {
+                t.push_str(&format!(" (+{} more)", steps.len() - 1));
+            }
+            t
+        }
+        // "moves the pointer right at 600 px/s while Right is held" (Step 71).
+        Some(s @ (Action::MouseMove(_) | Action::MouseScroll(_) | Action::MouseClick(_))) => {
+            let step = serde_json::to_value(s).unwrap_or_default();
+            let compiled = ddalgak::mouse::compile_step(&step);
+            if let Ok(
+                c @ (ddalgak::mouse::Compiled::Hold { .. } | ddalgak::mouse::Compiled::Motion(_)),
+            ) = compiled
+            {
+                // A held action's sentence names its keys already.
+                return ddalgak::mouse::summary(&c, keys).chars().take(80).collect();
+            }
+            let mut t = compiled.map_or_else(
+                |_| s.kind().replace('_', " "),
+                |c| ddalgak::mouse::summary(&c, keys),
+            );
             if let Some(first) = t.get(..1) {
                 t = first.to_lowercase() + &t[1..];
             }

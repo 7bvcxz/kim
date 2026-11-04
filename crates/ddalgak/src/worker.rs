@@ -29,13 +29,14 @@
 
 use crate::core::{RemapOp, Signal};
 use crate::inject::{Backend, Injector, OutCode, OutEvent};
+use crate::launch;
 use crate::run::{self, Env, HotstringFire, Next, Run, RunShared};
 use crate::stats::Stats;
 use crate::table::{Action, Binding, EngineOp};
 use crate::vk::ModKey;
 use serde_json::{Value, json};
 use std::collections::VecDeque;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -197,6 +198,8 @@ impl Worker {
                     shared: &shared,
                     activity: &act,
                     active: None,
+                    gate: Arc::new(Mutex::new(launch::Gate::default())),
+                    epoch: Arc::new(AtomicU32::new(0)),
                 };
                 run(&rx, &control, &st, &mut ctx);
             })
@@ -236,13 +239,18 @@ struct Active {
     due: Instant,
 }
 
-/// What the loop's typing runs work with.
+/// What the loop's typing runs and launches work with.
 struct Ctx<'a> {
     inj: &'a mut Inj,
     env: &'a mut Env,
     shared: &'a RunShared,
-    activity: &'a Mutex<Activity>,
+    activity: &'a Arc<Mutex<Activity>>,
     active: Option<Active>,
+    /// Launch rules running now and their last starts (`busy`, `rate_limited`; Step 70).
+    gate: Arc<Mutex<launch::Gate>>,
+    /// Bumped by every cancellation; a launch thread stops before its next target when it
+    /// changed since the trigger fired.
+    epoch: Arc<AtomicU32>,
 }
 
 impl Ctx<'_> {
@@ -258,8 +266,72 @@ impl Ctx<'_> {
         }
     }
 
+    /// Starts a launch on its own short-lived thread (Step 70), so a slow shell hand-off never
+    /// delays remaps or typing. One run per rule at a time (`busy`) and one start per rule per
+    /// [`launch::DEBOUNCE`] (`rate_limited`). The thread records the outcome (codes only).
+    fn launch(&mut self, r: &Rules, b: &Binding, plan: &Arc<launch::Plan>) {
+        let entry = |outcome: &str| Entry {
+            at: crate::time::now_rfc3339(),
+            rule: b.rule.clone(),
+            profile: r.profile.clone(),
+            mode: r.mode.clone(),
+            outcome: outcome.to_string(),
+        };
+        let admitted = self
+            .gate
+            .lock()
+            .map_or(Err("busy"), |mut g| g.admit(&b.rule, Instant::now()));
+        if let Err(code) = admitted {
+            if let Ok(mut a) = self.activity.lock() {
+                a.push(entry(code));
+            }
+            return;
+        }
+        let launcher = Arc::clone(&self.env.launcher);
+        let plan = Arc::clone(plan);
+        let gate = Arc::clone(&self.gate);
+        let activity = Arc::clone(self.activity);
+        let epoch = Arc::clone(&self.epoch);
+        let fired = epoch.load(Ordering::SeqCst);
+        let rule = b.rule.clone();
+        let mut done = entry("ok");
+        let spawned = std::thread::Builder::new()
+            .name("ddalgak-launch".into())
+            .spawn(move || {
+                let cancelled = || epoch.load(Ordering::SeqCst) != fired;
+                let code = launch::execute(
+                    &plan,
+                    &launch::Exec {
+                        launcher: &*launcher,
+                        var: &launch::process_var,
+                        cancelled: &cancelled,
+                    },
+                );
+                if let Ok(mut g) = gate.lock() {
+                    g.done(&rule);
+                }
+                done.at = crate::time::now_rfc3339();
+                done.outcome = code.to_string();
+                if let Ok(mut a) = activity.lock() {
+                    a.push(done);
+                }
+            });
+        if spawned.is_err() {
+            if let Ok(mut g) = self.gate.lock() {
+                g.done(&b.rule);
+            }
+            if let Ok(mut a) = self.activity.lock() {
+                a.push(entry("launch_failed"));
+            }
+        }
+    }
+
     /// Starts a typing run for a fired rule, or drops the trigger with `busy`.
     fn start(&mut self, r: &Rules, b: &Binding, hs: Option<HotstringFire>) {
+        if let Action::Launch(plan) = &b.action {
+            self.launch(r, b, plan);
+            return;
+        }
         if self.active.is_some() {
             if let Ok(mut a) = self.activity.lock() {
                 a.push(Entry {
@@ -313,8 +385,10 @@ impl Ctx<'_> {
         }
     }
 
-    /// Ends the run in progress (pause, stop, emergency, reload).
+    /// Ends the run in progress (pause, stop, emergency, reload); a launch still running stops
+    /// before its next target (a program already started is never stopped).
     fn cancel(&mut self) {
+        self.epoch.fetch_add(1, Ordering::SeqCst);
         if let Some(mut a) = self.active.take() {
             let code = a.run.cancel(self.inj, self.env, self.shared);
             self.push(&a.run, code);
@@ -556,8 +630,8 @@ fn fire(
         Action::Block => {}
         // Remaps run through `Signal::Remap`; a fired remap does nothing more.
         Action::Remap(_) => return false,
-        // Typing runs record their own outcome when they end.
-        Action::Type(_) | Action::Keys(_) => return true,
+        // Typing runs and launches record their own outcome when they end.
+        Action::Type(_) | Action::Keys(_) | Action::Launch(_) => return true,
     }
     record(rules, generation, binding, "ok", activity);
     false

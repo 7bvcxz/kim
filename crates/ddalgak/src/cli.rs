@@ -87,6 +87,7 @@ const RULE_FIELDS: &[(&str, Kind)] = &[
     ("--app-id", Value),
     ("--arg", Multi),
     ("--working-dir", Value),
+    ("--env", Multi),
     ("--window", Value),
     ("--if-running", Value),
     ("--url", Value),
@@ -147,7 +148,11 @@ impl Cmd {
             }
             Self::StartupEnable | Self::StartupDisable => vec![("--dry-run", Flag)],
             Self::RuleList => vec![("--profile", Value), ("--mode", Value), ("--draft", Flag)],
-            Self::RuleShow => vec![("--draft", Flag), ("--show-text", Flag)],
+            Self::RuleShow => vec![
+                ("--draft", Flag),
+                ("--show-text", Flag),
+                ("--show-targets", Flag),
+            ],
             Self::RuleCheck => vec![("--draft", Flag)],
             Self::RulesDraft | Self::RulesHistory => vec![],
             Self::RuleAdd => {

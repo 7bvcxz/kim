@@ -281,6 +281,18 @@ fn show(a: &Args, files: &Files, ctx: &Context) -> Outcome {
             }
         }
     }
+    // Launch targets are personal too (Step 70): a path names the user's folders, arguments,
+    // URL paths and queries and environment values can carry tokens. Shown only with
+    // --show-targets; otherwise the file name, the counts, the scheme and host, the variable
+    // names.
+    let mut targets_redacted = false;
+    if !a.has("--show-targets")
+        && let Some(steps) = rule["steps"].as_array_mut()
+    {
+        for s in steps.iter_mut() {
+            targets_redacted |= redact_targets(s);
+        }
+    }
     let data = json!({
         "source": src,
         "revision": l.revision(),
@@ -289,10 +301,42 @@ fn show(a: &Args, files: &Files, ctx: &Context) -> Outcome {
         "state": state.state,
         "code": state.code,
         "text_redacted": redacted > 0,
+        "targets_redacted": targets_redacted,
         "rule": rule,
         "problems": rule_problems(&l, std::slice::from_ref(id)).iter().map(|p| p.to_json()).collect::<Vec<_>>(),
     });
     Ok((data, Vec::new()))
+}
+
+/// Redacts one step's launch targets for `rule show` (Step 70); `true` when it changed something.
+fn redact_targets(s: &mut Value) -> bool {
+    let mut changed = false;
+    if s["type"] == "open_url"
+        && let Some(u) = s["url"].as_str()
+    {
+        s["url"] = json!({ "redacted": true, "shown": ddalgak::launch::redact_url(u) });
+        changed = true;
+    }
+    if s["type"] == "open_program" {
+        if let Some(p) = s["path"].as_str() {
+            s["path"] = json!({ "redacted": true, "program": ddalgak::launch::program_name(p) });
+            changed = true;
+        }
+        if let Some(n) = s["args"].as_array().map(Vec::len) {
+            s["args"] = json!({ "redacted": true, "count": n });
+            changed = true;
+        }
+        if s["working_dir"].is_string() {
+            s["working_dir"] = json!({ "redacted": true });
+            changed = true;
+        }
+        if let Some(env) = s["env"].as_array() {
+            let names: Vec<Value> = env.iter().map(|e| e["name"].clone()).collect();
+            s["env"] = json!({ "redacted": true, "names": names });
+            changed = true;
+        }
+    }
+    changed
 }
 
 /// `rule check`
@@ -362,6 +406,15 @@ fn inputs(a: &Args) -> Result<StepInputs, CliError> {
         app_id: a.get("--app-id").map(str::to_string),
         args: a.all("--arg").to_vec(),
         working_dir: a.get("--working-dir").map(str::to_string),
+        env: a
+            .all("--env")
+            .iter()
+            .map(|e| {
+                e.split_once('=')
+                    .map(|(n, v)| (n.to_string(), v.to_string()))
+                    .ok_or_else(|| CliError::usage("--env takes NAME=VALUE"))
+            })
+            .collect::<Result<Vec<_>, _>>()?,
         window: a.get("--window").map(str::to_string),
         if_running: a.get("--if-running").map(str::to_string),
         url: a.get("--url").map(str::to_string),
@@ -470,6 +523,18 @@ fn default_title(keys: &str, steps: &[Action]) -> String {
         }
         Some(Action::Remap(r)) => format!("acts as {}", r.to),
         Some(Action::SendKeys(s)) => format!("sends {}", s.keys),
+        // "opens notepad.exe with 2 arguments", "opens github.com in your browser": the file name
+        // and host only, never the path, the arguments or the URL's path (Step 70).
+        Some(s @ (Action::OpenProgram(_) | Action::OpenUrl(_))) => {
+            let mut t = ddalgak::launch::summary(&serde_json::to_value(s).unwrap_or_default());
+            if let Some(first) = t.get(..1) {
+                t = first.to_lowercase() + &t[1..];
+            }
+            if steps.len() > 1 {
+                t.push_str(&format!(" (+{} more)", steps.len() - 1));
+            }
+            t
+        }
         Some(s) => s.kind().replace('_', " "),
         None => "rule".into(),
     };

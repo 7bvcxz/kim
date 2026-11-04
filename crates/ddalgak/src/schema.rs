@@ -288,6 +288,19 @@ pub fn rule_problems(rule: &Value, at: &str) -> Vec<(&'static str, String)> {
                             }
                         });
                         push("step_invalid", msg);
+                    } else if matches!(
+                        s.get("type").and_then(Value::as_str),
+                        Some("open_program" | "open_url")
+                    ) {
+                        // The validator quotes failing strings; a path, argument, URL or
+                        // environment value never appears in a message (DDALGAK-SEC-011, Step 70).
+                        let msg = match crate::launch::compile_step(s) {
+                            Err(e) => format!("{at_s}: {e}"),
+                            Ok(_) => format!(
+                                "{at_s}: the step's inputs are not valid (DDALGAK_RULE_MODEL §5.5, §5.6; the target is not shown)"
+                            ),
+                        };
+                        push("step_invalid", msg);
                     } else {
                         push("step_invalid", rebase(first, &at_s));
                     }

@@ -3,12 +3,17 @@
   "id": 2,
   "result": {
     "dry_run": false,
+    "target": "region",
     "region": {
       "x": 0,
       "y": 0,
       "width": 400,
       "height": 300
     },
+    "monitor": null,
+    "mapping": null,
+    "window": null,
+    "pointer": null,
     "pin": {
       "id": "pin-1",
       "rect": {
@@ -20,6 +25,7 @@
       "source": "capture"
     },
     "desktop": "available",
+    "warnings": [],
     "pixels": "iVBORw0KGgo="
   }
 }

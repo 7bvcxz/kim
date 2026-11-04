@@ -1,0 +1,8 @@
+{
+  "schema": "subak.gui",
+  "schema_version": 2,
+  "window": { "x": 240, "y": 120, "width": 1452, "height": 912, "dpi": 144, "maximized": false },
+  "last_terminal": { "id": "t-3f2a9c41d07e", "name": "빌드" },
+  "hidden_terminals": ["t-0a1b2c3d4e5f"],
+  "an_option_of_a_later_version": { "kept": true }
+}

@@ -1,0 +1,116 @@
+{
+  "command": "config.show",
+  "data": {
+    "backups": "C:\\Users\\me\\AppData\\Roaming\\mouv\\subak\\backups",
+    "config_version": 1,
+    "default_profile": null,
+    "path": "C:\\Users\\me\\AppData\\Roaming\\mouv\\subak\\config.toml",
+    "problems": [],
+    "profiles": [],
+    "settings": [
+      {
+        "default": "auto",
+        "key": "appearance.theme",
+        "source": "default",
+        "takes": "auto, system, kim-dark, kim-light or high-contrast",
+        "value": "auto"
+      },
+      {
+        "default": "",
+        "key": "appearance.font_family",
+        "source": "default",
+        "takes": "a font family name of at most 31 characters (\"\" = Cascadia Mono, Consolas, …)",
+        "value": ""
+      },
+      {
+        "default": 13,
+        "key": "appearance.font_size",
+        "source": "default",
+        "takes": "a number from 8 to 36 (logical pixels)",
+        "value": 13
+      },
+      {
+        "default": 1.2,
+        "key": "appearance.line_height",
+        "source": "default",
+        "takes": "a number from 1.0 to 2.0",
+        "value": 1.2
+      },
+      {
+        "default": 8,
+        "key": "appearance.padding",
+        "source": "default",
+        "takes": "a whole number from 0 to 16 (logical pixels)",
+        "value": 8
+      },
+      {
+        "default": 100,
+        "key": "appearance.opacity",
+        "source": "default",
+        "takes": "a whole number from 50 to 100 (percent)",
+        "value": 100
+      },
+      {
+        "default": "system",
+        "key": "appearance.motion",
+        "source": "default",
+        "takes": "system, reduced or full",
+        "value": "system"
+      },
+      {
+        "default": true,
+        "key": "appearance.bold_is_bright",
+        "source": "default",
+        "takes": "true or false",
+        "value": true
+      },
+      {
+        "default": "",
+        "key": "terminal.default_profile",
+        "source": "default",
+        "takes": "the name of a profile (\"\" = the Host's default shell)",
+        "value": ""
+      },
+      {
+        "default": false,
+        "key": "terminal.copy_on_select",
+        "source": "default",
+        "takes": "true or false",
+        "value": false
+      },
+      {
+        "default": false,
+        "key": "terminal.smart_ctrl_c",
+        "source": "default",
+        "takes": "true or false",
+        "value": false
+      },
+      {
+        "default": "copy-paste",
+        "key": "terminal.right_click",
+        "source": "default",
+        "takes": "copy-paste, menu, paste or none",
+        "value": "copy-paste"
+      },
+      {
+        "default": "none",
+        "key": "terminal.middle_click",
+        "source": "default",
+        "takes": "none or paste",
+        "value": "none"
+      },
+      {
+        "default": " /\\()\"'-.,:;<>~!@#$%^&*|+=[]{}?│",
+        "key": "terminal.word_separators",
+        "source": "default",
+        "takes": "up to 128 characters, no control characters",
+        "value": " /\\()\"'-.,:;<>~!@#$%^&*|+=[]{}?│"
+      }
+    ],
+    "state": "missing",
+    "unknown": []
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

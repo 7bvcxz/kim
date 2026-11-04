@@ -92,6 +92,35 @@ fn word_and_block_selection() {
     assert_eq!(v.selection_cols(2), Some((1, 3)));
 }
 
+/// Step 20 (Tabby `wordSeparator`, TABBY_FEATURE_MATRIX `CORE-70`): the word separators are a
+/// setting; Korean stays a word, control characters are ignored, and mark mode's word moves
+/// follow the same set.
+#[test]
+fn word_separators_are_configurable() {
+    let mut v = view(40, 2, "cd C:\\src\\subak; echo 수박-터미널 done".as_bytes());
+    assert_eq!(v.word_delimiters(), subak_term::view::WORD_DELIMITERS);
+    // Only blanks separate words: a path and a hyphenated Korean word are one word each.
+    v.set_word_delimiters(" ");
+    v.select(7, 0, SelectMode::Word);
+    assert_eq!(v.selected_text().as_deref(), Some("C:\\src\\subak;"));
+    v.select(23, 0, SelectMode::Word);
+    assert_eq!(v.selected_text().as_deref(), Some("수박-터미널"));
+    // Backslashes separate too: `src` alone again; `-` no longer does.
+    v.set_word_delimiters(" \\;");
+    v.select(7, 0, SelectMode::Word);
+    assert_eq!(v.selected_text().as_deref(), Some("src"));
+    v.select(23, 0, SelectMode::Word);
+    assert_eq!(v.selected_text().as_deref(), Some("수박-터미널"));
+    // Control characters are dropped; the set is bounded.
+    v.set_word_delimiters(" \u{1b}\t");
+    assert_eq!(v.word_delimiters(), " ");
+    v.set_word_delimiters(&"x".repeat(1000));
+    assert_eq!(
+        v.word_delimiters().chars().count(),
+        subak_term::view::MAX_WORD_DELIMITERS
+    );
+}
+
 #[test]
 fn selection_in_the_history_survives_output_and_scrolling() {
     let mut v = TermView::new(12, 3, 100);

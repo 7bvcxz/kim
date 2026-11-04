@@ -167,10 +167,24 @@ lifecycle). `subak` also uses `io`, `internal`, `permission_denied`, `usage`, `t
 | `invalid_state` | 7 | The Terminal's state does not allow the operation (`rm` of a running Terminal without `--force`, attaching to a stopped one, acting on one that is still starting). |
 | `terminals_running` | 7 | `host stop` would end live Terminals; it does so only with `--kill-terminals` (ADR 0003 §7). |
 
+Since Step 20 the `config` and `profile` groups and `new --profile`
+([SUBAK_CLI §3.13](SUBAK_CLI.md), [ADR 0051](adr/0051-subak-settings-profiles-and-appearance.md))
+also use `config_invalid` (exit 4; for Subak: `config.toml` is not valid TOML, not a settings
+document, or cannot be edited in place without changing other keys; nothing was written) and
+`config_from_newer_version` (exit 5; `config_version` above 1, read-only) with Noeul's meaning,
+`profile_not_found` (exit 3; no shell profile with this name, names ignore case) with Ddalgak's,
+and one code of their own:
+
+| Code | Exit | Meaning |
+| --- | --- | --- |
+| `secret_in_config` | 4 | The settings to write hold a secret-looking profile value (an environment variable named like a token or password, a value shaped like a token or a URL password, a `--password` argument, or a `***` from an export); Subak never writes secrets into `config.toml`, so nothing was written. |
+
 **Noeul codes** (Step 49 foundation: the resident instance, Noeul IPC v1, region pins requested
 from the CLI, `F3` image paste; [ADR 0023](adr/0023-noeul-app-foundation.md). Step 50's
 `noeul capture --interactive`/`--cancel` and IPC `capture.region`/`capture.cancel` add no code:
 a request while an overlay is open succeeds with `opened: false` ([ADR 0026](adr/0026-noeul-capture-overlay.md));
+Step 58's `noeul capture --monitor`/`--window active` add `monitor_not_found` and
+`window_not_found` ([ADR 0050](adr/0050-noeul-displays-and-capture-backends.md));
 [NOEUL_REQUIREMENTS §7](NOEUL_REQUIREMENTS.md#7-planned-cli-error-codes)). `noeul` also uses
 `io`, `internal`, `permission_denied`, `usage`, `protocol_error`, `unsupported_platform`,
 `timeout`, `busy`, `confirmation_required`, `cancelled` and the `hotkeys` codes below with the
@@ -183,6 +197,8 @@ this document with its exit code.
 | `noeul_not_running` | 3 | The command needs the running Noeul (pins, capture, quit), and none runs; start it or pass `--start`. |
 | `pin_not_found` | 3 | No open pin with this ID, or no closed pin to reopen. |
 | `nothing_to_pin` | 3 | The clipboard or file holds nothing Noeul can pin: it is empty, holds no supported content (or not the kind asked for with `--as`), holds content its program marked private, or the file is missing, a folder or not a picture (Step 55). |
+| `monitor_not_found` | 3 | `noeul capture --monitor <n>` names a monitor that is not attached now (`noeul status` lists them, 1 is the leftmost; Step 58). |
+| `window_not_found` | 3 | `noeul capture --window active` (or the `capture.window` key) found no window to capture: none has the keyboard focus, the desktop has it, or the window is minimized, hidden by Windows or off every monitor (Step 58). |
 | `noeul_identity_mismatch` | 4 | The endpoint is served by a process that is not `noeul.exe` of this user (a pipe squatter, or a process that cannot be verified). Nothing was sent to it. |
 | `image_invalid` | 4 | The image is malformed or exceeds the size limits (128 MiB of data, 32767 pixels a side, 40 million pixels; Step 55). |
 | `config_invalid` | 4 | `config.toml` is not valid TOML, or `noeul config set` or `reset` cannot edit its layout in place without changing other keys; nothing was written (Step 51). |
@@ -236,7 +252,11 @@ familiarity and to match the IPC methods (ADR 0020, ADR 0027). `new` runs `-- <p
 `PATH`, or one verbatim `--command-line` (only its first word resolved); `--env NAME=VALUE`,
 `--env NAME` and `--unset-env NAME` adjust the pane's environment; `--dry-run` reports the
 resolved `executable` also without a Host ([PTY_PROCESSES](PTY_PROCESSES.md)); only `new` starts
-a Host on demand, and `--no-start` forbids even that.
+a Host on demand, and `--no-start` forbids even that. Since Step 20 `config show|check|set|reset|
+export|import` and `profile list|show` ([SUBAK_CLI §3.13](SUBAK_CLI.md)) read and edit
+`config.toml` without contacting a Host (`config reset --all` is `destructive`; `set`, `reset`
+and `import` take `--dry-run`), and `new --profile <name>` (or the default profile) adds
+`profile` to `new`'s data.
 
 **Ddalgak codes** (Step 66 engine commands, [DDALGAK_ENGINE §6](DDALGAK_ENGINE.md); Step 67 rule
 commands, [DDALGAK_RULE_MODEL §13](DDALGAK_RULE_MODEL.md)). `ddalgak` also uses `io`,

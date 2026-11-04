@@ -1,0 +1,11 @@
+{
+  "type": "request",
+  "id": 3,
+  "method": "capture",
+  "params": {
+    "monitor": 1,
+    "pointer": true,
+    "pin": true,
+    "dry_run": false
+  }
+}

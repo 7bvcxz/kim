@@ -6,6 +6,7 @@ pub mod card;
 pub mod client;
 pub mod clipboard;
 pub mod detect;
+pub mod displays;
 pub mod files;
 pub mod gdi;
 pub mod overlay;

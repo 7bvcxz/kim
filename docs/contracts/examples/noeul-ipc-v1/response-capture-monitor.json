@@ -1,0 +1,71 @@
+{
+  "type": "response",
+  "id": 3,
+  "result": {
+    "dry_run": false,
+    "target": "monitor",
+    "region": {
+      "x": -2880,
+      "y": 0,
+      "width": 2880,
+      "height": 1620
+    },
+    "monitor": {
+      "number": 1,
+      "rect": {
+        "x": -2880,
+        "y": 0,
+        "width": 2880,
+        "height": 1620
+      },
+      "work": {
+        "x": -2880,
+        "y": 0,
+        "width": 2880,
+        "height": 1560
+      },
+      "primary": false,
+      "dpi": 144,
+      "scale_percent": 150,
+      "rotation": 0,
+      "hdr": null
+    },
+    "mapping": {
+      "monitor": 1,
+      "dpi": 144,
+      "scale_percent": 150,
+      "logical": {
+        "x": 0,
+        "y": 0,
+        "width": 1920,
+        "height": 1080
+      },
+      "spans": 1,
+      "mixed_dpi": false
+    },
+    "window": null,
+    "pointer": {
+      "drawn": true,
+      "rect": {
+        "x": -1500,
+        "y": 700,
+        "width": 32,
+        "height": 32
+      },
+      "reason": null
+    },
+    "pin": {
+      "id": "pin-2",
+      "rect": {
+        "x": -2880,
+        "y": 0,
+        "width": 2880,
+        "height": 1620
+      },
+      "source": "capture",
+      "zoom": 100
+    },
+    "desktop": "available",
+    "warnings": []
+  }
+}

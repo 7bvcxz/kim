@@ -89,6 +89,9 @@ pub fn crlf(text: &str) -> String {
 /// The OS "open" handler for a validated link target.
 pub trait Opener: std::fmt::Debug {
     fn open(&mut self, target: &str) -> Result<(), String>;
+    /// Opens a local text file for editing (Step 20: "Edit settings file…" opens
+    /// `config.toml` in Notepad, on the user's explicit choice).
+    fn edit(&mut self, path: &std::path::Path) -> Result<(), String>;
     /// The recording fake, for the test hooks.
     fn fake(&self) -> Option<&FakeOpener> {
         None
@@ -105,6 +108,12 @@ pub struct FakeOpener {
 impl Opener for FakeOpener {
     fn open(&mut self, target: &str) -> Result<(), String> {
         self.opened.push(("open".to_string(), target.to_string()));
+        Ok(())
+    }
+
+    fn edit(&mut self, path: &std::path::Path) -> Result<(), String> {
+        self.opened
+            .push(("edit".to_string(), path.display().to_string()));
         Ok(())
     }
 

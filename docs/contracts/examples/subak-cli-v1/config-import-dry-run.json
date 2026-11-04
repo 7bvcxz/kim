@@ -1,0 +1,50 @@
+{
+  "command": "config.import",
+  "data": {
+    "backup": null,
+    "changes": [
+      {
+        "after": "\"auto\"",
+        "before": "\"kim-light\"",
+        "key": "appearance.theme"
+      },
+      {
+        "after": "13",
+        "before": "16",
+        "key": "appearance.font_size"
+      },
+      {
+        "after": "80",
+        "before": "100",
+        "key": "appearance.opacity"
+      },
+      {
+        "after": "\"\"",
+        "before": "\"PowerShell\"",
+        "key": "terminal.default_profile"
+      },
+      {
+        "after": null,
+        "before": "defined",
+        "key": "profiles.PowerShell"
+      },
+      {
+        "after": null,
+        "before": "defined",
+        "key": "profiles.dev"
+      },
+      {
+        "after": "defined",
+        "before": null,
+        "key": "profiles.cmd"
+      }
+    ],
+    "dry_run": true,
+    "from": "C:\\Users\\me\\AppData\\Roaming\\incoming.toml",
+    "path": "C:\\Users\\me\\AppData\\Roaming\\mouv\\subak\\config.toml",
+    "written": false
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

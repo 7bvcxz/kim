@@ -2948,6 +2948,7 @@ dependencies = [
  "regex",
  "serde_json",
  "subak-term",
+ "toml",
  "unicode-normalization",
  "windows-sys 0.61.2",
 ]

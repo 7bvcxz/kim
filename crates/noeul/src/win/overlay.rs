@@ -3,8 +3,11 @@
 //! - **One window over the virtual desktop**, created when a capture starts and destroyed when
 //!   it ends: a borderless popup tool window (no taskbar or Alt+Tab entry), always on top, at the
 //!   frozen picture's rectangle in device pixels (the process is per-monitor DPI aware v2, so a
-//!   window spanning monitors of different scales is never stretched; `WM_DPICHANGED` is
-//!   ignored). Nothing of it exists while Noeul is idle (NOEUL-NFR-002).
+//!   window spanning monitors of different scales is never stretched; the rectangle
+//!   `WM_DPICHANGED` suggests is ignored). `WM_DPICHANGED` and `WM_DISPLAYCHANGE` are reported
+//!   to the core, which decides once the displays are quiet (Step 58, ADR 0050): a capture whose
+//!   frozen picture no longer matches the monitors ends, a new scale is only drawn again. Nothing
+//!   of it exists while Noeul is idle (NOEUL-NFR-002).
 //! - **Drawing:** a back buffer (a 32-bit DIB section of the picture's size) is composed by
 //!   [`crate::overlay::compose`] for the parts that changed, the labels' text is drawn into it with
 //!   GDI (clipped to those parts), and `WM_PAINT` copies the invalid region to the screen with one
@@ -443,13 +446,19 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             push(OverlayEvent::Ime(Ime::End));
             return 0;
         }
-        // The frozen picture no longer matches the monitors: end the capture.
-        WM_DISPLAYCHANGE | WM_CLOSE => {
+        WM_CLOSE => {
             input(Input::Leave);
             return 0;
         }
-        // Keep the device-pixel rectangle on every monitor (per-monitor DPI aware v2).
-        WM_DPICHANGED | WM_DESTROY => return 0,
+        // The displays changed (Step 58): the core looks once they are quiet — a frozen picture
+        // that no longer matches the monitors ends the capture, a new scale only redraws it. The
+        // window keeps its device-pixel rectangle (per-monitor DPI aware v2): the suggested
+        // rectangle of WM_DPICHANGED is ignored.
+        WM_DISPLAYCHANGE | WM_DPICHANGED => {
+            push(OverlayEvent::DisplayChanged);
+            return 0;
+        }
+        WM_DESTROY => return 0,
         _ => {}
     }
     // SAFETY: default processing of a message of our own window.
@@ -1280,11 +1289,17 @@ mod tests {
             [p[0], p[1], p[2]]
         };
         assert_eq!(at(600, 150), pix(600, 150), "inside");
-        let d = dim_pixel(Synthetic::pixel(picture.x + 1000, picture.y + 380));
+        let d = dim_pixel(Synthetic::pixel(picture.x + 1100, picture.y + 290));
         assert_eq!(
-            at(1000, 380),
+            at(1100, 290),
             [d[0], d[1], d[2]],
             "outside, on the 150 % monitor"
+        );
+        let black = dim_pixel([0, 0, 0, 255]);
+        assert_eq!(
+            at(1000, 380),
+            [black[0], black[1], black[2]],
+            "below the 150 % monitor no monitor shows anything: opaque black, dimmed (Step 58)"
         );
         let a = color::ACCENT;
         assert_eq!(
@@ -1347,7 +1362,12 @@ mod tests {
             })
         ));
         assert_eq!(ev[4], OverlayEvent::Input(Input::Leave), "WM_CLOSE leaves");
-        assert_eq!(ev.len(), 5);
+        assert_eq!(
+            ev[5],
+            OverlayEvent::DisplayChanged,
+            "a DPI change is reported to the core (Step 58)"
+        );
+        assert_eq!(ev.len(), 6);
         // SAFETY: as above.
         unsafe {
             let mut r = RECT::default();
@@ -1355,9 +1375,15 @@ mod tests {
             assert_eq!(
                 (r.right - r.left, r.bottom - r.top),
                 (1120, 400),
-                "WM_DPICHANGED ignored"
+                "the suggested rectangle of WM_DPICHANGED is ignored"
             );
+            SendMessageW(hwnd, WM_DISPLAYCHANGE, 32, 0);
         }
+        assert_eq!(
+            take_events(),
+            [OverlayEvent::DisplayChanged],
+            "a display change no longer cancels by itself: the core decides (Step 58)"
+        );
         assert_eq!(win.buffer_bytes(), 1120 * 400 * 4);
         win.destroy();
         // SAFETY: a liveness query on a (now dead) handle.

@@ -1,7 +1,7 @@
 {
   "schema": "kim.catalog",
   "schema_version": 1,
-  "catalog_version": 6,
+  "catalog_version": 7,
   "generated_at": "2026-11-04T00:00:00Z",
   "expires_at": "2027-05-04T00:00:00Z",
   "publisher": "mouv",
@@ -39,7 +39,8 @@
         "F1 starts a region capture; a double-click inside the selection pins it to the desktop",
         "F3 pins the clipboard as a floating window: an image, image files, a colour, HTML or text",
         "Copy (Ctrl+C) or save (Ctrl+S) a selection or a pin; Esc cancels",
-        "Planned: annotation, color picker, capture history, multi-monitor and high-DPI support",
+        "Annotate and redact pins; capture a whole monitor or the active window, across mixed-DPI monitors",
+        "Planned: color picker and capture history",
         "Every shortcut can be changed, turned off or reset"
       ],
       "runs": "tray",
@@ -135,6 +136,18 @@
           {
             "action": "pins.toggle-hidden",
             "title": "Hide all pins, or show them again",
+            "scope": "global",
+            "keys": []
+          },
+          {
+            "action": "capture.monitor",
+            "title": "Capture the monitor under the pointer and pin it",
+            "scope": "global",
+            "keys": []
+          },
+          {
+            "action": "capture.window",
+            "title": "Capture the active window and pin it",
             "scope": "global",
             "keys": []
           }

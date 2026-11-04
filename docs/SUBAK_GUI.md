@@ -1,12 +1,14 @@
 # The Subak window (`subak-gui`)
 
-Status: **current** (implemented, Steps 16–19; the visible-window checks of §9, the
-visible-icon and real-tray checks of §11.9 and the real-clipboard, browser and dialog checks of
-§12.9 are pending the maintainer) · Decisions:
+Status: **current** (implemented, Steps 16–20; the visible-window checks of §9, the
+visible-icon and real-tray checks of §11.9, the real-clipboard, browser and dialog checks of
+§12.9 and the visible settings, theme and motion checks of §13.9 are pending the maintainer) ·
+Decisions:
 [ADR 0039](adr/0039-subak-window-plain-win32-client.md),
 [ADR 0042](adr/0042-subak-window-tabs-and-safe-close.md) (tabs),
 [ADR 0045](adr/0045-subak-floating-icon-and-terminal-manager.md) (floating icon and Terminal
-manager), [ADR 0048](adr/0048-subak-search-clipboard-and-links.md) (search, clipboard, links) ·
+manager), [ADR 0048](adr/0048-subak-search-clipboard-and-links.md) (search, clipboard, links),
+[ADR 0051](adr/0051-subak-settings-profiles-and-appearance.md) (settings, profiles, appearance) ·
 Builds on
 [TERMINAL_EMULATOR](TERMINAL_EMULATOR.md) (Step 15), [IPC_PROTOCOL](contracts/IPC_PROTOCOL.md),
 [SESSION_MODEL](SESSION_MODEL.md), [HOTKEY_CONTRACT](HOTKEY_CONTRACT.md),
@@ -14,15 +16,16 @@ Builds on
 `SUBAK-FR-013`, `SUBAK-FR-014`, `SUBAK-FR-015`, `SUBAK-FR-031`, `SUBAK-FR-033`, `SUBAK-FR-034`,
 `SUBAK-FR-037`, `SUBAK-FR-038`, `SUBAK-FR-046`, `SUBAK-NFR-001`, `SUBAK-NFR-002`; Step 18:
 `SUBAK-FR-030`, `SUBAK-FR-032`, `SUBAK-FR-039`, `KIM-FR-012`; Step 19: `SUBAK-FR-047`,
-`SUBAK-SEC-013`, `SUBAK-SEC-014`
+`SUBAK-SEC-013`, `SUBAK-SEC-014`; Step 20: `SUBAK-FR-048`, `SUBAK-FR-049`, `SUBAK-FR-046`,
+`KIM-NFR-012`
 
 `subak-gui.exe` is a small native window that shows the Host's **Terminals as tabs** and the
 shown tab's pane live. It is a client of the per-user Host, like `subak attach`: the Terminals
 and their programs live in the Host, so closing the window, hiding a tab — or the window
 crashing — never ends them. The Host and the `subak` CLI work without it. The optional floating
 icon, tray icon and Terminal manager (`subak-gui --float`, Step 18) are §11; search,
-selection, the clipboard, links and saving output (Step 19) are §12; visual polish and settings
-(Step 20) come next.
+selection, the clipboard, links and saving output (Step 19) are §12; settings, themes, fonts,
+motion, shell profiles and the polish of Step 20 are §13.
 
 ## 1. Starting it
 
@@ -134,7 +137,7 @@ Keys go to the program, in the order of ADR 0009:
    | `selection.all` / `selection.mark` | `Ctrl+Shift+A` / `Ctrl+Shift+M` | Select all; select with the keyboard (mark mode, §12.3) |
    | `search.open` | `Ctrl+Shift+F` | Find in the output (§12.1) |
    | `output.save` | none (the pane menu) | Save the output to a file, asking first (§12.5) |
-   | `view.zoom-in` / `view.zoom-out` / `view.zoom-reset` | `Ctrl+Plus` / `Ctrl+Minus` / `Ctrl+0` (and the numpad `+`, `-`, `0`) | Text size 8–36 px (default 13), saved |
+   | `view.zoom-in` / `view.zoom-out` / `view.zoom-reset` | `Ctrl+Plus` / `Ctrl+Minus` / `Ctrl+0` (and the numpad `+`, `-`, `0`) | Text size 8–36 px (default 13), saved as `appearance.font_size` in `config.toml` (§13) |
    | `scroll.page-up` / `scroll.page-down` | `Ctrl+Shift+PageUp` / `PageDown` | Scroll the history a page |
    | `scroll.line-up` / `scroll.line-down` | `Ctrl+Shift+Up` / `Down` | Scroll a line |
    | `scroll.top` / `scroll.bottom` | `Ctrl+Shift+Home` / `End` | Oldest line / live screen |
@@ -171,7 +174,8 @@ blink (no idle timer; DESIGN_SYSTEM §4.5).
 - **Resizing** sends the new grid to the Host (one size per pane, the latest interactive client's,
   ADR 0008); a resize to the pane's current size changes nothing. **Minimizing** never resizes the
   pane.
-- **High Contrast**: with Windows High Contrast on (and `theme: "auto"`), the terminal and the
+- **High Contrast**: with Windows High Contrast on (and `appearance.theme` `auto` or `system`,
+  §13), the terminal and the
   screens use the system's window, text and highlight colours and no lilac; the shown tab and the
   focused confirmation button are in reverse video. It follows changes while the window is open.
 - **States are never blank and never colour-only** (DESIGN_SYSTEM §3.8): connecting ("Connecting
@@ -181,27 +185,26 @@ blink (no idle timer; DESIGN_SYSTEM §4.5).
   `bg.raised`, a 3 px marker, words that say what happened and what `Enter` does), and the busy
   confirmation (danger colour, the focused button filled and in brackets).
 
-## 5. Preferences: `%APPDATA%\mouv\subak\gui.json`
+## 5. Placement: `%APPDATA%\mouv\subak\gui.json`
 
 The window's own file, independent of the Host's state (no process ids, no terminal content, no
-secrets). Schema: [subak-gui-v1](contracts/schemas/subak-gui-v1.schema.json), examples in
-`contracts/examples/subak-gui-v1/`.
+secrets): where the window was and which tabs it showed. Schema (version 2, Step 20):
+[subak-gui-v2](contracts/schemas/subak-gui-v2.schema.json), examples in
+`contracts/examples/subak-gui-v2/`. The settings — theme, text size and everything else of §13
+— are in `config.toml`.
 
 ```json
 {
   "schema": "subak.gui",
-  "schema_version": 1,
-  "font_size": 15.0,
-  "theme": "auto",
+  "schema_version": 2,
   "window": { "x": 240, "y": 120, "width": 1452, "height": 912, "dpi": 144, "maximized": false },
-  "last_terminal": { "id": "t-3f2a9c41d07e", "name": "빌드" }
+  "last_terminal": { "id": "t-3f2a9c41d07e", "name": "빌드" },
+  "hidden_terminals": []
 }
 ```
 
 | Key | Meaning |
 | --- | --- |
-| `font_size` | Terminal text size in logical pixels, 8–36 (default 13; changed with the zoom keys) |
-| `theme` | `auto` (kim-dark, or the system colours under High Contrast), `kim-dark`, `high-contrast` |
 | `window` | The restored (not maximized) outer rectangle in physical pixels at `dpi`, and `maximized`. Used only if a title bar's worth of it lies on a current monitor; its size is rescaled to that monitor's DPI. |
 | `last_terminal` | The Terminal shown last; reopened when it still runs |
 | `hidden_terminals` | Terminals hidden in the window when it last ran, by id (Step 18). A new window keeps them hidden; they keep running, the tab menu's "Show hidden: …" and the Terminal manager (§11) show them again |
@@ -212,8 +215,12 @@ secrets). Schema: [subak-gui-v1](contracts/schemas/subak-gui-v1.schema.json), ex
 - An invalid value falls back to its default alone; the window says so once in a banner.
 - A file that is not JSON, not a `subak.gui` document, or from a newer schema version is used as
   defaults and **never rewritten** by this run; the banner says so.
-- Step 20 moves display settings into the versioned `config.toml` with migrations; the window
-  placement stays here.
+- **Version 1** (Steps 16–19, [subak-gui-v1](contracts/schemas/subak-gui-v1.schema.json)) also
+  held `font_size` and `theme`. The first Step 20 window migrates it once: the two values go into
+  `config.toml` where that file does not set them yet, the old file is copied to
+  `backups\gui-v1-<UTC time>.json`, and `gui.json` is rewritten as version 2 (unknown keys kept).
+  When `config.toml` cannot take them (invalid or newer), version 1 is left as it is and its
+  values apply to that window only.
 
 ## 6. How it works
 
@@ -272,9 +279,9 @@ the system's input-method threads.
   own limits in §12.11).
 - win32-input-mode is not granted: Ctrl+Break and key releases do not reach programs.
 - UI text uses the terminal font; the tab bar is in the client area (the integrated title-bar tab
-  bar of DESIGN_SYSTEM §3.5 needs custom non-client drawing), icons, settings UI and themes are
-  Step 20. No hover states or tooltips on tabs yet. The taskbar shows the generic application
-  icon.
+  bar of DESIGN_SYSTEM §3.5 needs custom non-client drawing). Settings, themes, hover and the
+  window icon arrived in Step 20 (§13, with its own limits in §13.10); there are no tooltips on
+  tabs.
 - No UI Automation tree yet (screen readers do not read the terminal); planned with Step 20/39.
 - Colour emoji are monochrome; the cursor does not blink.
 - The banner covers the pane's first row while it is shown.
@@ -852,11 +859,263 @@ checks are the maintainer's. Build: `cargo build --release -p subak`; use a priv
   script classes are not compiled in.
 - A wide character pushed to the next row by a soft wrap leaves a blank at the row's end that
   a search across that wrap sees as a space.
-- No copy-on-select, no choice of right/middle click actions, no configurable word separators,
-  no setting to turn the paste question off, no file-path links, no files dropped from Explorer,
-  no "search the web for the selection" (it would send output to a web service; not planned):
-  settings are Step 20's.
+- No setting to turn the paste question off (`SUBAK-SEC-014`), no file-path links, no files
+  dropped from Explorer, no "search the web for the selection" (it would send output to a web
+  service; not planned). Copy on select, the right/middle click actions and word separators
+  arrived with the settings of Step 20 (§13).
 - Opening a link needs the mouse (`Ctrl+click`, `Ctrl+right click`); there is no keyboard link
   picker yet (a keyboard user can select an address in mark mode and copy it).
-- The search bar and questions use the terminal font and the banner row; the integrated look of
-  DESIGN_SYSTEM's search field is Step 20's.
+- The search bar and questions use the terminal font and the banner row (Step 20 keeps it so:
+  the integrated search field of DESIGN_SYSTEM §3.8 is a tracked deviation, §13.10).
+
+## 13. Settings, themes, fonts, motion and shell profiles (Step 20)
+
+Decision: [ADR 0051](adr/0051-subak-settings-profiles-and-appearance.md) · Requirements:
+`SUBAK-FR-048`, `SUBAK-FR-049`, `SUBAK-FR-046`, `SUBAK-FR-031`, `KIM-NFR-012`, `KIM-FR-013`,
+`KIM-SEC-013` · CLI: [SUBAK_CLI §3.13](SUBAK_CLI.md) · Contract:
+[STATE_SCHEMA §2](contracts/STATE_SCHEMA.md), [subak-config-v1](contracts/schemas/subak-config-v1.schema.json)
+
+### 13.1 The settings file: `%APPDATA%\mouv\subak\config.toml`
+
+One human-edited TOML file with a version. Every key is optional; a key you do not set uses
+its default. Edit it by hand, with `subak config set`, or from the window's **Settings** menu
+(§13.4) — all three change the same lines.
+
+```toml
+# my Subak settings
+config_version = 1
+
+[appearance]
+theme = "auto"           # auto | system | kim-dark | kim-light | high-contrast
+font_family = ""         # "" = Cascadia Mono, Consolas, D2Coding, Malgun Gothic, … (tried first)
+font_size = 13           # 8–36 logical px; the zoom keys change it
+line_height = 1.2        # 1.0–2.0, the cell height as a multiple of the text size
+padding = 8              # 0–16 logical px around the cell grid
+opacity = 100            # 50–100 %; High Contrast is always opaque
+motion = "system"        # system (Windows' "Show animations") | reduced | full
+bold_is_bright = true    # bold ANSI 0–7 drawn in their bright colours
+
+[terminal]
+default_profile = ""     # the profile Ctrl+T, + and `subak new` start ("" = the Host's shell)
+copy_on_select = false   # copy a mouse selection when the button is released
+smart_ctrl_c = false     # Ctrl+C copies a selection; without one it reaches the program
+right_click = "copy-paste"   # copy-paste | menu | paste | none
+middle_click = "none"    # none | paste
+word_separators = " ()[]{}'\",;:|<>"   # default: Windows Terminal's set (shown by `config show`)
+
+[[profiles]]
+name = "PowerShell"
+program = "powershell.exe"           # a path, or a name looked up on the pane's PATH
+args = ["-NoLogo"]
+cwd = 'C:\Users\me\src'              # absolute; absent = your profile folder
+env = { RUST_BACKTRACE = "1" }       # set in the pane
+unset_env = ["HTTP_PROXY"]           # removed from the pane's environment
+```
+
+| Theme | Draws with |
+| --- | --- |
+| `auto` (default) | `kim-dark`; the system colours while Windows High Contrast is on |
+| `system` | `kim-light` while Windows apps use the light mode, else `kim-dark`; High Contrast wins |
+| `kim-dark`, `kim-light` | always that theme (DESIGN_SYSTEM §2.1–2.2; every declared contrast pair checked by `design-check`) |
+| `high-contrast` | the system's window, text and highlight colours, reverse video for the shown tab and focused buttons |
+
+**Rules** (`SUBAK-FR-046`):
+
+- A missing file means the defaults; nothing is written by reading.
+- An invalid value falls back to its default **alone**, named with its key and line ("config.toml
+  line 3: `appearance.font_size` must be a number from 8 to 36 (logical pixels); the default
+  (13) applies"); the window shows the first problem once in a banner, `subak config check`
+  lists them all. An invalid profile is left out with its reason.
+- A file that is not TOML, or whose `config_version` is newer than this Subak's, is used as
+  defaults and **never rewritten by an edit** (not by the menu, `config set` or the zoom keys:
+  those then last for the window's run, and a notice says so). `subak config reset --all --yes`
+  replaces an invalid file after copying it to `backups\config-invalid-<UTC>.toml`; a newer file
+  is never replaced.
+- Edits change only their own lines: comments, unknown keys and sections stay as they are. The
+  edited text is parsed again and must differ in exactly the edited keys, or nothing is written.
+  Writes are atomic.
+- `reset --all`, `import` and the `gui.json` migration (§5) first copy the file to `backups\`;
+  the newest 5 backups of each kind are kept.
+- **No secrets.** Subak never writes a secret-looking value into a profile (`import` refuses:
+  `secret_in_config`). A secret-looking environment value or argument typed in by hand is used,
+  reported as a warning naming the variable (never the value), and shown as `***` in the window,
+  every CLI output and `subak config export`. Let programs read secrets from your own
+  environment instead.
+
+### 13.2 When settings apply — and what they never touch
+
+- The window reads `config.toml` when it starts and **again whenever it gets the focus**; it
+  applies what changed (a new theme, font or size at once; a new line height or text size
+  re-lays out the grid, so the shown pane is resized to it, as a zoom does).
+- **The Host never reads it** (`tests/config_boundary.rs`). A profile is resolved by the client
+  into the explicit program, arguments, folder and environment of `terminal.create`; changing or
+  deleting a profile never changes a Terminal that runs, and a broken file never stops the Host.
+  Running Terminals keep their processes, environment and state whatever you change (checked by
+  `tests/config_cli.rs` and `tests/gui_settings.rs`).
+
+### 13.3 Shell profiles
+
+| Where | What starts |
+| --- | --- |
+| `Ctrl+T`, `+`, "New Terminal" | the default profile (`terminal.default_profile`), else the Host's default shell |
+| The tab or pane menu → "New Terminal: <name>" | that profile |
+| `subak new --profile <name>` | that profile; `-- <program>`, `--command-line`, `--cwd`, `--env`, `--unset-env` given there win over the profile's |
+| `subak new` with no program | the default profile, unless `--no-profile` |
+
+Profiles are local programs only (no SSH, serial or Telnet: Step 33). A profile names a program,
+never a shell command line; the arguments are passed as separate words. Names ignore case. A
+default profile that does not exist is a warning; new Terminals then run the Host's shell.
+
+### 13.4 The settings menu
+
+The tab menu (right click on the bar) and the pane menu (the Menu key, `Ctrl+right click`, or a
+right click with `right_click = "menu"`) end with **Settings**:
+
+| Item | Choices (the current one checked) |
+| --- | --- |
+| Theme | Automatic · Follow Windows light or dark mode · Kim dark · Kim light · High Contrast |
+| Text size | Larger · Smaller · Default (also `Ctrl+Plus`/`Ctrl+Minus`/`Ctrl+0`) |
+| Terminal font | Default chain · the installed ones of Cascadia Mono, Cascadia Code, Consolas, Courier New, Lucida Console, D2Coding, JetBrains Mono · "Ligatures: not drawn" (§13.10) |
+| Line spacing | 1.0 · 1.2 · 1.4 · 1.6 |
+| Window opacity | 100 · 95 · 90 · 80 · 70 % |
+| Motion | Follow Windows · Reduced · Full |
+| Copy on select · Ctrl+C copies a selection · Middle click pastes | on/off |
+| Right click | Copy a selection, else paste · Open the pane menu · Paste · Nothing |
+| Edit settings file (config.toml)… | opens it in Notepad (created with a header first) |
+| Reload settings | reads it now |
+
+A choice applies at once and is saved in `config.toml` (a short notice confirms it and hides
+after 4 s). Before "Settings", the menu lists "New Terminal: <name>" for every profile. Windows'
+menus are operated with the keyboard (Menu key, arrows, Enter, Esc) and read by screen readers.
+
+### 13.5 The look: polish, motion, High Contrast
+
+- **Tabs**: the shown tab is bold on `bg.base` with the lilac marker; a tab under the pointer gets
+  `bg.hover` and a brighter `×`; states keep their shapes. Light and dark chrome come from the
+  same tokens (the screens, banners, search bar and questions are mapped role by role).
+- **Motion** (DESIGN_SYSTEM §2.5): when another tab is shown its marker fades in (120 ms); a
+  banner fades in rising 4 px (160 ms); both decelerate (`easing.standard`). Nothing else moves:
+  never the terminal content, the layout or typing. A 16 ms timer runs only during a transition.
+  **Reduced motion** — Windows' "Show animations in Windows" off with `motion = "system"`, or
+  `motion = "reduced"` — draws the final state at once, with no timer.
+- **Notifications**: problems stay in the banner until a key; non-critical confirmations (a saved
+  setting, a copied link, settings reloaded) are toasts that hide after 4 s.
+- **Window**: Subak's watermelon (the floating icon's art) is the window's icon in the taskbar and
+  Alt+Tab; the caption follows the theme (light caption for `kim-light`; colours on Windows 11).
+  `opacity` below 100 makes the whole window translucent (a layered window); High Contrast is
+  always opaque, and below 100 % the text's contrast depends on what lies behind the window.
+- **High Contrast** (DESIGN_SYSTEM §4.3) as before (§4), now also chosen explicitly with
+  `theme = "high-contrast"`.
+
+### 13.6 How it works
+
+| Part | Where | Role |
+| --- | --- | --- |
+| Settings | `crates/subak/src/config.rs` | Parse, validate (key and line), defaults, in-place edits, backups, export redaction, import checks, profiles → `terminal.create` parameters, the `gui.json` v1 adoption (portable, headless) |
+| CLI | `crates/subak/src/config_cmd.rs`, `terminal.rs` | `subak config …`, `subak profile …`, `new --profile` |
+| Motion | `gui/motion.rs` | Transitions, `easing.standard`, reduced motion (pure) |
+| Chrome | `gui/screens.rs` (`Chrome`) | `kim-dark` and `kim-light` chrome tokens; retinting the window's VT parts |
+| Tabs | `gui/tabs.rs` (`layout_hover`) | The hover fill |
+| Renderer | `subak-term` (`render::font_chain`, `Renderer::set_options`, `Theme::kim_light`, `TermView::set_word_delimiters`) | Font chain, line height, padding, bold-as-bright, the light palette, word separators |
+| Window | `gui/window.rs` | Loading and reloading, the menu, profiles on `Ctrl+T`, opacity, the motion timer, hover, icon, toasts, mouse and keyboard choices |
+
+### 13.7 Measurements
+
+This machine: Windows 10 Pro 22H2 19045, Intel Core i5-13600KF, 2026-11-04. The Milestone B
+baseline (startup, journey latencies, idle cost of the window and the Host) is in
+[MILESTONE_B_VALIDATION.md](MILESTONE_B_VALIDATION.md).
+
+| What | Result |
+| --- | --- |
+| Idle, debug build, attached, 10 s (`gui_window.rs::idle_window_costs_no_cpu_and_little_memory`) | 0.0 ms CPU, 4.68 MiB private, 15.35 MiB working set, 6 threads, 180 handles (Step 17: 4.38 MiB, 13.5 MiB, 157 handles); no timer while idle (the motion timer runs only during a transition) |
+| Binary sizes (release, shipped features) | `subak-gui.exe` 2 974 720 → **3 370 496** bytes (settings, the TOML parser, menus, motion, the light theme); `subak.exe` 2 100 224 → **2 506 240** bytes (the TOML parser and the `config`/`profile` commands) |
+| `subak.exe` still carries no window code | `grep -c -a` on the release binaries: `CreateWindowExW`, `SetLayeredWindowAttributes`, `TrackMouseEvent`, `RegGetValueW`, `ShellExecuteW`, `SetDIBitsToDevice` — 0 in `subak.exe`, 1 each in `subak-gui.exe` |
+| A transition | 120 ms (tab) or 160 ms (banner) at 16 ms frames, then the timer stops (`gui_settings.rs::transitions_run_briefly_and_reduced_motion_runs_none`) |
+
+### 13.8 Keyboard and accessibility
+
+Every setting is reachable by keyboard: the Menu key opens the pane menu, whose **Settings**
+submenu holds every choice (arrows, Enter; Esc closes); every shortcut stays rebindable with
+`subak hotkeys` (the window's actions are unchanged by this Step). The light and dark chrome meet
+the declared WCAG pairs of `design/tokens.json`; state is never colour-only (shapes on tabs,
+checks in menus, words in banners). Reduced motion and High Contrast are honoured as §13.5 says.
+
+### 13.9 Manual verification (maintainer)
+
+Agents on this machine never show windows, so these checks are the maintainer's. Build:
+`cargo build --release -p subak`; use a private endpoint and look at your own settings file
+first (`subak config show`; keep a copy if you have one): `set E=--endpoint subak-manual-20`.
+
+1. `target\release\subak.exe config show`: every setting with `(default)`. `target\release\subak.exe
+   config set appearance.theme kim-light`, then `target\release\subak-gui.exe %E%`: the window is
+   light (caption, tab bar, pane), Korean text readable; the taskbar shows the watermelon.
+2. Right click on the tab bar → Settings → Theme → Kim dark: dark at once; `subak config show`
+   says `kim-dark`. Settings → Window opacity → 80 %: the desktop shows through.
+3. Settings → Terminal font → Consolas, then Courier New: the text changes; Settings → Line
+   spacing → 1.6: rows spread, `subak.exe %E% info 1` shows the pane resized, the same pid.
+4. `Ctrl+Plus` three times, close the window, reopen: the same size, theme and opacity.
+5. Ctrl+Tab between two tabs: the lilac marker fades in briefly. Turn "Show animations in
+   Windows" off (Settings → Accessibility → Visual effects), click into the window, Ctrl+Tab: no
+   fade. Settings → Motion → Full: the fade returns despite Windows' setting.
+6. Hover the tabs: the one under the pointer lightens, its `×` brighter.
+7. Add a profile with Settings → Edit settings file… (Notepad opens):
+   `[[profiles]]` / `name = "pwsh"` / `program = "powershell.exe"` / `args = ["-NoLogo"]` /
+   `cwd = 'C:\Windows'`, and `default_profile = "pwsh"` under `[terminal]`; save, click into the
+   window: `Ctrl+T` opens PowerShell in `C:\Windows`; the tab menu lists "New Terminal: pwsh
+   (default)".
+8. Settings → Copy on select; drag over a word: Notepad pastes it. Settings → Ctrl+C copies a
+   selection; select, `Ctrl+C`: copied; without a selection `Ctrl+C` interrupts `ping -t
+   localhost`. Settings → Right click → Open the pane menu: a right click opens it.
+9. Break the file (delete a `]`), click into the window: a banner names the line; `Ctrl+Plus`
+   says the change applies to this window only; the file is unchanged.
+   `subak config reset --all --yes` restores it (`backups\config-invalid-….toml` keeps yours).
+10. Turn on a Contrast theme: system colours, opaque even at 80 %; with `theme = "system"` the
+    window follows Windows' light or dark app mode.
+11. Narrator (`Ctrl+Win+Enter`), the Menu key: the Settings submenu and its checked items are read.
+12. Clean up: `subak.exe %E% host stop --kill-terminals --yes`; restore your settings file.
+
+| Manual check | Result |
+| --- | --- |
+| Themes, caption, icon, opacity in the visible window (steps 1–2, 10) | automated off-screen with frames and the window's own report (§13.11); visible run **pending — maintainer** |
+| Fonts and line spacing (step 3) | automated (face, cell heights, pane resized, same pid); visible look **pending — maintainer** |
+| Persistence across a restart (step 4) | automated; visible run **pending — maintainer** |
+| Motion and Windows' animation setting (step 5) | automated with the setting and a simulated Windows value; the real setting and the look **pending — maintainer** |
+| Hover (step 6) | automated with posted mouse messages and a frame; real pointer **pending — maintainer** |
+| Profiles from the file, Notepad (step 7) | automated (recording opener, real Host, exact argv/cwd/env); Notepad **pending — maintainer** |
+| Mouse and `Ctrl+C` choices with the real clipboard (step 8) | automated with the recording clipboard; real clipboard **pending — maintainer** |
+| A broken file (step 9) | automated; visible banner **pending — maintainer** |
+| Real High Contrast and light mode (step 10), Narrator (step 11) | simulated (`system` test command); real settings and Narrator **pending — maintainer** |
+
+### 13.10 Known limits and tracked deviations (Step 20)
+
+- **No ligatures.** The GDI renderer draws each cell on its own; ligatures need text shaping
+  across cells (DirectWrite or Uniscribe), deferred (ADR 0051 §7). The menu says so.
+- **No settings page**: the menu and the file cover every setting; profiles are edited in the
+  file (or imported). A form-based editor (with a profile editor) is not built.
+- Font choices in the menu are a fixed list of common monospace families (the installed ones);
+  any other family works through the file.
+- No colour schemes beyond the three themes (Tabby `CORE-37`/`38`), no per-profile theme,
+  icon or colour (`CORE-24`), no cursor-style or blink setting (`CORE-45`), no Alt-as-Meta or
+  backspace mode (`CORE-61`/`62`), no portable mode (`SHELL-24`), no interface language
+  (`APP-08`), no welcome tab (`APP-09`), no sign-in start (`APP-07`).
+- The integrated title-bar tab bar, tooltips on tabs, an `F6` region cycle and the integrated
+  search field of DESIGN_SYSTEM §3.5/§3.8/§4.1 are not built; the tab bar stays in the client
+  area and the search bar in the banner row.
+- The floating icon and Terminal manager (§11) keep `kim-dark` (and High Contrast); the light
+  theme is the window's.
+- Opacity is the whole window's (text included); a backdrop that keeps text opaque (Mica,
+  acrylic) needs Windows 11 and a different composition path.
+- Motion animates the tab marker and banners only; native menus follow Windows' own animation
+  setting.
+
+### 13.11 Tests
+
+| Test | What it checks |
+| --- | --- |
+| `crates/subak/src/config.rs` unit tests | defaults, every key read, invalid values with key and line, broken and newer files, profiles left out with reasons, secret warnings and redaction, in-place edits keeping comments and unknown keys, refusals, reset, atomic writes, backups and pruning, unreadable and non-UTF-8 files, the `gui.json` v1 adoption, differences, theme resolution, the JSON schema |
+| `crates/subak/tests/config_cli.rs` | every `config`/`profile` command with golden files (`docs/contracts/examples/subak-cli-v1/config-*.json`, …), refusals and exit codes, backups, import checks; a profile's exact argv, cwd and environment through a real Host; a running pane unchanged by every setting |
+| `crates/subak/tests/gui_settings.rs` | light/dark/High Contrast frames pixel by pixel, font family, line height, padding, opacity, motion and reduced motion, profiles on `Ctrl+T` and in the menu, the settings menu saving into `config.toml`, copy on select, smart `Ctrl+C`, right/middle click, word separators, hover, the `gui.json` v1 migration, restart persistence, a broken file never rewritten, running Terminals untouched |
+| `crates/subak/tests/config_boundary.rs` | the Host never reads `config.toml`; only the window and the settings commands load it |
+| `crates/subak/tests/milestone_b.rs` | the Milestone B journey and its measurements ([MILESTONE_B_VALIDATION](MILESTONE_B_VALIDATION.md)) |
+| `crates/subak-term/tests/{render,view}.rs` | line height, padding, bold-as-bright and the light theme in pixels; the font chain (Courier New, Consolas, a missing family); configurable word separators |
+| `e2e/tests/step20_subak_polish.rs` (ignored; `cargo xtask e2e` only) | settings and profiles from the CLI into the window and across a restart; the Milestone B journey |

@@ -1,6 +1,6 @@
 # Noeul UX specification
 
-Status: **current** (specification; Step 49 implemented the app foundation, [ADR 0023](adr/0023-noeul-app-foundation.md); Step 50 the `F1` selection overlay with `Enter` to pin, [ADR 0026](adr/0026-noeul-capture-overlay.md), see §4.5; Step 53 the floating pin engine, [ADR 0029](adr/0029-noeul-pin-engine.md), see §4.6; Step 51 the double-click-to-pin gesture, the toolbar, the selection menu, copy, save and the gesture settings, [ADR 0032](adr/0032-noeul-double-click-pin-and-outputs.md), see §4.7; Step 52 window and element detection, the magnifier, the precision keys, snapping and the rectangle history, [ADR 0035](adr/0035-noeul-smart-selection-and-precision.md), see §4.8; Step 56 annotation in the overlay and on pins, [ADR 0038](adr/0038-noeul-annotation.md), see §4.9; Step 57 mosaic, blur, the eraser and the solid redaction, [ADR 0041](adr/0041-noeul-privacy-tools.md), see §4.10; Step 54 the pin transforms, border resizing, outline and shadow, click-through with its ways back, thumbnails and groups, [ADR 0044](adr/0044-noeul-pin-transforms-and-control.md), see §4.11; Step 55 `F3` paste of images, image files, colours, HTML and text cards, drops and `noeul pin <file>`, [ADR 0047](adr/0047-noeul-clipboard-paste-and-rich-sources.md), see §4.12) · Step 48 ·
+Status: **current** (specification; Step 49 implemented the app foundation, [ADR 0023](adr/0023-noeul-app-foundation.md); Step 50 the `F1` selection overlay with `Enter` to pin, [ADR 0026](adr/0026-noeul-capture-overlay.md), see §4.5; Step 53 the floating pin engine, [ADR 0029](adr/0029-noeul-pin-engine.md), see §4.6; Step 51 the double-click-to-pin gesture, the toolbar, the selection menu, copy, save and the gesture settings, [ADR 0032](adr/0032-noeul-double-click-pin-and-outputs.md), see §4.7; Step 52 window and element detection, the magnifier, the precision keys, snapping and the rectangle history, [ADR 0035](adr/0035-noeul-smart-selection-and-precision.md), see §4.8; Step 56 annotation in the overlay and on pins, [ADR 0038](adr/0038-noeul-annotation.md), see §4.9; Step 57 mosaic, blur, the eraser and the solid redaction, [ADR 0041](adr/0041-noeul-privacy-tools.md), see §4.10; Step 54 the pin transforms, border resizing, outline and shadow, click-through with its ways back, thumbnails and groups, [ADR 0044](adr/0044-noeul-pin-transforms-and-control.md), see §4.11; Step 55 `F3` paste of images, image files, colours, HTML and text cards, drops and `noeul pin <file>`, [ADR 0047](adr/0047-noeul-clipboard-paste-and-rich-sources.md), see §4.12; Step 58 whole-monitor and active-window capture, the pointer in a capture and the rules for changing displays, [ADR 0050](adr/0050-noeul-displays-and-capture-backends.md), see §4.13 with the physical test matrix) · Step 48 ·
 Philosophy: [NOEUL_PHILOSOPHY](NOEUL_PHILOSOPHY.md) · Requirements: [NOEUL_REQUIREMENTS](NOEUL_REQUIREMENTS.md) ·
 Parity: [NOEUL_SNIPASTE_MATRIX](NOEUL_SNIPASTE_MATRIX.md) · Shortcuts: [HOTKEY_CONTRACT §13.3](HOTKEY_CONTRACT.md) ·
 Decision: [ADR 0021](adr/0021-noeul-product-definition.md)
@@ -983,6 +983,125 @@ automated runs never touch the user's clipboard.
   console: pinned without taking focus, a notice "Noeul pinned … (command line)" appears, and the
   JSON names kinds and pin IDs only.
 
+### 4.13 Step 58: displays, capture targets and the physical test matrix
+
+Step 58 ([ADR 0050](adr/0050-noeul-displays-and-capture-backends.md)) adds whole-monitor and
+active-window capture without the overlay, the pointer in a capture, and the rules for changing
+displays. Every rectangle stays in device pixels of the virtual desktop; Noeul's own drawing stays
+in logical pixels of the monitor it is on.
+
+**Capture targets** (`noeul capture … --pin`, and the keys `capture.monitor` and
+`capture.window`, which have **no default key**: `noeul hotkeys set capture.window Ctrl+Alt+F1`):
+
+| Target | What is captured | The pin | When there is nothing to capture |
+| --- | --- | --- | --- |
+| `--region x,y,w,h` | That rectangle | In place, 100 % | `usage` when it is not on the desktop |
+| `--monitor <n>`, `primary`, `pointer`; key `capture.monitor` (the monitor under the pointer) | The whole monitor at its native resolution; monitors are numbered in `noeul status`'s order, left to right, then top to bottom | In place, covering that monitor; `Esc` closes it | `monitor_not_found` (3) |
+| `--window active`; key `capture.window` | The visible frame of the window that has the keyboard focus (no invisible resize border), cut from the screen as you see it — whatever covers it is in the picture | In place, over the window | `window_not_found` (3): no window has focus, the desktop has it, or the window is minimized, hidden or off every monitor |
+
+- From the CLI the pin takes no focus and a notice says Noeul captured (command line); from a key
+  it takes focus like the overlay's pin. A failure from a key is a short notice.
+- **The pointer** is drawn in with `--pointer`, or with `noeul config set capture.pointer on` for
+  the keys and the `F1` freeze (off by default): at the image's own size, its hotspot on its
+  device pixel, inverting the pixels under a monochrome pointer as the screen does. A hidden
+  pointer, or one outside the captured area, is not drawn and the result says why. (The overlay's
+  own pointer toggle is not in this build.)
+- **What every result says** (`--json` `data`, and the human line): the monitor that holds the
+  rectangle's centre (number, scale, rotation, HDR), the rectangle in that monitor's logical
+  pixels ("Pinned monitor 2 −2880,0,2880,1620 (1920×1080 logical at 150 % on monitor 2) as
+  pin-3."), how many monitors it touches, and warnings: monitors of different scales (every
+  monitor keeps its device pixels, nothing is rescaled), HDR converted to SDR by Windows, a
+  window that protects itself (black) or excludes itself (left out) from capture — Noeul never
+  gets around either — and a window partly off the monitors (only the part on them).
+- **Gaps** of the virtual desktop (corners no monitor shows) are opaque black in every picture.
+- No tray items for these two captures: opening the tray menu makes the taskbar the active window,
+  and the menu's fade-out would be in a monitor capture.
+
+**Display changes** (NOEUL-FR-093): attaching, removing, moving, turning or rescaling a monitor,
+or moving the taskbar, sends Noeul a burst of notifications; it looks at the displays **once**, when
+they have been quiet for 250 ms (at most 1 s after the first). Then:
+
+| Open thing | Monitors attached, removed, moved, resized or turned | Only a scale, a work area, HDR or the primary changed |
+| --- | --- | --- |
+| Capture overlay | Ends: "The displays changed, so the capture was cancelled …"; nothing is pinned, copied or kept; press the key again | Stays with its selection; handles, toolbar, magnifier and labels are drawn for the new scales |
+| Pin editor | Stays and follows the new scales | Same |
+| Pins | Stay where Windows left them, at their pixel size; a pin no monitor shows is reported with the way back ("Bring pins on screen", `noeul pin show --all --on-screen`) | Keep their place and pixel size; their outline, shadow and resize band follow their monitor's scale |
+
+**Automated over synthetic layouts** (no real display is touched; `crates/noeul/src/displays/tests.rs`,
+`crates/noeul/src/app/display_tests.rs`, `crates/noeul/src/win/displays.rs`,
+`crates/noeul/tests/displays.rs`, `e2e/tests/step58_noeul_displays.rs`):
+
+| Case | Layout | Checked |
+| --- | --- | --- |
+| DISP-01 | 150 % monitor at negative coordinates, 100 % primary, 125 % portrait HDR monitor, gaps | Monitor numbers, `primary`, `pointer` (also in a gap); every captured pixel equals the synthetic pattern; gaps opaque black; logical sizes (2880×1620 at 150 % → 1920×1080) |
+| DISP-02 | Same | A window across the 150 %/100 % seam: mixed-scale warning; a window partly off the desktop: clipped and said; protected and excluded windows: said; minimized, cloaked, hidden, off-screen: `window_not_found` |
+| DISP-03 | Same | The pointer's sprite exactly at its hotspot, clipped at the picture's edge, hidden and outside reported; `[capture] pointer` puts it into the `F1` freeze |
+| DISP-04 | Same | `capture.monitor` / `capture.window` pin with focus; failures are notices; busy while an overlay is open; nothing on a locked desktop |
+| DISP-05 | Bursts | Ten notifications → one handling (250 ms quiet, at most 1 s); a pin's and the overlay's `WM_DPICHANGED` count |
+| DISP-06 | Rescale, rotate, attach, detach | Pins keep place and pixel size, their outline follows the scale; detached pins are brought back onto a portrait monitor at its scale; the overlay survives a rescale and a work-area change and is cancelled by a detach or an attach, freeing its picture |
+| DISP-07 | The real binary, layout file rewritten while it runs | CLI captures compared pixel by pixel from quick-saved pins; ten posted `WM_DISPLAYCHANGE` → one handling; `WM_DPICHANGED` sent to a pin and to the overlay |
+| DISP-08 | This machine, read-only | The display configuration matches the monitors; the system arrow and I-beam drawn into the test's own memory bitmap only inside their box |
+
+**Physical test matrix (manual, for the maintainer).** It needs real monitors and changes real
+display settings, which automated runs on this shared machine never do. Record Windows edition
+and build, GPU and driver, each monitor's resolution, scale, position, rotation and HDR state, and
+the date, in the Step report and the parity matrix (`DISP-*` rows). Use a release
+build, the tray icon on, and bind the keys first: `noeul hotkeys set capture.monitor Ctrl+Alt+F1`
+and `noeul hotkeys set capture.window Ctrl+Alt+F2`.
+
+| Config | Monitors (arrange in Settings → System → Display) |
+| --- | --- |
+| A | One monitor at 100 % (baseline) |
+| B | One monitor at 150 % (or 125 %) |
+| C | Two side by side: primary at 100 % on the right, a second at 150 % on its **left** (negative x) |
+| D | C with the second monitor **above** the primary and offset (negative y, a gap in the corner) |
+| E | One monitor turned to portrait (90°) next to the primary |
+| F | Two monitors of different resolutions (e.g. 1920×1080 and 3840×2160) at different scales |
+| G | An HDR-capable monitor with "Use HDR" on (Windows 10 or 11) |
+
+For each configuration (✓ in the result table, with notes):
+
+- [ ] 1. `noeul status --json`: every monitor's `rect`, `dpi`, `rotation` and `hdr` match Settings;
+  the numbers run left to right.
+- [ ] 2. For each monitor `n`: `noeul capture --monitor n --pin --json`, then `Ctrl+S` on the pin
+  and open the PNG: it has the monitor's resolution (e.g. 3840×2160 at 200 %), is upright on a
+  turned monitor, and `mapping.logical` is the resolution divided by the scale.
+- [ ] 3. `F1`, select across the seam of C or D and pin it: one pin, no seam, no rescaling; the
+  corner gap of D is black in the pin.
+- [ ] 4. Drag a pin from the 100 % to the 150 % monitor and back: its picture keeps its pixel size
+  (FLOW-33); its outline and shadow grow and shrink with the scale.
+- [ ] 5. Open Notepad, click into it, press `Ctrl+Alt+F2`: a pin exactly over Notepad's frame (no
+  extra border); press `Esc`. Repeat with Notepad maximized, and spanning two monitors (the result
+  says "different scales").
+- [ ] 6. `noeul config set capture.pointer on`; hover a link (hand pointer) and press
+  `Ctrl+Alt+F1`; then over text (I-beam): the pointer is in the pin at the right place and size on
+  each scale. Note whether a scaled monitor or the accessibility pointer size shows a larger
+  pointer than the pin.
+- [ ] 7. With a pin on the second monitor, unplug it (or switch it off / "Disconnect this display"):
+  a notice says pins are off-screen; tray → Bring pins on screen brings it back. Plug it in again:
+  nothing moves by itself.
+- [ ] 8. `F1` and, while the overlay is open, change the primary's scale in Settings: the overlay
+  stays and its toolbar and handles change size. `F1` again and, while it is open, rearrange the
+  monitors: the overlay closes with "The displays changed …".
+- [ ] 9. Change the scale while a pin is in its editor (`Space`): the editor stays.
+- [ ] 10. Config G: capture an HDR video or game frame and an ordinary window: the result warns
+  "shows HDR"; note how the PNG compares with the screen (Noeul promises no exact match).
+- [ ] 11. A protected window (e.g. a DRM video in a browser, or a password manager window with
+  screen protection): monitor and window captures show it black or absent, never its content.
+- [ ] 12. During steps 7–8, `noeul status --json` → `displays.changes` grows by several per
+  rearrangement while `displays.handled` grows by one; Task Manager shows no CPU while idle
+  afterwards.
+
+| Config | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | Windows build, GPU, date |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| A | | | | | | | | | | | | | |
+| B | | | | | | | | | | | | | |
+| C | | | | | | | | | | | | | |
+| D | | | | | | | | | | | | | |
+| E | | | | | | | | | | | | | |
+| F | | | | | | | | | | | | | |
+| G | | | | | | | | | | | | | |
+
 ## 5. Toolbar, menus and the tray
 
 - **Toolbar order** (tab order): Pin · Copy · Save · tools (N3) · Undo · Redo · Cancel. Pin is the
@@ -1018,7 +1137,9 @@ default will be added (HOTKEY_CONTRACT §7.5). Shipped since Step 54: `pins.clic
 pin clickable again) and `pins.toggle-hidden` (hide all pins, or show them when one is hidden),
 scopes `global` and `app`, **no default keys**: the user binds them (`noeul hotkeys set
 pins.clickable Ctrl+Alt+F11`), so nothing new is registered and no other program loses a key;
-the catalog lists them (catalog v5).
+the catalog lists them (catalog v5). Shipped since Step 58 (§4.13): `capture.monitor` (capture the
+monitor under the pointer and pin it) and `capture.window` (capture the active window and pin it),
+scopes `global` and `app`, also **without default keys**; the catalog's shortcut summary lists them.
 
 **Context `capture-overlay`** (while the overlay has focus):
 

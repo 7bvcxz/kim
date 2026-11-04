@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/hellomouv/kim/docs/contracts/schemas/subak-gui-v2.schema.json",
+  "title": "Subak window placement and remembered tabs, schema version 2",
+  "description": "Contents of %APPDATA%\\mouv\\subak\\gui.json written by subak-gui since Step 20 (ADR 0051, docs/SUBAK_GUI.md §5): the window's placement, the Terminal shown last and the hidden tabs. No process ids, terminal content or secrets. Version 1 (subak-gui-v1) also held font_size and theme; those moved to config.toml (subak-config-v1), and a version 1 file is migrated once (its values go into config.toml where that file is silent, the old file is backed up). Unknown keys are allowed and preserved by subak-gui when it rewrites the file.",
+  "type": "object",
+  "required": ["schema", "schema_version"],
+  "properties": {
+    "schema": { "const": "subak.gui" },
+    "schema_version": { "const": 2 },
+    "font_size": { "description": "Version 1 only: config.toml appearance.font_size since version 2.", "not": {} },
+    "theme": { "description": "Version 1 only: config.toml appearance.theme since version 2.", "not": {} },
+    "window": {
+      "description": "The restored (not maximized) outer window rectangle in physical screen pixels at dpi, and whether the window was maximized. A rectangle on no current monitor is ignored.",
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["x", "y", "width", "height", "dpi"],
+          "properties": {
+            "x": { "type": "integer", "minimum": -1000000, "maximum": 1000000 },
+            "y": { "type": "integer", "minimum": -1000000, "maximum": 1000000 },
+            "width": { "type": "integer", "minimum": 1, "maximum": 100000 },
+            "height": { "type": "integer", "minimum": 1, "maximum": 100000 },
+            "dpi": { "type": "integer", "minimum": 48, "maximum": 960 },
+            "maximized": { "type": "boolean" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "last_terminal": {
+      "description": "The Terminal shown last, reopened when it still runs (by id, else by name). A hint, never a process.",
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["id", "name"],
+          "properties": {
+            "id": { "type": "string", "minLength": 1, "maxLength": 64 },
+            "name": { "type": "string", "maxLength": 64 }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "hidden_terminals": {
+      "description": "Terminals hidden in the window when it last ran, by id (Step 18). They keep running; the Terminal manager shows them and opening one there shows its tab again.",
+      "type": "array",
+      "maxItems": 1000,
+      "items": { "type": "string", "minLength": 1, "maxLength": 64 }
+    }
+  },
+  "additionalProperties": true
+}

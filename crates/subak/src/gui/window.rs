@@ -78,17 +78,17 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     CREATESTRUCTW, CS_DBLCLKS, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow,
     DispatchMessageW, GetClientRect, GetMessageW, GetWindowRect, HTCLIENT, IDC_ARROW, IDC_IBEAM,
     IDI_APPLICATION, IsIconic, IsZoomed, KillTimer, LoadCursorW, LoadIconW, MINMAXINFO, MSG,
-    PM_REMOVE, PeekMessageW, PostMessageW, PostQuitMessage, RegisterClassExW, SC_KEYMENU,
-    SIZE_MAXIMIZED, SIZE_MINIMIZED, SPI_GETHIGHCONTRAST, SW_SHOWMAXIMIZED, SW_SHOWNOACTIVATE,
-    SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, SetCursor, SetTimer, SetWindowPos,
-    SetWindowTextW, ShowWindow, SystemParametersInfoW, TranslateMessage, WM_APP, WM_CHAR, WM_CLOSE,
-    WM_COPYDATA, WM_DEADCHAR, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_EXITSIZEMOVE,
-    WM_GETMINMAXINFO, WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION, WM_IME_SETCONTEXT,
-    WM_IME_STARTCOMPOSITION, WM_KEYDOWN, WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_PAINT,
-    WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETTINGCHANGE, WM_SIZE, WM_SYSCHAR,
-    WM_SYSCOLORCHANGE, WM_SYSCOMMAND, WM_SYSDEADCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_THEMECHANGED,
-    WM_TIMER, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_OVERLAPPEDWINDOW,
+    PostMessageW, PostQuitMessage, RegisterClassExW, SC_KEYMENU, SIZE_MAXIMIZED, SIZE_MINIMIZED,
+    SPI_GETHIGHCONTRAST, SW_SHOWMAXIMIZED, SW_SHOWNOACTIVATE, SW_SHOWNORMAL, SWP_NOACTIVATE,
+    SWP_NOMOVE, SWP_NOZORDER, SetCursor, SetTimer, SetWindowPos, SetWindowTextW, ShowWindow,
+    SystemParametersInfoW, TranslateMessage, WM_APP, WM_CHAR, WM_CLOSE, WM_COPYDATA, WM_DESTROY,
+    WM_DPICHANGED, WM_ERASEBKGND, WM_EXITSIZEMOVE, WM_GETMINMAXINFO, WM_IME_COMPOSITION,
+    WM_IME_ENDCOMPOSITION, WM_IME_SETCONTEXT, WM_IME_STARTCOMPOSITION, WM_KEYDOWN, WM_KILLFOCUS,
+    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE,
+    WM_MOUSEWHEEL, WM_NCCREATE, WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS,
+    WM_SETTINGCHANGE, WM_SIZE, WM_SYSCHAR, WM_SYSCOLORCHANGE, WM_SYSCOMMAND, WM_SYSKEYDOWN,
+    WM_SYSKEYUP, WM_THEMECHANGED, WM_TIMER, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    WS_OVERLAPPEDWINDOW,
 };
 
 /// The network threads have queued something.
@@ -1726,6 +1726,29 @@ fn run_after(hwnd: HWND, after: Vec<After>) {
     }
 }
 
+/// A key press, before `TranslateMessage` turns it into a character (as accelerators are): a
+/// key the window handles (a shortcut, a cursor or function key for the program, a chooser key)
+/// never produces a `WM_CHAR`, so nothing has to be taken back out of the queue. Returns whether
+/// it was handled. Alt+F4 always goes on to the window (close = detach).
+fn pre_translate(msg: &MSG) -> bool {
+    if !matches!(msg.message, WM_KEYDOWN | WM_SYSKEYDOWN) {
+        return false;
+    }
+    let code = msg.wParam as u32;
+    if msg.message == WM_SYSKEYDOWN && code == vk::F4 {
+        return false;
+    }
+    let handled = APP.with(|cell| {
+        let Ok(mut slot) = cell.try_borrow_mut() else {
+            return false;
+        };
+        slot.as_mut()
+            .is_some_and(|app| app.hwnd == msg.hwnd && app.key_down(code, mods()))
+    });
+    flush_after(msg.hwnd);
+    handled
+}
+
 /// Takes the queued [`After`] actions out of the state and runs them.
 fn flush_after(hwnd: HWND) {
     let after = APP.with_borrow_mut(|slot| {
@@ -1791,28 +1814,9 @@ fn handle(app: &mut App, hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> Option
             }
             None
         }
-        WM_KEYDOWN | WM_SYSKEYDOWN => {
-            let code = wp as u32;
-            if msg == WM_SYSKEYDOWN && code == vk::F4 {
-                return None; // Alt+F4: close (a detach)
-            }
-            if app.key_down(code, mods()) {
-                // The key's character (if TranslateMessage made one) is not for the program.
-                let mut m = MSG::default();
-                // SAFETY: removes pending character messages of our own window.
-                unsafe {
-                    while PeekMessageW(&raw mut m, hwnd, WM_CHAR, WM_DEADCHAR, PM_REMOVE) != 0 {}
-                    while PeekMessageW(&raw mut m, hwnd, WM_SYSCHAR, WM_SYSDEADCHAR, PM_REMOVE) != 0
-                    {
-                    }
-                }
-                Some(0)
-            } else if msg == WM_SYSKEYDOWN && code == vk::F10 {
-                Some(0)
-            } else {
-                None
-            }
-        }
+        // Key presses are dispatched in the message loop before TranslateMessage (see
+        // `pre_translate`); what arrives here was not handled there.
+        WM_SYSKEYDOWN if wp as u32 == vk::F10 => Some(0),
         WM_SYSKEYUP if matches!(wp as u32, vk::MENU | vk::F10) => {
             // A lone Alt or F10 would open the (absent) menu bar and swallow the next key.
             Some(0)
@@ -2075,6 +2079,9 @@ pub fn run(o: Options) -> ExitCode {
     app.bg_brush = unsafe { CreateSolidBrush(colorref(app.theme().background)) };
     let outer = if restored {
         None
+    } else if let Some(w) = app.prefs.window.filter(|_| test) {
+        // The test window stays off-screen, but takes the saved size (persistence check).
+        Some(layout::rescale((w.width, w.height), w.dpi, dpi))
     } else {
         let (cw, ch) = app
             .cells()
@@ -2150,6 +2157,9 @@ pub fn run(o: Options) -> ExitCode {
         flush_after(hwnd);
         let mut msg = MSG::default();
         while GetMessageW(&raw mut msg, null_mut(), 0, 0) > 0 {
+            if pre_translate(&msg) {
+                continue;
+            }
             TranslateMessage(&raw const msg);
             DispatchMessageW(&raw const msg);
         }

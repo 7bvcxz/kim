@@ -2429,15 +2429,26 @@ impl Screen {
     }
 }
 
-/// Paints a grid on a cleared client screen, row by row, at absolute positions.
+/// Paints a grid on a cleared client screen, row by row, at absolute positions. A row that
+/// soft-wraps into the next is continued without positioning, so the client's autowrap marks it
+/// wrapped too (copy and `capture --join` join it on the client as on the Host).
 fn paint(grid: &[Row], s: &mut String) {
     s.push_str("\x1b[H\x1b[2J");
+    let mut continues = false;
     for (y, row) in grid.iter().enumerate() {
-        if row.used() == 0 {
-            continue;
+        let used = row.used();
+        if continues {
+            // The previous row filled its last column; printing here wraps it on the client.
+            if used == 0 {
+                s.push(' ');
+            } else {
+                row.encode(s);
+            }
+        } else if used > 0 {
+            let _ = write!(s, "\x1b[{};1H", y + 1);
+            row.encode(s);
         }
-        let _ = write!(s, "\x1b[{};1H", y + 1);
-        row.encode(s);
+        continues = row.wrapped && y + 1 < grid.len();
     }
 }
 

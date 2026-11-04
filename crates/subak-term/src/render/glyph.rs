@@ -625,6 +625,48 @@ impl Cmap {
     }
 }
 
+/// The family names (name IDs 1 and 16, every language) in a font's OpenType `name` table.
+pub fn font_names(data: &[u8]) -> Vec<String> {
+    let mut out = Vec::new();
+    let (Some(count), Some(storage)) = (be16(data, 2), be16(data, 4)) else {
+        return out;
+    };
+    for i in 0..usize::from(count) {
+        let r = 6 + i * 12;
+        let (Some(platform), Some(name_id), Some(len), Some(off)) = (
+            be16(data, r),
+            be16(data, r + 6),
+            be16(data, r + 8),
+            be16(data, r + 10),
+        ) else {
+            break;
+        };
+        if name_id != 1 && name_id != 16 {
+            continue;
+        }
+        let start = usize::from(storage) + usize::from(off);
+        let Some(bytes) = data.get(start..start + usize::from(len)) else {
+            continue;
+        };
+        let name = match platform {
+            0 | 3 => {
+                let units: Vec<u16> = bytes
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|c| u16::from_be_bytes(*c))
+                    .collect();
+                String::from_utf16_lossy(&units)
+            }
+            _ => bytes.iter().map(|&b| char::from(b)).collect(),
+        };
+        if !out.contains(&name) {
+            out.push(name);
+        }
+    }
+    out
+}
+
 // ---------------------------------------------------------------------------------------------
 // The glyph cache.
 
@@ -835,6 +877,37 @@ mod tests {
             0,
             "garbage maps nothing"
         );
+    }
+
+    #[test]
+    fn name_table_family_names() {
+        // A Windows UTF-16BE family name, a subfamily (skipped) and a Mac Roman family name.
+        let names = [
+            ("Malgun Gothic", 3u16, 1u16),
+            ("Regular", 3, 2),
+            ("Mac Name", 1, 1),
+        ];
+        let mut storage = Vec::new();
+        let mut records = Vec::new();
+        for (text, platform, id) in names {
+            let bytes: Vec<u8> = if platform == 3 {
+                text.encode_utf16().flat_map(u16::to_be_bytes).collect()
+            } else {
+                text.bytes().collect()
+            };
+            for v in [platform, 0, 0, id, bytes.len() as u16, storage.len() as u16] {
+                records.extend_from_slice(&v.to_be_bytes());
+            }
+            storage.extend(bytes);
+        }
+        let mut table = Vec::new();
+        for v in [0u16, names.len() as u16, (6 + records.len()) as u16] {
+            table.extend_from_slice(&v.to_be_bytes());
+        }
+        table.extend(records);
+        table.extend(storage);
+        assert_eq!(font_names(&table), ["Malgun Gothic", "Mac Name"]);
+        assert!(font_names(&[0, 0]).is_empty());
     }
 
     #[test]

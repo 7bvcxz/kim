@@ -9,7 +9,9 @@
 //! characters outside the BMP. GDI draws colour emoji fonts in monochrome; colour emoji need a
 //! DirectWrite rasterizer behind the same [`Rasterizer`] boundary (docs/TERMINAL_EMULATOR.md §5).
 
-use super::glyph::{CellMetrics, Cmap, FaceInfo, GlyphBitmap, Rasterizer, Style, missing_glyph};
+use super::glyph::{
+    CellMetrics, Cmap, FaceInfo, GlyphBitmap, Rasterizer, Style, font_names, missing_glyph,
+};
 use std::ptr::{null, null_mut};
 use windows_sys::Win32::Foundation::SIZE;
 use windows_sys::Win32::Graphics::Gdi::{
@@ -25,11 +27,13 @@ use windows_sys::Win32::Graphics::Gdi::{
 #[derive(Debug)]
 struct Face {
     family: String,
-    /// Fonts by [`Style::index`], created on first use.
+    /// Fonts by [`Style::index`], created on first use. A style the family does not have
+    /// (GDI would pick another font for it) uses the regular font.
     fonts: [HFONT; 4],
-    cmap: Cmap,
-    /// `lfHeight`: negative = em size (the primary face), positive = cell height (fallbacks, so
-    /// their ascent and descent fit the cell).
+    /// Each font's own character map: a bold or italic font may be a different file with
+    /// different glyph indices.
+    cmaps: [Option<Cmap>; 4],
+    /// `lfHeight`: the negative em size, the same for every face of the chain.
     lf_height: i32,
     ascent: i32,
     descent: i32,
@@ -105,35 +109,57 @@ impl GdiRasterizer {
         unsafe { CreateFontIndirectW(&raw const lf) }
     }
 
-    /// Loads `family` at `height`, or `None` if it is not installed (GDI silently substitutes
-    /// another family for a missing one, so the selected face's name is checked).
+    /// What GDI selected for `font`: its face name, metrics, and its `cmap` and `name` tables.
+    fn inspect(&self, font: HFONT) -> (String, TEXTMETRICW, Vec<u8>, Vec<u8>) {
+        let mut name = [0u16; 64];
+        let mut tm = TEXTMETRICW::default();
+        let table = |tag: &[u8; 4]| {
+            let tag = u32::from_le_bytes(*tag);
+            // SAFETY: the font is selected into our own DC (below); the buffer has the size the
+            // first call reported.
+            unsafe {
+                let size = GetFontData(self.dc, tag, 0, null_mut(), 0);
+                if size == GDI_ERROR as u32 || size == 0 {
+                    return Vec::new();
+                }
+                let mut data = vec![0u8; size as usize];
+                GetFontData(self.dc, tag, 0, data.as_mut_ptr().cast(), size);
+                data
+            }
+        };
+        // SAFETY: `font` is a live font selected into our own DC and restored below; every
+        // buffer passed is valid for the size given.
+        let old = unsafe {
+            let old = SelectObject(self.dc, font);
+            GetTextFaceW(self.dc, name.len() as i32, name.as_mut_ptr());
+            GetTextMetricsW(self.dc, &raw mut tm);
+            old
+        };
+        let (cmap, names) = (table(b"cmap"), table(b"name"));
+        // SAFETY: restores the DC's previous font.
+        unsafe { SelectObject(self.dc, old) };
+        let len = name.iter().position(|&c| c == 0).unwrap_or(name.len());
+        (String::from_utf16_lossy(&name[..len]), tm, cmap, names)
+    }
+
+    /// GDI silently substitutes another font for a family it does not have, and reports a
+    /// localized family name for some fonts (Malgun Gothic is reported in Korean on Korean
+    /// Windows), so a font is `family` if its face name or one of its `name` table entries says so.
+    fn is_family(face_name: &str, names: &[u8], family: &str) -> bool {
+        face_name.eq_ignore_ascii_case(family)
+            || font_names(names)
+                .iter()
+                .any(|n| n.eq_ignore_ascii_case(family))
+    }
+
+    /// Loads `family` at `height`, or `None` if it is not installed.
     fn load_face(&self, family: &str, height: i32) -> Option<Face> {
         let font = self.create_font(family, height, Style::default());
         if font.is_null() {
             return None;
         }
-        let mut name = [0u16; 64];
-        let mut tm = TEXTMETRICW::default();
-        let mut data = Vec::new();
-        // SAFETY: `font` is a live font selected into our own DC and restored before returning;
-        // every buffer passed is valid for the size given.
-        let selected = unsafe {
-            let old = SelectObject(self.dc, font);
-            let n = GetTextFaceW(self.dc, name.len() as i32, name.as_mut_ptr());
-            GetTextMetricsW(self.dc, &raw mut tm);
-            let tag = u32::from_le_bytes(*b"cmap");
-            let size = GetFontData(self.dc, tag, 0, null_mut(), 0);
-            if size != GDI_ERROR as u32 && size > 0 {
-                data = vec![0u8; size as usize];
-                GetFontData(self.dc, tag, 0, data.as_mut_ptr().cast(), size);
-            }
-            SelectObject(self.dc, old);
-            n
-        };
-        let len = name.iter().position(|&c| c == 0).unwrap_or(0);
-        let got =
-            String::from_utf16_lossy(&name[..len.min(usize::try_from(selected).unwrap_or(0))]);
-        if !got.eq_ignore_ascii_case(family) {
+        let (face_name, tm, cmap, names) = self.inspect(font);
+        if !Self::is_family(&face_name, &names, family) {
             // SAFETY: our own font handle, not selected anywhere.
             unsafe { DeleteObject(font) };
             return None;
@@ -141,7 +167,7 @@ impl GdiRasterizer {
         Some(Face {
             family: family.to_string(),
             fonts: [font, null_mut(), null_mut(), null_mut()],
-            cmap: Cmap::parse(data),
+            cmaps: [Some(Cmap::parse(cmap)), None, None, None],
             lf_height: height,
             ascent: tm.tmAscent,
             descent: tm.tmDescent,
@@ -150,10 +176,11 @@ impl GdiRasterizer {
 
     fn release_fonts(&mut self) {
         for f in self.faces.drain(..) {
-            for h in f.fonts {
-                if !h.is_null() {
+            for (i, h) in f.fonts.iter().enumerate() {
+                // A style without its own font shares the regular one: delete each handle once.
+                if !h.is_null() && !f.fonts[..i].contains(h) {
                     // SAFETY: our own font handles; none is selected into the DC between calls.
-                    unsafe { DeleteObject(h) };
+                    unsafe { DeleteObject(*h) };
                 }
             }
         }
@@ -216,22 +243,38 @@ impl GdiRasterizer {
         }
     }
 
-    fn font(&mut self, face: usize, style: Style) -> HFONT {
+    /// The font of `face` in `style` and the index of its character map, created on first use.
+    fn font(&mut self, face: usize, style: Style) -> (HFONT, usize) {
         let i = style.index();
         if self.faces[face].fonts[i].is_null() {
             let f = &self.faces[face];
             let font = self.create_font(&f.family, f.lf_height, style);
-            self.faces[face].fonts[i] = if font.is_null() {
-                self.faces[face].fonts[0]
+            let mut own = false;
+            if !font.is_null() {
+                let (face_name, _, cmap, names) = self.inspect(font);
+                if Self::is_family(&face_name, &names, &self.faces[face].family) {
+                    self.faces[face].cmaps[i] = Some(Cmap::parse(cmap));
+                    own = true;
+                } else {
+                    // SAFETY: our own font handle, never selected.
+                    unsafe { DeleteObject(font) };
+                }
+            }
+            let f = &mut self.faces[face];
+            if own {
+                f.fonts[i] = font;
             } else {
-                font
-            };
+                f.fonts[i] = f.fonts[0];
+                f.cmaps[i] = f.cmaps[0].clone();
+            }
         }
-        self.faces[face].fonts[i]
+        (self.faces[face].fonts[i], i)
     }
 
     fn face_index(&self, c: char) -> Option<usize> {
-        self.faces.iter().position(|f| f.cmap.glyph(c) != 0)
+        self.faces
+            .iter()
+            .position(|f| f.cmaps[0].as_ref().is_some_and(|m| m.glyph(c) != 0))
     }
 }
 
@@ -309,9 +352,10 @@ impl Rasterizer for GdiRasterizer {
             stroke: u32::try_from(stroke).unwrap_or(1),
         };
         self.faces.push(primary);
-        // Fallback faces at the cell height, so they fit the cell.
+        // Fallback faces at the same em size, drawn on the primary baseline (as Windows Terminal
+        // does): Hangul and emoji match the Latin text's size; ink beyond the cell is clipped.
         for f in rest {
-            if let Some(face) = self.load_face(f, height) {
+            if let Some(face) = self.load_face(f, -em) {
                 self.faces.push(face);
             }
         }
@@ -336,22 +380,21 @@ impl Rasterizer for GdiRasterizer {
         if self.bits.is_null() {
             return missing_glyph(cells, m);
         }
-        let font = self.font(fi, style);
+        let (font, ci) = self.font(fi, style);
         let face = &self.faces[fi];
+        let Some(cmap) = face.cmaps[ci].as_ref() else {
+            return missing_glyph(cells, m);
+        };
         let glyphs: Vec<u16> = cluster
             .chars()
-            .map(|c| face.cmap.glyph(c))
+            .map(|c| cmap.glyph(c))
             .filter(|&g| g != 0)
             .collect();
         let cell_w = i32::try_from(m.width).unwrap_or(1);
         let height = i32::try_from(m.height).unwrap_or(1).min(self.dib_h);
         let span = cell_w * i32::from(cells);
         let margin = cell_w;
-        let baseline = if fi == 0 {
-            i32::try_from(m.baseline).unwrap_or(0)
-        } else {
-            (height - (face.ascent + face.descent)) / 2 + face.ascent
-        };
+        let baseline = i32::try_from(m.baseline).unwrap_or(0);
         let (dib_w, dc, bits) = (self.dib_w, self.dc, self.bits);
         let mut coverage = vec![0u8; (dib_w * height) as usize];
         // SAFETY: our own DC with our own DIB selected; `bits` points at `dib_w × dib_h` pixels
@@ -445,6 +488,10 @@ mod tests {
             "a Windows mono font comes first: {faces:?}"
         );
         assert_eq!(r.face_for('A').family, *primary);
+        assert!(
+            faces.iter().any(|f| f == "Malgun Gothic"),
+            "Malgun Gothic ships with Windows 10 and 11 (found {faces:?})"
+        );
         assert!(!r.face_for('A').fallback);
         if faces.iter().any(|f| f == "Malgun Gothic") {
             let k = r.face_for('한');
@@ -484,6 +531,19 @@ mod tests {
                 &m,
             );
             assert!(bold.ink() >= a.ink(), "bold is not lighter");
+            // An italic face (or GDI's synthesized slant) draws the same letter, not another
+            // font's glyph at the same index: about the same amount of ink.
+            let italic = r.rasterize(
+                "A",
+                Style {
+                    bold: false,
+                    italic: true,
+                },
+                1,
+                &m,
+            );
+            let (ai, ii) = (a.ink() as f64, italic.ink() as f64);
+            assert!(ii > ai * 0.6 && ii < ai * 1.6, "italic A {ii} vs A {ai}");
             let k = r.rasterize("한", Style::default(), 2, &m);
             assert!(k.ink() > 0);
             // A Hangul syllable is centred in its two cells and wider than one.

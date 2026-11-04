@@ -172,7 +172,7 @@ impl Client {
     }
 
     fn expect(&self, needle: &str) {
-        let until = Instant::now() + Duration::from_secs(30);
+        let until = Instant::now() + Duration::from_secs(120); // a cold PowerShell start can be slow
         while Instant::now() < until {
             if self.text().contains(needle) {
                 return;

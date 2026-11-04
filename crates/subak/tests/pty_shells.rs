@@ -411,6 +411,10 @@ fn ps_prompt(p: &mut Pane) {
     }
 }
 
+/// How long a PowerShell's first answer may take: a cold start on a busy CI runner, with other
+/// tests starting PowerShell at the same time, took longer than 20 s (Windows Server 2025).
+const PS_START: Duration = Duration::from_secs(120);
+
 /// Variables for PowerShell panes in tests: no update check, no telemetry, no logo.
 const PS_ENV: [&str; 4] = [
     "--env",
@@ -469,12 +473,12 @@ fn powershell_and_cmd_run_interactively_in_independent_trees_under_the_host() {
     assert!(text.contains("Microsoft Windows"), "{text}");
     let mut p = lab.attach("ps");
     p.send(b"Write-Output ('ps-' + 'marker-' + $PSVersionTable.PSVersion.Major)\r");
-    p.expect("ps-marker-5");
+    p.expect_within("ps-marker-5", PS_START);
     let mut seven = None;
     if pwsh {
         let mut s = lab.attach("pwsh");
         s.send(b"Write-Output ('pwsh-' + 'marker-' + $PSVersionTable.PSVersion.Major)\r");
-        let text = s.expect("pwsh-marker-");
+        let text = s.expect_within("pwsh-marker-", PS_START);
         seven = text
             .split("pwsh-marker-")
             .nth(1)
@@ -718,7 +722,7 @@ fn explicit_programs_get_their_arguments_exactly_and_report_exit_codes() {
             *name,
         ));
     }
-    let deadline = Instant::now() + LONG;
+    let deadline = Instant::now() + PS_START;
     let mut exits = std::collections::BTreeMap::new();
     let mut removed = false;
     while exits.len() < ids.len() || !removed {
@@ -986,7 +990,7 @@ fn ctrl_c_and_unicode_reach_programs_in_cmd_and_powershell() {
     // PowerShell: Ctrl+C stops a running cmdlet and a native child; Unicode round-trips.
     let mut p = lab.attach("ps");
     p.send("Write-Output ('유니코드-' + '확인')\r".as_bytes());
-    p.expect("유니코드-확인");
+    p.expect_within("유니코드-확인", PS_START);
     p.send(b"Start-Sleep -Seconds 60; 'not-' + 'interrupted'\r");
     std::thread::sleep(Duration::from_millis(800));
     p.clear();

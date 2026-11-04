@@ -52,6 +52,7 @@ a recorded justification.
 | 36 | #77 Step 72 – Ddalgak user-defined modes, layers and mode toggles (merged; issue open for the maintainer's tray-indicator and real-typing check, `DDALGAK_ENGINE.md` §15) | `step72_ddalgak_modes.rs` (2 tests): an agent builds modes and layers headlessly; the running app switches modes, releases held keys and never restores the active mode | 6 |
 | 37 | #59 Step 54 – Noeul pin transforms and advanced interaction controls | `step54_noeul_pin_transform.rs` (2 tests): transforms, groups and recovery are discoverable headlessly; scripts transform, recover and group off-screen pins. `step53_noeul_pins.rs` updated (the transform keys are no longer planned) | 7 |
 | 38 | #18 Step 18 – Subak floating icon and terminal manager (merged; issue open for the maintainer's visible icon/manager check, `SUBAK_GUI.md` §11.9) | `step18_floating_manager.rs` (2 tests): the floating manager follows the Host and manages Terminals without ending others; the icon is dragged, snaps, keeps its place and comes back when a monitor goes | 8 |
+| 39 | #78 Step 73 – Ddalgak enable/disable and emergency recovery (merged; issue open for the maintainer's physical-keyboard checks, `DDALGAK_ENGINE.md` §16) | `step73_ddalgak_recovery.rs` (2 tests): an agent switches rules, modes and profiles off and on headlessly; the running app recovers and never turns itself back on | 9 |
 
 ## E2E runs
 

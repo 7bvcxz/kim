@@ -221,7 +221,7 @@ ADR 0027; `subak terminal <verb>` is the deprecated Step 10 spelling) maps onto 
 - **Profiles** (`profile` of `terminal.create`, Step 33) are refused with `invalid_params`, never
   silently ignored. Environment overrides (`env`) exist since Step 11
   ([PTY_PROCESSES §3](PTY_PROCESSES.md)).
-- **More windows and panes** (Steps 21–22), the GUI's session manager (Step 18; tabs exist since Step 17), and
+- **More windows and panes** (Steps 21–22) — the Terminal manager exists since Step 18 and tabs since Step 17 — and
   `pane.send_keys` (Step 24; Step 12 writes input only through an attach). `pane.capture` exists
   since Step 13.
 - **Persisted history** (Steps 29+): opt-in and off by default when it comes

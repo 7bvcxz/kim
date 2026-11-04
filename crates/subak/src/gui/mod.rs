@@ -1,4 +1,5 @@
-//! `subak-gui`: the Subak window (Steps 16–17, ADR 0039, ADR 0042, docs/SUBAK_GUI.md).
+//! `subak-gui`: the Subak window (Steps 16–17, ADR 0039, ADR 0042, docs/SUBAK_GUI.md), and with
+//! `--float` the floating icon, tray icon and Terminal manager (Step 18, ADR 0045, [`float`]).
 //!
 //! A pure client of the per-user Host (ADR 0009): it connects like the CLI (identity checks,
 //! IPC v1, starting a Host on demand — one that starts no shell), shows the Host's Terminals as
@@ -18,11 +19,13 @@
 //! | [`prefs`] | `%APPDATA%\mouv\subak\gui.json` | portable, unit-tested |
 //! | `net` | the connection: connect or start, read frames, write frames | Windows |
 //! | `window` | the Win32 window: paint, keyboard, IME, mouse, clipboard, DPI, test hooks | Windows |
+//! | [`float`] | `--float`: the floating icon, the tray icon and the Terminal manager (Step 18) | portable parts + Windows |
 
 // Portable modules: compiled and unit-tested on every target; until the Linux window (M4,
 // ADR 0011) only the Windows window uses them.
 #[cfg_attr(not(windows), allow(dead_code))]
 mod compose;
+pub mod float;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod keys;
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -45,10 +48,12 @@ mod window;
 use std::process::ExitCode;
 
 const HELP: &str = "\
-subak-gui — the Subak window (pre-alpha, Steps 16-17)
+subak-gui — the Subak window (pre-alpha, Steps 16-18)
 
 USAGE:
     subak-gui [<terminal>] [--endpoint <name>] [--no-hotkeys]
+    subak-gui --float [--icon] [--tray] [--manager] [--endpoint <name>] [--no-hotkeys]
+    subak-gui --manager [--endpoint <name>]
     subak-gui --help | --version
 
 Shows the Host's Terminals as tabs in a native window. <terminal> is a Terminal name (case is
@@ -76,6 +81,16 @@ reach the program only once you disable or rebind them (the Ctrl+B pass-through 
 The mouse selects (double-click: word, triple-click: line, Alt: block); right-click copies a
 selection or pastes. Preferences: %APPDATA%\\mouv\\subak\\gui.json (docs/SUBAK_GUI.md).
 
+FLOATING ICON AND TERMINAL MANAGER (optional, off unless you start it; docs/SUBAK_GUI.md §11):
+    --float         Run the small always-on-top floating icon (and/or a tray icon). Click it for
+                    the Terminal manager: every Terminal of the Host with its state, quick
+                    search, Open (Enter), New (Ctrl+N), Rename (F2), Delete (Delete, asks
+                    first). Drag it anywhere; its place is kept. Right-click for its menu.
+                    It never starts a Host by itself and closing it ends nothing.
+    --icon, --tray  With --float: show the floating icon, the tray icon, or both (saved in
+                    %APPDATA%\\mouv\\subak\\float.json); without either, the saved choice.
+    --manager       Open the Terminal manager (starting the floating UI if it does not run).
+
 OPTIONS:
     --endpoint <name>   Use this Host endpoint instead of your default one (as `subak --endpoint`).
     --no-hotkeys        Start with every shortcut off (also KIM_NO_HOTKEYS); keys go to programs.
@@ -92,6 +107,8 @@ pub struct Options {
     pub target: Option<String>,
     /// `--no-hotkeys`: every shortcut off for this run (HOTKEY_CONTRACT §8.3 4).
     pub no_hotkeys: bool,
+    /// `--float` / `--manager`: the floating icon and Terminal manager instead of a window.
+    pub float: Option<float::FloatOptions>,
     /// Test hooks (debug builds, or the `test-hooks` feature): the window is placed off every
     /// monitor, never activated, without a taskbar button, reports its state as JSON lines on
     /// stdout, takes WM_COPYDATA test commands, never touches the system clipboard, and closes
@@ -130,6 +147,25 @@ fn parse(args: &[String]) -> Result<Parsed, String> {
                 o.endpoint = Some(ep.clone());
             }
             "--no-hotkeys" => o.no_hotkeys = true,
+            "--float" => {
+                o.float.get_or_insert_with(Default::default);
+            }
+            "--icon" | "--tray" | "--manager" => {
+                let f = o.float.get_or_insert_with(Default::default);
+                match a {
+                    "--icon" => f.icon = true,
+                    "--tray" => f.tray = true,
+                    _ => f.manager = true,
+                }
+            }
+            "--test-monitors" if TEST_HOOKS => {
+                i += 1;
+                let m = args
+                    .get(i)
+                    .and_then(|v| float::parse_monitors(v))
+                    .ok_or("--test-monitors needs left,top,right,bottom,dpi[;…]")?;
+                o.float.get_or_insert_with(Default::default).test_monitors = Some(m);
+            }
             "--test-offscreen" if TEST_HOOKS => o.test = true,
             "--test-max-seconds" if TEST_HOOKS => {
                 i += 1;
@@ -148,6 +184,19 @@ fn parse(args: &[String]) -> Result<Parsed, String> {
             }
         }
         i += 1;
+    }
+    if let Some(f) = &o.float {
+        if let Some(t) = &o.target {
+            return Err(format!(
+                "`{t}`: the floating icon shows every Terminal; open one from its manager"
+            ));
+        }
+        if (f.icon || f.tray || f.test_monitors.is_some())
+            && !f.manager
+            && !args.iter().any(|a| a == "--float")
+        {
+            return Err("--icon, --tray and --test-monitors go with --float".into());
+        }
     }
     Ok(Parsed::Run(o))
 }
@@ -189,6 +238,9 @@ pub fn main() -> ExitCode {
 
 #[cfg(windows)]
 fn run(o: Options) -> ExitCode {
+    if o.float.is_some() {
+        return float::win::run(o);
+    }
     window::run(o)
 }
 
@@ -232,5 +284,43 @@ mod tests {
         assert_eq!(p(&["--test-offscreen"]).is_ok(), TEST_HOOKS);
         assert!(HELP.contains("only detaches"));
         assert!(HELP.contains("Ctrl+Tab") && HELP.contains("asks first"));
+        assert!(HELP.contains("--float") && HELP.contains("closing it ends nothing"));
+    }
+
+    #[test]
+    fn floating_options() {
+        let Ok(Parsed::Run(o)) = p(&["--float", "--endpoint", "e"]) else {
+            panic!()
+        };
+        assert_eq!(o.float, Some(float::FloatOptions::default()));
+        let Ok(Parsed::Run(o)) = p(&["--float", "--tray", "--icon"]) else {
+            panic!()
+        };
+        let f = o.float.unwrap();
+        assert!(f.icon && f.tray && !f.manager);
+        let Ok(Parsed::Run(o)) = p(&["--manager"]) else {
+            panic!()
+        };
+        assert!(o.float.unwrap().manager);
+        assert!(p(&["--tray"]).unwrap_err().contains("go with --float"));
+        assert!(
+            p(&["--float", "work"])
+                .unwrap_err()
+                .contains("open one from its manager")
+        );
+        assert_eq!(
+            p(&[
+                "--float",
+                "--test-monitors",
+                "-20000,-20000,-18000,-19000,96"
+            ])
+            .is_ok(),
+            TEST_HOOKS
+        );
+        // A window (no --float) is not floating.
+        let Ok(Parsed::Run(o)) = p(&["work"]) else {
+            panic!()
+        };
+        assert_eq!(o.float, None);
     }
 }

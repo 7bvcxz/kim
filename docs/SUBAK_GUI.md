@@ -1,25 +1,31 @@
 # The Subak window (`subak-gui`)
 
-Status: **current** (implemented, Steps 16–17; the visible-window checks of §9 are pending the
-maintainer) · Decisions: [ADR 0039](adr/0039-subak-window-plain-win32-client.md),
-[ADR 0042](adr/0042-subak-window-tabs-and-safe-close.md) (tabs) · Builds on
+Status: **current** (implemented, Steps 16–18; the visible-window checks of §9 and the
+visible-icon and real-tray checks of §11.9 are pending the maintainer) · Decisions:
+[ADR 0039](adr/0039-subak-window-plain-win32-client.md),
+[ADR 0042](adr/0042-subak-window-tabs-and-safe-close.md) (tabs),
+[ADR 0045](adr/0045-subak-floating-icon-and-terminal-manager.md) (floating icon and Terminal
+manager) · Builds on
 [TERMINAL_EMULATOR](TERMINAL_EMULATOR.md) (Step 15), [IPC_PROTOCOL](contracts/IPC_PROTOCOL.md),
 [SESSION_MODEL](SESSION_MODEL.md), [HOTKEY_CONTRACT](HOTKEY_CONTRACT.md),
 [DESIGN_SYSTEM](DESIGN_SYSTEM.md) · Requirements: `SUBAK-FR-003`, `SUBAK-FR-011`,
 `SUBAK-FR-013`, `SUBAK-FR-014`, `SUBAK-FR-015`, `SUBAK-FR-031`, `SUBAK-FR-033`, `SUBAK-FR-034`,
-`SUBAK-FR-037`, `SUBAK-FR-038`, `SUBAK-FR-046`, `SUBAK-NFR-001`, `SUBAK-NFR-002`
+`SUBAK-FR-037`, `SUBAK-FR-038`, `SUBAK-FR-046`, `SUBAK-NFR-001`, `SUBAK-NFR-002`; Step 18:
+`SUBAK-FR-030`, `SUBAK-FR-032`, `SUBAK-FR-039`, `KIM-FR-012`
 
 `subak-gui.exe` is a small native window that shows the Host's **Terminals as tabs** and the
 shown tab's pane live. It is a client of the per-user Host, like `subak attach`: the Terminals
 and their programs live in the Host, so closing the window, hiding a tab — or the window
-crashing — never ends them. The Host and the `subak` CLI work without it. The floating icon and
-session manager (Step 18), search and clipboard UX (Step 19) and visual polish and settings
-(Step 20) come next.
+crashing — never ends them. The Host and the `subak` CLI work without it. The optional floating
+icon, tray icon and Terminal manager (`subak-gui --float`, Step 18) are §11; search and clipboard
+UX (Step 19) and visual polish and settings (Step 20) come next.
 
 ## 1. Starting it
 
 ```text
 subak-gui [<terminal>] [--endpoint <name>] [--no-hotkeys]
+subak-gui --float [--icon] [--tray] [--manager] [--endpoint <name>] [--no-hotkeys]   (§11)
+subak-gui --manager [--endpoint <name>]                                               (§11)
 subak-gui --help | --version
 ```
 
@@ -189,6 +195,7 @@ secrets). Schema: [subak-gui-v1](contracts/schemas/subak-gui-v1.schema.json), ex
 | `theme` | `auto` (kim-dark, or the system colours under High Contrast), `kim-dark`, `high-contrast` |
 | `window` | The restored (not maximized) outer rectangle in physical pixels at `dpi`, and `maximized`. Used only if a title bar's worth of it lies on a current monitor; its size is rescaled to that monitor's DPI. |
 | `last_terminal` | The Terminal shown last; reopened when it still runs |
+| `hidden_terminals` | Terminals hidden in the window when it last ran, by id (Step 18). A new window keeps them hidden; they keep running, the tab menu's "Show hidden: …" and the Terminal manager (§11) show them again |
 
 - Written **atomically** (a temporary file, flushed, renamed) and only on a change: a move or
   resize that ended, maximize/restore, a zoom, another Terminal, closing. Never while idle.
@@ -213,6 +220,7 @@ secrets). Schema: [subak-gui-v1](contracts/schemas/subak-gui-v1.schema.json), ex
 | Network | `gui/net.rs` | A reader thread (connect or start, identity checks, frames in) and a writer thread (frames out) |
 | Window | `gui/window.rs` | Win32: paint (tab bar strip, pane, banner, IME), keyboard dispatch, the confirmation and the rename field, the native tab menu, mouse, clipboard, DPI, High Contrast, test hooks |
 | Binary | `crates/subak/src/bin/subak-gui.rs` | GUI subsystem (no console window) |
+| Floating UI | `gui/float/*.rs` | `--float` (§11): placement, the icon's picture, the manager's model, `float.json`, the tray trait (portable, unit-tested) and the Win32 icon, tray and manager (`float/win.rs`) |
 
 Data path: the reader queues frames and posts one message per batch; the window feeds them to the
 pane's `TermView` (the same model as the Host), renders only changed rows, and invalidates only
@@ -244,8 +252,8 @@ the system's input-method threads.
 
 ## 8. Known limits (Steps 16–17)
 
-- One window; no session manager or floating icon (Step 18). Hidden tabs are forgotten when the
-  window closes; the tab order is the window's own and not saved.
+- One window per process. Hidden tabs are kept across runs (`gui.json`, Step 18; with several
+  windows the one closed last decides); the tab order is the window's own and not saved.
 - No `Ctrl+B` prefix or pass-through (Step 23): a program gets `Ctrl+T`/`Ctrl+W` only once the
   action is disabled or rebound. `AltGr` and `Win` chords are not matched by the window.
 - A background tab is not attached: its activity and Claude state are not shown (Steps 26–28).
@@ -344,3 +352,232 @@ maintainer's. Build first: `cargo build --release -p subak` (both binaries land 
 | `crates/subak/tests/golden/gui_*.txt` | golden frames (built-in rasterizer) of the connecting, empty, stored-Terminal and error screens at 100 % and 200 %, the tab bar at 100 % and 200 %, the banner over a pane, the inline IME composition; `SUBAK_BLESS=1` refreshes them |
 | `e2e/tests/step16_subak_window.rs` (ignored; `cargo xtask e2e` only) | the release window against a release Host: attach without a new shell, input, close and crash keep the pane, reconnect |
 | `e2e/tests/step17_subak_tabs.rs` (ignored; `cargo xtask e2e` only) | tabs following CLI new/rename/kill, `Ctrl+Tab` switching with input to the shown tab only; `Ctrl+T`, `Ctrl+W` asking before ending a busy Terminal (Esc keeps it, consent ends only it), the window X only detaching |
+| Step 18 | the floating icon and Terminal manager: §11.10 |
+
+## 11. The floating icon, tray icon and Terminal manager (Step 18)
+
+`subak-gui --float` runs a small, optional companion to the windows: a **floating icon** that
+stays above other windows, and/or a **tray icon**, and the **Terminal manager** they open. It is
+a tiny process of the same binary on the same plain Win32 stack (ADR 0045): no GUI framework, no
+terminal renderer, no GPU. It is a client of the Host like a window; it never attaches a pane,
+and closing it — or the manager — ends nothing.
+
+### 11.1 Starting and stopping it
+
+```text
+subak-gui --float                 the saved choice (first time: the floating icon)
+subak-gui --float --tray          only a tray icon (saved)
+subak-gui --float --icon --tray   both (saved)
+subak-gui --manager               open the Terminal manager (starting the floating UI if needed)
+```
+
+- **Off unless you start it.** The Host and the `subak` CLI never start it and never need it;
+  opening a window does not start it. Besides the command line, a window's tab menu has
+  "Floating icon and Terminal manager". Nothing is added to sign-in (Run or Startup) by this
+  Step.
+- **One per endpoint** (and Windows session): running `subak-gui --float` or `--manager` again
+  asks the running one to show itself (or its manager) and exits. `--endpoint` works as for the
+  window.
+- **Quit** from the icon's menu ("Quit (Terminals keep running)"), or turn off both the floating
+  icon and the tray icon. A quit, a crash or ending the process in Task Manager is a disconnect:
+  no Terminal, window or Host is touched.
+- **Headless means none of it**: without a desktop session nothing of this runs; the CLI and the
+  Host behave exactly as before (`KIM-FR-012`).
+
+### 11.2 The floating icon
+
+| Behaviour | What it does |
+| --- | --- |
+| Size and look | 40 × 40 logical pixels at its monitor's DPI (60 px at 150 %, 80 px at 200 %), radius 10 on `bg.overlay`, a 1 px `border.subtle` edge, the watermelon glyph (§11.3) and a 10 px state badge |
+| Never takes the focus | A tool window (no taskbar button, not in Alt+Tab) that never activates: clicking it does not move the keyboard away from the program you type into |
+| Click | Opens the Terminal manager beside it (§11.4); a second click closes it |
+| Drag | Moves it; it snaps to a work area's edges within 8 logical pixels and always stays fully inside a work area (never under the taskbar). The place is saved when you let go |
+| Right click (press and hold on touch) | Its menu: Terminals…, Open Subak window, New Terminal, Always on top ✓, Show floating icon ✓, Show tray icon ✓, Quit (Terminals keep running) |
+| Pin (Always on top) | On by default; unchecked, the icon and the manager are normal windows in the z-order |
+| Hide | "Show floating icon" off hides it (the tray icon brings it back); with neither on, the floating UI quits |
+| Monitors | Its place is restored on the monitor it was on, at that monitor's DPI. If that monitor is gone — or a display change (resolution, monitor unplugged, taskbar moved) leaves the icon off every work area — it comes back onto the nearest monitor; the saved place is kept for when that monitor returns |
+| DPI | Per-monitor DPI v2: moving to a monitor with another scale redraws it at the new size |
+| Hover | Without a Host, hovering retries the connection at once (otherwise every 0.5 s … 10 s) |
+| Assistive technology | Its window name is its state in words ("Subak — 3 Terminals, 2 running"), the same as the tray tip |
+
+### 11.3 The picture and its state (Step 44 interface)
+
+The icon is a pure function of a small state (`gui::float::art::IconState`): whether a Host is
+reachable, how many Terminals it has, how many run or failed, and the aggregate Claude indicator
+(priority `need-input` > `error` > `done` > `in-progress` > `unknown` > `idle` > `none`,
+`SUBAK-FR-051`; always `none` until the Host reports Claude states, Steps 26–28). It is drawn
+once per state change; nothing animates and no timer runs, so a hidden icon costs nothing. The
+glyph is Subak's identity drawn procedurally — a watermelon slice with a charcoal rind (with a
+light edge so it never reads black-on-black), a pale band and red flesh with dark seeds — and is
+**provisional**: Step 44 owns the final art and the per-state motion behind the same interface.
+The badge is a shape, never colour alone: a hollow ring (no Host), a ring with a gap
+(connecting), a triangle (a Terminal failed), Claude shapes later; nothing when all is well.
+Under High Contrast the glyph is an outline in the system's text colour.
+
+### 11.4 The Terminal manager
+
+A compact popup (380 × 440 logical pixels) beside the icon — above it when the icon is in the
+lower half of its work area, below otherwise, aligned to the side with room — or near the tray
+icon. It lists **every Terminal of the Host**, including ones no window shows (a hidden tab, no
+window at all), in the Host's order:
+
+`● build    running · cmd.exe · shown in 1 window` · `● agent    running · busy: claude.exe (3 processes)` · `■ old    stopped`
+
+The state is a shape and a word (`●` running, `◐` starting or stopping, `■` stopped, `▲`
+failed). The header says the totals ("3 Terminals · 2 running · 1 stopped"); the status line
+shows the keys as bound, or what just happened.
+
+| Action | Keys (context `manager`, rebindable with `subak hotkeys`) | Mouse and touch | What it does |
+| --- | --- | --- | --- |
+| Search | type in the field; `Ctrl+F` or `/` focuses it; typing in the list goes there too | the field | Filters by name (case and composed/decomposed Hangul folded), program, state or id prefix; `Esc` clears it |
+| Move | `Up`/`Down`/`PageUp`/`PageDown` (also from the field), `Home`/`End` in the list | click a row | The selection |
+| Open | `Enter` | double click, "Open" | Shows the Terminal: a window of this Host shows its tab (a hidden tab comes back) and comes to the front; with no window, a new `subak-gui <id>` opens. The manager closes unless pinned |
+| New Terminal | `Ctrl+N` | "New Terminal" | Creates one with the Host's defaults and opens it. Without a Host, it starts one first — the only thing that starts a Host here |
+| Rename | `F2` | "Rename" | The row's name becomes an edit field (the IME works): `Enter` saves by id, `Esc` cancels; a name in use or invalid keeps the field with the reason |
+| Delete | `Delete` (in the list) | "Delete…" | **Always asks first**, naming what ends: "End `x`? It runs PING.EXE (2 processes); they will be ended." / "End `x`? Its shell (cmd.exe) will be closed." / "Remove `x`? Nothing runs in it; its record is deleted." **Cancel is focused**: `Esc`, `Enter` on Cancel or a click on it ends nothing; `Tab`/arrows move to "End Terminal" (or "Remove"). Consent sends exactly one request for exactly that Terminal, by id: `terminal.kill` (with `force` only when the question said it is busy; one that turned busy since is refused by the Host and asked again) or `terminal.remove`. While the question is open, other keys reach nothing |
+| Pin | `Ctrl+P` | "Pin" | Keeps the manager open when it loses the focus (saved); unpinned it closes like a flyout |
+| Close | `Esc` (with an empty search) | `×`, click the icon again | Closes the manager; an open question counts as Cancel. Nothing else changes |
+| Row menu | `Shift+F10`, the Menu key | right click | Open, Rename…, Delete…, New Terminal |
+
+`Tab`/`Shift+Tab` move between the search field, the list and the buttons; `Enter`/`Space`
+press a focused button. The search field gets its editing keys first (`Delete`, `Backspace`,
+arrows, `Home`/`End`, `Ctrl+A/C/V/X/Y/Z`, characters).
+
+**States are never blank** (DESIGN_SYSTEM §3.8): "Connecting to the Subak Host…"; "The Subak Host
+is not running (…). New Terminal (Ctrl+N) starts it with a Terminal."; "Cannot reach the Subak
+Host: … (code). It is retried in a moment." (an impostor on the endpoint, for example); "No
+Terminals yet. New Terminal (Ctrl+N) creates one."; "No Terminal matches “x”."
+
+**Accessibility.** The manager is built from the system's own controls, so keyboard focus, the
+IME, touch (mouse promotion) and the accessibility tree come from Windows: an editable text named
+"Search", a list named "Terminals" whose items are the rows in words, push buttons named "New
+Terminal", "Open", "Rename", "Delete…", "Pin (keep open: off)", "Close manager", and while asking
+the question as text with "Cancel" and "End Terminal". Focus is a 2 px `focus.ring`; the search
+field has a `border.strong` boundary; High Contrast uses the system colours.
+
+### 11.5 Opening a Terminal, and the focus rules
+
+- The floating icon never takes the focus. The manager takes it only when you opened it (a
+  click on the icon or the tray, the tray's keyboard selection, `subak-gui --manager`), which
+  Windows allows the process that received that input.
+- **Opening hands the foreground on explicitly**: the floating UI asks the windows of its Host,
+  front to back, whether they serve it, calls `AllowSetForegroundWindow` for that window's
+  process, and asks it to show the Terminal; the window shows the tab and calls
+  `SetForegroundWindow` for itself (restoring itself if minimized). With no window, it starts
+  `subak-gui <id>` and allows that process. Nothing else steals the focus.
+- These window-to-window requests (`WM_COPYDATA`) can only show or select — never create, end or
+  change a Terminal; a window answers only for its own endpoint, and requests over 4 KiB are
+  ignored. Windows' UIPI keeps lower-integrity processes from sending them.
+
+### 11.6 Settings: `%APPDATA%\mouv\subak\float.json`
+
+Schema: [subak-float-v1](contracts/schemas/subak-float-v1.schema.json), examples in
+`contracts/examples/subak-float-v1/`.
+
+```json
+{ "schema": "subak.float", "schema_version": 1, "icon": true, "tray": false, "on_top": true,
+  "manager_pinned": false, "position": { "x": 2856, "y": 1316, "dpi": 144 } }
+```
+
+| Key | Meaning |
+| --- | --- |
+| `icon`, `tray` | Which presences show (default: the floating icon only) |
+| `on_top` | Pinned above other windows (default on) |
+| `manager_pinned` | The manager stays open when it loses the focus (default off) |
+| `position` | The icon's top-left corner in physical pixels and its monitor's DPI; restored as §11.2 says |
+
+Its own file (the windows rewrite `gui.json` from memory; two processes sharing one file would
+lose each other's changes). Same rules as `gui.json` (§5): written atomically and only on a
+change, unknown keys kept, an invalid value falls back alone, a broken or newer file is used as
+defaults and never rewritten.
+
+### 11.7 How it works
+
+| Part | Where | Role |
+| --- | --- | --- |
+| Placement | `gui/float/place.rs` | Icon size at a DPI, the default place, drag with snapping, settling on a monitor, recovery from a lost monitor, the manager's rectangle (synthetic DPI and monitor layouts in its tests) |
+| Picture | `gui/float/art.rs` | The icon from `IconState` (premultiplied BGRA, 4 × 4 supersampled), the badge, the words, Claude aggregation |
+| Manager model | `gui/float/list.rs` | The Host conversation (subscribe, list, follow events, create, rename, kill, remove by id), search, selection by id, the delete question, no-Host and retry |
+| Settings | `gui/float/fprefs.rs` | `float.json` |
+| Tray | `gui/float/tray.rs` | The `Tray` trait and the recording `FakeTray` |
+| Win32 | `gui/float/win.rs` | The layered icon window (`UpdateLayeredWindow`), `Shell_NotifyIconW`, the manager of system controls (owner-drawn list box and buttons, an edit field), keyboard dispatch before `TranslateMessage`, opening Terminals in windows, single instance, test hooks |
+| Window side | `gui/window.rs`, `gui/model.rs` | Answers `probe`/`open` requests (shows the tab, comes forward), keeps hidden tabs in `gui.json` |
+
+One connection (`subak-float`, kind `gui`) through the window's network threads; idle, both wait
+in the kernel. The only timer is the reconnect delay while no Host is reachable.
+
+### 11.8 Measurements
+
+This machine: Windows 10 Pro 22H2 19045, 2026-11-04.
+
+| What | Result |
+| --- | --- |
+| Idle, debug build, off-screen, connected to a Host with 3 Terminals, 10 s (`tests/gui_float.rs`) | icon only: **0.0 ms CPU, 1.97 MiB private, 11.0 MiB working set, 6 threads, 136 handles**; icon and manager open: 0.0 ms CPU, 1.96 MiB private, 11.0 MiB working set, 6 threads |
+| Idle, **release build** (`--features test-hooks` for the off-screen mode), 30 s each, `Process.TotalProcessorTime` (`step18_idle.ps1`, the Step 16–17 quantities) | icon only, connected to a Host with 3 Terminals: **0.0 ms CPU, 1.54 MiB private, 7.33 MiB working set, 3 threads, 126 handles**; icon and manager open: 0.0 ms CPU, 1.82 MiB private, 8.89 MiB working set, 4 threads, 133 handles; no Host (retrying every 10 s): 0.0 ms CPU, 1.27 MiB private, 6.71 MiB working set, 1 thread, 116 handles. (0.0 ms: below the counter's 15.6 ms tick over 30 s) |
+| Binary sizes (release, shipped features) | `subak-gui.exe` 1.31 MB (Step 17) → **1.75 MB** (icon, tray, manager, the manager's hotkey context); `subak.exe` 2.10 MB, unchanged, and its import table still names no window function (`Shell_NotifyIconW`, `UpdateLayeredWindow`, `CreateWindowExW`: 0 matches with `grep -c -a`; 1 each in `subak-gui.exe`) |
+| 30 quick open/close cycles of the manager | GDI objects 4 → 4, USER objects 5 → 5 (nothing leaks) |
+
+### 11.9 Manual verification (maintainer)
+
+Agents on this machine never show windows, put icons into the notification area or synthesize
+input, so these checks are the maintainer's. Build: `cargo build --release -p subak`; use a
+private endpoint: `set E=--endpoint subak-manual-18`.
+
+1. `target\release\subak-gui.exe %E% --float`: a 40 px watermelon icon appears at the bottom
+   right of the primary monitor, above other windows, with a hollow-ring badge; no taskbar
+   button; the program you were typing in keeps the focus. `subak.exe %E% ls` says no Host runs.
+2. Click the icon: the manager opens above it with "The Subak Host is not running …". Press
+   `Ctrl+N`: a Host starts, a Terminal is created and a Subak window opens with it, in the
+   foreground; the manager closes.
+3. `subak.exe %E% new work`, `subak.exe %E% new 빌드`: the icon's tooltip/name says
+   "3 Terminals, 3 running" within a moment (hover the icon).
+4. Click the icon, type `빌` (Korean IME): only `빌드` remains; `Esc` clears; `Down`, `Enter`:
+   the existing window shows `빌드`'s tab and comes to the front.
+5. In the window hide `work` (its `×`), then in the manager choose `work`, `Enter`: the tab is
+   back. Close the window, reopen `subak-gui.exe %E%`: hidden tabs stay hidden.
+6. In the manager: `F2` on `빌드`, type `작업`, `Enter`: `subak.exe %E% ls` shows it.
+7. `subak.exe %E% new busy -- ping -n 1000 127.0.0.1`; in the manager select it, `Delete`: the
+   question names `PING.EXE` with Cancel focused; `Enter` keeps it; `Delete`, `Tab`, `Enter`
+   ends it and nothing else.
+8. Drag the icon near a screen edge: it snaps; release it, quit from its menu, start it again:
+   it is where you left it. Drag it to another monitor (with another scale): it is 40 logical px
+   there. Unplug (or disable) that monitor: the icon comes back onto the remaining one.
+9. Right click → "Always on top" off: other windows can cover it. "Show tray icon" on: a tray
+   icon with the same tip; click it: the manager opens near it; `Win+B`, arrows, `Enter` on it:
+   the manager opens with the keyboard. "Show floating icon" off: only the tray remains.
+10. Narrator (`Ctrl+Win+Enter`) on the manager: it reads "Search, edit", "Terminals, list", each
+    row in words, the buttons by name, and the delete question.
+11. Turn on a Contrast theme: the icon is an outline, the manager uses system colours.
+12. Quit from the menu: every Terminal still runs (`subak.exe %E% ls`). Clean up:
+    `subak.exe %E% host stop --kill-terminals --yes`.
+
+| Manual check | Result |
+| --- | --- |
+| Visible icon, no focus stealing, no-Host state, New Terminal with a Host started on demand (steps 1–3) | **pending — maintainer** |
+| Search with the Korean IME, open in an existing window with the foreground handed on, hidden tabs (steps 4–5) | automated off-screen (§11.10; IME not); visible run **pending — maintainer** |
+| Rename and the guarded delete (steps 6–7) | automated off-screen; visible run **pending — maintainer** |
+| Real drags, snapping, saved place, real monitors and DPI, unplugging (step 8) | automated with window messages on synthetic layouts; real hardware **pending — maintainer** |
+| Always on top, the real tray icon and its keyboard selection (step 9) | the tray is a fake in tests; **pending — maintainer** |
+| Narrator (step 10) | the accessibility tree read with MSAA from the off-screen manager (ADR 0045 evidence); Narrator **pending — maintainer** |
+| High Contrast (step 11) | **pending — maintainer** |
+
+### 11.10 Tests
+
+| Test | What it checks |
+| --- | --- |
+| `crates/subak/tests/gui_float.rs` (Windows; the off-screen floating UI driven by its own window messages, real Hosts on private endpoints) | `the_icon_starts_only_on_request_shows_no_host_and_follows_the_cli_without_starting_one` (tool window that never activates, no Host started, the no-Host manager, hover retry, CLI changes followed, quit ends nothing); `the_manager_searches_opens_renames_and_deletes_by_id_asking_first` (accessible names, search, typing from the list, open in a new then an existing window with the foreground request, rename in Korean, the guarded delete for busy and idle Terminals, keys during a question reach nothing); `new_terminal_from_the_manager_starts_a_host_on_demand_and_opens_it`; `drag_snaps_and_saves_and_display_and_dpi_changes_keep_the_icon_on_a_monitor` (posted mouse messages, snapping, saved place across runs, a synthetic two-monitor layout, `WM_DISPLAYCHANGE` after a monitor goes, DPI 192, the manager inside the work area, an on-screen layout refused); `repeated_quick_open_close_leaks_nothing_and_the_idle_icon_and_manager_cost_no_cpu`; `the_tray_is_a_fake_in_tests_and_the_menu_switches_pin_and_presence_and_quits_ending_nothing`; `a_second_start_forwards_to_the_running_one_and_neither_cli_nor_host_starts_it`; `hidden_tabs_persist_across_runs_and_the_manager_shows_a_hidden_terminal_in_its_window`; `a_window_menu_starts_the_floating_ui_for_its_endpoint_once` (the tab menu entry; a second request only shows the running one) |
+| `crates/subak/src/gui/float/*.rs` unit tests | placement with synthetic DPI and monitor layouts (default place, snapping, clamping, recovery, the manager's rectangle), the picture (tile, glyph, badges per state, every size, High Contrast), Claude aggregation, the manager model (no Host and retries, New Terminal starting a Host, events from other clients, search with Hangul folding, selection, rename by id, the delete question and its answers), `float.json` and its schema, the fake tray, `--test-monitors` |
+| `e2e/tests/step18_floating_manager.rs` (ignored; `cargo xtask e2e` only) | the floating manager following a Host it did not start, search, open, `Ctrl+N`, rename, the guarded delete; drag, saved place, a monitor going away |
+
+### 11.11 Known limits (Step 18)
+
+- The watermelon glyph is provisional (Step 44 owns the art and the Claude motion); there is no
+  Claude state yet (Steps 26–28), so the badge shows Host and failure states only.
+- No hover tooltip window on the floating icon (its accessible name and the tray tip carry the
+  words); no `gui.show` global hotkey (`subak-gui --manager` with a link's shortcut key instead);
+  no sign-in start.
+- The manager has no "Stop" (a stopped Terminal cannot be restarted before Step 30) and no
+  multi-select.
+- Opening a Terminal picks the frontmost window of the Host; choosing a particular window is
+  Step 21's.
+- The manager uses Segoe UI through GDI; the list box's scroll bar is the classic one.

@@ -180,8 +180,8 @@ Each row has a permanent ID (`CORE-01`) so that commits, tests and later audits 
 
 | Tabby feature | Tabby reference | Subak approach | Status | Target Step | Evidence |
 | --- | --- | --- | --- | --- | --- |
-| `CORE-82` Quake-style dropdown window | R: "Optional dockable window with a global spawn hotkey ("Quake console")"; S `appearance.dock`, `dockScreen`, `dockFill`, `dockHideOnBlur`, `dockAlwaysOnTop` | A GUI client docked to a screen edge. It is just another client, so hiding it never touches processes. | planned | Step 18 | — |
-| `CORE-83` Global show/hide hotkey | S `toggle-window` (`Ctrl-Space`), `hacks.globalHotkey` | Uses `RegisterHotKey`, opt-in. No default that collides with Chinese IME toggling (`Ctrl+Space`). | planned | Step 18 | — |
+| `CORE-82` Quake-style dropdown window | R: "Optional dockable window with a global spawn hotkey ("Quake console")"; S `appearance.dock`, `dockScreen`, `dockFill`, `dockHideOnBlur`, `dockAlwaysOnTop` | A GUI client docked to a screen edge. It is just another client, so hiding it never touches processes. Not part of Step 18, which shipped the floating icon and Terminal manager instead (ADR 0045) | planned | Step 20 | — |
+| `CORE-83` Global show/hide hotkey | S `toggle-window` (`Ctrl-Space`), `hacks.globalHotkey` | Uses `RegisterHotKey`, opt-in (`gui.show`, no default). No default that collides with Chinese IME toggling (`Ctrl+Space`). Not shipped in Step 18 (ADR 0045): `subak-gui --manager` (e.g. a Start-menu link's shortcut key) opens the manager meanwhile | planned | Step 20 | — |
 
 ## 2. Shells and profiles on Windows
 
@@ -353,8 +353,8 @@ ssh-keymap `SSH-30` and serial-timestamp `SER-13`.
 | `APP-03` Usage analytics | S `enableAnalytics: true` | Excluded: no tracking and no telemetry (KIM-SEC-011, KIM-SEC-012) | excluded | — | — |
 | `APP-04` Command-line launcher | S CLI `open [directory]`, `run [command...]`, `profile [profileName]`, `paste [text]`, `recent [index]`, `quickConnect` | The headless `subak` CLI with `--json` (KIM-FR-010). It opens a Terminal in a directory, with a command or a profile, and can send text. | planned | Step 33 | — |
 | `APP-05` Single instance | K a second launch hands its arguments to the running app | All clients talk to the one per-user Host (SUBAK-FR-001). The GUI focuses the window that is already open. | planned | Step 17 | — |
-| `APP-06` Tray icon | S `hideTray` | A floating icon or a tray icon, both optional (SUBAK-FR-030) | planned | Step 18 | — |
-| `APP-07` Start minimized or at login | S CLI `--hidden` ("Start minimized") | Starts minimized on request. The Host and the icon start at login only if the user enabled that (SUBAK-FR-002). | planned | Step 18 | — |
+| `APP-06` Tray icon | S `hideTray` | A floating icon or a tray icon, both optional (SUBAK-FR-030). *Partial:* `subak-gui --float` runs a 40 px always-on-top floating icon and/or a tray icon (`--icon`/`--tray`, the icon's menu), off unless started, with a compact Terminal manager (search, open, new, rename, guarded delete) and a saved place per monitor ([SUBAK_GUI §11](SUBAK_GUI.md), ADR 0045); the real tray and the visible icon are not yet checked on a desktop | partial | Step 18 | T: `crates/subak/tests/gui_float.rs::the_tray_is_a_fake_in_tests_and_the_menu_switches_pin_and_presence_and_quits_ending_nothing`, `::the_manager_searches_opens_renames_and_deletes_by_id_asking_first` (Step 18) |
+| `APP-07` Start minimized or at login | S CLI `--hidden` ("Start minimized") | Starts minimized on request. The Host and the icon start at login only if the user enabled that (SUBAK-FR-002). Step 18 ships the icon without a sign-in entry (ADR 0045); the opt-in sign-in start is later work | planned | Step 20 | — |
 | `APP-08` Interface language | S `language`, `locale/`; R translated READMEs (incl. ko-KR) | English first, Korean planned. Translations are data files. | planned | Step 20 | — |
 | `APP-09` Welcome tab and release notes | S `enableWelcomeTab`, `releaseNotesTab` | The first-run page explains detach vs. kill. Release notes come from the local Kim catalog, with no network call. | planned | Step 20 | — |
 | `APP-10` Safe mode | S `safeModeModal` | Excluded: there are no plugins to disable, and a broken config already falls back to defaults (SUBAK-FR-046) | excluded | — | — |

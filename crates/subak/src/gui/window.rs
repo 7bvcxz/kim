@@ -87,17 +87,17 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     GetWindowRect, HTCLIENT, IDC_ARROW, IDC_IBEAM, IDI_APPLICATION, IsIconic, IsZoomed, KillTimer,
     LoadCursorW, LoadIconW, MF_GRAYED, MF_SEPARATOR, MF_STRING, MINMAXINFO, MSG, PostMessageW,
     PostQuitMessage, RegisterClassExW, SC_KEYMENU, SIZE_MAXIMIZED, SIZE_MINIMIZED,
-    SPI_GETHIGHCONTRAST, SW_SHOWMAXIMIZED, SW_SHOWNOACTIVATE, SW_SHOWNORMAL, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOZORDER, SetCursor, SetTimer, SetWindowPos, SetWindowTextW, ShowWindow,
-    SystemParametersInfoW, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenuEx, TranslateMessage,
-    WM_APP, WM_CHAR, WM_CLOSE, WM_COPYDATA, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND,
-    WM_EXITSIZEMOVE, WM_GETMINMAXINFO, WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION,
-    WM_IME_SETCONTEXT, WM_IME_STARTCOMPOSITION, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS,
-    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE,
-    WM_MOUSEWHEEL, WM_NCCREATE, WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS,
-    WM_SETTINGCHANGE, WM_SIZE, WM_SYSCHAR, WM_SYSCOLORCHANGE, WM_SYSCOMMAND, WM_SYSKEYDOWN,
-    WM_SYSKEYUP, WM_THEMECHANGED, WM_TIMER, WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-    WS_OVERLAPPEDWINDOW,
+    SPI_GETHIGHCONTRAST, SW_RESTORE, SW_SHOWMAXIMIZED, SW_SHOWNOACTIVATE, SW_SHOWNORMAL,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, SetCursor, SetForegroundWindow, SetTimer,
+    SetWindowPos, SetWindowTextW, ShowWindow, SystemParametersInfoW, TPM_RETURNCMD,
+    TPM_RIGHTBUTTON, TrackPopupMenuEx, TranslateMessage, WM_APP, WM_CHAR, WM_CLOSE, WM_COPYDATA,
+    WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_EXITSIZEMOVE, WM_GETMINMAXINFO,
+    WM_IME_COMPOSITION, WM_IME_ENDCOMPOSITION, WM_IME_SETCONTEXT, WM_IME_STARTCOMPOSITION,
+    WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCREATE, WM_PAINT,
+    WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETCURSOR, WM_SETFOCUS, WM_SETTINGCHANGE, WM_SIZE, WM_SYSCHAR,
+    WM_SYSCOLORCHANGE, WM_SYSCOMMAND, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_THEMECHANGED, WM_TIMER,
+    WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_OVERLAPPEDWINDOW,
 };
 
 /// The network threads have queued something.
@@ -119,6 +119,8 @@ const CMD_MOVE_LEFT: u32 = 3;
 const CMD_MOVE_RIGHT: u32 = 4;
 const CMD_CLOSE: u32 = 5;
 const CMD_NEW: u32 = 6;
+/// Start the floating icon and Terminal manager (`subak-gui --float`, Step 18).
+const CMD_FLOAT: u32 = 7;
 /// `CMD_SHOW + k`: show the `k`-th hidden Terminal again.
 const CMD_SHOW: u32 = 100;
 /// `dwData` of a test command (`WM_COPYDATA`): "SUBK".
@@ -135,15 +137,15 @@ const DWMWA_TEXT: u32 = 36;
 /// `ISC_SHOWUICOMPOSITIONWINDOW`: the IME's own composition window; the window draws it inline.
 const ISC_SHOWUICOMPOSITIONWINDOW: isize = 0x8000_0000;
 
-fn wide(s: &str) -> Vec<u16> {
+pub(super) fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain([0]).collect()
 }
 
-fn colorref(c: Rgb) -> u32 {
+pub(super) fn colorref(c: Rgb) -> u32 {
     u32::from(c.0) | (u32::from(c.1) << 8) | (u32::from(c.2) << 16)
 }
 
-fn rgb_of(colorref: u32) -> Rgb {
+pub(super) fn rgb_of(colorref: u32) -> Rgb {
     Rgb(
         colorref as u8,
         (colorref >> 8) as u8,
@@ -186,6 +188,9 @@ enum After {
     Place(Option<(i32, i32)>, (i32, i32)),
     Title(String),
     Destroy,
+    /// Come to the front for the user's choice in the Terminal manager (it granted this process
+    /// the foreground with `AllowSetForegroundWindow`); a minimized window is restored.
+    Foreground,
     /// The tab menu at a client point (its own message loop): the items `(command, label,
     /// enabled)` (command 0: a separator), for tab `tab` (-1: the bar).
     Menu {
@@ -294,7 +299,7 @@ thread_local! {
     static APP: RefCell<Option<App>> = const { RefCell::new(None) };
 }
 
-fn system_theme_colors() -> (Rgb, Rgb, Rgb) {
+pub(super) fn system_theme_colors() -> (Rgb, Rgb, Rgb) {
     // SAFETY: plain system colour queries.
     unsafe {
         (
@@ -305,7 +310,7 @@ fn system_theme_colors() -> (Rgb, Rgb, Rgb) {
     }
 }
 
-fn high_contrast_on() -> bool {
+pub(super) fn high_contrast_on() -> bool {
     let mut hc = HIGHCONTRASTW {
         cbSize: size_of::<HIGHCONTRASTW>() as u32,
         ..HIGHCONTRASTW::default()
@@ -328,7 +333,7 @@ fn make_renderer(theme: Theme, font_size: f32, scale: f32, padding: f32) -> Rend
 }
 
 /// The work areas of the monitors and their DPI.
-fn monitors() -> Vec<(Rect, u32)> {
+pub(super) fn monitors() -> Vec<(Rect, u32)> {
     unsafe extern "system" fn each(
         m: HMONITOR,
         _dc: HDC,
@@ -1196,6 +1201,76 @@ impl App {
         if tabs {
             self.on_tabs();
         }
+        // Hidden tabs are kept across runs (Step 18), once the Host's list is known.
+        if self.model.connected() {
+            let hidden = self.model.hidden_ids();
+            if hidden != self.prefs.hidden_terminals {
+                self.prefs.hidden_terminals = hidden;
+                self.save_prefs();
+            }
+        }
+    }
+
+    /// "Floating icon and Terminal manager" in the tab menu: starts `subak-gui --float` for this
+    /// endpoint (a second one only shows the running one). The user's explicit choice.
+    fn start_float(&mut self) {
+        let Ok(exe) = std::env::current_exe() else {
+            return;
+        };
+        let mut cmd = std::process::Command::new(exe);
+        cmd.args(["--float", "--endpoint", &self.endpoint]);
+        if self.opts.test {
+            cmd.args([
+                "--test-offscreen",
+                "--test-max-seconds",
+                &self.opts.test_max_seconds.to_string(),
+            ]);
+            cmd.stdout(std::process::Stdio::inherit());
+        } else {
+            cmd.stdout(std::process::Stdio::null());
+        }
+        let r = cmd
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+        match r {
+            Ok(child) => self.event(&json!({"event": "float_started", "pid": child.id()})),
+            Err(e) => {
+                self.notice = Some(format!("The floating icon could not start: {e}"));
+                self.rebuild_banner();
+            }
+        }
+    }
+
+    /// A request of the Terminal manager (`WM_COPYDATA` `COPYDATA_OPEN`, Step 18): `probe`
+    /// answers whether this window serves `endpoint`; `open` shows the Terminal `terminal` (its
+    /// tab, a hidden one first shown again) and brings the window to the front. It never
+    /// creates, ends or changes a Terminal.
+    fn open_request(&mut self, req: &Value) -> LRESULT {
+        if req["endpoint"].as_str() != Some(self.endpoint.as_str()) {
+            return 0;
+        }
+        match req["op"].as_str() {
+            Some("probe") => 1,
+            Some("open") => {
+                if let Some(id) = req["terminal"].as_str() {
+                    if self.model.terminal().is_none_or(|t| t.id != id) {
+                        self.leave_pane();
+                    }
+                    let fx = self.model.open_id(id);
+                    self.apply(fx);
+                }
+                self.event(
+                    &json!({"event": "open_request", "terminal": req["terminal"],
+                    "foreground": if self.opts.test { "skipped (test)" } else { "requested" }}),
+                );
+                if !self.opts.test {
+                    self.after.push(After::Foreground);
+                }
+                1
+            }
+            _ => 0,
+        }
     }
 
     /// The tabs changed: drop a rename field or a confirmation whose Terminal is no longer the
@@ -1720,6 +1795,14 @@ impl App {
                 self.pane.scroll_to_bottom();
                 self.redraw();
             }
+            // The Terminal manager's actions (context `manager`) are never active in a window.
+            Action::ManagerOpen
+            | Action::ManagerNew
+            | Action::ManagerRename
+            | Action::ManagerDelete
+            | Action::ManagerSearch
+            | Action::ManagerPin
+            | Action::ManagerClose => {}
         }
     }
 
@@ -1779,6 +1862,11 @@ impl App {
             CMD_NEW,
             format!("New Terminal{}", keys(Action::NewTerminal)),
             connected,
+        ));
+        items.push((
+            CMD_FLOAT,
+            "Floating icon and Terminal manager".to_string(),
+            true,
         ));
         if !self.model.hidden().is_empty() {
             items.push((0, String::new(), true));
@@ -1855,6 +1943,7 @@ impl App {
                 self.run(Action::CloseTerminal);
             }
             CMD_NEW => self.run(Action::NewTerminal),
+            CMD_FLOAT => self.start_float(),
             c if c >= CMD_SHOW => {
                 if let Some(h) = self.model.hidden().get((c - CMD_SHOW) as usize).cloned() {
                     self.leave_pane();
@@ -2631,6 +2720,12 @@ fn run_after(hwnd: HWND, after: Vec<After>) {
                 After::Destroy => {
                     DestroyWindow(hwnd);
                 }
+                After::Foreground => {
+                    if IsIconic(hwnd) != 0 {
+                        ShowWindow(hwnd, SW_RESTORE);
+                    }
+                    SetForegroundWindow(hwnd);
+                }
                 After::Menu { items, at, tab } => {
                     let menu = CreatePopupMenu();
                     if menu.is_null() {
@@ -2947,7 +3042,16 @@ fn handle(app: &mut App, hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> Option
             }
             Some(0)
         }
-        WM_COPYDATA if app.opts.test => {
+        WM_COPYDATA => {
+            let req =
+                // SAFETY: the lParam of this WM_COPYDATA.
+                unsafe { super::float::win::copydata(lp, super::float::COPYDATA_OPEN) };
+            if let Some(req) = req {
+                return Some(app.open_request(&req));
+            }
+            if !app.opts.test {
+                return Some(0);
+            }
             // SAFETY: `lp` points at the COPYDATASTRUCT of this message, valid during the call.
             let cds = unsafe { &*(lp as *const COPYDATASTRUCT) };
             if cds.dwData != COPYDATA_TEST || cds.lpData.is_null() {
@@ -3081,7 +3185,7 @@ pub fn run(o: Options) -> ExitCode {
         hwnd,
         opts: o,
         endpoint,
-        model: Model::new(want, layout::DEFAULT_GRID),
+        model: Model::new(want, layout::DEFAULT_GRID).with_hidden(prefs.hidden_terminals.clone()),
         prefs,
         prefs_dir,
         prefs_read_only: loaded.read_only,

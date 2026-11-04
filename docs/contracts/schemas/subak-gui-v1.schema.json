@@ -51,6 +51,12 @@
           "additionalProperties": false
         }
       ]
+    },
+    "hidden_terminals": {
+      "description": "Terminals hidden in the window when it last ran, by id (Step 18). They keep running; the Terminal manager shows them and opening one there shows its tab again.",
+      "type": "array",
+      "maxItems": 1000,
+      "items": { "type": "string", "minLength": 1, "maxLength": 64 }
     }
   },
   "additionalProperties": true

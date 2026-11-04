@@ -1401,10 +1401,14 @@ fn the_window_x_and_a_tab_x_only_detach_and_hidden_tabs_come_back() {
         assert_eq!(info(&ep, name)["state"], "running", "{name}");
         assert_eq!(pid_of(&pane(&info(&ep, name))["pid"]), pid, "{name}");
     }
-    // A new window shows both again (hiding belongs to the window that hid them).
+    // A new window keeps `a` hidden (since Step 18 hiding is kept across runs in gui.json); it
+    // still runs, and the tab menu or the Terminal manager shows it again.
     let gui = Gui::start(&ep, None, &appdata);
     gui.state("attached");
-    gui.until("both tabs", |d| tab_names(d).len() == 2);
+    let d = gui.until("a still hidden", |d| {
+        tab_names(d) == ["b"] && d["hidden"].as_array().is_some_and(|h| h.len() == 1)
+    });
+    assert_eq!(d["hidden"][0]["name"], "a");
     println!(
         "EVIDENCE hide: tab x, middle click and the window X detached only; a pid {pid_a} and b (stand-in) pid {pid_b} kept running"
     );

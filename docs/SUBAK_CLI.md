@@ -287,7 +287,7 @@ contact or start a Host, never open a window, never register a hotkey or install
 `terminal` context, the Step 16 keys `clipboard.copy`, `clipboard.paste`, `view.zoom-in|out|reset`
 and `scroll.page-up|page-down|line-up|line-down|top|bottom`. The prefix leader (`Ctrl+B`) and its
 table (`window.*`, `pane.*`, `client.detach`, `help.show`) arrive with Step 23 and are not listed
-until they work; Subak has no global action yet (`gui.show` comes with Step 18), so every
+until they work; Subak has no global action yet (`gui.show` is not shipped; Step 18's floating UI is reached without one), so every
 `registration` is `not_applicable`.
 
 **The file** is `%APPDATA%\mouv\subak\hotkeys.json` (next to the window's `gui.json`). It holds

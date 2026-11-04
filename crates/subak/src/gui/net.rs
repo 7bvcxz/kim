@@ -128,6 +128,17 @@ pub fn host_exe() -> Option<PathBuf> {
 /// is started on demand when none serves `endpoint` (one without a shell); without it, a missing
 /// Host is just a failure (a reconnection never starts one).
 pub fn connect(endpoint: String, start: bool, generation: u64, inbox: Arc<Inbox>) {
+    connect_as(endpoint, start, generation, inbox, Identity::GUI);
+}
+
+/// [`connect`] as another client identity (the floating icon is `subak-float`).
+pub fn connect_as(
+    endpoint: String,
+    start: bool,
+    generation: u64,
+    inbox: Arc<Inbox>,
+    who: Identity,
+) {
     std::thread::spawn(move || {
         let opened = if start {
             match host_exe() {
@@ -136,7 +147,7 @@ pub fn connect(endpoint: String, start: bool, generation: u64, inbox: Arc<Inbox>
                         shell: None,
                         idle_exit_s: crate::host::DEFAULT_IDLE_EXIT_S,
                     };
-                    client::connect_or_start_as(&endpoint, &plan, Identity::GUI, &exe)
+                    client::connect_or_start_as(&endpoint, &plan, who, &exe)
                         .map(|c| (c.session, c.started))
                 }
                 exe => Err(crate::output::CliError::new(
@@ -149,7 +160,7 @@ pub fn connect(endpoint: String, start: bool, generation: u64, inbox: Arc<Inbox>
                 .hint("install subak.exe and subak-gui.exe in the same folder")),
             }
         } else {
-            Session::try_open_as(&endpoint, Duration::from_millis(500), Identity::GUI)
+            Session::try_open_as(&endpoint, Duration::from_millis(500), who)
                 .map(|s| (s, None))
                 .map_err(|f| f.err)
         };

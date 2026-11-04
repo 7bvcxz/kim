@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/hellomouv/kim/docs/contracts/schemas/subak-float-v1.schema.json",
+  "title": "Subak floating icon settings, schema version 1",
+  "description": "Contents of %APPDATA%\\mouv\\subak\\float.json, written by `subak-gui --float` (Step 18, ADR 0045, docs/SUBAK_GUI.md §11). Which presences the floating UI shows (the floating icon, the tray icon), whether they stay on top, whether the Terminal manager stays open, and where the icon was. No process ids, terminal content or secrets. Unknown keys are allowed and preserved when the file is rewritten.",
+  "type": "object",
+  "required": ["schema", "schema_version"],
+  "properties": {
+    "schema": { "const": "subak.float" },
+    "schema_version": { "const": 1 },
+    "icon": { "description": "Show the floating icon (default true).", "type": "boolean" },
+    "tray": { "description": "Show the tray icon (default false).", "type": "boolean" },
+    "on_top": { "description": "Keep the floating icon and the manager above other windows (default true).", "type": "boolean" },
+    "manager_pinned": { "description": "Keep the Terminal manager open when it loses the focus (default false).", "type": "boolean" },
+    "position": {
+      "description": "The icon's top-left corner in physical screen pixels and the DPI of its monitor. A place on no current monitor is moved onto the nearest one.",
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["x", "y", "dpi"],
+          "properties": {
+            "x": { "type": "integer", "minimum": -1000000, "maximum": 1000000 },
+            "y": { "type": "integer", "minimum": -1000000, "maximum": 1000000 },
+            "dpi": { "type": "integer", "minimum": 48, "maximum": 960 }
+          },
+          "additionalProperties": false
+        }
+      ]
+    }
+  },
+  "additionalProperties": true
+}

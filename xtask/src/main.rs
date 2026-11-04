@@ -258,8 +258,10 @@ fn run_e2e(root: &Path, force: bool) -> Result<(), String> {
             "noeul",
         ],
     )?;
-    // Debug `kim` accepts a development catalog key (KIM_DEV_TRUSTED_KEY); some scenarios need it.
-    cargo(root, &["build", "--package", "kim"])?;
+    // Debug builds carry test hooks that release builds compile out: `kim` accepts a development
+    // catalog key (KIM_DEV_TRUSTED_KEY); `noeul` runs its overlay on an off-screen synthetic
+    // desktop (NOEUL_DEV_SYNTHETIC_DESKTOP, ADR 0026). Some scenarios need them.
+    cargo(root, &["build", "--package", "kim", "--package", "noeul"])?;
     let bin_dir = root.join("target").join("release");
     let cargo_bin = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
     // --no-fail-fast: one failing scenario file must not hide the results of the others.

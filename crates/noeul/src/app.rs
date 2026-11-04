@@ -1633,6 +1633,81 @@ pub(crate) mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The real trigger path on an obscure chord: `kim-hotkeys` registers `capture.region` with
+    /// `RegisterHotKey` on `Ctrl+Alt+Shift+F21`, and that registration's id (what a press
+    /// delivers to the instance) opens the overlay. No key is pressed or synthesized, and F1 is
+    /// never registered.
+    #[cfg(windows)]
+    #[test]
+    fn the_registered_capture_chord_opens_the_overlay() {
+        use kim_hotkeys::register::{HotkeyId, Registrar, Status};
+        let dir = tmp("ov-hotkey");
+        let _ = std::fs::remove_dir_all(&dir);
+        let paths = Paths::under(&dir);
+        std::fs::create_dir_all(&paths.config_dir).unwrap();
+        std::fs::write(
+            paths.hotkeys_file(),
+            serde_json::to_vec(&json!({"schema": "kim.hotkeys", "schema_version": 1,
+                "tool": "noeul", "overrides": [
+                    {"action": "capture.region", "bindings": ["Ctrl+Alt+Shift+F21"]},
+                    {"action": "paste.float", "disabled": true}]}))
+            .unwrap(),
+        )
+        .unwrap();
+        let mgr = Manager::start(&paths, None, Registrar::start);
+        let regs = mgr.registrations().to_vec();
+        assert_eq!(regs.len(), 1, "{regs:?}");
+        assert_eq!(
+            (
+                regs[0].action.as_str(),
+                regs[0].keys.as_str(),
+                regs[0].status
+            ),
+            ("capture.region", "Ctrl+Alt+Shift+F21", "registered"),
+            "{:?}",
+            regs[0].message
+        );
+        let id = (1..=16)
+            .map(HotkeyId)
+            .find(|id| mgr.action_for(*id).as_deref() == Some("capture.region"))
+            .expect("the registration's id");
+        let syn = Arc::new(Synthetic::new(layout()));
+        let shell = FakeShell {
+            pointer_at: Some((10, 10)),
+            ..FakeShell::default()
+        };
+        let mut a = App::new(
+            shell,
+            Box::new(Arc::clone(&syn)),
+            mgr,
+            settings::load(&paths.config_file()),
+            paths,
+            Identity {
+                pid: 42,
+                endpoint: r"\\.\pipe\noeul-test".into(),
+                session: 1,
+            },
+        );
+        a.hotkey_pressed(id);
+        assert!(a.overlay_open(), "the press opened the overlay");
+        assert_eq!(
+            a.status()["last_action"],
+            json!({"action": "capture.region", "result": "opened"})
+        );
+        assert_eq!(a.latency().to_json()["count"], 1);
+        a.hotkey_pressed(id);
+        assert_eq!(syn.captures(), 1, "a second press while open does nothing");
+        assert_eq!(a.status()["captures"]["ignored"], 1);
+        a.shutdown();
+        let probe = Registrar::start().unwrap();
+        let (pid, st) = probe
+            .register(&Chord::parse("Ctrl+Alt+Shift+F21").unwrap())
+            .unwrap();
+        assert_eq!(st, Status::Registered, "shutdown released the chord");
+        probe.unregister(pid.unwrap()).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn latency_percentiles_use_the_nearest_rank() {
         let mut l = Latency::default();

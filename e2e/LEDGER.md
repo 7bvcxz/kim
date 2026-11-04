@@ -46,6 +46,7 @@ Run with `cargo xtask e2e`, which refuses unless the counter below has reached 1
 | 33 | #76 Step 71 – Ddalgak mouse movement, scrolling and click actions (merged; issue open for the maintainer's real-pointer check, `DDALGAK_ENGINE.md` §14) | `step71_ddalgak_mouse.rs` (2 tests): an agent writes a keyboard-mouse profile headlessly; the running app loads mouse rules without a mouse hook and moves no real pointer | 3 |
 | 34 | #62 Step 57 – Noeul blur, mosaic, eraser and redaction tools (merged; issue open for the maintainer's real-desktop check, `NOEUL_UX_SPEC.md` §4.10) | `step57_noeul_redaction.rs` (2 tests): the privacy tools are discoverable headlessly; redact, mosaic, erase and save without the original on the synthetic desktop | 4 |
 | 35 | #17 Step 17 – Subak terminal tabs and keyboard shortcuts | `step17_subak_tabs.rs` (2 tests): tabs follow the CLI and Ctrl+Tab switches without ending anything; Ctrl+T creates, Ctrl+W asks before ending a busy Terminal and the X only detaches. `step17_subak_hotkeys.rs` (2 tests): a user rebinds and disables the tab keys headlessly; safe mode and cross-tool checks read files only | 5 |
+| 36 | #77 Step 72 – Ddalgak user-defined modes, layers and mode toggles (merged; issue open for the maintainer's tray-indicator and real-typing check, `DDALGAK_ENGINE.md` §15) | `step72_ddalgak_modes.rs` (2 tests): an agent builds modes and layers headlessly; the running app switches modes, releases held keys and never restores the active mode | 6 |
 
 ## E2E runs
 

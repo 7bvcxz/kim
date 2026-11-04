@@ -769,17 +769,28 @@ mod tests {
     use crate::model::{Action, EngineOp, EngineStep, Rule, Trigger};
     use serde_json::Map;
 
-    fn sandbox(tag: &str) -> Files {
-        let root = std::env::temp_dir().join(format!(
-            "ddalgak-store-{tag}-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
-        Files {
-            rules: root.join("rules.json"),
+    /// Removes the sandbox folder when the test ends.
+    struct Cleanup(PathBuf);
+
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    fn sandbox(tag: &str) -> (Files, Cleanup) {
+        let root = std::env::temp_dir().join(format!(
+            "ddalgak-store-{tag}-{}-{}",
+            std::process::id(),
+            crate::model::uuid_v4()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        (
+            Files {
+                rules: root.join("rules.json"),
+            },
+            Cleanup(root),
+        )
     }
 
     fn cli(cmd: &str) -> Origin {
@@ -803,7 +814,7 @@ mod tests {
 
     #[test]
     fn missing_file_save_backup_history_and_revisions() {
-        let f = sandbox("save");
+        let (f, _cleanup) = sandbox("save");
         let l = read(&f, &Context::default());
         assert_eq!(l.state, FileState::Missing);
         let mut doc = l.doc.unwrap();
@@ -845,7 +856,7 @@ mod tests {
 
     #[test]
     fn invalid_and_newer_files_are_never_rewritten() {
-        let f = sandbox("invalid");
+        let (f, _cleanup) = sandbox("invalid");
         std::fs::write(&f.rules, b"{ broken").unwrap();
         let l = read(&f, &Context::default());
         assert!(matches!(l.state, FileState::Invalid(_)));
@@ -873,7 +884,7 @@ mod tests {
 
     #[test]
     fn a_restore_keeps_the_unusable_file_and_the_backup() {
-        let f = sandbox("restore");
+        let (f, _cleanup) = sandbox("restore");
         let lock = lock(&f, LOCK_TIMEOUT).unwrap();
         let mut doc = Document::empty();
         doc.profiles[0].rules.push(engine_rule("ra", "F13"));
@@ -922,7 +933,7 @@ mod tests {
 
     #[test]
     fn the_history_keeps_the_last_fifty() {
-        let f = sandbox("prune");
+        let (f, _cleanup) = sandbox("prune");
         let lock = lock(&f, LOCK_TIMEOUT).unwrap();
         let mut doc = Document::empty();
         for i in 0..55u64 {
@@ -936,7 +947,7 @@ mod tests {
 
     #[test]
     fn the_lock_is_exclusive_and_released_on_drop() {
-        let f = sandbox("lock");
+        let (f, _cleanup) = sandbox("lock");
         let held = lock(&f, LOCK_TIMEOUT).unwrap();
         let t = Instant::now();
         assert!(matches!(
@@ -981,7 +992,7 @@ mod tests {
 
     #[test]
     fn a_read_only_file_is_refused_and_left_alone() {
-        let f = sandbox("readonly");
+        let (f, _cleanup) = sandbox("readonly");
         let lock = lock(&f, LOCK_TIMEOUT).unwrap();
         let mut doc = Document::empty();
         save(&f, &lock, &mut doc, 0, &cli("rule.add")).unwrap();
@@ -1000,7 +1011,7 @@ mod tests {
 
     #[test]
     fn drafts_keep_their_base_revision() {
-        let f = sandbox("draft");
+        let (f, _cleanup) = sandbox("draft");
         let lock = lock(&f, LOCK_TIMEOUT).unwrap();
         assert!(read_draft(&f).unwrap().is_none());
         let mut doc = Document::empty();

@@ -1866,7 +1866,6 @@ pub const OPEN_URL_FIELDS: &[Field] = &[Field {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
 
     fn no_var(_: &str) -> Option<OsString> {
         None
@@ -2585,7 +2584,7 @@ mod tests {
         let inside = program_in(&d.0, "sandbox 한글", "marker.exe");
         let outside_dir = Dir::new("outside");
         let outside = program_in(&outside_dir.0, "x", "x.exe");
-        let inner = Arc::new(FakeLauncher::default());
+        let inner = std::sync::Arc::new(FakeLauncher::default());
         let host = TestHostLauncher::new(inner.clone(), Some(d.0.join("sandbox 한글")));
         let never = || false;
         assert_eq!(

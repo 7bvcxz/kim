@@ -19,6 +19,12 @@
 //! rules. A repeat is sent only for an output the ledger still holds, so a late repeat can never
 //! press again what a release-all let go.
 //!
+//! **Launches** (Step 70, [`crate::launch`]): a fired `open_program`/`open_url` rule passes a gate
+//! (`busy` while its previous run is still going, `rate_limited` within a second of its last
+//! start) and runs on a short-lived `ddalgak-launch` thread, so a slow shell hand-off never delays
+//! remaps or typing; a cancellation ends it before its next target. No launch thread exists while
+//! nothing launches.
+//!
 //! **Typing runs** (Step 69, [`crate::run`]): `type_text` and `send_keys` rules and hotstrings run
 //! one at a time as a plan of pieces, carried out between the worker's other messages (one
 //! `SendInput` call per piece, waits as timeouts), so remaps keep working while text is typed.

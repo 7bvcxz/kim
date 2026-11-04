@@ -489,11 +489,12 @@ mod tests {
 
     #[test]
     fn repository_examples_conform() {
+        // Also compiled into Ddalgak's tests (crates/ddalgak/src/validate.rs): find the root.
         let contracts = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .join("docs")
-            .join("contracts");
+            .ancestors()
+            .map(|p| p.join("docs").join("contracts"))
+            .find(|p| p.is_dir())
+            .unwrap();
         let report = check(&contracts).expect("examples readable");
         assert!(report.documents >= 10, "{report:?}");
         assert!(report.problems.is_empty(), "{}", report.problems.join("\n"));

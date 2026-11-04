@@ -137,6 +137,18 @@
             "title": "Hide all pins, or show them again",
             "scope": "global",
             "keys": []
+          },
+          {
+            "action": "capture.monitor",
+            "title": "Capture the monitor under the pointer and pin it",
+            "scope": "global",
+            "keys": []
+          },
+          {
+            "action": "capture.window",
+            "title": "Capture the active window and pin it",
+            "scope": "global",
+            "keys": []
           }
         ]
       },

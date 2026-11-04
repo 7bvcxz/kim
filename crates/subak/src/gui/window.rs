@@ -1774,6 +1774,11 @@ fn handle(app: &mut App, hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> Option
             unsafe {
                 let mmi = &mut *(lp as *mut MINMAXINFO);
                 mmi.ptMinTrackSize = POINT { x: ow, y: oh };
+                if app.opts.test {
+                    // The off-screen test window is not limited to the desktop's size, so a
+                    // synthetic DPI change behaves the same on a small CI screen.
+                    mmi.ptMaxTrackSize = POINT { x: 16_000, y: 16_000 };
+                }
             }
             Some(0)
         }

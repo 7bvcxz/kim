@@ -96,6 +96,18 @@ impl ThemeChoice {
         Self::ALL.into_iter().find(|t| t.as_str() == s)
     }
 
+    /// The theme this choice draws with, given whether Windows High Contrast is on and whether
+    /// Windows apps use the light mode: `kim-dark`, `kim-light` or `high-contrast`.
+    pub fn resolve(self, high_contrast: bool, light_mode: bool) -> &'static str {
+        match self {
+            Self::Auto | Self::System if high_contrast => "high-contrast",
+            Self::System if light_mode => "kim-light",
+            Self::Auto | Self::System | Self::KimDark => "kim-dark",
+            Self::KimLight => "kim-light",
+            Self::HighContrast => "high-contrast",
+        }
+    }
+
     /// The menu label.
     pub fn title(self) -> &'static str {
         match self {
@@ -308,6 +320,7 @@ impl Settings {
     }
 
     /// The settings as JSON (the `subak-config-v1` data model; profile values redacted).
+    #[cfg(test)]
     pub fn to_json(&self) -> Value {
         let mut doc = Map::new();
         doc.insert("config_version".into(), json!(VERSION));
@@ -330,6 +343,7 @@ impl Settings {
         Value::Object(doc)
     }
 
+    #[cfg(test)]
     fn is_default(&self, p: &Profile) -> bool {
         self.default_profile().is_some_and(|d| d.name == p.name)
     }
@@ -1511,6 +1525,19 @@ pub fn set(loaded: &Loaded, values: &[(&str, &str)]) -> Result<Edited, EditError
     checked_edit(&text, &edits)
 }
 
+/// Sets key `id` to `value` in `s` with the same checks as [`set`] (the window applies a menu
+/// choice at once, then saves it with [`set`]).
+pub fn set_value(s: &mut Settings, id: &str, value: &str) -> Result<(), EditError> {
+    let k = key(id).ok_or_else(|| EditError::UnknownKey(id.to_string()))?;
+    let lit = literal(k, value)?;
+    let v = format!("x = {lit}")
+        .parse::<toml::Table>()
+        .ok()
+        .and_then(|mut t| t.remove("x"))
+        .ok_or(EditError::BadValue(k.id(), k.takes))?;
+    apply(s, k, &v).map_err(|()| EditError::BadValue(k.id(), k.takes))
+}
+
 /// What `subak config reset` resets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Reset<'a> {
@@ -2358,6 +2385,38 @@ args = ["/k", "--password", "hunter2"]
                 .unwrap();
             assert!(errors.is_empty(), "{errors:?}\n{doc:#}");
         }
+    }
+
+    /// Step 20: which theme draws, from the setting and what Windows reports (High Contrast,
+    /// the light app mode); and a menu choice applied in memory with the file's checks.
+    #[test]
+    fn themes_resolve_and_values_apply_in_memory() {
+        use ThemeChoice::*;
+        for (c, hc, light, want) in [
+            (Auto, false, false, "kim-dark"),
+            (Auto, false, true, "kim-dark"),
+            (Auto, true, false, "high-contrast"),
+            (System, false, true, "kim-light"),
+            (System, false, false, "kim-dark"),
+            (System, true, true, "high-contrast"),
+            (KimDark, true, true, "kim-dark"),
+            (KimLight, true, false, "kim-light"),
+            (HighContrast, false, false, "high-contrast"),
+        ] {
+            assert_eq!(c.resolve(hc, light), want, "{c:?} hc={hc} light={light}");
+        }
+        let mut s = Settings::default();
+        set_value(&mut s, "appearance.theme", "kim-light").unwrap();
+        set_value(&mut s, "appearance.line_height", "1.6").unwrap();
+        set_value(&mut s, "terminal.right_click", "menu").unwrap();
+        set_value(&mut s, "terminal.copy_on_select", "true").unwrap();
+        assert_eq!(s.appearance.theme, KimLight);
+        assert_eq!(s.appearance.line_height, 1.6);
+        assert_eq!(s.terminal.right_click, RightClick::Menu);
+        assert!(s.terminal.copy_on_select);
+        assert!(set_value(&mut s, "appearance.opacity", "5").is_err());
+        assert!(set_value(&mut s, "nope.key", "1").is_err());
+        assert_eq!(s.appearance.opacity, 100, "a refused value changes nothing");
     }
 
     #[test]

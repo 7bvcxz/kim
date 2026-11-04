@@ -66,7 +66,9 @@ toml = { version = "1.1.8", default-features = false, features = ["parse", "serd
 # (UI_Controls) and `PrintWindow` for the test hook's picture of the manager (Storage_Xps).
 # Step 19 (ADR 0048): links open through the shell's "open" verb (UI_Shell, `ShellExecuteW`), the
 # clipboard's HTML Format is registered (DataExchange), and "Save output…" asks for a path in
-# the common save dialog (UI_Controls_Dialogs, `GetSaveFileNameW`).
+# the common save dialog (UI_Controls_Dialogs, `GetSaveFileNameW`). Step 20 (ADR 0051): Windows'
+# light or dark app mode for `theme = "system"` is one registry value (Registry, `RegGetValueW`,
+# read only).
 windows-sys = { version = "0.61.2", features = [
     "Win32_Foundation",
     "Win32_Graphics_Dwm",
@@ -85,6 +87,7 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_System_Ole",
     "Win32_System_Pipes",
     "Win32_System_ProcessStatus",
+    "Win32_System_Registry",
     "Win32_System_RemoteDesktop",
     "Win32_System_Threading",
     "Win32_UI_Accessibility",

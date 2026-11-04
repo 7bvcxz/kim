@@ -45,6 +45,8 @@ mod layout;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod model;
 #[cfg_attr(not(windows), allow(dead_code))]
+mod motion;
+#[cfg_attr(not(windows), allow(dead_code))]
 mod prefs;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod screens;

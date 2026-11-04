@@ -5,6 +5,7 @@
 //! test hook's frame shots use these functions, so the golden frames below are the window's own
 //! content, never a capture of the screen.
 
+#[cfg(test)]
 use super::screens::tokens;
 use subak_term::render::{Frame, Rgb};
 
@@ -16,6 +17,12 @@ pub struct BannerLayer<'a> {
     pub fill: Rgb,
     /// The status colour of the left marker, and its width; `None` in High Contrast.
     pub marker: Option<(Rgb, u32)>,
+    /// The hairline under it (the theme's `border.subtle`), drawn with the marker.
+    pub border: Rgb,
+    /// Step 20 motion: how far it has faded in (255: fully) and how many device pixels it
+    /// still sits below its place (DESIGN_SYSTEM §2.5: fade and a 4 px rise).
+    pub fade: u8,
+    pub rise: u32,
 }
 
 /// How the tab bar strip is painted around its one row of cells (DESIGN_SYSTEM §3.5).
@@ -94,11 +101,28 @@ pub fn compose(
     blit(&mut out, main, 0, top);
     if let Some(b) = banner {
         let bh = b.frame.height;
-        out.fill(0, top, w, bh, b.fill);
-        blit(&mut out, b.frame, 0, top);
+        let y0 = top + b.rise;
+        // What lies under the banner, for the fade.
+        let under: Vec<u32> = (0..bh)
+            .filter(|y| y0 + y < h)
+            .flat_map(|y| {
+                let row = ((y0 + y) * w) as usize;
+                out.pixels[row..row + w as usize].to_vec()
+            })
+            .collect();
+        out.fill(0, y0, w, bh, b.fill);
+        blit(&mut out, b.frame, 0, y0);
         if let Some((color, width)) = b.marker {
-            out.fill(0, top, width, bh, color);
-            out.fill(0, top + bh.saturating_sub(1), w, 1, tokens::BORDER_SUBTLE);
+            out.fill(0, y0, width, bh, color);
+            out.fill(0, y0 + bh.saturating_sub(1), w, 1, b.border);
+        }
+        if b.fade < 255 {
+            for (i, u) in under.iter().enumerate() {
+                let p = (y0 * w) as usize + i;
+                out.pixels[p] = Rgb::from_u32(*u)
+                    .mix(Rgb::from_u32(out.pixels[p]), b.fade)
+                    .to_u32();
+            }
         }
     }
     if let Some((f, (x, y))) = ime {
@@ -306,6 +330,9 @@ mod tests {
             frame: br.frame(),
             fill: b.tone.fill(),
             marker: Some((b.tone.color(), 3)),
+            border: tokens::BORDER_SUBTLE,
+            fade: 255,
+            rise: 0,
         };
         let f = compose(client, tokens::BG_BASE, None, r.frame(), Some(&layer), None);
         assert_eq!(f.pixel(1, 1), tokens::INFO, "the status marker");

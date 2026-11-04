@@ -1,9 +1,12 @@
-//! The window's display preferences and placement: `%APPDATA%\mouv\subak\gui.json`
-//! (docs/SUBAK_GUI.md §5, schema `docs/contracts/schemas/subak-gui-v1.schema.json`).
+//! The window's placement and remembered tabs: `%APPDATA%\mouv\subak\gui.json` (docs/SUBAK_GUI.md
+//! §5, schema `docs/contracts/schemas/subak-gui-v2.schema.json`).
 //!
 //! The file is the GUI's own and is independent of the Host's session state: it never holds a
-//! process id as truth, terminal content or anything secret, only how the window looks and where
-//! it was, and which Terminal it showed last (a hint by id and name). Rules (ADR 0006 writing
+//! process id as truth, terminal content or anything secret, only where the window was, and
+//! which Terminal it showed last (a hint by id and name). **Version 2** (Step 20, ADR 0051): the
+//! text size and theme of version 1 moved to `config.toml` ([`crate::config`]); a version 1 file
+//! is migrated once — its values go into `config.toml` where that file is silent, the old file is
+//! backed up, then it is rewritten as version 2 ([`Prefs::legacy`]). Rules (ADR 0006 writing
 //! rules, `SUBAK-FR-046`):
 //!
 //! - a missing file means defaults;
@@ -22,42 +25,15 @@ use std::path::{Path, PathBuf};
 
 /// The document's `schema` and `schema_version`.
 pub const SCHEMA: &str = "subak.gui";
-pub const VERSION: u64 = 1;
+pub const VERSION: u64 = 2;
 /// The file name inside the configuration directory.
 pub const FILE: &str = "gui.json";
 
-/// Terminal text sizes the window allows, in logical pixels (`size.terminal`, user-adjustable).
-pub const FONT_MIN: f32 = 8.0;
-pub const FONT_MAX: f32 = 36.0;
-pub const FONT_DEFAULT: f32 = 13.0;
-
-/// Which colours the window uses.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ThemePref {
-    /// `kim-dark`, or the system's colours while Windows High Contrast is on (DESIGN_SYSTEM §4.3).
-    Auto,
-    KimDark,
-    HighContrast,
-}
-
-impl ThemePref {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Auto => "auto",
-            Self::KimDark => "kim-dark",
-            Self::HighContrast => "high-contrast",
-        }
-    }
-
-    fn parse(s: &str) -> Option<Self> {
-        match s {
-            "auto" => Some(Self::Auto),
-            "kim-dark" => Some(Self::KimDark),
-            "high-contrast" => Some(Self::HighContrast),
-            _ => None,
-        }
-    }
-}
+/// Terminal text sizes the window allows, in logical pixels (`size.terminal`, user-adjustable;
+/// the setting `appearance.font_size` of `config.toml` since Step 20).
+pub const FONT_MIN: f32 = crate::config::FONT_SIZE.0;
+pub const FONT_MAX: f32 = crate::config::FONT_SIZE.1;
+pub const FONT_DEFAULT: f32 = crate::config::FONT_SIZE.2;
 
 /// Where the window was: its restored (not maximized) outer rectangle in physical screen pixels
 /// at `dpi`, and whether it was maximized.
@@ -81,13 +57,14 @@ pub struct LastTerminal {
 /// The preferences, plus what the file said that this version does not know.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Prefs {
-    pub font_size: f32,
-    pub theme: ThemePref,
     pub window: Option<Placement>,
     pub last_terminal: Option<LastTerminal>,
     /// Terminals hidden in the window when it last ran (ids; Step 18 keeps tab hiding across
     /// runs). The Terminal manager shows them; opening one there shows its tab again.
     pub hidden_terminals: Vec<String>,
+    /// The text size and theme a version 1 file held (Step 20: they belong in `config.toml`
+    /// now); `None` when the file was version 2 or had neither. Never written back.
+    pub legacy: Option<crate::config::Legacy>,
     /// Unknown keys of the file, written back unchanged.
     extra: Map<String, Value>,
 }
@@ -95,11 +72,10 @@ pub struct Prefs {
 impl Default for Prefs {
     fn default() -> Self {
         Self {
-            font_size: FONT_DEFAULT,
-            theme: ThemePref::Auto,
             window: None,
             last_terminal: None,
             hidden_terminals: Vec::new(),
+            legacy: None,
             extra: Map::new(),
         }
     }
@@ -166,19 +142,20 @@ impl Prefs {
         for key in ["schema", "schema_version"] {
             map.remove(key);
         }
-        if let Some(v) = map.remove("font_size") {
-            match v.as_f64() {
-                Some(f) if (f64::from(FONT_MIN)..=f64::from(FONT_MAX)).contains(&f) => {
-                    p.font_size = f as f32;
-                }
-                _ => bad.push("font_size"),
-            }
-        }
-        if let Some(v) = map.remove("theme") {
-            match v.as_str().and_then(ThemePref::parse) {
-                Some(t) => p.theme = t,
-                None => bad.push("theme"),
-            }
+        // Version 1's display settings (Step 20: `config.toml`): kept aside for the migration,
+        // never written back; an invalid one is simply dropped.
+        let font_size = map
+            .remove("font_size")
+            .and_then(|v| v.as_f64())
+            .filter(|f| (f64::from(FONT_MIN)..=f64::from(FONT_MAX)).contains(f));
+        let theme = map
+            .remove("theme")
+            .and_then(|v| v.as_str().and_then(crate::config::ThemeChoice::parse));
+        if version == Some(1) && (font_size.is_some() || theme.is_some()) {
+            p.legacy = Some(crate::config::Legacy {
+                font_size: font_size.map(|f| f as f32),
+                theme,
+            });
         }
         if let Some(v) = map.remove("window") {
             match parse_placement(&v) {
@@ -254,8 +231,6 @@ impl Prefs {
         let mut m = Map::new();
         m.insert("schema".into(), json!(SCHEMA));
         m.insert("schema_version".into(), json!(VERSION));
-        m.insert("font_size".into(), json!(self.font_size));
-        m.insert("theme".into(), json!(self.theme.as_str()));
         m.insert(
             "window".into(),
             self.window.map_or(Value::Null, |w| {
@@ -337,6 +312,7 @@ fn parse_placement(v: &Value) -> Option<Placement> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::ThemeChoice;
 
     fn sandbox(tag: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!(
@@ -363,7 +339,7 @@ mod tests {
         std::fs::create_dir_all(&d).unwrap();
         std::fs::write(
             d.join(FILE),
-            r#"{"schema":"subak.gui","schema_version":1,"font_size":15,"theme":"kim-dark",
+            r#"{"schema":"subak.gui","schema_version":2,
                 "window":{"x":100,"y":80,"width":1000,"height":640,"dpi":144,"maximized":true},
                 "last_terminal":{"id":"t-0123456789ab","name":"빌드"},
                 "future_option":{"keep":[1,2,3]}}"#,
@@ -372,8 +348,7 @@ mod tests {
         let l = Prefs::load(&d);
         assert_eq!(l.problem, None, "{l:?}");
         let mut p = l.prefs;
-        assert_eq!(p.font_size, 15.0);
-        assert_eq!(p.theme, ThemePref::KimDark);
+        assert_eq!(p.legacy, None);
         assert_eq!(
             p.window,
             Some(Placement {
@@ -386,7 +361,7 @@ mod tests {
             })
         );
         assert_eq!(p.last_terminal.as_ref().unwrap().name, "빌드");
-        p.font_size = 16.0;
+        p.hidden_terminals = vec!["t-0123456789ab".into()];
         p.save(&d).unwrap();
         assert!(
             !d.join("gui.json.tmp").exists(),
@@ -395,27 +370,61 @@ mod tests {
         let text = std::fs::read_to_string(d.join(FILE)).unwrap();
         let doc: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(doc["future_option"], json!({"keep": [1, 2, 3]}));
-        assert_eq!(doc["font_size"], json!(16.0));
+        assert_eq!(doc["schema_version"], json!(2));
+        assert!(doc.get("font_size").is_none() && doc.get("theme").is_none());
         let again = Prefs::load(&d);
         assert_eq!(again.prefs, p);
         let _ = std::fs::remove_dir_all(&d);
     }
 
+    /// Step 20: a version 1 file's text size and theme are kept aside for `config.toml` (the
+    /// window migrates them once), the rest is read as before, and the next save is version 2.
+    #[test]
+    fn a_version_1_file_is_read_and_its_display_settings_kept_for_the_migration() {
+        let l = Prefs::parse(
+            r#"{"schema":"subak.gui","schema_version":1,"font_size":15,"theme":"kim-dark",
+                "window":{"x":0,"y":0,"width":900,"height":600,"dpi":96},"last_terminal":null,
+                "hidden_terminals":["t-aaaaaaaaaaaa"]}"#,
+        );
+        assert!(!l.read_only);
+        assert_eq!(l.problem, None);
+        assert_eq!(
+            l.prefs.legacy,
+            Some(crate::config::Legacy {
+                font_size: Some(15.0),
+                theme: Some(ThemeChoice::KimDark)
+            })
+        );
+        assert_eq!(l.prefs.window.unwrap().width, 900);
+        assert_eq!(l.prefs.hidden_terminals, ["t-aaaaaaaaaaaa"]);
+        let doc = l.prefs.to_json();
+        assert_eq!(doc["schema_version"], 2);
+        assert!(doc.get("font_size").is_none() && doc.get("theme").is_none());
+        // Invalid version 1 values are dropped (the defaults apply), never an error.
+        let l = Prefs::parse(
+            r#"{"schema":"subak.gui","schema_version":1,"font_size":200,"theme":"neon"}"#,
+        );
+        assert_eq!(l.prefs.legacy, None);
+        assert_eq!(l.problem, None);
+        // A version 2 file with stray display keys does not migrate them.
+        let l = Prefs::parse(r#"{"schema":"subak.gui","schema_version":2,"font_size":20}"#);
+        assert_eq!(l.prefs.legacy, None);
+    }
+
     #[test]
     fn invalid_values_fall_back_one_by_one() {
         let l = Prefs::parse(
-            r#"{"schema":"subak.gui","schema_version":1,"font_size":200,"theme":"neon",
-                "window":{"x":0,"y":0,"width":-5,"height":10,"dpi":96},"last_terminal":null}"#,
+            r#"{"schema":"subak.gui","schema_version":2,
+                "window":{"x":0,"y":0,"width":-5,"height":10,"dpi":96},"last_terminal":7,
+                "hidden_terminals":["ok-id"]}"#,
         );
         assert!(!l.read_only);
-        assert_eq!(l.prefs.font_size, FONT_DEFAULT);
-        assert_eq!(l.prefs.theme, ThemePref::Auto);
         assert_eq!(l.prefs.window, None);
+        assert_eq!(l.prefs.last_terminal, None);
+        assert_eq!(l.prefs.hidden_terminals, ["ok-id"]);
         let problem = l.problem.unwrap();
         assert!(
-            problem.contains("font_size")
-                && problem.contains("theme")
-                && problem.contains("window"),
+            problem.contains("window") && problem.contains("last_terminal"),
             "{problem}"
         );
     }
@@ -430,7 +439,7 @@ mod tests {
                 "not a `subak.gui`",
             ),
             (
-                r#"{"schema":"subak.gui","schema_version":2}"#,
+                r#"{"schema":"subak.gui","schema_version":3}"#,
                 "newer Subak",
             ),
         ] {
@@ -453,7 +462,7 @@ mod tests {
     #[test]
     fn the_written_document_matches_its_schema() {
         let schema: Value = serde_json::from_str(include_str!(
-            "../../../../docs/contracts/schemas/subak-gui-v1.schema.json"
+            "../../../../docs/contracts/schemas/subak-gui-v2.schema.json"
         ))
         .unwrap();
         let check = |doc: &Value| {
@@ -484,14 +493,14 @@ mod tests {
     #[test]
     fn hidden_tabs_are_kept_by_id_and_a_bad_list_falls_back() {
         let l = Prefs::parse(
-            r#"{"schema":"subak.gui","schema_version":1,"hidden_terminals":["t-aaaaaaaaaaaa","t-bbbbbbbbbbbb"]}"#,
+            r#"{"schema":"subak.gui","schema_version":2,"hidden_terminals":["t-aaaaaaaaaaaa","t-bbbbbbbbbbbb"]}"#,
         );
         assert_eq!(l.problem, None);
         assert_eq!(
             l.prefs.hidden_terminals,
             ["t-aaaaaaaaaaaa", "t-bbbbbbbbbbbb"]
         );
-        let l = Prefs::parse(r#"{"schema":"subak.gui","schema_version":1,"hidden_terminals":[1]}"#);
+        let l = Prefs::parse(r#"{"schema":"subak.gui","schema_version":2,"hidden_terminals":[1]}"#);
         assert!(l.prefs.hidden_terminals.is_empty());
         assert!(l.problem.unwrap().contains("hidden_terminals"));
     }

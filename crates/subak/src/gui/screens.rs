@@ -30,8 +30,166 @@ pub mod tokens {
     pub const BG_SELECTED: Rgb = Rgb(0x2A, 0x28, 0x38);
     pub const BORDER_STRONG: Rgb = Rgb(0x6A, 0x66, 0x80);
     pub const FOCUS_RING: Rgb = Rgb(0xC9, 0xBC, 0xFF);
+    /// Step 20: a hovered tab.
+    pub const BG_HOVER: Rgb = Rgb(0x22, 0x21, 0x2C);
 }
 use tokens::*;
+
+/// The window's chrome colours in one theme (DESIGN_SYSTEM §2.1): `kim-dark`'s tokens, or
+/// `kim-light`'s (Step 20). The state screens, the tab bar, banners, the search bar and the
+/// questions are written in `kim-dark`'s token colours; [`Chrome::retint`] maps every such
+/// colour to the same role of this theme, so each part keeps one implementation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Chrome {
+    pub name: &'static str,
+    pub bg_base: Rgb,
+    pub bg_raised: Rgb,
+    pub bg_overlay: Rgb,
+    pub bg_hover: Rgb,
+    pub bg_selected: Rgb,
+    pub border_subtle: Rgb,
+    pub border_strong: Rgb,
+    pub text_primary: Rgb,
+    pub text_secondary: Rgb,
+    pub text_muted: Rgb,
+    pub accent: Rgb,
+    pub focus_ring: Rgb,
+    pub success: Rgb,
+    pub warning: Rgb,
+    pub danger: Rgb,
+    pub info: Rgb,
+}
+
+impl Chrome {
+    pub const KIM_DARK: Chrome = Chrome {
+        name: "kim-dark",
+        bg_base: BG_BASE,
+        bg_raised: BG_RAISED,
+        bg_overlay: BG_OVERLAY,
+        bg_hover: BG_HOVER,
+        bg_selected: BG_SELECTED,
+        border_subtle: BORDER_SUBTLE,
+        border_strong: BORDER_STRONG,
+        text_primary: TEXT_PRIMARY,
+        text_secondary: TEXT_SECONDARY,
+        text_muted: TEXT_MUTED,
+        accent: ACCENT,
+        focus_ring: FOCUS_RING,
+        success: SUCCESS,
+        warning: WARNING,
+        danger: DANGER,
+        info: INFO,
+    };
+
+    /// `kim-light` (design/tokens.json; checked by a test).
+    pub const KIM_LIGHT: Chrome = Chrome {
+        name: "kim-light",
+        bg_base: Rgb(0xF7, 0xF6, 0xFA),
+        bg_raised: Rgb(0xEC, 0xEB, 0xF2),
+        bg_overlay: Rgb(0xFF, 0xFF, 0xFF),
+        bg_hover: Rgb(0xE3, 0xE1, 0xEB),
+        bg_selected: Rgb(0xDC, 0xD7, 0xEE),
+        border_subtle: Rgb(0xD9, 0xD7, 0xE2),
+        border_strong: Rgb(0x77, 0x73, 0x8C),
+        text_primary: Rgb(0x1C, 0x1B, 0x24),
+        text_secondary: Rgb(0x45, 0x42, 0x5A),
+        text_muted: Rgb(0x55, 0x52, 0x6B),
+        accent: Rgb(0x5F, 0x49, 0xC4),
+        focus_ring: Rgb(0x5A, 0x43, 0xC8),
+        success: Rgb(0x23, 0x70, 0x3E),
+        warning: Rgb(0x7D, 0x57, 0x00),
+        danger: Rgb(0xB4, 0x28, 0x3B),
+        info: Rgb(0x23, 0x5B, 0xB8),
+    };
+
+    /// The chrome of a terminal theme (`kim-light` → light; everything else, the system colours
+    /// of High Contrast included, starts from `kim-dark` and is then turned into reverse video).
+    pub fn for_theme(name: &str) -> Chrome {
+        if name == "kim-light" {
+            Self::KIM_LIGHT
+        } else {
+            Self::KIM_DARK
+        }
+    }
+
+    fn roles(&self) -> [Rgb; 16] {
+        [
+            self.bg_base,
+            self.bg_raised,
+            self.bg_overlay,
+            self.bg_hover,
+            self.bg_selected,
+            self.border_subtle,
+            self.border_strong,
+            self.text_primary,
+            self.text_secondary,
+            self.text_muted,
+            self.accent,
+            self.focus_ring,
+            self.success,
+            self.warning,
+            self.danger,
+            self.info,
+        ]
+    }
+
+    /// This theme's colour for a `kim-dark` token colour (other colours unchanged).
+    pub fn map(&self, c: Rgb) -> Rgb {
+        let dark = Self::KIM_DARK.roles();
+        dark.iter()
+            .position(|d| *d == c)
+            .map_or(c, |i| self.roles()[i])
+    }
+
+    /// VT text written in `kim-dark` token colours, in this theme's colours (24-bit `38;2` and
+    /// `48;2` colours are mapped role by role; everything else is kept).
+    pub fn retint(&self, vt: &[u8]) -> Vec<u8> {
+        if self.name == Self::KIM_DARK.name {
+            return vt.to_vec();
+        }
+        let s = String::from_utf8_lossy(vt);
+        let mut out = String::with_capacity(s.len());
+        let mut rest = s.as_ref();
+        while let Some(i) = rest.find("\x1b[") {
+            out.push_str(&rest[..i]);
+            let tail = &rest[i..];
+            let kind = ["38;2;", "48;2;"]
+                .into_iter()
+                .find(|k| tail[2..].starts_with(k));
+            let end = tail.find('m');
+            let parsed = kind.zip(end).and_then(|(k, e)| {
+                let nums: Vec<u8> = tail[2 + k.len()..e]
+                    .split(';')
+                    .map(|n| n.parse().ok())
+                    .collect::<Option<Vec<u8>>>()?;
+                (nums.len() == 3).then(|| (k, e, Rgb(nums[0], nums[1], nums[2])))
+            });
+            match parsed {
+                Some((k, e, c)) => {
+                    let m = self.map(c);
+                    out.push_str(&format!("\x1b[{k}{};{};{}m", m.0, m.1, m.2));
+                    rest = &tail[e + 1..];
+                }
+                None => {
+                    out.push_str("\x1b[");
+                    rest = &tail[2..];
+                }
+            }
+        }
+        out.push_str(rest);
+        out.into_bytes()
+    }
+
+    /// The status colour of a banner's marker.
+    pub fn tone_color(&self, t: Tone) -> Rgb {
+        self.map(t.color())
+    }
+
+    /// A banner's fill: the status colour at 12 % over `bg.raised` (DESIGN_SYSTEM §3.8).
+    pub fn tone_fill(&self, t: Tone) -> Rgb {
+        self.bg_raised.mix(self.tone_color(t), 31)
+    }
+}
 
 fn fg(c: Rgb) -> String {
     format!("\x1b[38;2;{};{};{}m", c.0, c.1, c.2)
@@ -269,6 +427,7 @@ impl Tone {
     }
 
     /// The banner fill: the status colour at 12 % over `bg.raised` (DESIGN_SYSTEM §3.8).
+    #[cfg(test)]
     pub fn fill(self) -> Rgb {
         BG_RAISED.mix(self.color(), 31)
     }
@@ -652,6 +811,67 @@ mod tests {
         let row = v.row_at(0);
         assert!((0..120).any(|x| row.cell(x).attrs.inverse()));
         assert!((0..120).all(|x| row.cell(x).attrs.fg == subak_term::screen::Color::Default));
+    }
+
+    /// Step 20: the light chrome is `kim-light` of the token file, and retinting maps every
+    /// dark token colour of a screen to its light role (and nothing else).
+    #[test]
+    fn the_light_chrome_matches_its_tokens_and_retints_screens() {
+        let doc: serde_json::Value =
+            serde_json::from_str(include_str!("../../../../design/tokens.json")).unwrap();
+        for c in [Chrome::KIM_DARK, Chrome::KIM_LIGHT] {
+            let colors = &doc["themes"][c.name]["color"];
+            let names = [
+                "bg.base",
+                "bg.raised",
+                "bg.overlay",
+                "bg.hover",
+                "bg.selected",
+                "border.subtle",
+                "border.strong",
+                "text.primary",
+                "text.secondary",
+                "text.muted",
+                "accent",
+                "focus.ring",
+                "status.success",
+                "status.warning",
+                "status.danger",
+                "status.info",
+            ];
+            for (name, v) in names.iter().zip(c.roles()) {
+                assert_eq!(
+                    Rgb::hex(colors[name].as_str().unwrap()),
+                    Some(v),
+                    "{} {name}",
+                    c.name
+                );
+            }
+        }
+        let l = Chrome::KIM_LIGHT;
+        assert_eq!(Chrome::for_theme("kim-light"), l);
+        assert_eq!(Chrome::for_theme("high-contrast"), Chrome::KIM_DARK);
+        let vt = format!(
+            "{}x{}y\x1b[1mz\x1b[38;2;1;2;3mw{RESET}",
+            fg(ACCENT),
+            bg(BG_RAISED)
+        );
+        let out = String::from_utf8(l.retint(vt.as_bytes())).unwrap();
+        assert_eq!(
+            out,
+            format!("\x1b[38;2;95;73;196mx\x1b[48;2;236;235;242my\x1b[1mz\x1b[38;2;1;2;3mw{RESET}")
+        );
+        assert_eq!(Chrome::KIM_DARK.retint(vt.as_bytes()), vt.as_bytes());
+        // A whole screen in the light theme: every colour it uses is a light token.
+        let screen = screen(&Phase::Connecting, "subak-x", 80, 24, &hints()).unwrap();
+        let light = String::from_utf8(l.retint(&screen)).unwrap();
+        assert!(light.contains("38;2;95;73;196"), "accent title");
+        assert!(!light.contains("38;2;183;166;245"), "no dark accent left");
+        assert_eq!(l.tone_fill(Tone::Info), l.bg_raised.mix(l.info, 31));
+        assert_eq!(
+            Chrome::KIM_DARK.tone_fill(Tone::Danger),
+            Tone::Danger.fill()
+        );
     }
 
     #[test]

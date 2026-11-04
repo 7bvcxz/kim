@@ -11,8 +11,8 @@
 //! marker drawn by the window), and High Contrast turns fills into reverse video.
 
 use super::screens::tokens::{
-    ACCENT, BG_BASE, BG_OVERLAY, BORDER_SUBTLE, DANGER, SUCCESS, TEXT_MUTED, TEXT_PRIMARY,
-    TEXT_SECONDARY, WARNING,
+    ACCENT, BG_BASE, BG_HOVER, BG_OVERLAY, BORDER_SUBTLE, DANGER, SUCCESS, TEXT_MUTED,
+    TEXT_PRIMARY, TEXT_SECONDARY, WARNING,
 };
 use subak_term::render::Rgb;
 
@@ -220,6 +220,20 @@ pub fn layout(
     cols: u16,
     first: usize,
 ) -> Bar {
+    layout_hover(items, active, edit, cols, first, None)
+}
+
+/// [`layout`] with the tab under the pointer (Step 20): an inactive hovered tab gets the
+/// `bg.hover` fill and its `×` the secondary text colour, so the hidden-tab action is easier to
+/// see before it is clicked. The columns and spans are the same as without a hover.
+pub fn layout_hover(
+    items: &[Item<'_>],
+    active: Option<usize>,
+    edit: Option<&Edit<'_>>,
+    cols: u16,
+    first: usize,
+    hover: Option<usize>,
+) -> Bar {
     let cols = usize::from(cols);
     let widths: Vec<usize> = items
         .iter()
@@ -272,8 +286,11 @@ pub fn layout(
         let w = widths[i];
         let start = col;
         let is_active = Some(i) == active;
+        let hovered = !is_active && Some(i) == hover;
         let fill = if is_active {
             bg(BG_BASE)
+        } else if hovered {
+            bg(BG_HOVER)
         } else {
             String::new()
         };
@@ -332,7 +349,10 @@ pub fn layout(
         put(
             &mut vt,
             &mut col,
-            &format!("{fill}{} × {RESET}", fg(TEXT_MUTED)),
+            &format!(
+                "{fill}{} × {RESET}",
+                fg(if hovered { TEXT_SECONDARY } else { TEXT_MUTED })
+            ),
         );
         spans.push((cell(start), cell(close_at), Hit::Tab(i)));
         spans.push((cell(close_at), cell(col), Hit::Close(i)));
@@ -420,6 +440,34 @@ mod tests {
             col += u16::from(subak_term::screen::char_width(c));
         }
         out
+    }
+
+    /// Step 20: a hovered inactive tab gets `bg.hover` and a brighter `×`; the text and the
+    /// clickable spans do not move, and the active tab is not changed by a hover.
+    #[test]
+    fn a_hovered_tab_is_filled_without_moving_anything() {
+        let list = items(&["one", "two", "three"]);
+        let plain = layout(&list, Some(0), None, 120, 0);
+        let hover = layout_hover(&list, Some(0), None, 120, 0, Some(1));
+        assert_eq!(text(&plain, 120), text(&hover, 120));
+        assert_eq!(plain.spans, hover.spans);
+        let mut v = TermView::new(120, 1, 0);
+        v.feed(&hover.vt);
+        let (a, b) = hover
+            .spans
+            .iter()
+            .find(|s| s.2 == Hit::Tab(1))
+            .map(|s| (s.0, s.1))
+            .unwrap();
+        let bg_of = |x: u16| v.row_at(0).cell(usize::from(x)).attrs.bg;
+        let hovered = subak_term::screen::Color::Rgb(BG_HOVER.0, BG_HOVER.1, BG_HOVER.2);
+        assert!((a..b).all(|x| bg_of(x) == hovered));
+        assert_ne!(bg_of(1), hovered, "the active tab keeps its fill");
+        assert_eq!(
+            layout_hover(&list, Some(1), None, 120, 0, Some(1)).vt,
+            layout(&list, Some(1), None, 120, 0).vt,
+            "hovering the active tab changes nothing"
+        );
     }
 
     #[test]

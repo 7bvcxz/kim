@@ -1952,7 +1952,7 @@ pub const MOUSE_FIELDS: &[Field] = &[
         required: true,
         default: Some("mouse_move"),
         label: "Mouse",
-        help: "Move the pointer, scroll the wheel or click a button. Every choice works from the keyboard alone.",
+        help: "Move the pointer, scroll the wheel or click a button. Every choice works from the keyboard alone; Windows' own Mouse Keys is the system alternative.",
     },
     Field {
         path: "steps[0].mode",
@@ -2040,7 +2040,7 @@ pub const MOUSE_FIELDS: &[Field] = &[
         required: false,
         default: Some("click"),
         label: "Click",
-        help: "Click, double click, or hold the button exactly as long as the keys are held (released on pause, lock and every stop).",
+        help: "Click, double click, or hold the button exactly as long as the keys are held (released on pause, lock and every stop). To keep a button down without holding keys, use Windows' ClickLock.",
     },
     Field {
         path: "steps[0].at",

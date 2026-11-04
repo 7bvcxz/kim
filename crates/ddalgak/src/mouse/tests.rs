@@ -3,7 +3,7 @@
 //! reads or moves the real pointer.
 
 use super::*;
-use crate::inject::{Recorder, SharedRecorder};
+use crate::inject::Recorder;
 
 /// Left: 2880 × 1620 at 150 % with negative x; primary: 1920 × 1080 at 100 %; right: 2560 × 1440 at
 /// 125 %, its top 360 px above the primary (the corners beyond each monitor are dead zones).
@@ -661,7 +661,6 @@ fn targets_that_refuse_input_stop_the_run_and_nothing_stays_pressed() {
         "injection_failed"
     );
     assert!(dead.held().is_empty());
-    let _ = SharedRecorder::default();
 }
 
 fn sim_schema(def: &str) -> Value {

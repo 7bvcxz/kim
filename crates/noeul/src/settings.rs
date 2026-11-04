@@ -1,16 +1,31 @@
-//! `config.toml` (NOEUL-FR-102): versioned settings, read at start.
+//! `config.toml` (NOEUL-FR-102): versioned settings, read at start and on change.
 //!
-//! Settings so far: `[general] tray_icon` (default `true`, NOEUL-FR-004; Step 49) and
+//! Settings so far: `[general] tray_icon` (default `true`, NOEUL-FR-004; Step 49),
 //! `[capture] keyboard_help` (`"first-run"` by default, `"always"` or `"never"`: the keyboard
-//! help inside the capture overlay; Step 50, ADR 0026). The rules that later settings inherit
-//! are implemented here:
+//! help inside the capture overlay; Step 50, ADR 0026), and since Step 51 (NOEUL-FR-024,
+//! NOEUL-FR-032):
+//!
+//! - `[capture] quick_save_folder`: an absolute folder for quick save (default: the user's
+//!   Pictures folder + `Noeul`);
+//! - `[gestures] double_click`: what a double-click inside a confirmed selection does, `"pin"`
+//!   (default), `"copy"`, `"save"` or `"none"`;
+//! - `[gestures] middle_click`: the same for a middle-click, `"pin"` (default), `"copy"` or
+//!   `"none"`;
+//! - `[gestures] preset`: `"noeul"` (default) or `"snipaste"`, the name of the opt-in
+//!   "Snipaste-style gestures" preset. `noeul config set gestures.preset snipaste` writes it with
+//!   the preset's values (double-click copies, middle-click pins) and the preset's keys into
+//!   `hotkeys.json` (`Enter` copies, `Ctrl+T` pins); `noeul config reset gestures` undoes both.
+//!
+//! The rules every setting follows:
 //!
 //! - a missing file means defaults;
 //! - a file that is not TOML, or a `schema_version` other than 1, leaves the defaults in place
 //!   and is reported (`newer_version` when it is higher; an older Noeul never rewrites it);
 //! - an invalid value falls back to its default with a message naming the key, never a crash;
-//! - unknown keys are kept: Noeul does not write this file yet, and when it does (settings
-//!   window, Step 61) it edits keys in place.
+//! - **writing** ([`set`], [`reset`]; `noeul config set|reset`) edits only the lines of the keys
+//!   it changes: comments, unknown keys and sections stay as they are. The edited text is parsed
+//!   again before it is written and must differ from the old one in exactly those keys;
+//!   otherwise nothing is written (`config_invalid`). The file is replaced atomically.
 //!
 //! Settings hold no secrets, pixels or clipboard content.
 //!
@@ -18,6 +33,8 @@
 //! first-run keyboard help was seen), in `%LOCALAPPDATA%\mouv\noeul\ui-state.json`, written once
 //! after the first capture finished from the overlay.
 
+use crate::error::{Code, NoeulError};
+use crate::overlay::{GestureAction, Gestures};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
@@ -52,6 +69,64 @@ impl KeyboardHelp {
     }
 }
 
+/// The gesture preset (`[gestures] preset`, NOEUL-FR-024).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Preset {
+    /// Noeul's own gestures: double-click and `Enter` pin.
+    Noeul,
+    /// The opt-in "Snipaste-style gestures": double-click and `Enter` copy, `Ctrl+T` and
+    /// middle-click pin.
+    Snipaste,
+}
+
+impl Preset {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Preset::Noeul => "noeul",
+            Preset::Snipaste => "snipaste",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Preset> {
+        [Preset::Noeul, Preset::Snipaste]
+            .into_iter()
+            .find(|p| p.as_str() == s)
+    }
+
+    /// The name shown in settings and the shortcut list.
+    pub fn title(self) -> &'static str {
+        match self {
+            Preset::Noeul => "Noeul gestures",
+            Preset::Snipaste => "Snipaste-style gestures",
+        }
+    }
+
+    /// The gesture values the preset sets.
+    pub fn gestures(self) -> Gestures {
+        match self {
+            Preset::Noeul => Gestures::default(),
+            Preset::Snipaste => Gestures {
+                double_click: GestureAction::Copy,
+                middle_click: GestureAction::Pin,
+            },
+        }
+    }
+
+    /// The overlay bindings the preset writes into `hotkeys.json` (`None`: the defaults).
+    pub fn bindings(self) -> &'static [(&'static str, &'static [&'static str])] {
+        match self {
+            Preset::Noeul => &[],
+            Preset::Snipaste => &[
+                ("capture.pin", &["Ctrl+T"]),
+                ("capture.copy", &["Ctrl+C", "Enter"]),
+            ],
+        }
+    }
+}
+
+/// The actions whose bindings a preset may change (reset by `noeul config reset gestures`).
+pub const PRESET_ACTIONS: &[&str] = &["capture.pin", "capture.copy"];
+
 /// Effective settings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Settings {
@@ -59,6 +134,12 @@ pub struct Settings {
     pub tray_icon: bool,
     /// The overlay's keyboard help (ADR 0026).
     pub keyboard_help: KeyboardHelp,
+    /// Where quick save writes; `None`: the user's Pictures folder + `Noeul` (NOEUL-FR-032).
+    pub quick_save_folder: Option<PathBuf>,
+    /// The double-click and middle-click inside a selection (NOEUL-FR-024).
+    pub gestures: Gestures,
+    /// The gesture preset's name (NOEUL-FR-024).
+    pub preset: Preset,
 }
 
 impl Default for Settings {
@@ -66,6 +147,9 @@ impl Default for Settings {
         Settings {
             tray_icon: true,
             keyboard_help: KeyboardHelp::FirstRun,
+            quick_save_folder: None,
+            gestures: Gestures::default(),
+            preset: Preset::Noeul,
         }
     }
 }
@@ -101,11 +185,18 @@ pub struct Loaded {
 
 impl Loaded {
     pub fn to_json(&self) -> Value {
+        let s = &self.settings;
         json!({
             "path": self.path.display().to_string(),
             "state": self.state.as_str(),
-            "tray_icon": self.settings.tray_icon,
-            "keyboard_help": self.settings.keyboard_help.as_str(),
+            "tray_icon": s.tray_icon,
+            "keyboard_help": s.keyboard_help.as_str(),
+            "quick_save_folder": s.quick_save_folder.as_ref().map(|p| p.display().to_string()),
+            "gestures": {
+                "double_click": s.gestures.double_click.as_str(),
+                "middle_click": s.gestures.middle_click.as_str(),
+                "preset": s.preset.as_str(),
+            },
             "problems": self.problems,
         })
     }
@@ -136,6 +227,95 @@ fn invalid(path: &Path, problem: &str) -> Loaded {
         state: State::Invalid,
         problems: vec![format!("{problem}; the default settings apply")],
     }
+}
+
+/// One known key: its section, name, the values it takes (for messages) and how a value is read.
+struct Key {
+    section: &'static str,
+    name: &'static str,
+    takes: &'static str,
+    default: &'static str,
+}
+
+/// Every key Noeul reads and `noeul config set` writes.
+const KEYS: &[Key] = &[
+    Key {
+        section: "general",
+        name: "tray_icon",
+        takes: "true or false",
+        default: "true",
+    },
+    Key {
+        section: "capture",
+        name: "keyboard_help",
+        takes: "\"first-run\", \"always\" or \"never\"",
+        default: "\"first-run\"",
+    },
+    Key {
+        section: "capture",
+        name: "quick_save_folder",
+        takes: "an absolute folder path",
+        default: "the Pictures folder + Noeul",
+    },
+    Key {
+        section: "gestures",
+        name: "double_click",
+        takes: "\"pin\", \"copy\", \"save\" or \"none\"",
+        default: "\"pin\"",
+    },
+    Key {
+        section: "gestures",
+        name: "middle_click",
+        takes: "\"pin\", \"copy\" or \"none\"",
+        default: "\"pin\"",
+    },
+    Key {
+        section: "gestures",
+        name: "preset",
+        takes: "\"noeul\" or \"snipaste\"",
+        default: "\"noeul\"",
+    },
+];
+
+/// The dotted names of every key `noeul config set` accepts.
+pub fn key_names() -> Vec<String> {
+    KEYS.iter()
+        .map(|k| format!("{}.{}", k.section, k.name))
+        .collect()
+}
+
+/// The sections that hold keys (`noeul config reset <section>`).
+pub const SECTIONS: &[&str] = &["general", "capture", "gestures"];
+
+/// Applies one value to `settings`; `Err` names what the key takes.
+fn apply(settings: &mut Settings, section: &str, name: &str, v: &toml::Value) -> Result<(), ()> {
+    let s = v.as_str();
+    match (section, name) {
+        ("general", "tray_icon") => settings.tray_icon = v.as_bool().ok_or(())?,
+        ("capture", "keyboard_help") => {
+            settings.keyboard_help = s.and_then(KeyboardHelp::parse).ok_or(())?;
+        }
+        ("capture", "quick_save_folder") => {
+            let p = s
+                .filter(|p| !p.trim().is_empty())
+                .map(PathBuf::from)
+                .filter(|p| p.is_absolute())
+                .ok_or(())?;
+            settings.quick_save_folder = Some(p);
+        }
+        ("gestures", "double_click") => {
+            settings.gestures.double_click = s.and_then(GestureAction::parse).ok_or(())?;
+        }
+        ("gestures", "middle_click") => {
+            settings.gestures.middle_click = s
+                .and_then(GestureAction::parse)
+                .filter(|g| *g != GestureAction::Save)
+                .ok_or(())?;
+        }
+        ("gestures", "preset") => settings.preset = s.and_then(Preset::parse).ok_or(())?,
+        _ => {}
+    }
+    Ok(())
 }
 
 pub fn parse(path: &Path, text: &str) -> Loaded {
@@ -173,32 +353,22 @@ pub fn parse(path: &Path, text: &str) -> Loaded {
     }
     let mut settings = Settings::default();
     let mut problems = Vec::new();
-    if let Some(general) = table.get("general") {
-        match general {
-            toml::Value::Table(g) => match g.get("tray_icon") {
-                None => {}
-                Some(toml::Value::Boolean(b)) => settings.tray_icon = *b,
-                Some(_) => problems.push(
-                    "`general.tray_icon` must be true or false; the default (true) applies"
-                        .to_string(),
-                ),
-            },
-            _ => problems.push("`general` must be a table; its defaults apply".to_string()),
-        }
-    }
-    if let Some(capture) = table.get("capture") {
-        match capture {
-            toml::Value::Table(c) => match c.get("keyboard_help") {
-                None => {}
-                Some(toml::Value::String(v)) if KeyboardHelp::parse(v).is_some() => {
-                    settings.keyboard_help = KeyboardHelp::parse(v).unwrap_or(KeyboardHelp::FirstRun);
+    for section in SECTIONS {
+        match table.get(*section) {
+            None => {}
+            Some(toml::Value::Table(t)) => {
+                for k in KEYS.iter().filter(|k| k.section == *section) {
+                    if let Some(v) = t.get(k.name)
+                        && apply(&mut settings, k.section, k.name, v).is_err()
+                    {
+                        problems.push(format!(
+                            "`{}.{}` must be {}; the default ({}) applies",
+                            k.section, k.name, k.takes, k.default
+                        ));
+                    }
                 }
-                Some(_) => problems.push(
-                    "`capture.keyboard_help` must be \"first-run\", \"always\" or \"never\"; the default (\"first-run\") applies"
-                        .to_string(),
-                ),
-            },
-            _ => problems.push("`capture` must be a table; its defaults apply".to_string()),
+            }
+            Some(_) => problems.push(format!("`{section}` must be a table; its defaults apply")),
         }
     }
     Loaded {
@@ -207,6 +377,302 @@ pub fn parse(path: &Path, text: &str) -> Loaded {
         state: State::User,
         problems,
     }
+}
+
+/// A TOML basic string.
+fn toml_string(s: &str) -> String {
+    let mut out = String::from("\"");
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => out.push_str(&format!("\\u{:04X}", u32::from(c))),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// The TOML text of `value` for `section.name`, after checking it (`usage` otherwise).
+fn literal(section: &str, name: &str, value: &str) -> Result<(String, toml::Value), NoeulError> {
+    let key = KEYS
+        .iter()
+        .find(|k| k.section == section && k.name == name)
+        .ok_or_else(|| unknown_key(&format!("{section}.{name}")))?;
+    let v = if section == "general" {
+        match value {
+            "true" => toml::Value::Boolean(true),
+            "false" => toml::Value::Boolean(false),
+            _ => toml::Value::String(value.to_string()),
+        }
+    } else {
+        toml::Value::String(value.to_string())
+    };
+    let mut probe = Settings::default();
+    if apply(&mut probe, section, name, &v).is_err() {
+        return Err(NoeulError::new(
+            Code::Usage,
+            format!("`{section}.{name}` must be {}", key.takes),
+        ));
+    }
+    let text = match &v {
+        toml::Value::Boolean(b) => b.to_string(),
+        toml::Value::String(s) => toml_string(s),
+        _ => unreachable!("only booleans and strings are written"),
+    };
+    Ok((text, v))
+}
+
+fn unknown_key(key: &str) -> NoeulError {
+    NoeulError::new(Code::Usage, format!("`{key}` is not a Noeul setting"))
+        .hint(format!("settings: {}", key_names().join(", ")))
+}
+
+/// Splits `section.name`.
+pub fn split_key(key: &str) -> Result<(&'static str, &'static str), NoeulError> {
+    let (s, n) = key.split_once('.').ok_or_else(|| unknown_key(key))?;
+    KEYS.iter()
+        .find(|k| k.section == s && k.name == n)
+        .map(|k| (k.section, k.name))
+        .ok_or_else(|| unknown_key(key))
+}
+
+/// The header name of a `[table]` line (not `[[array]]`), ignoring a trailing comment.
+fn header(line: &str) -> Option<&str> {
+    let t = line.trim();
+    if t.starts_with("[[") {
+        return Some("");
+    }
+    let rest = t.strip_prefix('[')?;
+    let end = rest.find(']')?;
+    let after = rest[end + 1..].trim();
+    (after.is_empty() || after.starts_with('#')).then(|| rest[..end].trim())
+}
+
+/// Whether `line` assigns `name` (`name = …`, `"name" = …`).
+fn assigns(line: &str, name: &str) -> bool {
+    let t = line.trim_start();
+    let rest = t
+        .strip_prefix(name)
+        .or_else(|| t.strip_prefix(&format!("\"{name}\"")));
+    rest.is_some_and(|r| r.trim_start().starts_with('='))
+}
+
+/// `text` with `section.name` set to `literal` (`None`: the key removed). The line of the key
+/// is replaced in place; a new key goes after the last line of its section; a missing section
+/// is appended.
+fn edit_text(text: &str, section: &str, name: &str, literal: Option<&str>) -> String {
+    let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
+    let mut current = String::new();
+    let mut section_end: Option<usize> = None; // index after the section's last content line
+    let mut found: Option<usize> = None;
+    for (i, line) in lines.iter().enumerate() {
+        if let Some(h) = header(line) {
+            current = h.to_string();
+            if current == section {
+                section_end = Some(i + 1);
+            }
+            continue;
+        }
+        if current == section {
+            if !line.trim().is_empty() {
+                section_end = Some(i + 1);
+            }
+            if found.is_none() && assigns(line, name) {
+                found = Some(i);
+            }
+        }
+    }
+    match (found, literal) {
+        (Some(i), Some(l)) => lines[i] = format!("{name} = {l}"),
+        (Some(i), None) => {
+            lines.remove(i);
+        }
+        (None, None) => {}
+        (None, Some(l)) => match section_end {
+            Some(end) => lines.insert(end, format!("{name} = {l}")),
+            None => {
+                if lines.last().is_some_and(|l| !l.trim().is_empty()) {
+                    lines.push(String::new());
+                }
+                lines.push(format!("[{section}]"));
+                lines.push(format!("{name} = {l}"));
+            }
+        },
+    }
+    let mut out = lines.join("\n");
+    out.push('\n');
+    out
+}
+
+/// One change of `noeul config set|reset`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Change {
+    pub key: String,
+    /// The value before (as TOML text; `None`: not in the file, so the default applied).
+    pub before: Option<String>,
+    pub after: Option<String>,
+}
+
+impl Change {
+    pub fn to_json(&self) -> Value {
+        json!({"key": self.key, "before": self.before, "after": self.after})
+    }
+}
+
+/// The result of an edit: the new text and what changed.
+#[derive(Debug, Clone)]
+pub struct Edited {
+    pub text: String,
+    pub changes: Vec<Change>,
+}
+
+fn value_text(v: Option<&toml::Value>) -> Option<String> {
+    match v? {
+        toml::Value::Boolean(b) => Some(b.to_string()),
+        toml::Value::String(s) => Some(toml_string(s)),
+        other => Some(format!("{other:?}")),
+    }
+}
+
+/// Reads the file for an edit: refuses an invalid or newer file (never rewritten).
+fn current(path: &Path) -> Result<String, NoeulError> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(format!("schema_version = {SCHEMA_VERSION}\n"));
+        }
+        Err(e) => return Err(NoeulError::io(path.display(), &e)),
+    };
+    let loaded = parse(path, &text);
+    match loaded.state {
+        State::Invalid => Err(NoeulError::new(
+            Code::ConfigInvalid,
+            format!("{} is invalid; nothing was changed", path.display()),
+        )
+        .hint("fix the file by hand, or delete it to start from the defaults")
+        .details(loaded.problems)),
+        State::NewerVersion => Err(NoeulError::new(
+            Code::ConfigFromNewerVersion,
+            format!(
+                "{} was written by a newer Noeul and is read-only; nothing was changed",
+                path.display()
+            ),
+        )
+        .hint("use the newer Noeul to change settings")),
+        _ => Ok(text),
+    }
+}
+
+/// Applies `edits` (`(section, name, Some(literal))` to set, `None` to remove) to `text` and
+/// checks the result: it must parse and differ from `text` in exactly the edited keys.
+fn checked_edit(
+    path: &Path,
+    text: &str,
+    edits: &[(&str, &str, Option<String>)],
+) -> Result<Edited, NoeulError> {
+    let refuse = |why: &str| {
+        NoeulError::new(
+            Code::ConfigInvalid,
+            format!(
+                "{} uses a layout Noeul cannot edit in place ({why}); nothing was changed",
+                path.display()
+            ),
+        )
+        .hint("edit the file by hand (keys go under [general], [capture] and [gestures])")
+    };
+    let before: toml::Table = text.parse().map_err(|_| refuse("not valid TOML"))?;
+    let mut out = text.to_string();
+    let mut changes = Vec::new();
+    for (section, name, lit) in edits {
+        out = edit_text(&out, section, name, lit.as_deref());
+        let old = before
+            .get(*section)
+            .and_then(toml::Value::as_table)
+            .and_then(|t| t.get(*name));
+        changes.push(Change {
+            key: format!("{section}.{name}"),
+            before: value_text(old),
+            after: lit.clone(),
+        });
+    }
+    let after: toml::Table = out
+        .parse()
+        .map_err(|_| refuse("the result would not parse"))?;
+    let strip = |t: &toml::Table| {
+        let mut t = t.clone();
+        for (section, name, _) in edits {
+            if let Some(toml::Value::Table(s)) = t.get_mut(*section) {
+                s.remove(*name);
+                if s.is_empty() {
+                    t.remove(*section);
+                }
+            }
+        }
+        t
+    };
+    if strip(&before) != strip(&after) {
+        return Err(refuse("other keys would change"));
+    }
+    for (section, name, lit) in edits {
+        let got = after
+            .get(*section)
+            .and_then(toml::Value::as_table)
+            .and_then(|t| t.get(*name));
+        if value_text(got) != *lit {
+            return Err(refuse("a key is defined in another form"));
+        }
+    }
+    Ok(Edited { text: out, changes })
+}
+
+/// `noeul config set`: the edited text for `values` (`(section.name, value)`), checked; nothing
+/// is written here.
+pub fn set(path: &Path, values: &[(&str, &str)]) -> Result<Edited, NoeulError> {
+    let text = current(path)?;
+    let mut edits = Vec::new();
+    for (key, value) in values {
+        let (section, name) = split_key(key)?;
+        let (lit, _) = literal(section, name, value)?;
+        edits.push((section, name, Some(lit)));
+    }
+    checked_edit(path, &text, &edits)
+}
+
+/// `noeul config reset`: the edited text with every key of `section` (all sections when `None`)
+/// removed, so the defaults apply; unknown keys and comments stay.
+pub fn reset(path: &Path, section: Option<&str>) -> Result<Edited, NoeulError> {
+    if let Some(s) = section
+        && !SECTIONS.contains(&s)
+    {
+        return Err(
+            NoeulError::new(Code::Usage, format!("`{s}` is not a settings section"))
+                .hint(format!("sections: {}", SECTIONS.join(", "))),
+        );
+    }
+    let text = current(path)?;
+    let edits: Vec<(&str, &str, Option<String>)> = KEYS
+        .iter()
+        .filter(|k| section.is_none_or(|s| s == k.section))
+        .map(|k| (k.section, k.name, None))
+        .collect();
+    checked_edit(path, &text, &edits)
+}
+
+/// Writes `text` to `path` atomically (a temporary file in the same folder, then a rename).
+pub fn write(path: &Path, text: &str) -> Result<(), NoeulError> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| NoeulError::io(dir.display(), &e))?;
+    }
+    let tmp = path.with_extension("toml.tmp");
+    std::fs::write(&tmp, text).map_err(|e| NoeulError::io(tmp.display(), &e))?;
+    std::fs::rename(&tmp, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        NoeulError::io(path.display(), &e)
+    })
 }
 
 /// What Noeul remembers about its own UI (not a setting; see the module documentation).
@@ -338,5 +804,181 @@ mod tests {
         std::fs::write(&f, b"{ broken").unwrap();
         assert_eq!(UiState::load(&f), UiState::default());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn gestures_and_the_quick_save_folder_are_read_with_fallbacks() {
+        let l = parse(&p(), "");
+        assert_eq!(l.settings.gestures, Gestures::default(), "pin by default");
+        assert_eq!(l.settings.preset, Preset::Noeul);
+        assert_eq!(l.settings.quick_save_folder, None);
+        assert_eq!(l.to_json()["gestures"]["double_click"], "pin");
+        let folder = if cfg!(windows) {
+            "C:\\\\Shots"
+        } else {
+            "/shots"
+        };
+        let l = parse(
+            &p(),
+            &format!(
+                "[gestures]\ndouble_click = \"copy\"\nmiddle_click = \"none\"\npreset = \"snipaste\"\n[capture]\nquick_save_folder = \"{folder}\"\n"
+            ),
+        );
+        assert!(l.problems.is_empty(), "{:?}", l.problems);
+        assert_eq!(l.settings.gestures.double_click, GestureAction::Copy);
+        assert_eq!(l.settings.gestures.middle_click, GestureAction::None);
+        assert_eq!(l.settings.preset, Preset::Snipaste);
+        assert!(l.settings.quick_save_folder.unwrap().is_absolute());
+        // Invalid values fall back to their defaults, naming the key.
+        let l = parse(
+            &p(),
+            "[gestures]\ndouble_click = \"close\"\nmiddle_click = \"save\"\npreset = 3\n[capture]\nquick_save_folder = \"relative\\\\dir\"\n",
+        );
+        assert_eq!(l.settings, Settings::default());
+        let keys: Vec<&str> = [
+            "gestures.double_click",
+            "gestures.middle_click",
+            "gestures.preset",
+            "capture.quick_save_folder",
+        ]
+        .into_iter()
+        .filter(|k| l.problems.iter().any(|m| m.contains(k)))
+        .collect();
+        assert_eq!(keys.len(), 4, "{:?}", l.problems);
+        assert_eq!(Preset::Snipaste.title(), "Snipaste-style gestures");
+        assert_eq!(
+            Preset::Snipaste.gestures().double_click,
+            GestureAction::Copy
+        );
+        assert_eq!(
+            Preset::Snipaste.bindings()[0],
+            ("capture.pin", &["Ctrl+T"][..])
+        );
+    }
+
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("noeul-settings-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("config.toml")
+    }
+
+    #[test]
+    fn set_edits_keys_in_place_and_keeps_comments_and_unknown_keys() {
+        let f = scratch("set");
+        // A missing file: created with the schema version and the section.
+        let e = set(&f, &[("gestures.double_click", "copy")]).unwrap();
+        assert_eq!(
+            e.text,
+            "schema_version = 1\n\n[gestures]\ndouble_click = \"copy\"\n"
+        );
+        assert_eq!(
+            e.changes,
+            [Change {
+                key: "gestures.double_click".into(),
+                before: None,
+                after: Some("\"copy\"".into())
+            }]
+        );
+        assert!(!f.exists(), "set only computes; write writes");
+        let original = "# my settings\nschema_version = 1\n\n[general]\ntray_icon = false # no icon\nfuture = 1\n\n[gestures]\n# keep this comment\ndouble_click = \"none\"\n\n[later]\nx = \"y\"\n";
+        std::fs::write(&f, original).unwrap();
+        let e = set(
+            &f,
+            &[
+                ("gestures.double_click", "pin"),
+                ("gestures.middle_click", "copy"),
+                (
+                    "capture.quick_save_folder",
+                    if cfg!(windows) {
+                        "C:\\Users\\me\\Pictures\\Shots"
+                    } else {
+                        "/home/me/shots"
+                    },
+                ),
+            ],
+        )
+        .unwrap();
+        write(&f, &e.text).unwrap();
+        let text = std::fs::read_to_string(&f).unwrap();
+        for kept in [
+            "# my settings",
+            "tray_icon = false # no icon",
+            "future = 1",
+            "# keep this comment",
+            "[later]",
+            "x = \"y\"",
+        ] {
+            assert!(text.contains(kept), "{kept:?} kept in:\n{text}");
+        }
+        assert!(
+            text.contains("double_click = \"pin\"\nmiddle_click = \"copy\""),
+            "{text}"
+        );
+        let l = load(&f);
+        assert!(l.problems.is_empty(), "{:?}", l.problems);
+        assert_eq!(l.settings.gestures.middle_click, GestureAction::Copy);
+        assert!(!l.settings.tray_icon, "untouched keys keep their values");
+        if cfg!(windows) {
+            assert_eq!(
+                l.settings.quick_save_folder,
+                Some(PathBuf::from("C:\\Users\\me\\Pictures\\Shots")),
+                "backslashes survive the TOML string"
+            );
+        }
+        // Values are checked; unknown keys are refused.
+        for (k, v) in [
+            ("gestures.double_click", "close"),
+            ("gestures.middle_click", "save"),
+            ("general.tray_icon", "yes"),
+            ("capture.quick_save_folder", "relative"),
+            ("gestures.preset", "other"),
+        ] {
+            assert_eq!(set(&f, &[(k, v)]).unwrap_err().code, Code::Usage, "{k} {v}");
+        }
+        let e = set(&f, &[("gestures.colour", "red")]).unwrap_err();
+        assert_eq!(e.code, Code::Usage);
+        assert!(e.hint.unwrap().contains("gestures.double_click"));
+        // Reset of a section removes its keys only (defaults apply), comments stay.
+        let e = reset(&f, Some("gestures")).unwrap();
+        write(&f, &e.text).unwrap();
+        let l = load(&f);
+        assert_eq!(l.settings.gestures, Gestures::default());
+        assert!(!l.settings.tray_icon);
+        assert!(
+            std::fs::read_to_string(&f)
+                .unwrap()
+                .contains("# keep this comment")
+        );
+        assert_eq!(reset(&f, Some("pins")).unwrap_err().code, Code::Usage);
+        let e = reset(&f, None).unwrap();
+        write(&f, &e.text).unwrap();
+        assert_eq!(load(&f).settings, Settings::default());
+        assert!(
+            std::fs::read_to_string(&f).unwrap().contains("future = 1"),
+            "unknown keys stay"
+        );
+        let _ = std::fs::remove_dir_all(f.parent().unwrap());
+    }
+
+    #[test]
+    fn files_noeul_cannot_edit_safely_are_never_rewritten() {
+        let f = scratch("refuse");
+        for (text, code) in [
+            ("this is = = not toml", Code::ConfigInvalid),
+            ("schema_version = 2\n", Code::ConfigFromNewerVersion),
+            // The key in another form: a dotted key at the top and an inline table.
+            ("gestures.double_click = \"copy\"\n", Code::ConfigInvalid),
+            (
+                "gestures = { double_click = \"copy\" }\n",
+                Code::ConfigInvalid,
+            ),
+        ] {
+            std::fs::write(&f, text).unwrap();
+            let e = set(&f, &[("gestures.double_click", "pin")]).unwrap_err();
+            assert_eq!(e.code, code, "{text:?}: {}", e.message);
+            assert_eq!(std::fs::read_to_string(&f).unwrap(), text, "untouched");
+        }
+        let _ = std::fs::remove_dir_all(f.parent().unwrap());
     }
 }

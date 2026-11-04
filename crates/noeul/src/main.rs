@@ -10,6 +10,7 @@
 //! and the global hotkeys; `capture`, `pin …` and `quit` ask it over the identity-checked local
 //! pipe. Noeul makes no network connection (NOEUL-NFR-008).
 
+mod config_cmd;
 mod hotkeys_cmd;
 mod instance;
 
@@ -21,16 +22,20 @@ use std::io::{IsTerminal, Write};
 use std::process::ExitCode;
 
 const AFTER_HELP: &str = "\
-While Noeul runs, F1 opens the region selection overlay (drag a rectangle, Enter pins it, Esc
-cancels; `noeul capture --interactive` does the same) and F3 pins the clipboard image.
+While Noeul runs, F1 opens the region selection overlay: drag a rectangle, then double-click
+inside it to pin it at once (also Enter, the toolbar's Pin button or a middle-click). Ctrl+C or
+Copy copies it, Ctrl+S or Save saves it where you choose, Ctrl+Shift+S quick-saves it, Esc or
+right-click outside cancels; `noeul capture --interactive` opens the same overlay. F3 pins the
+clipboard image. The double-click can copy, save or do nothing instead
+(`noeul config set gestures.double_click copy`), and `noeul config set gestures.preset snipaste`
+switches to Snipaste-style gestures (double-click and Enter copy, Ctrl+T pins).
 Pins float on top: drag to move, wheel or Plus/Minus to zoom, 0 or middle-click for 100 %,
 H hides, Esc closes, Shift+Esc destroys, right-click (or Shift+F10) opens the pin's menu;
 `noeul pin list/hide/show/close` reach them from scripts. Pins live in memory only and do not
 survive a restart.
-Not in this build (labeled planned): double-click to pin and the toolbar (Step 51), copy and
-save (51), window detection and the magnifier (52), pin transforms, opacity and click-through
-(54), annotation (56), settings window (61), capture to a file or the clipboard and
-`noeul pin <file>` (62).
+Not in this build (labeled planned): window detection and the magnifier (52), pin transforms,
+opacity and click-through (54), annotation (56), settings window (61), capture to a file or the
+clipboard from the command line and `noeul pin <file>` (62).
 
 Exit codes: 0 ok · 1 failure (I/O, permission) · 2 usage · 3 not found (not running, no pin)
             4 integrity (protocol, identity) · 5 incompatible or unsupported platform
@@ -47,13 +52,14 @@ Exit codes: 0 ok · 1 failure (I/O, permission) · 2 usage · 3 not found (not r
     about = "Noeul — small native screenshot and floating-pin tool (pre-alpha)",
     long_about = "Noeul pins pictures to the desktop as floating windows. This pre-alpha build \
         has the resident instance (`noeul start`), its optional tray icon, F1 to select a region \
-        over a frozen picture of every monitor and pin it with Enter, F3 to pin the clipboard \
-        image, pins of a screen region or the clipboard requested from the command line, and \
-        the floating pin engine: always-on-top pins that move, zoom, hide, show and close \
-        independently, each with its own context menu.\n\n\
-        Noeul never captures on its own, never watches the clipboard, writes no picture to disk, \
-        uses no network, installs no hook or service, and never captures a locked, secure or \
-        other user's desktop.",
+        over a frozen picture of every monitor and pin it with a double-click inside it (or \
+        Enter), copy it or save it, F3 to pin the clipboard image, pins of a screen region or \
+        the clipboard requested from the command line, and the floating pin engine: \
+        always-on-top pins that move, zoom, hide, show and close independently, each with its \
+        own context menu.\n\n\
+        Noeul never captures on its own, never watches the clipboard, writes a picture to disk \
+        only when you save one, uses no network, installs no hook or service, and never \
+        captures a locked, secure or other user's desktop.",
     after_help = AFTER_HELP
 )]
 struct Cli {
@@ -105,7 +111,7 @@ enum Command {
     /// registers a hotkey or opens a window)
     #[command(subcommand)]
     Hotkeys(hotkeys_cmd::HotkeysCommand),
-    /// Settings and paths (read-only)
+    /// Settings and paths: show them, change one (`config set`), reset them (`config reset`)
     #[command(subcommand)]
     Config(ConfigCommand),
     /// Noeul's capabilities document: its commands and what each may change (read-only)
@@ -269,6 +275,11 @@ pub struct DryRun {
 enum ConfigCommand {
     /// Effective settings and the per-user paths
     Show,
+    /// Change one setting in config.toml (e.g. `gestures.double_click copy`, or
+    /// `gestures.preset snipaste` for the opt-in Snipaste-style gestures)
+    Set(config_cmd::SetArgs),
+    /// Reset settings to their defaults: one section (general, capture, gestures) or all
+    Reset(config_cmd::ResetArgs),
 }
 
 /// Output options shared by every command (docs/CLI_CONTRACT.md §3–§4).
@@ -382,6 +393,8 @@ fn main() -> ExitCode {
         },
         Command::Hotkeys(c) => hotkeys_cmd::run(c, &ctx),
         Command::Config(ConfigCommand::Show) => instance::config_show(),
+        Command::Config(ConfigCommand::Set(a)) => config_cmd::set(&ctx, a),
+        Command::Config(ConfigCommand::Reset(a)) => config_cmd::reset(&ctx, a),
         Command::Capabilities => Ok(capabilities()),
         Command::Version => Ok(version()),
     };
@@ -407,6 +420,8 @@ fn command_name(c: &Command) -> &'static str {
         },
         Command::Hotkeys(c) => hotkeys_cmd::command_name(c),
         Command::Config(ConfigCommand::Show) => "config.show",
+        Command::Config(ConfigCommand::Set(_)) => "config.set",
+        Command::Config(ConfigCommand::Reset(_)) => "config.reset",
         Command::Capabilities => "capabilities",
         Command::Version => "version",
     }

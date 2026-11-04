@@ -1,0 +1,20 @@
+{
+  "type": "response",
+  "id": 8,
+  "result": {
+    "reloaded": true,
+    "settings": {
+      "path": "C:\\Users\\me\\AppData\\Roaming\\mouv\\noeul\\config.toml",
+      "state": "user",
+      "tray_icon": true,
+      "keyboard_help": "first-run",
+      "quick_save_folder": "C:\\Users\\me\\Pictures\\Shots",
+      "gestures": {
+        "double_click": "copy",
+        "middle_click": "pin",
+        "preset": "snipaste"
+      },
+      "problems": []
+    }
+  }
+}

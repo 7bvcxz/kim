@@ -225,3 +225,13 @@ Against the budgets:
   they are created not topmost and `WS_EX_NOACTIVATE`, and a pin's context menu is never opened
   under the hook. §5's `capture.pin` now goes through `App::pin_selection`, the engine's entry
   point that Step 51's double-click also uses.
+- 2026-11-04 (Step 51): [ADR 0032](0032-noeul-double-click-pin-and-outputs.md) adds what §4 and
+  §5 left to Step 51. A click without a drag inside a confirmed selection may now be the first
+  press of the double-click gesture (Noeul counts presses itself; the window class still has no
+  `CS_DBLCLKS`); a middle-click inside runs `[gestures] middle_click`; a right-click inside opens
+  the selection's context menu instead of doing nothing; the overlay gains the toolbar and
+  `capture.copy`, `capture.save` and `capture.quick-save`, all through the same
+  `CaptureSelection`. §6's first-run help names the double-click and the copy and save keys. §8's
+  test hook now also keeps the outputs off the user's clipboard, screen and Pictures folder
+  (ADR 0032 §5). `noeul status` reports `captures.copied`, `captures.saved` and the overlay's
+  keyboard `focus`.

@@ -62,6 +62,8 @@
     "captures": {
       "started": 1,
       "pinned": 1,
+      "copied": 0,
+      "saved": 0,
       "cancelled": 0,
       "open": false
     },

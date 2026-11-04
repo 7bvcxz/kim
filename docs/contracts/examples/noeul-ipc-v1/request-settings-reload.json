@@ -1,0 +1,6 @@
+{
+  "type": "request",
+  "id": 8,
+  "method": "settings.reload",
+  "params": {}
+}

@@ -329,7 +329,7 @@ const SECRET_WORDS: &[&str] = &[
     "cookie",
 ];
 
-fn secret_name(name: &str) -> bool {
+pub fn secret_name(name: &str) -> bool {
     let n = name.trim_start_matches(['-', '/']).to_ascii_lowercase();
     !n.is_empty() && SECRET_WORDS.iter().any(|w| n.contains(w))
 }

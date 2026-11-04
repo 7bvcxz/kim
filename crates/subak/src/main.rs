@@ -20,6 +20,11 @@ mod output;
 mod proto;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod pty;
+// Wired into the Host in the next commit of Step 13.
+#[allow(dead_code)]
+mod redact;
+#[allow(dead_code)]
+mod screen;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod session;
 

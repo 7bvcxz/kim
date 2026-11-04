@@ -103,7 +103,8 @@ pub struct Attrs {
 }
 
 impl Attrs {
-    fn is_default(&self) -> bool {
+    /// Default colours and no attribute.
+    pub fn is_default(&self) -> bool {
         *self == Self::default()
     }
 
@@ -453,6 +454,16 @@ impl Line {
 /// (`ESC ] 8 ; … ESC \`).
 fn strip_vt(vt: &str) -> String {
     let mut out = String::with_capacity(vt.len());
+    strip_vt_into(vt, &mut out);
+    out
+}
+
+/// [`strip_vt`] appending to `out` (no allocation when `out` has room).
+fn strip_vt_into(vt: &str, out: &mut String) {
+    if !vt.contains('\x1b') {
+        out.push_str(vt);
+        return;
+    }
     let mut it = vt.chars().peekable();
     while let Some(c) = it.next() {
         if c != '\x1b' {
@@ -481,7 +492,6 @@ fn strip_vt(vt: &str) -> String {
             _ => {}
         }
     }
-    out
 }
 
 /// Bounds of a pane's history.
@@ -908,6 +918,22 @@ impl Screen {
         fit_row(&mut row, usize::from(cols.max(1)));
         row.wrapped = line.wrapped;
         Some(row)
+    }
+
+    /// History line `i` (0 = the oldest kept) as plain text appended to `out` — its characters
+    /// in column order, a wide character once, combining marks after their character, trailing
+    /// blanks of an unwrapped line left out — without decoding it into cells: what a search
+    /// reads ([`crate::search`]). Returns whether the line continues on the next one (a soft
+    /// wrap), or `None` when there is no such line.
+    pub fn history_text(&self, i: usize, out: &mut String) -> Option<bool> {
+        let line = self.history.lines.get(i)?;
+        strip_vt_into(&line.vt, out);
+        Some(line.wrapped)
+    }
+
+    /// Whether history line `i` continues on the next one (a soft wrap).
+    pub fn history_wrapped(&self, i: usize) -> Option<bool> {
+        self.history.lines.get(i).map(|l| l.wrapped)
     }
 
     /// The window title (OSC 0/2).

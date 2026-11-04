@@ -25,7 +25,11 @@
 //! screen), and closes itself after `--test-max-seconds`.
 
 use super::Options;
+use super::ask::{Answer, Question, Topic};
+use super::clip::{self, Clipboard, FakeClipboard, FakeOpener, FakeSavePicker, Opener};
 use super::compose;
+use super::export::{self, Export};
+use super::find::{Edit, FindBar, Toggle};
 use super::keys::{self, Action, Matcher, Outcome, Press, Typed, vk};
 use super::layout::{self, Cells, Rect};
 use super::model::{Confirm, Effect, Frame as Data, Model, Phase, Want};
@@ -42,9 +46,11 @@ use std::process::ExitCode;
 use std::ptr::{null, null_mut};
 use std::sync::Arc;
 use std::time::Instant;
-use subak_term::render::{Frame, RenderOptions, Renderer, Rgb, Theme};
+use subak_term::links::{self, Kind};
+use subak_term::render::{Frame, RenderOptions, Renderer, Rgb, Theme, html};
 use subak_term::{
-    Key, Mods, MouseAction, MouseButton, MouseEvent, MouseOutcome, SelectMode, TermView,
+    Key, Mods, Motion, MouseAction, MouseButton, MouseEvent, MouseOutcome, PasteCheck, SelectMode,
+    Span, TermView,
 };
 use windows_sys::Win32::Foundation::{
     GENERIC_READ, GENERIC_WRITE, HANDLE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
@@ -63,12 +69,16 @@ use windows_sys::Win32::System::Console::{
 };
 use windows_sys::Win32::System::DataExchange::{
     COPYDATASTRUCT, CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard,
-    SetClipboardData,
+    RegisterClipboardFormatW, SetClipboardData,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
 use windows_sys::Win32::System::Ole::CF_UNICODETEXT;
 use windows_sys::Win32::UI::Accessibility::{HCF_HIGHCONTRASTON, HIGHCONTRASTW};
+use windows_sys::Win32::UI::Controls::Dialogs::{
+    GetSaveFileNameW, OFN_EXPLORER, OFN_NOCHANGEDIR, OFN_OVERWRITEPROMPT, OFN_PATHMUSTEXIST,
+    OPENFILENAMEW,
+};
 use windows_sys::Win32::UI::HiDpi::{
     AdjustWindowRectExForDpi, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForMonitor,
     GetDpiForWindow, MDT_EFFECTIVE_DPI, SetProcessDpiAwarenessContext,
@@ -81,6 +91,7 @@ use windows_sys::Win32::UI::Input::Ime::{
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     GetDoubleClickTime, GetKeyState, ReleaseCapture, SetCapture, ToUnicode,
 };
+use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CREATESTRUCTW, CS_DBLCLKS, CW_USEDEFAULT, CreatePopupMenu, CreateWindowExW,
     DefWindowProcW, DestroyMenu, DestroyWindow, DispatchMessageW, GetClientRect, GetMessageW,
@@ -121,6 +132,17 @@ const CMD_CLOSE: u32 = 5;
 const CMD_NEW: u32 = 6;
 /// Start the floating icon and Terminal manager (`subak-gui --float`, Step 18).
 const CMD_FLOAT: u32 = 7;
+/// The pane's commands (Step 19): the Menu key's menu and Ctrl+right click in the pane.
+const CMD_COPY: u32 = 10;
+const CMD_COPY_HTML: u32 = 11;
+const CMD_PASTE: u32 = 12;
+const CMD_PASTE_LINE: u32 = 13;
+const CMD_SELECT_ALL: u32 = 14;
+const CMD_MARK: u32 = 15;
+const CMD_FIND: u32 = 16;
+const CMD_SAVE: u32 = 17;
+const CMD_OPEN_LINK: u32 = 18;
+const CMD_COPY_LINK: u32 = 19;
 /// `CMD_SHOW + k`: show the `k`-th hidden Terminal again.
 const CMD_SHOW: u32 = 100;
 /// `dwData` of a test command (`WM_COPYDATA`): "SUBK".
@@ -197,6 +219,12 @@ enum After {
         items: Vec<(u32, String, bool)>,
         at: (i32, i32),
         tab: isize,
+    },
+    /// The save dialog for an export the user agreed to (its own modal loop); `hide`: with the
+    /// secret-looking values hidden.
+    SaveDialog {
+        suggested: String,
+        hide: bool,
     },
 }
 
@@ -288,7 +316,23 @@ struct App {
     reported_tabs: Value,
     /// The window's last restored (not maximized or minimized) outer rectangle.
     normal: Option<Rect>,
-    test_clipboard: String,
+    /// The clipboard, the link opener and the export's save dialog: the system's, or recording
+    /// fakes in the off-screen test window (Step 19).
+    clipboard: Box<dyn Clipboard>,
+    opener: Box<dyn Opener>,
+    save_picker: FakeSavePicker,
+    /// The search bar (Step 19), while open.
+    find: Option<FindBar>,
+    /// The bar's caret column, for the IME.
+    find_caret: u16,
+    /// The pane's view was replaced (a snapshot): the next refresh searches it whole.
+    find_stale: bool,
+    /// A question before a paste, a link or an export (Step 19).
+    ask: Option<Question>,
+    /// The export the question is about (kept until it is answered).
+    export: Option<Export>,
+    /// The link under the pointer when the pane menu opened.
+    menu_link: Option<links::Found>,
     title: String,
     frames: u64,
     bytes: u64,
@@ -661,17 +705,26 @@ impl App {
         })
     }
 
-    /// Rebuilds the banner: the busy confirmation, else a pending shortcut sequence, else a
-    /// notice, else the phase's banner.
+    /// Rebuilds the banner: the busy confirmation, else a question (paste, link, export), else
+    /// the search bar, else a pending shortcut sequence, else a notice, else the phase's banner.
     fn rebuild_banner(&mut self) {
+        enum Content {
+            Confirm,
+            Ask,
+            Find,
+            Text(Banner),
+        }
         let hc = self.hc_theme();
-        let content: Option<(screens::Tone, Option<Banner>)> = if let Some(c) = &self.confirm {
-            let _ = c;
-            Some((screens::Tone::Danger, None))
+        let content = if self.confirm.is_some() {
+            Some((screens::Tone::Danger, Content::Confirm))
+        } else if self.ask.is_some() {
+            Some((screens::Tone::Warning, Content::Ask))
+        } else if self.find.is_some() {
+            Some((screens::Tone::Info, Content::Find))
         } else if let Some(keys) = self.matcher.pending_keys() {
             Some((
                 screens::Tone::Info,
-                Some(Banner {
+                Content::Text(Banner {
                     tone: screens::Tone::Info,
                     text: format!("{keys} … waiting for the next key (Esc cancels)"),
                 }),
@@ -679,15 +732,15 @@ impl App {
         } else if let Some(n) = &self.notice {
             Some((
                 screens::Tone::Info,
-                Some(Banner {
+                Content::Text(Banner {
                     tone: screens::Tone::Info,
                     text: format!("{n} (any key hides this)"),
                 }),
             ))
         } else {
-            screens::banner(&self.model.phase, &self.hints()).map(|b| (b.tone, Some(b)))
+            screens::banner(&self.model.phase, &self.hints()).map(|b| (b.tone, Content::Text(b)))
         };
-        let Some((tone, text)) = content else {
+        let Some((tone, content)) = content else {
             if self.banner.take().is_some() {
                 self.invalidate_all();
             }
@@ -708,12 +761,14 @@ impl App {
             _ => make_renderer(theme.clone(), self.prefs.font_size, self.scale(), 4.0),
         };
         r.set_theme(theme);
+        r.set_focused(self.focused);
         let m = r.metrics();
         let cols = ((self.client.0.saturating_sub(2 * r.padding())) / m.width.max(1)).max(1);
         let cols = u16::try_from(cols).unwrap_or(u16::MAX);
         let mut view = TermView::new(cols, 1, 0);
-        let (vt, b) = match (&text, &mut self.confirm) {
-            (None, Some(c)) => {
+        let (vt, b) = match content {
+            Content::Confirm => {
+                let Some(c) = &mut self.confirm else { return };
                 let (vt, spans) = screens::confirm_vt(&c.info, c.focus, cols);
                 c.spans = spans;
                 (
@@ -724,13 +779,36 @@ impl App {
                     },
                 )
             }
-            (Some(b), _) => (screens::banner_vt(b, cols), b.clone()),
-            (None, None) => return,
+            Content::Ask => {
+                let Some(q) = &mut self.ask else { return };
+                let vt = q.vt(cols);
+                (
+                    vt,
+                    Banner {
+                        tone,
+                        text: q.words(),
+                    },
+                )
+            }
+            Content::Find => {
+                let Some(f) = &mut self.find else { return };
+                let (vt, caret) = f.vt(cols);
+                self.find_caret = caret;
+                (
+                    vt,
+                    Banner {
+                        tone,
+                        text: format!("find: {}", f.status()),
+                    },
+                )
+            }
+            Content::Text(b) => (screens::banner_vt(&b, cols), b),
         };
         view.feed(&if hc { screens::high_contrast(&vt) } else { vt });
         r.render(&view);
         self.banner = Some((b, Overlay { renderer: r }));
         self.invalidate_all();
+        self.place_ime();
     }
 
     /// Draws the IME composition inline at the cursor (DESIGN_SYSTEM §4.4): an underlined run
@@ -787,6 +865,19 @@ impl App {
             return (
                 (self.bar.pad_x + u32::from(col) * m.width) as i32,
                 y as i32,
+                m.height as i32,
+            );
+        }
+        if self.find.is_some()
+            && self.ask.is_none()
+            && self.confirm.is_none()
+            && let Some((_, o)) = &self.banner
+        {
+            let m = o.renderer.metrics();
+            let pad = o.renderer.padding();
+            return (
+                (pad + u32::from(self.find_caret) * m.width) as i32,
+                (self.top() + pad) as i32,
                 m.height as i32,
             );
         }
@@ -1308,6 +1399,7 @@ impl App {
         }
         self.pane = v;
         self.drag = None;
+        self.find_stale = true;
     }
 
     fn on_phase(&mut self) {
@@ -1432,6 +1524,23 @@ impl App {
             fed = true;
         }
         if fed {
+            // Step 19: an open search follows the output without moving the view; the current
+            // match stays selected if it was, and a selection the user made is left alone.
+            if let Some(f) = &mut self.find {
+                let was = f.current.map(|c| c.1);
+                let selected = was.is_some() && self.pane.selection_span() == was;
+                f.refresh(&self.pane, std::mem::take(&mut self.find_stale));
+                let (spans, index, cur) = (
+                    f.matches().to_vec(),
+                    f.current.map(|c| c.0),
+                    f.current.map(|c| c.1),
+                );
+                self.pane.set_highlights(spans, index);
+                if selected && let Some(span) = cur {
+                    self.pane.select_span(span);
+                }
+                self.rebuild_banner();
+            }
             // Device reports the program asked for: this interactive view answers (ADR 0036).
             let replies = self.pane.take_replies();
             self.input(&replies);
@@ -1485,6 +1594,22 @@ impl App {
         if self.rename.is_some() {
             return self.rename_key(code, m);
         }
+        // Step 19: a question owns the keys; the search bar and mark mode take their own keys
+        // first and leave shortcut chords to the matcher.
+        if self.ask.is_some() {
+            self.ask_key(code, m);
+            return true;
+        }
+        if self.find.is_some()
+            && let Some(handled) = self.find_key(code, m)
+        {
+            return handled;
+        }
+        if self.pane.marking()
+            && let Some(handled) = self.mark_key(code, m)
+        {
+            return handled;
+        }
         // 2. (The Ctrl+B prefix table is Step 23's.) 3. The shortcuts (hotkey contract).
         match self.matcher.press(p) {
             Outcome::Fire(a) => {
@@ -1515,12 +1640,22 @@ impl App {
         }
         // The context-menu key opens the shown tab's menu (reserved navigation, §3.5).
         if code == vk::APPS && m == Mods::NONE {
-            if let Some(i) = self.model.active() {
+            if self.model.phase.shows_pane() {
+                self.menu_link = None;
+                self.open_pane_menu(None);
+            } else if let Some(i) = self.model.active() {
                 self.open_menu(Some(i), None);
             } else {
                 self.open_menu(None, None);
             }
             return true;
+        }
+        // Keys that are neither the search field's nor a shortcut reach nothing while it is open
+        // (characters still arrive as WM_CHAR, for the field), and neither do keys that mark
+        // mode does not use (a character leaves it and types).
+        // (Ctrl+Alt is AltGr on many layouts: its characters still arrive for the field.)
+        if self.find.is_some() || self.pane.marking() {
+            return keys::special_key(code).is_some() || m.ctrl != m.alt;
         }
         // 4. The program, or the state screen.
         match self.model.phase {
@@ -1707,7 +1842,15 @@ impl App {
     }
 
     fn type_char(&mut self, c: char, alt: bool, held: Mods) {
-        if self.confirm.is_some() {
+        if self.confirm.is_some() || self.ask.is_some() {
+            return;
+        }
+        if let Some(f) = &mut self.find {
+            // Plain and Shift characters, and AltGr's (Ctrl+Alt); not Ctrl or Alt chords.
+            let altgr = held.ctrl && held.alt;
+            if !alt && (!held.ctrl || altgr) && f.insert(c) {
+                self.find_changed();
+            }
             return;
         }
         if self.rename.is_some() {
@@ -1738,6 +1881,12 @@ impl App {
         if self.confirm.take().is_some() {
             self.rebuild_banner();
         }
+        self.end_find(false);
+        if self.ask.take().is_some() {
+            self.export = None;
+            self.rebuild_banner();
+        }
+        self.pane.mark_end(false);
         if matches!(self.model.phase, Phase::Attached { .. })
             && let Some(report) = self.pane.focus(false)
         {
@@ -1781,8 +1930,20 @@ impl App {
                 }
             }
             Action::RenameTerminal => self.start_rename(),
-            Action::Copy => self.copy(),
-            Action::Paste => self.paste(),
+            Action::Copy => self.copy(false),
+            Action::Paste => self.paste(false),
+            Action::CopyHtml => self.copy(true),
+            Action::PasteOneLine => self.paste(true),
+            Action::SelectAll => {
+                if self.model.phase.shows_pane() {
+                    self.end_find(true);
+                    self.pane.select_all();
+                    self.redraw();
+                }
+            }
+            Action::MarkMode => self.toggle_mark(),
+            Action::FindOpen => self.open_find(),
+            Action::SaveOutput => self.ask_export(),
             Action::ZoomIn => self.set_font_size(Prefs::zoomed(self.prefs.font_size, 1)),
             Action::ZoomOut => self.set_font_size(Prefs::zoomed(self.prefs.font_size, -1)),
             Action::ZoomReset => self.set_font_size(Prefs::zoomed(self.prefs.font_size, 0)),
@@ -1816,14 +1977,85 @@ impl App {
         self.apply(fx);
     }
 
-    /// The tab menu of tab `tab` (or of the bar), at a client point (`None`: under the tab).
-    fn open_menu(&mut self, tab: Option<usize>, at: Option<(i32, i32)>) {
+    /// The pane's menu (the Menu key, Ctrl+right click; Step 19): copy, paste, select, find,
+    /// save, the link under the pointer, then the shown tab's items. At a client point (`None`:
+    /// under the tab).
+    fn open_pane_menu(&mut self, at: Option<(i32, i32)>) {
         let keys = |a| {
             self.matcher
                 .keys_for(a)
                 .map_or_else(String::new, |k| format!("\t{k}"))
         };
+        let live = matches!(self.model.phase, Phase::Attached { .. });
+        let sel = self.pane.has_selection();
         let mut items: Vec<(u32, String, bool)> = Vec::new();
+        if let Some(l) = &self.menu_link {
+            let ok = links::validate(&l.target).is_ok();
+            let shown: String = l.target.chars().take(60).collect();
+            items.push((
+                CMD_OPEN_LINK,
+                if ok {
+                    format!("Open link {shown}")
+                } else {
+                    format!("Link not opened (only http and https): {shown}")
+                },
+                ok,
+            ));
+            items.push((CMD_COPY_LINK, "Copy link".into(), true));
+            items.push((0, String::new(), true));
+        }
+        items.push((CMD_COPY, format!("Copy{}", keys(Action::Copy)), sel));
+        items.push((
+            CMD_COPY_HTML,
+            format!("Copy with colours (HTML){}", keys(Action::CopyHtml)),
+            sel,
+        ));
+        items.push((CMD_PASTE, format!("Paste{}", keys(Action::Paste)), live));
+        items.push((
+            CMD_PASTE_LINE,
+            format!("Paste as one line{}", keys(Action::PasteOneLine)),
+            live,
+        ));
+        items.push((0, String::new(), true));
+        items.push((
+            CMD_SELECT_ALL,
+            format!("Select all{}", keys(Action::SelectAll)),
+            true,
+        ));
+        items.push((
+            CMD_MARK,
+            format!("Select with the keyboard{}", keys(Action::MarkMode)),
+            true,
+        ));
+        items.push((CMD_FIND, format!("Find…{}", keys(Action::FindOpen)), true));
+        items.push((
+            CMD_SAVE,
+            format!("Save output…{}", keys(Action::SaveOutput)),
+            true,
+        ));
+        items.push((0, String::new(), true));
+        let tab = self.model.active();
+        self.open_menu_with(items, tab, at);
+    }
+
+    /// The tab menu of tab `tab` (or of the bar), at a client point (`None`: under the tab).
+    fn open_menu(&mut self, tab: Option<usize>, at: Option<(i32, i32)>) {
+        self.open_menu_with(Vec::new(), tab, at);
+    }
+
+    /// A menu: `lead` items, then the tab menu of `tab` (or of the bar).
+    fn open_menu_with(
+        &mut self,
+        lead: Vec<(u32, String, bool)>,
+        tab: Option<usize>,
+        at: Option<(i32, i32)>,
+    ) {
+        let keys = |a| {
+            self.matcher
+                .keys_for(a)
+                .map_or_else(String::new, |k| format!("\t{k}"))
+        };
+        let mut items: Vec<(u32, String, bool)> = lead;
         let connected = self.model.connected();
         if let Some(t) = tab.and_then(|i| self.model.tabs().get(i)) {
             let n = self.model.tabs().len();
@@ -1944,6 +2176,29 @@ impl App {
             }
             CMD_NEW => self.run(Action::NewTerminal),
             CMD_FLOAT => self.start_float(),
+            CMD_COPY => self.run(Action::Copy),
+            CMD_COPY_HTML => self.run(Action::CopyHtml),
+            CMD_PASTE => self.run(Action::Paste),
+            CMD_PASTE_LINE => self.run(Action::PasteOneLine),
+            CMD_SELECT_ALL => self.run(Action::SelectAll),
+            CMD_MARK => self.run(Action::MarkMode),
+            CMD_FIND => self.run(Action::FindOpen),
+            CMD_SAVE => self.run(Action::SaveOutput),
+            CMD_OPEN_LINK | CMD_COPY_LINK => {
+                if let Some(l) = self.menu_link.take() {
+                    if cmd == CMD_COPY_LINK {
+                        self.copy_text(&l.target);
+                    } else if l.kind == Kind::Hyperlink {
+                        // A hyperlink's text may not be its target: shown first.
+                        if let Ok(t) = links::validate(&l.target) {
+                            self.ask = Some(Question::link(t, Kind::Hyperlink, None));
+                            self.rebuild_banner();
+                        }
+                    } else {
+                        self.open_link(&l.target);
+                    }
+                }
+            }
             c if c >= CMD_SHOW => {
                 if let Some(h) = self.model.hidden().get((c - CMD_SHOW) as usize).cloned() {
                     self.leave_pane();
@@ -1962,33 +2217,75 @@ impl App {
         }
     }
 
-    fn copy(&mut self) {
+    /// Copies the selection: plain text (CR LF line ends), and with `html` also the HTML Format
+    /// with the theme's colours (Step 19). Clears the selection, as Windows Terminal does.
+    fn copy(&mut self, html: bool) {
         if !self.model.phase.shows_pane() {
             return;
         }
         let Some(text) = self.pane.selected_text() else {
             return;
         };
-        if self.opts.test {
-            self.test_clipboard = text;
-        } else {
-            set_clipboard(self.hwnd, &text.replace('\n', "\r\n"));
+        let doc = html
+            .then(|| self.pane.selected_cells())
+            .flatten()
+            .map(|cells| {
+                html::cf_html(&html::fragment(&cells, &self.theme(), self.prefs.font_size))
+            });
+        if let Err(e) = self.clipboard.write(&clip::crlf(&text), doc.as_deref()) {
+            self.notice = Some(format!("Nothing was copied: {e}"));
+            self.rebuild_banner();
         }
+        self.event(
+            &json!({"event": "copied", "chars": text.chars().count(), "html": doc.is_some()}),
+        );
+        self.pane.mark_end(false);
         self.pane.clear_selection();
         self.redraw();
     }
 
-    fn paste(&mut self) {
+    /// Pastes the clipboard's plain text (Step 19): into the search field while it is open;
+    /// otherwise into the program — after a question when it would run lines, carries control
+    /// characters or is large (`SUBAK-SEC-014`). `one_line`: "Paste as one line".
+    fn paste(&mut self, one_line: bool) {
+        let text = match self.clipboard.read_text() {
+            Ok(Some(t)) if !t.is_empty() => t,
+            Ok(_) => {
+                self.notice = Some("The clipboard holds no text to paste".into());
+                self.rebuild_banner();
+                return;
+            }
+            Err(e) => {
+                self.notice = Some(format!("The clipboard cannot be read: {e}"));
+                self.rebuild_banner();
+                return;
+            }
+        };
+        if let Some(f) = &mut self.find {
+            if f.insert_str(&text) {
+                self.find_changed();
+            }
+            return;
+        }
         if !matches!(self.model.phase, Phase::Attached { .. }) {
             return;
         }
-        let text = if self.opts.test {
-            Some(self.test_clipboard.clone())
+        let text = if one_line {
+            subak_term::input::one_line(&text)
         } else {
-            clipboard(self.hwnd)
+            text
         };
-        if let Some(t) = text.filter(|t| !t.is_empty()) {
-            self.paste_text(&t);
+        let check = PasteCheck::of(&text, self.pane.screen().modes().bracketed_paste);
+        self.event(&json!({"event": "paste_check", "breaks": check.breaks,
+            "controls": check.controls, "escapes": check.escapes, "bytes": check.bytes,
+            "bracketed": check.bracketed, "asks": check.needs_confirmation()}));
+        if check.needs_confirmation() {
+            self.matcher.cancel();
+            self.ask = Some(Question::paste(text, check));
+            self.event(&json!({"event": "ask", "words": self.ask.as_ref().map(Question::words)}));
+            self.rebuild_banner();
+        } else {
+            self.paste_text(&text);
         }
     }
 
@@ -1996,6 +2293,366 @@ impl App {
         let bytes = self.pane.paste(text);
         self.input(&bytes);
         self.redraw();
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // Questions (Step 19): before a paste, a link, an export.
+
+    /// The question's keys: Tab and the arrows move, Enter or Space answers with the focused
+    /// button, Esc cancels. Everything else is swallowed.
+    fn ask_key(&mut self, code: u32, m: Mods) {
+        let Some(q) = &mut self.ask else {
+            return;
+        };
+        match code {
+            vk::ESCAPE => self.answer(Answer::Cancel),
+            vk::TAB | vk::RIGHT if !m.ctrl && !m.alt => {
+                q.move_focus(code == vk::TAB && m.shift);
+                self.rebuild_banner();
+            }
+            vk::LEFT if !m.ctrl && !m.alt => {
+                q.move_focus(true);
+                self.rebuild_banner();
+            }
+            vk::RETURN | vk::SPACE if m == Mods::NONE => {
+                let a = q.focused();
+                self.answer(a);
+            }
+            _ => {}
+        }
+    }
+
+    fn answer(&mut self, a: Answer) {
+        let Some(q) = self.ask.take() else {
+            return;
+        };
+        self.event(&json!({"event": "answer", "answer": format!("{a:?}")}));
+        self.rebuild_banner();
+        match (q.topic, a) {
+            (_, Answer::Cancel) => self.export = None,
+            (Topic::Paste { text, .. }, Answer::Paste) => self.paste_text(&text),
+            (Topic::Paste { text, .. }, Answer::PasteOneLine) => {
+                self.paste_text(&subak_term::input::one_line(&text));
+            }
+            (Topic::Link { target, .. }, Answer::Open) => self.open_link(&target),
+            (Topic::Link { target, .. }, Answer::CopyLink) => self.copy_text(&target),
+            (Topic::Export { name, .. }, Answer::SaveHidden | Answer::SaveExact) => {
+                let hide = a == Answer::SaveHidden;
+                let unix = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_secs());
+                let suggested = export::suggested_name(&name, unix);
+                if self.opts.test {
+                    let path = self.save_picker.pick(&suggested);
+                    self.save_export(path, hide);
+                } else {
+                    self.after.push(After::SaveDialog { suggested, hide });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Copies `text` (a link's target) as plain text.
+    fn copy_text(&mut self, text: &str) {
+        match self.clipboard.write(&clip::crlf(text), None) {
+            Ok(()) => self.notice = Some(format!("Copied {text}")),
+            Err(e) => self.notice = Some(format!("Nothing was copied: {e}")),
+        }
+        self.event(&json!({"event": "copied", "chars": text.chars().count(), "html": false}));
+        self.rebuild_banner();
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // Links (Step 19).
+
+    /// A Ctrl+click on viewport cell (`col`, `row`): a detected address opens at once (its text
+    /// is its target), after validation; a hyperlink shows its target first and opens only on
+    /// "Open"; a refused target says why and offers to copy it. Returns whether a link was there.
+    fn link_click(&mut self, col: u16, row: u16) -> bool {
+        let Some(found) = links::link_at(&self.pane, col, row) else {
+            return false;
+        };
+        let checked = links::validate(&found.target);
+        self.event(&json!({"event": "link", "target": found.target,
+            "kind": if found.kind == Kind::Hyperlink { "hyperlink" } else { "text" },
+            "valid": checked.is_ok()}));
+        match (checked, found.kind) {
+            (Ok(target), Kind::Text) => self.open_link(&target),
+            (Ok(target), Kind::Hyperlink) => {
+                self.ask = Some(Question::link(target, Kind::Hyperlink, None));
+                self.rebuild_banner();
+            }
+            (Err(r), kind) => {
+                self.ask = Some(Question::link(found.target, kind, Some(r)));
+                self.rebuild_banner();
+            }
+        }
+        true
+    }
+
+    /// Hands a validated target to the OS "open" handler.
+    fn open_link(&mut self, target: &str) {
+        let Ok(target) = links::validate(target) else {
+            return;
+        };
+        match self.opener.open(&target) {
+            Ok(()) => {
+                self.event(&json!({"event": "opened", "verb": "open", "target": target}));
+                self.notice = Some(format!("Opened {target}"));
+            }
+            Err(e) => self.notice = Some(format!("{target} could not be opened: {e}")),
+        }
+        self.rebuild_banner();
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // Save output (Step 19).
+
+    /// "Save output…": asks first, naming what the secret detector found.
+    fn ask_export(&mut self) {
+        if !self.model.phase.shows_pane() {
+            return;
+        }
+        let e = Export::of(&self.pane);
+        let name = self
+            .model
+            .terminal()
+            .map_or_else(|| "subak".to_string(), |t| t.name.clone());
+        self.matcher.cancel();
+        self.ask = Some(Question::export(e.lines.len(), e.bytes(), e.secrets, name));
+        self.event(&json!({"event": "ask", "words": self.ask.as_ref().map(Question::words)}));
+        self.export = Some(e);
+        self.rebuild_banner();
+    }
+
+    /// Writes the export the user agreed to, to the path chosen in the save dialog.
+    fn save_export(&mut self, path: Option<PathBuf>, hide: bool) {
+        let Some(e) = self.export.take() else {
+            return;
+        };
+        let Some(path) = path else {
+            self.notice = Some("Nothing was saved".into());
+            self.rebuild_banner();
+            return;
+        };
+        match export::write(&path, &e.content(hide)) {
+            Ok(()) => {
+                self.event(
+                    &json!({"event": "saved_output", "path": path, "lines": e.lines.len(),
+                    "hidden": hide, "secrets": e.secrets}),
+                );
+                self.notice = Some(format!(
+                    "Saved {} lines to {}{}",
+                    e.lines.len(),
+                    path.display(),
+                    if hide && e.secrets > 0 {
+                        " (secret-looking values hidden)"
+                    } else {
+                        ""
+                    }
+                ));
+            }
+            Err(err) => self.notice = Some(format!("{} was not saved: {err}", path.display())),
+        }
+        self.rebuild_banner();
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // The search bar (Step 19).
+
+    fn open_find(&mut self) {
+        if !self.model.phase.shows_pane() {
+            return;
+        }
+        self.pane.mark_end(true);
+        self.matcher.cancel();
+        if self.find.is_none() {
+            let mut f = FindBar::default();
+            // A selection on one line becomes the query.
+            if let Some(sel) = self.pane.selected_text()
+                && !sel.contains('\n')
+                && !sel.trim().is_empty()
+            {
+                f.insert_str(sel.trim());
+            }
+            self.find = Some(f);
+            self.event(&json!({"event": "find", "open": true}));
+            self.find_changed();
+        } else if let Some(f) = &mut self.find {
+            f.edit(Edit::End);
+            self.rebuild_banner();
+        }
+    }
+
+    /// Closes the search bar; the current match stays selected when `keep`.
+    fn end_find(&mut self, keep: bool) {
+        if self.find.take().is_none() {
+            return;
+        }
+        self.pane.clear_highlights();
+        if !keep {
+            self.pane.clear_selection();
+        }
+        self.event(&json!({"event": "find", "open": false}));
+        self.rebuild_banner();
+        self.redraw();
+    }
+
+    /// The query or an option changed: search again and show the match nearest the bottom of
+    /// the view.
+    fn find_changed(&mut self) {
+        let rows = self.pane.size().1;
+        let bottom = self.pane.point_at(0, rows - 1).line;
+        let cur = match &mut self.find {
+            Some(f) => f.run(&self.pane, bottom),
+            None => return,
+        };
+        self.show_match(cur, true);
+        self.report_find();
+    }
+
+    fn find_step(&mut self, older: bool) {
+        let cur = self.find.as_mut().and_then(|f| f.step(older));
+        self.show_match(cur, true);
+        self.report_find();
+    }
+
+    /// Highlights the matches, selects the current one and (with `reveal`) scrolls to it.
+    fn show_match(&mut self, cur: Option<Span>, reveal: bool) {
+        let Some(f) = &self.find else {
+            return;
+        };
+        let index = f.current.map(|c| c.0);
+        self.pane.set_highlights(f.matches().to_vec(), index);
+        match cur {
+            Some(span) => {
+                self.pane.select_span(span);
+                if reveal {
+                    self.pane.reveal(span.start.line);
+                }
+            }
+            None => self.pane.clear_selection(),
+        }
+        self.rebuild_banner();
+        self.redraw();
+    }
+
+    fn report_find(&self) {
+        if let Some(f) = &self.find {
+            self.event(&json!({"event": "find_result", "query": f.text,
+                "matches": f.matches().len(), "current": f.current.map(|c| c.0),
+                "status": f.status()}));
+        }
+    }
+
+    /// The search field's keys. `None`: not the field's (a shortcut chord may fire).
+    fn find_key(&mut self, code: u32, m: Mods) -> Option<bool> {
+        let plain = !m.ctrl && !m.alt;
+        let edit = |app: &mut App, e: Edit| {
+            if let Some(f) = &mut app.find {
+                if f.edit(e) {
+                    app.find_changed();
+                } else {
+                    app.rebuild_banner();
+                }
+            }
+            Some(true)
+        };
+        match code {
+            vk::ESCAPE if plain && !m.shift => {
+                self.end_find(true);
+                Some(true)
+            }
+            vk::RETURN | vk::F3 if plain => {
+                self.find_step(!m.shift);
+                Some(true)
+            }
+            vk::UP | vk::DOWN if plain && !m.shift => {
+                self.find_step(code == vk::UP);
+                Some(true)
+            }
+            vk::BACK if m.ctrl && !m.alt && !m.shift => edit(self, Edit::BackWord),
+            vk::BACK if plain => edit(self, Edit::Backspace),
+            vk::DELETE if plain && !m.shift => edit(self, Edit::Delete),
+            vk::LEFT if plain && !m.shift => edit(self, Edit::Left),
+            vk::RIGHT if plain && !m.shift => edit(self, Edit::Right),
+            vk::HOME if plain && !m.shift => edit(self, Edit::Home),
+            vk::END if plain && !m.shift => edit(self, Edit::End),
+            0x43 | 0x52 | 0x57 if m.alt && !m.ctrl && !m.shift => {
+                let t = match code {
+                    0x43 => Toggle::Case,
+                    0x52 => Toggle::Regex,
+                    _ => Toggle::Word,
+                };
+                if let Some(f) = &mut self.find {
+                    f.toggle(t);
+                }
+                self.find_changed();
+                Some(true)
+            }
+            // Ctrl+V pastes into the field (the window's paste keys do too, through `run`).
+            0x56 if m.ctrl && !m.alt && !m.shift => {
+                self.paste(false);
+                Some(true)
+            }
+            _ => None,
+        }
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // Keyboard selection (Step 19, mark mode).
+
+    fn toggle_mark(&mut self) {
+        if !self.model.phase.shows_pane() {
+            return;
+        }
+        if self.pane.marking() {
+            self.pane.mark_end(false);
+        } else {
+            self.end_find(true);
+            self.matcher.cancel();
+            self.pane.mark_begin();
+        }
+        self.event(&json!({"event": "mark", "on": self.pane.marking()}));
+        self.redraw();
+    }
+
+    /// Mark mode's keys: the arrows move the caret (Shift extends, Ctrl moves by words),
+    /// Home/End, PageUp/PageDown, Ctrl+Home/End; Enter copies and leaves, Esc leaves. `None`:
+    /// not one of them (a shortcut chord may fire).
+    fn mark_key(&mut self, code: u32, m: Mods) -> Option<bool> {
+        if m.alt {
+            return None;
+        }
+        let motion = match (code, m.ctrl) {
+            (vk::LEFT, false) => Motion::Left,
+            (vk::RIGHT, false) => Motion::Right,
+            (vk::LEFT, true) => Motion::WordLeft,
+            (vk::RIGHT, true) => Motion::WordRight,
+            (vk::UP, false) => Motion::Up,
+            (vk::DOWN, false) => Motion::Down,
+            (vk::HOME, false) => Motion::LineStart,
+            (vk::END, false) => Motion::LineEnd,
+            (vk::HOME, true) => Motion::Top,
+            (vk::END, true) => Motion::Bottom,
+            (vk::PRIOR, false) => Motion::PageUp,
+            (vk::NEXT, false) => Motion::PageDown,
+            (vk::RETURN, false) if !m.shift => {
+                self.copy(false);
+                return Some(true);
+            }
+            (vk::ESCAPE, false) if !m.shift => {
+                self.pane.mark_end(false);
+                self.event(&json!({"event": "mark", "on": false}));
+                self.redraw();
+                return Some(true);
+            }
+            _ => return None,
+        };
+        self.pane.mark_move(motion, m.shift);
+        self.redraw();
+        Some(true)
     }
 
     fn on_focus(&mut self, focused: bool) {
@@ -2178,6 +2835,28 @@ impl App {
         {
             return;
         }
+        if self.drag.is_none()
+            && (self.ask.is_some() || self.find.is_some())
+            && let Some((_, o)) = &self.banner
+            && y < top + o.renderer.frame().height as i32
+        {
+            // A click on a question's buttons or the search bar's options; nothing else.
+            if msg == WM_LBUTTONUP {
+                let w = o.renderer.metrics().width.max(1) as i32;
+                let col = u16::try_from((x - o.renderer.padding() as i32).div_euclid(w)).ok();
+                if let Some(q) = &self.ask {
+                    if let Some(a) = col.and_then(|c| q.hit(c)) {
+                        self.answer(a);
+                    }
+                } else if let Some(t) = col.and_then(|c| self.find.as_ref()?.hit(c)) {
+                    if let Some(f) = &mut self.find {
+                        f.toggle(t);
+                    }
+                    self.find_changed();
+                }
+            }
+            return;
+        }
         if matches!(msg, WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN) {
             // A click cancels a pending shortcut sequence (§5.3) and ends a rename field.
             self.matcher.cancel();
@@ -2202,6 +2881,22 @@ impl App {
             WM_MBUTTONUP => MouseAction::Release(MouseButton::Middle),
             _ => MouseAction::Move,
         };
+        // Step 19: Ctrl+click opens a link, Ctrl+right click opens the pane menu (a program that
+        // tracks the mouse gets plain Ctrl+clicks; Shift+Ctrl reaches the window, as in xterm).
+        let tracking =
+            live && self.pane.screen().modes().mouse != subak_term::screen::MouseTracking::Off;
+        if m.ctrl && !dragging && (!tracking || m.shift) {
+            match msg {
+                WM_LBUTTONDOWN if self.link_click(col, row) => return,
+                WM_RBUTTONUP => {
+                    self.menu_link = links::link_at(&self.pane, col, row);
+                    self.open_pane_menu(Some((x, y)));
+                    return;
+                }
+                WM_RBUTTONDOWN => return,
+                _ => {}
+            }
+        }
         if live && !dragging {
             let c = self.cells();
             let ev = MouseEvent {
@@ -2284,9 +2979,9 @@ impl App {
             WM_RBUTTONDOWN => {
                 // Windows Terminal's right click: copy a selection, else paste.
                 if self.pane.has_selection() {
-                    self.copy();
+                    self.copy(false);
                 } else {
-                    self.paste();
+                    self.paste(false);
                 }
             }
             _ => {}
@@ -2341,7 +3036,7 @@ impl App {
             .map(|r| surface.row_at(r).text().trim_end().to_string())
             .collect();
         let m = self.renderer.metrics();
-        json!({
+        let mut dump = json!({
             "event": "dump",
             "phase": self.model.phase.name(),
             "terminal": self.model.terminal().map(|t| json!({"id": t.id, "name": t.name, "pid": t.pid})),
@@ -2363,7 +3058,7 @@ impl App {
             "banner": self.banner.as_ref().map(|(b, _)| b.text.clone()),
             "composition": self.composition,
             "selection": self.pane.selected_text(),
-            "clipboard": self.test_clipboard,
+            "clipboard": self.fake_clipboard().and_then(|c| c.get(clip::TEXT).map(String::from)),
             "scroll_offset": self.pane.scroll_offset(),
             "frames": self.frames,
             "bytes": self.bytes,
@@ -2382,7 +3077,51 @@ impl App {
             "renaming": self.rename.as_ref().map(|r| json!({"id": r.id, "text": r.text, "cursor": r.cursor})),
             "confirm": self.confirm_json(),
             "banner_text": self.banner_text(),
+        });
+        if let (Some(d), Value::Object(more)) = (dump.as_object_mut(), self.step19_json()) {
+            d.extend(more);
+        }
+        dump
+    }
+
+    /// The dump's Step 19 state: the fake clipboard's formats, what was opened, the search
+    /// bar, the highlights, mark mode and an open question.
+    fn step19_json(&self) -> Value {
+        json!({
+            "clipboard_formats": self.fake_clipboard().map(|c| c.formats.iter()
+                .map(|(n, v)| json!([n, v])).collect::<Vec<_>>()),
+            "opened": self.fake_opener().map(|o| o.opened.iter()
+                .map(|(verb, t)| json!({"verb": verb, "target": t})).collect::<Vec<_>>()),
+            "save_dialog": self.save_picker.asked,
+            "find": self.find.as_ref().map(|f| json!({
+                "query": f.text, "cursor": f.cursor, "regex": f.regex,
+                "case_sensitive": f.case_sensitive, "whole_word": f.whole_word,
+                "matches": f.matches().len(), "current": f.current.map(|c| c.0),
+                "status": f.status(),
+                "current_line": f.current.map(|c| c.1.start.line),
+                "lines_searched": f.search.as_ref().map(|s| s.lines_searched),
+                "elapsed_us": f.search.as_ref().map(|s| s.elapsed.as_micros() as u64),
+            })),
+            "highlights": self.pane.highlights().len(),
+            "marking": self.pane.marking(),
+            "ask": self.ask.as_ref().map(|q| json!({
+                "words": q.words(), "focus": format!("{:?}", q.focused()),
+                "answers": q.answers().iter().map(|a| format!("{a:?}")).collect::<Vec<_>>(),
+                "spans": q.spans.iter().map(|(a, b, x)| json!([a, b, format!("{x:?}")]))
+                    .collect::<Vec<_>>(),
+                "banner": self.banner.as_ref().map(|(_, o)| json!({
+                    "cell": o.renderer.metrics().width, "pad": o.renderer.padding(),
+                    "height": o.renderer.frame().height})),
+            })),
         })
+    }
+
+    fn fake_clipboard(&self) -> Option<&FakeClipboard> {
+        self.clipboard.fake()
+    }
+
+    fn fake_opener(&self) -> Option<&FakeOpener> {
+        self.opener.fake()
     }
 
     fn hotkeys_json(&self) -> Value {
@@ -2508,10 +3247,11 @@ impl App {
                         repeat: cmd["repeat"] == true,
                     };
                     let handled = self.key_down(&p, m);
-                    // As TranslateMessage would: an unhandled key with a character types it.
+                    // As TranslateMessage would: an unhandled key with a character types it
+                    // (WM_SYSCHAR with Alt alone; AltGr, Ctrl+Alt, gives a WM_CHAR).
                     if !handled && let Some(c) = cmd["char"].as_str().and_then(|c| c.chars().next())
                     {
-                        self.type_char(c, m.alt, m);
+                        self.type_char(c, m.alt && !m.ctrl, m);
                     }
                 }
             }
@@ -2523,10 +3263,30 @@ impl App {
                 }
             }
             "paste" => {
-                if let Some(t) = cmd["text"].as_str() {
-                    self.test_clipboard = t.to_string();
+                if let (Some(t), Some(c)) = (cmd["text"].as_str(), self.clipboard.as_fake()) {
+                    c.set(vec![(clip::TEXT.to_string(), t.to_string())]);
                 }
-                self.paste();
+                self.paste(cmd["one_line"] == true);
+            }
+            // What another program put on the (fake) clipboard: `[[format, content], …]`.
+            "clipboard" => {
+                let formats: Vec<(String, String)> = cmd["formats"]
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|f| {
+                                Some((f[0].as_str()?.to_string(), f[1].as_str()?.to_string()))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if let Some(c) = self.clipboard.as_fake() {
+                    c.set(formats);
+                }
+            }
+            // The path the (fake) save dialog answers with; null: the user cancels it.
+            "save_dialog" => {
+                self.save_picker.answer = cmd["path"].as_str().map(PathBuf::from);
             }
             "select" => {
                 let p = |k: &str| {
@@ -2622,59 +3382,154 @@ impl App {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Clipboard (never touched by the test hooks).
+// The system clipboard, link opener and save dialog (never used by the test hooks, which use the
+// fakes of `clip`).
 
-fn clipboard(hwnd: HWND) -> Option<String> {
-    // SAFETY: the clipboard is opened by our window and closed on every path; the data is read
-    // while its handle is locked.
-    unsafe {
-        if OpenClipboard(hwnd) == 0 {
-            return None;
-        }
-        let h = GetClipboardData(u32::from(CF_UNICODETEXT));
-        let text = if h.is_null() {
-            None
-        } else {
-            let p = GlobalLock(h).cast::<u16>();
-            if p.is_null() {
+/// The Windows clipboard, opened by the window for each read or write.
+#[derive(Debug)]
+struct SystemClipboard {
+    hwnd: HWND,
+}
+
+impl Clipboard for SystemClipboard {
+    fn read_text(&mut self) -> Result<Option<String>, String> {
+        // SAFETY: the clipboard is opened by our window and closed on every path; the data is
+        // read while its handle is locked.
+        unsafe {
+            if OpenClipboard(self.hwnd) == 0 {
+                return Err(std::io::Error::last_os_error().to_string());
+            }
+            let h = GetClipboardData(u32::from(CF_UNICODETEXT));
+            let text = if h.is_null() {
                 None
             } else {
-                let mut n = 0usize;
-                while *p.add(n) != 0 {
-                    n += 1;
+                let p = GlobalLock(h).cast::<u16>();
+                if p.is_null() {
+                    None
+                } else {
+                    let mut n = 0usize;
+                    while *p.add(n) != 0 {
+                        n += 1;
+                    }
+                    let s = String::from_utf16_lossy(std::slice::from_raw_parts(p, n));
+                    GlobalUnlock(h);
+                    Some(s)
                 }
-                let s = String::from_utf16_lossy(std::slice::from_raw_parts(p, n));
+            };
+            CloseClipboard();
+            Ok(text)
+        }
+    }
+
+    fn write(&mut self, text: &str, html: Option<&str>) -> Result<(), String> {
+        /// A movable global block holding `bytes`, or null.
+        unsafe fn block(bytes: &[u8]) -> HANDLE {
+            // SAFETY: a movable global block of the right size, filled while locked.
+            unsafe {
+                let h = GlobalAlloc(GMEM_MOVEABLE, bytes.len());
+                if h.is_null() {
+                    return null_mut();
+                }
+                let p = GlobalLock(h).cast::<u8>();
+                if p.is_null() {
+                    return null_mut();
+                }
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), p, bytes.len());
                 GlobalUnlock(h);
-                Some(s)
+                h as HANDLE
             }
-        };
-        CloseClipboard();
-        text
+        }
+        let units: Vec<u8> = text
+            .encode_utf16()
+            .chain([0])
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        // SAFETY: the clipboard is opened by our window and closed on every path; ownership of
+        // each block passes to the clipboard when SetClipboardData succeeds.
+        unsafe {
+            if OpenClipboard(self.hwnd) == 0 {
+                return Err(std::io::Error::last_os_error().to_string());
+            }
+            EmptyClipboard();
+            let ok = !SetClipboardData(u32::from(CF_UNICODETEXT), block(&units)).is_null();
+            if let Some(h) = html {
+                let name = wide("HTML Format");
+                let fmt = RegisterClipboardFormatW(name.as_ptr());
+                if fmt != 0 {
+                    let mut bytes = h.as_bytes().to_vec();
+                    bytes.push(0);
+                    SetClipboardData(fmt, block(&bytes));
+                }
+            }
+            CloseClipboard();
+            if ok {
+                Ok(())
+            } else {
+                Err("the clipboard did not take the text".into())
+            }
+        }
     }
 }
 
-fn set_clipboard(hwnd: HWND, text: &str) -> bool {
-    let units: Vec<u16> = text.encode_utf16().chain([0]).collect();
-    // SAFETY: a movable global block of the right size, filled while locked; ownership passes to
-    // the clipboard on success.
-    unsafe {
-        if OpenClipboard(hwnd) == 0 {
-            return false;
+/// The OS "open" handler: `ShellExecuteW` with the verb `open` and the validated target as the
+/// file — no command line, no shell.
+#[derive(Debug)]
+struct ShellOpener {
+    hwnd: HWND,
+}
+
+impl Opener for ShellOpener {
+    fn open(&mut self, target: &str) -> Result<(), String> {
+        let verb = wide("open");
+        let file = wide(target);
+        // SAFETY: NUL-terminated wide strings that outlive the call; no parameters or folder.
+        let r = unsafe {
+            ShellExecuteW(
+                self.hwnd,
+                verb.as_ptr(),
+                file.as_ptr(),
+                null(),
+                null(),
+                SW_SHOWNORMAL,
+            )
+        };
+        if r as isize > 32 {
+            Ok(())
+        } else {
+            Err(format!("ShellExecute error {}", r as isize))
         }
-        EmptyClipboard();
-        let h = GlobalAlloc(GMEM_MOVEABLE, units.len() * 2);
-        let mut ok = false;
-        if !h.is_null() {
-            let p = GlobalLock(h).cast::<u16>();
-            if !p.is_null() {
-                std::ptr::copy_nonoverlapping(units.as_ptr(), p, units.len());
-                GlobalUnlock(h);
-                ok = !SetClipboardData(u32::from(CF_UNICODETEXT), h as HANDLE).is_null();
-            }
-        }
-        CloseClipboard();
-        ok
     }
+}
+
+/// The save dialog (modal: run with the window's state free). The chosen path, or `None`.
+fn save_dialog(hwnd: HWND, suggested: &str) -> Option<PathBuf> {
+    let mut buf = vec![0u16; 1024];
+    for (i, u) in suggested.encode_utf16().take(1000).enumerate() {
+        buf[i] = u;
+    }
+    let filter: Vec<u16> = "Text files (*.txt)\0*.txt\0All files (*.*)\0*.*\0\0"
+        .encode_utf16()
+        .collect();
+    let ext = wide("txt");
+    let title = wide("Save the output");
+    let mut ofn = OPENFILENAMEW {
+        lStructSize: size_of::<OPENFILENAMEW>() as u32,
+        hwndOwner: hwnd,
+        lpstrFilter: filter.as_ptr(),
+        lpstrFile: buf.as_mut_ptr(),
+        nMaxFile: buf.len() as u32,
+        lpstrTitle: title.as_ptr(),
+        lpstrDefExt: ext.as_ptr(),
+        Flags: OFN_EXPLORER | OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR,
+        ..OPENFILENAMEW::default()
+    };
+    // SAFETY: every pointer in `ofn` refers to a buffer that outlives the modal call.
+    let ok = unsafe { GetSaveFileNameW(&raw mut ofn) } != 0;
+    if !ok {
+        return None;
+    }
+    let n = buf.iter().position(|&u| u == 0).unwrap_or(buf.len());
+    Some(PathBuf::from(String::from_utf16_lossy(&buf[..n])))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2760,6 +3615,18 @@ fn run_after(hwnd: HWND, after: Vec<After>) {
                     if cmd > 0 {
                         PostMessageW(hwnd, WM_MENU, cmd as usize, tab);
                     }
+                }
+                After::SaveDialog { suggested, hide } => {
+                    // Its own modal loop, with the state free; the answer goes back to it.
+                    let path = save_dialog(hwnd, &suggested);
+                    APP.with(|cell| {
+                        if let Ok(mut slot) = cell.try_borrow_mut()
+                            && let Some(app) = slot.as_mut()
+                        {
+                            app.save_export(path, hide);
+                        }
+                    });
+                    flush_after(hwnd);
                 }
             }
         }
@@ -3230,7 +4097,23 @@ pub fn run(o: Options) -> ExitCode {
         confirm: None,
         reported_tabs: Value::Null,
         normal: None,
-        test_clipboard: String::new(),
+        clipboard: if test {
+            Box::new(FakeClipboard::default())
+        } else {
+            Box::new(SystemClipboard { hwnd })
+        },
+        opener: if test {
+            Box::new(FakeOpener::default())
+        } else {
+            Box::new(ShellOpener { hwnd })
+        },
+        save_picker: FakeSavePicker::default(),
+        find: None,
+        find_caret: 0,
+        find_stale: false,
+        ask: None,
+        export: None,
+        menu_link: None,
         title: String::new(),
         frames: 0,
         bytes: 0,

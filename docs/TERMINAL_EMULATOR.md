@@ -1,7 +1,9 @@
 # Terminal emulator and rendering
 
-Status: **current** (implemented, Step 15; the Subak window that uses it is Step 16) · Decision:
-[ADR 0036](adr/0036-terminal-emulation-and-rendering-path.md) · Builds on
+Status: **current** (implemented, Step 15; the Subak window that uses it is Step 16; search,
+keyboard selection, links and paste checks since Step 19, §3.5) · Decisions:
+[ADR 0036](adr/0036-terminal-emulation-and-rendering-path.md),
+[ADR 0048](adr/0048-subak-search-clipboard-and-links.md) (Step 19) · Builds on
 [SCROLLBACK.md](SCROLLBACK.md) (Step 13) · Requirements: `SUBAK-FR-031`, `SUBAK-FR-036`,
 `SUBAK-NFR-001`, `SUBAK-SEC-013`, `KIM-NFR-001`, `KIM-NFR-012`, `KIM-NFR-013`
 
@@ -92,7 +94,9 @@ line, lines separated by `\n` (the Windows clipboard layer converts to CR LF).
 
 `link_at(col, row)` returns the target of the cell under the pointer. The view never opens it;
 the window shows the target and opens it only on an explicit gesture (Ctrl+click, Step 19)
-(`SUBAK-SEC-013`).
+(`SUBAK-SEC-013`). Since Step 19 `links::link_at` also finds `http(s)://` addresses in the text
+(across soft wraps) and `links::validate` checks every target before a window may open it
+([SUBAK_GUI §12.4](SUBAK_GUI.md)).
 
 ### 3.4 Device reports
 
@@ -101,6 +105,23 @@ clients attached, only one must answer: `set_answer_reports(true)` is for the vi
 pane's size (the interactive one, ADR 0008); its `take_replies()` are written to the pane. Replies
 are bounded (4 KiB) if nobody collects them. On the inbox ConPTY these queries rarely reach a
 client (conhost answers its programs itself); on Linux (M4) they will.
+
+### 3.5 Search, highlights and keyboard selection (Step 19)
+
+- `subak_term::search`: literal or `regex` queries (linear time, size and nesting caps, a match
+  cap and a time budget, newest lines first) over the view's history and screen, logical line by
+  logical line; `Search::refresh` after output re-searches only new history rows and the screen.
+  History rows are read as text with `Screen::history_text` (no cell decoding).
+- `set_highlights(spans, current)` marks matches; the renderer tints them
+  (`terminal.search-match`) and draws the current one dark on `terminal.search-current`, over the
+  selection; only the rows involved are redrawn. `reveal(line)` scrolls a line into view below
+  the first row (where the window's search bar is).
+- `select_span`, `select_all`, `span_text`, `selected_cells` (attributes, for a copy as HTML,
+  `render::html`); mark mode: `mark_begin`, `mark_move(Motion, extend)`, `mark_end` (a wide
+  character is one place; a growing selection's word moves end on the word's last cell).
+- `PasteCheck` (input): whether a paste would run lines (no bracketed paste), carries control
+  characters (removed) or is large — the window asks first (`SUBAK-SEC-014`); `one_line` is the
+  "paste as one line" clean-up.
 
 ## 4. Input
 
@@ -128,8 +149,8 @@ CLI client does not grant it (Step 12, `OutputFilter`); whether the GUI does is 
 `encode_paste(text, bracketed)`: CR LF, LF and CR become CR (what Enter sends); every other
 control character — C0 except tab, DEL and C1 — is removed, so pasted text can neither end a
 bracketed paste early (`ESC [201~`) nor inject escape sequences (`SUBAK-SEC-013`); with mode
-2004 the text is wrapped in `ESC [200~` … `ESC [201~`. The multi-line paste warning is the GUI's
-(Step 19).
+2004 the text is wrapped in `ESC [200~` … `ESC [201~`. Whether to ask first is `PasteCheck`
+(§3.5); the question is the window's (Step 19, [SUBAK_GUI §12.2](SUBAK_GUI.md)).
 
 ### 4.3 Mouse
 

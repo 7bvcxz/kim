@@ -355,7 +355,10 @@ mod tests {
             | "hold-ms-without-hold"
             | "bare-modifier-press-action"
             | "mouse-primary-button-trigger"
-            | "mouse-button-sequence-trigger" => "trigger_invalid",
+            | "mouse-button-sequence-trigger"
+            | "hotstring-with-keys"
+            | "hotstring-abbreviation-with-space"
+            | "hotstring-immediate-with-end-chars" => "trigger_invalid",
             // whole-file problems
             "newer-schema-version" | "no-modes" | "rule-id-with-dot" => "file",
             _ => "step_invalid",

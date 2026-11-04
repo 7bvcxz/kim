@@ -808,6 +808,129 @@ mod tests {
         );
     }
 
+    #[allow(clippy::needless_pass_by_value)]
+    fn typing_rule(id: &str, trigger: Value, steps: Value) -> Value {
+        json!({ "id": id, "title": id, "enabled": true, "trigger": trigger, "steps": steps,
+                "consent": { "input-injection": { "granted_at": "2026-11-04T09:00:00Z", "via": "cli" },
+                             "clipboard": { "granted_at": "2026-11-04T09:00:00Z", "via": "cli" } } })
+    }
+
+    #[test]
+    fn typing_rules_and_hotstrings_compile_and_combinations_wait_for_step_78() {
+        let l = parse(&doc(json!([
+            typing_rule(
+                "sign",
+                json!({ "keys": "Ctrl+Shift+F2" }),
+                json!([{ "type": "type_text", "text": "감사합니다\n", "method": "paste", "key_delay_ms": 5 }])
+            ),
+            typing_rule(
+                "btw",
+                json!({ "hotstring": { "abbreviation": "btw", "case": "sensitive",
+                    "inside_words": true, "end_chars": " .", "omit_end": true, "erase": false } }),
+                json!([{ "type": "type_text", "text": "by the way" }])
+            ),
+            typing_rule(
+                "ac",
+                json!({ "hotstring": { "abbreviation": ";ac", "immediate": true } }),
+                json!([{ "type": "send_keys", "keys": "Ctrl+A Ctrl+C", "step_delay_ms": 40 }])
+            ),
+            typing_rule(
+                "two",
+                json!({ "keys": "F14" }),
+                json!([{ "type": "type_text", "text": "a" }, { "type": "send_keys", "keys": "Enter" }])
+            ),
+            typing_rule(
+                "hs-engine",
+                json!({ "hotstring": { "abbreviation": ";p" } }),
+                json!([{ "type": "engine", "op": "pause" }])
+            ),
+            typing_rule(
+                "future-hs",
+                json!({ "hotstring": { "abbreviation": ";f", "fuzzy": true } }),
+                json!([{ "type": "type_text", "text": "f" }])
+            )
+        ])));
+        let active: Vec<&str> = l.bindings.iter().map(|b| b.rule.as_str()).collect();
+        assert_eq!(active, ["sign", "btw", "ac"]);
+        let Action::Type(t) = &l.bindings[0].action else {
+            panic!("{:?}", l.bindings[0].action)
+        };
+        assert!(t.paste && t.key_delay_ms == 5 && !t.variables);
+        assert!(l.bindings[0].injects && !l.bindings[0].widen && l.bindings[0].hotstring.is_none());
+        let h = l.bindings[1].hotstring.as_ref().unwrap();
+        assert_eq!(h.abbreviation, ['b', 't', 'w']);
+        assert_eq!(h.case, hotstring::Case::Sensitive);
+        assert!(h.inside_words && h.omit_end && !h.erase && !h.immediate);
+        assert_eq!(h.end_chars, [' ', '.']);
+        assert!(l.bindings[1].trigger.steps().is_empty());
+        let Action::Keys(k) = &l.bindings[2].action else {
+            panic!()
+        };
+        assert_eq!((k.chords.len(), k.step_delay_ms), (2, 40));
+        assert!(l.bindings[2].hotstring.as_ref().unwrap().immediate);
+        let codes: Vec<(&str, &str)> = l
+            .inactive
+            .iter()
+            .map(|i| (i.rule.as_str(), i.code))
+            .collect();
+        assert_eq!(
+            codes,
+            [
+                ("two", "step_unsupported"),
+                ("hs-engine", "step_unsupported"),
+                ("future-hs", "rule_unsupported")
+            ]
+        );
+        assert!(
+            l.inactive[0].reason.contains("Step 78"),
+            "{:?}",
+            l.inactive[0]
+        );
+        // The compiled table knows its hotstrings and bounds the core's buffer by them.
+        let table = crate::table::Table::compile(l.bindings.clone(), 20);
+        assert!(table.has_hotstrings());
+        assert_eq!(table.longest_hotstring, 3);
+    }
+
+    #[test]
+    fn duplicate_hotstrings_and_slow_typing_are_semantic_errors() {
+        let tt = |t: &str| json!([{ "type": "type_text", "text": t }]);
+        let mut sensitive = typing_rule(
+            "btw-exact",
+            json!({ "hotstring": { "abbreviation": "BTW", "case": "sensitive" } }),
+            tt("BY THE WAY"),
+        );
+        sensitive["priority"] = json!(0);
+        let l = parse(&doc(json!([
+            typing_rule(
+                "btw",
+                json!({ "hotstring": { "abbreviation": "btw" } }),
+                tt("by the way")
+            ),
+            typing_rule(
+                "btw2",
+                json!({ "hotstring": { "abbreviation": "Btw" } }),
+                tt("x")
+            ),
+            sensitive,
+            typing_rule(
+                "slow",
+                json!({ "keys": "F13" }),
+                json!([{ "type": "type_text", "text": "y".repeat(400), "key_delay_ms": 200 }])
+            )
+        ])));
+        let codes: Vec<(&str, &str)> = l
+            .inactive
+            .iter()
+            .map(|i| (i.rule.as_str(), i.code))
+            .collect();
+        assert_eq!(
+            codes,
+            [("btw2", "duplicate_trigger"), ("slow", "run_too_long")],
+            "a case-sensitive abbreviation is its own trigger"
+        );
+    }
+
     #[test]
     fn loading_and_validating_1000_rules_is_fast_enough() {
         // 1000 distinct triggers (two-chord sequences over F13–F24 with modifiers), as a large

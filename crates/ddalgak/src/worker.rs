@@ -956,4 +956,227 @@ mod tests {
             "one entry per press"
         );
     }
+
+    // ---- Step 69: typing runs on the worker (fake backend, fake probe, no clipboard).
+
+    use crate::run::{HotstringFire, KeysSpec, TextSpec};
+    use crate::text::{self, CaseForm};
+
+    fn typing_rules(generation: u32, text: &str, key_delay_ms: u32) -> Rules {
+        let b = |id: &str, action| Binding {
+            rule: id.into(),
+            trigger: Trigger::parse("F13").unwrap(),
+            on: On::Press,
+            repeat: false,
+            pass_through: false,
+            injected: Injected::Ignore,
+            widen: false,
+            injects: true,
+            action,
+            hotstring: None,
+        };
+        Rules {
+            generation,
+            bindings: Arc::new(vec![
+                b(
+                    "sign",
+                    Action::Type(Arc::new(TextSpec {
+                        text: text.into(),
+                        paste: false,
+                        key_delay_ms,
+                        variables: false,
+                    })),
+                ),
+                b(
+                    "copy",
+                    Action::Keys(Arc::new(KeysSpec {
+                        chords: vec![crate::remap::Output::parse("Ctrl+C").unwrap()],
+                        step_delay_ms: 0,
+                    })),
+                ),
+            ]),
+            profile: "default".into(),
+            mode: "base".into(),
+        }
+    }
+
+    fn outcomes(w: &Worker) -> Vec<(String, String)> {
+        w.activity
+            .lock()
+            .unwrap()
+            .entries()
+            .map(|e| (e.rule.clone(), e.outcome.clone()))
+            .collect()
+    }
+
+    fn wait_outcomes(w: &Worker, n: usize) -> Vec<(String, String)> {
+        let t = Instant::now();
+        while outcomes(w).len() < n && t.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        outcomes(w)
+    }
+
+    fn fire(binding: u16) -> Signal {
+        Signal::Fire {
+            binding,
+            kind: FireKind::Press,
+        }
+    }
+
+    #[test]
+    fn a_typing_rule_types_exactly_its_text_and_records_only_its_outcome() {
+        let (w, log) = output_worker();
+        let q = w.queue();
+        q.send(Msg::Rules(typing_rules(1, "감사합니다 👍\n", 0)));
+        q.signal(1, fire(0));
+        assert_eq!(
+            wait_outcomes(&w, 1),
+            [("sign".to_string(), "ok".to_string())]
+        );
+        assert_eq!(*log.lock().unwrap(), text::events("감사합니다 👍\n"));
+        let j = w.activity.lock().unwrap().to_json(10).to_string();
+        assert!(!j.contains("감사"), "activity never holds the text: {j}");
+        // send_keys taps its chord.
+        q.signal(1, fire(1));
+        assert_eq!(
+            wait_outcomes(&w, 2)[1],
+            ("copy".to_string(), "ok".to_string())
+        );
+        let all = log.lock().unwrap().clone();
+        assert_eq!(
+            all[all.len() - 4..],
+            run::chord_events(&crate::remap::Output::parse("Ctrl+C").unwrap())[..]
+        );
+    }
+
+    fn hotstring_fire(typed: u32) -> HotstringFire {
+        HotstringFire {
+            erase: 3,
+            case: CaseForm::AsWritten,
+            key: OutCode::Exact {
+                vk: 0x20,
+                scan: 0x39,
+                ext: false,
+            },
+            mods: 0,
+            retype: true,
+            consumed: true,
+            typed,
+        }
+    }
+
+    #[test]
+    fn a_trigger_while_typing_is_busy_and_a_hotstring_gets_its_key_back() {
+        let (w, log) = output_worker();
+        let q = w.queue();
+        q.send(Msg::Rules(typing_rules(1, "abcdefgh", 30)));
+        q.signal(1, fire(0));
+        wait_for(&log, 2);
+        q.signal(1, fire(1)); // another typing rule
+        q.signal(
+            1,
+            Signal::Hotstring {
+                binding: 0,
+                fire: hotstring_fire(0),
+            },
+        );
+        let got = wait_outcomes(&w, 3);
+        assert_eq!(
+            got,
+            [
+                ("copy".to_string(), "busy".to_string()),
+                ("sign".to_string(), "busy".to_string()),
+                ("sign".to_string(), "ok".to_string()),
+            ]
+        );
+        let all = log.lock().unwrap().clone();
+        let key = OutCode::Exact {
+            vk: 0x20,
+            scan: 0x39,
+            ext: false,
+        };
+        let back = all.iter().position(|e| *e == OutEvent::down(key)).unwrap();
+        assert_eq!(all[back + 1], OutEvent::up(key), "given back unchanged");
+        let typed: Vec<OutEvent> = all.iter().filter(|e| e.code != key).copied().collect();
+        assert_eq!(
+            typed,
+            text::events("abcdefgh"),
+            "the run itself was not disturbed"
+        );
+    }
+
+    #[test]
+    fn pause_emergency_and_reload_cancel_a_run_at_its_next_piece() {
+        for how in ["pause", "emergency", "reload"] {
+            let (tx, rx) = channel();
+            let tx = Mutex::new(tx);
+            let log = Arc::new(Mutex::new(Vec::new()));
+            let w = Worker::start(
+                Arc::new(Stats::default()),
+                Box::new(move |c| {
+                    let _ = tx.lock().unwrap().send(c);
+                }),
+                Arc::new(Mutex::new(Activity::default())),
+                Box::new(SharedRecorder(Arc::clone(&log))),
+                Env::inert(),
+            );
+            let q = w.queue();
+            q.send(Msg::Rules(typing_rules(1, &"x".repeat(200), 20)));
+            q.signal(1, fire(0));
+            wait_for(&log, 6);
+            match how {
+                "pause" => q.send(Msg::Cancel),
+                "emergency" => q.signal(1, Signal::Emergency),
+                _ => q.send(Msg::Rules(typing_rules(2, "y", 0))),
+            }
+            assert_eq!(
+                wait_outcomes(&w, 1),
+                [("sign".to_string(), "cancelled".to_string())],
+                "{how}"
+            );
+            let n = log.lock().unwrap().len();
+            std::thread::sleep(Duration::from_millis(100));
+            assert_eq!(log.lock().unwrap().len(), n, "{how}: nothing more is typed");
+            assert!(n < 2 * 200, "{how}: stopped early ({n} events)");
+            if how == "emergency" {
+                assert_eq!(
+                    rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+                    Control::Emergency
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_hotstring_from_an_older_table_only_gets_its_key_back() {
+        let (w, log) = output_worker();
+        let q = w.queue();
+        q.send(Msg::Rules(typing_rules(2, "by the way", 0)));
+        q.signal(
+            1,
+            Signal::Hotstring {
+                binding: 0,
+                fire: hotstring_fire(0),
+            },
+        );
+        let got = wait_for(&log, 2);
+        assert_eq!(got.len(), 2);
+        assert!(outcomes(&w).is_empty(), "nothing ran");
+        // A current one erases, types and types the end key again.
+        q.signal(
+            2,
+            Signal::Hotstring {
+                binding: 0,
+                fire: hotstring_fire(0),
+            },
+        );
+        assert_eq!(wait_outcomes(&w, 1)[0].1, "ok");
+        let all = log.lock().unwrap().clone();
+        let bs = all
+            .iter()
+            .filter(|e| **e == OutEvent::down(OutCode::Vk(text::VK_BACK)))
+            .count();
+        assert_eq!(bs, 3);
+    }
 }

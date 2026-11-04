@@ -1,0 +1,68 @@
+{
+  "schema": "ddalgak.rules",
+  "schema_version": 1,
+  "hotkey_contract": 1,
+  "active_profile": "default",
+  "profiles": [
+    {
+      "id": "default",
+      "title": "Hotstrings and snippets",
+      "description": "Step 69: typed abbreviations as triggers, template variables and the insertion point.",
+      "default_mode": "base",
+      "modes": [{"id": "base", "title": "Base"}],
+      "rules": [
+        {
+          "id": "btw",
+          "title": "btw expands to by the way (BTW to BY THE WAY)",
+          "enabled": true,
+          "trigger": {"hotstring": {"abbreviation": "btw"}},
+          "steps": [{"type": "type_text", "text": "by the way"}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T09:30:00Z", "via": "gui"}}
+        },
+        {
+          "id": "sig-ko",
+          "title": "Korean sign-off as soon as ;sig is typed",
+          "enabled": true,
+          "trigger": {"hotstring": {"abbreviation": ";sig", "immediate": true, "case": "sensitive"}},
+          "steps": [{"type": "type_text", "text": "감사합니다.\n김민수 드림"}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T09:30:00Z", "via": "gui"}}
+        },
+        {
+          "id": "today",
+          "title": "Today's date after dd and Tab or Enter",
+          "enabled": true,
+          "trigger": {"hotstring": {"abbreviation": "dd", "end_chars": "\t\n", "omit_end": true}},
+          "steps": [{"type": "type_text", "text": "{date}", "variables": true}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T09:30:00Z", "via": "cli"}}
+        },
+        {
+          "id": "paragraph",
+          "title": "An HTML paragraph with the cursor inside",
+          "enabled": true,
+          "trigger": {"keys": "Ctrl+Shift+F6"},
+          "steps": [{"type": "type_text", "text": "<p>{cursor}</p> {{not a variable}}", "variables": true}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T09:31:00Z", "via": "gui"}}
+        },
+        {
+          "id": "addr",
+          "title": "Address block pasted after @@addr, inside words too, abbreviation kept",
+          "enabled": true,
+          "trigger": {"hotstring": {"abbreviation": "@@addr", "inside_words": true, "erase": false, "case": "insensitive"}},
+          "steps": [{"type": "type_text", "text": "\n서울특별시 중구 세종대로 110", "method": "paste"}],
+          "consent": {
+            "input-injection": {"granted_at": "2026-11-04T09:32:00Z", "via": "gui"},
+            "clipboard": {"granted_at": "2026-11-04T09:32:00Z", "via": "gui"}
+          }
+        },
+        {
+          "id": "select-copy",
+          "title": "Select all and copy as soon as ;ac is typed",
+          "enabled": true,
+          "trigger": {"hotstring": {"abbreviation": ";ac", "immediate": true}},
+          "steps": [{"type": "send_keys", "keys": "Ctrl+A Ctrl+C", "step_delay_ms": 50}],
+          "consent": {"input-injection": {"granted_at": "2026-11-04T09:33:00Z", "via": "gui"}}
+        }
+      ]
+    }
+  ]
+}

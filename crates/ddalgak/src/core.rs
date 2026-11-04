@@ -2729,4 +2729,313 @@ mod tests {
         }
         assert!(!more.ev("E", false).consume);
     }
+
+    // ---- Step 69: hotstrings, typing runs' modifier state (DDALGAK_RULE_MODEL §3.4; ADR 0034).
+    // Synthetic event streams only: no real typing, no injection.
+
+    use crate::hotstring::{self as hs, Spec};
+    use crate::run::{RunShared, TextSpec};
+    use crate::text::CaseForm;
+
+    fn hot(rule: &str, spec: Spec) -> Binding {
+        Binding {
+            rule: rule.into(),
+            trigger: Trigger::none(),
+            on: On::Press,
+            repeat: false,
+            pass_through: false,
+            injected: Injected::Ignore,
+            widen: false,
+            injects: true,
+            action: Action::Type(Arc::new(TextSpec {
+                text: "by the way".into(),
+                paste: false,
+                key_delay_ms: 0,
+                variables: false,
+            })),
+            hotstring: Some(Arc::new(spec)),
+        }
+    }
+
+    fn typing(bindings: Vec<Binding>) -> (T, Arc<RunShared>) {
+        let mut t = T::new(bindings);
+        let runs = Arc::new(RunShared::default());
+        t.core.set_runs(Arc::clone(&runs));
+        t.core.set_translator(hs::us_qwerty);
+        (t, runs)
+    }
+
+    impl T {
+        /// Types keys (down and up) and returns the decision of the last down.
+        fn type_keys(&mut self, keys: &[&str]) -> Decision {
+            let mut last = None;
+            for k in keys {
+                last = Some(self.ev(k, false));
+                self.ev(k, true);
+            }
+            last.unwrap()
+        }
+
+        fn fired_hotstring(d: &Decision) -> Option<(u16, HotstringFire)> {
+            match d.signal {
+                Some(Signal::Hotstring { binding, fire }) => Some((binding, fire)),
+                _ => None,
+            }
+        }
+    }
+
+    #[test]
+    fn a_hotstring_fires_on_an_end_character_and_consumes_only_that_key() {
+        let (mut t, runs) = typing(vec![binding("other", "F13"), hot("btw", Spec::new("btw"))]);
+        for k in ["B", "T", "W"] {
+            let d = t.ev(k, false);
+            assert!(!d.consume && d.signal.is_none(), "{k} reaches the app");
+            t.ev(k, true);
+        }
+        let d = t.ev("Space", false);
+        assert!(d.consume, "the end key is held back");
+        let (b, f) = T::fired_hotstring(&d).unwrap();
+        assert_eq!(b, 1);
+        assert_eq!(
+            (f.erase, f.case, f.retype, f.consumed),
+            (3, CaseForm::AsWritten, true, true)
+        );
+        assert_eq!(
+            f.key,
+            OutCode::Exact {
+                vk: 0x20,
+                scan: 0,
+                ext: false
+            }
+        );
+        assert_eq!(f.typed, 4, "four physical presses so far");
+        assert_eq!(runs.typed.load(Ordering::SeqCst), 4);
+        assert!(t.ev("Space", true).consume, "consumed down, consumed up");
+        assert_eq!(t.core.hotstring_buffer().0, 0, "cleared after a match");
+        // The next word starts fresh.
+        assert!(T::fired_hotstring(&t.type_keys(&["B", "T", "W", "Period"])).is_some());
+    }
+
+    #[test]
+    fn case_forms_and_word_boundaries() {
+        let (mut t, _) = typing(vec![hot("btw", Spec::new("btw"))]);
+        t.ev("LShift", false);
+        t.type_keys(&["B"]);
+        t.ev("LShift", true);
+        let d = t.type_keys(&["T", "W", "Space"]);
+        let (_, f) = T::fired_hotstring(&d).unwrap();
+        assert_eq!(f.case, CaseForm::Title);
+        t.ev("LShift", false);
+        let d = t.type_keys(&["B", "T", "W", "1"]);
+        t.ev("LShift", true);
+        // Shift+1 is `!`, a default end character.
+        let (_, f) = T::fired_hotstring(&d).unwrap_or_else(|| panic!("{d:?}"));
+        assert_eq!(f.case, CaseForm::Upper);
+        assert_ne!(f.mods, 0, "Shift is typed again with the end key");
+        // Inside a word: no match.
+        assert!(t.type_keys(&["A", "B", "T", "W", "Space"]).signal.is_none());
+    }
+
+    #[test]
+    fn every_reset_clears_the_buffer() {
+        let spec = || Spec::new("btw");
+        let fires = |f: &dyn Fn(&mut T)| {
+            let (mut t, _) = typing(vec![hot("btw", spec())]);
+            t.type_keys(&["B", "T"]);
+            f(&mut t);
+            t.type_keys(&["W"]);
+            T::fired_hotstring(&t.type_keys(&["Space"])).is_some()
+        };
+        assert!(fires(&|_| {}), "the baseline fires");
+        assert!(!fires(&|t| t.flags.focus_epoch += 1), "focus change");
+        assert!(
+            !fires(&|t| {
+                t.flags.password_field = true;
+                t.type_keys(&["X"]);
+                t.flags.password_field = false;
+            }),
+            "password field"
+        );
+        assert!(
+            !fires(&|t| {
+                t.flags.ime_composing = true;
+                t.type_keys(&["X"]);
+                t.flags.ime_composing = false;
+            }),
+            "IME composition"
+        );
+        assert!(
+            !fires(&|t| {
+                t.flags.secure_desktop = true;
+                t.type_keys(&["X"]);
+                t.flags.secure_desktop = false;
+            }),
+            "secure desktop"
+        );
+        assert!(
+            !fires(&|t| {
+                t.mode = Mode::Paused;
+                t.type_keys(&["X"]);
+                t.mode = Mode::Running;
+            }),
+            "paused"
+        );
+        assert!(
+            !fires(&|t| {
+                t.type_keys(&["Left"]);
+            }),
+            "navigation"
+        );
+        assert!(
+            !fires(&|t| {
+                t.ev("LCtrl", false);
+                t.type_keys(&["V"]);
+                t.ev("LCtrl", true);
+            }),
+            "a shortcut"
+        );
+        assert!(
+            !fires(&|t| {
+                t.src("X", false, Source::Other);
+                t.src("X", true, Source::Other);
+            }),
+            "another program's input"
+        );
+        assert!(!fires(&|t| t.t += 20_000), "a pause in typing");
+        assert!(
+            !fires(&|t| {
+                t.key_with_scan(0xDF, 0x29, false);
+                t.key_with_scan(0xDF, 0x29, true);
+            }),
+            "a dead key"
+        );
+        // A key-state reset (desktop switch) and a pause clear it too.
+        let (mut t, _) = typing(vec![hot("btw", spec())]);
+        t.type_keys(&["B", "T"]);
+        let _ = t.core.reset_keys();
+        assert_eq!(t.core.hotstring_buffer().0, 0);
+        t.type_keys(&["B", "T"]);
+        let _ = t.core.cancel_pending();
+        assert_eq!(t.core.hotstring_buffer().0, 0);
+        // Backspace forgets the last character; own input is not part of the buffer.
+        let (mut t, _) = typing(vec![hot("btw", spec())]);
+        t.type_keys(&["B", "T", "X", "Backspace", "W"]);
+        t.src("Q", false, Source::Own);
+        t.src("Q", true, Source::Own);
+        assert!(T::fired_hotstring(&t.type_keys(&["Space"])).is_some());
+    }
+
+    #[test]
+    fn the_buffer_is_bounded_by_the_longest_abbreviation() {
+        let (mut t, _) = typing(vec![
+            hot("btw", Spec::new("btw")),
+            hot("sig", Spec::new("sig")),
+        ]);
+        assert_eq!(t.core.hotstring_buffer(), (0, 4));
+        for _ in 0..50 {
+            t.type_keys(&["A", "B", "C"]);
+        }
+        assert_eq!(t.core.hotstring_buffer().0, 4, "never more than the bound");
+        // Without hotstrings there is no translation and no buffer use at all.
+        let (mut t, _) = typing(vec![binding("x", "F13")]);
+        t.type_keys(&["A", "B"]);
+        assert_eq!(t.core.hotstring_buffer().0, 0);
+    }
+
+    #[test]
+    fn immediate_hotstrings_and_kept_abbreviations() {
+        let mut imm = Spec::new("sig");
+        imm.immediate = true;
+        let (mut t, _) = typing(vec![hot("sig", imm.clone())]);
+        t.type_keys(&["S", "I"]);
+        let d = t.ev("G", false);
+        let (_, f) = T::fired_hotstring(&d).unwrap();
+        assert!(d.consume);
+        assert_eq!(
+            (f.erase, f.retype),
+            (2, false),
+            "the last key never reached the app"
+        );
+        t.ev("G", true);
+        imm.erase = false;
+        let (mut t, _) = typing(vec![hot("sig", imm)]);
+        t.type_keys(&["S", "I"]);
+        let d = t.ev("G", false);
+        let (_, f) = T::fired_hotstring(&d).unwrap();
+        assert!(!d.consume, "kept: the last key reaches the app");
+        assert_eq!((f.erase, f.consumed), (0, false));
+        // A rule that takes a key clears the buffer.
+        let (mut t, _) = typing(vec![binding("b-rule", "B"), hot("btw", Spec::new("btw"))]);
+        t.type_keys(&["B", "T", "W"]);
+        assert!(T::fired_hotstring(&t.type_keys(&["Space"])).is_none());
+    }
+
+    #[test]
+    fn hotstrings_are_rate_limited_like_any_rule() {
+        let mut t = T::new(vec![hot("btw", Spec::new("btw"))]);
+        t.core = Core::new(Table::compile(vec![hot("btw", Spec::new("btw"))], 1));
+        t.core.set_translator(hs::us_qwerty);
+        assert!(T::fired_hotstring(&t.type_keys(&["B", "T", "W", "Space"])).is_some());
+        let d = t.type_keys(&["B", "T", "W", "Space"]);
+        assert!(matches!(d.signal, Some(Signal::RateLimited { binding: 0 })));
+        assert!(!d.consume, "a dropped hotstring lets its key through");
+    }
+
+    #[test]
+    fn typing_runs_see_the_modifiers_and_their_released_modifiers_are_paired() {
+        let (mut t, runs) = typing(vec![binding("f13", "Ctrl+Shift+F13")]);
+        t.down(&["LCtrl", "LShift"]);
+        let both = ModKey::LCtrl.bit() | ModKey::LShift.bit();
+        assert_eq!(runs.visible.load(Ordering::SeqCst), both);
+        assert_eq!(runs.phys.load(Ordering::SeqCst), both);
+        // A run released Shift logically (its own injected up is seen as own input).
+        runs.lifted.fetch_or(ModKey::LShift.bit(), Ordering::SeqCst);
+        t.src("LShift", true, Source::Own);
+        assert_eq!(runs.visible.load(Ordering::SeqCst), ModKey::LCtrl.bit());
+        assert_eq!(
+            runs.phys.load(Ordering::SeqCst),
+            both,
+            "still held physically"
+        );
+        // The physical release is consumed: the application already saw Shift go up.
+        assert!(t.ev("LShift", true).consume);
+        assert_eq!(runs.lifted.load(Ordering::SeqCst), 0);
+        // Pressing a released modifier again forgets the release.
+        assert!(!t.ev("LCtrl", true).consume);
+        runs.lifted.fetch_or(ModKey::LCtrl.bit(), Ordering::SeqCst);
+        t.ev("LCtrl", false);
+        assert_eq!(runs.lifted.load(Ordering::SeqCst), 0);
+        assert!(!t.ev("LCtrl", true).consume);
+        // Modifier presses are not counted as typed keys.
+        let before = runs.typed.load(Ordering::SeqCst);
+        t.type_keys(&["A"]);
+        assert_eq!(runs.typed.load(Ordering::SeqCst), before + 1);
+    }
+
+    #[test]
+    fn keys_rules_with_typing_steps_fire_and_step_aside() {
+        let mut b = binding("sign", "Ctrl+Shift+F2");
+        b.injects = true;
+        b.action = Action::Type(Arc::new(TextSpec {
+            text: "x".into(),
+            paste: false,
+            key_delay_ms: 0,
+            variables: false,
+        }));
+        let mut t = T::new(vec![b]);
+        let d = t.down(&["LCtrl", "LShift", "F2"]);
+        assert!(d.consume);
+        assert_eq!(fired(&d), Some((0, FireKind::Press)));
+        t.up(&["LCtrl", "LShift", "F2"]);
+        t.flags.elevated_foreground = true;
+        let d = t.down(&["LCtrl", "LShift", "F2"]);
+        assert!(!d.consume);
+        assert_eq!(
+            d.signal,
+            Some(Signal::Skipped {
+                binding: 0,
+                code: Skip::ElevatedTarget
+            })
+        );
+    }
 }

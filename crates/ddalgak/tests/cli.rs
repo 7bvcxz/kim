@@ -1659,3 +1659,279 @@ fn a_running_app_reloads_valid_rules_and_keeps_its_hook() {
     sb.json(&["quit"]);
     assert_eq!(host.wait_exit(Duration::from_secs(10)), Some(0));
 }
+
+/// Step 69: typing rules and hotstrings through the real CLI (and loaded by the real test host,
+/// which injects nothing). Snippet text never appears in any output unless `--show-text` asks.
+#[test]
+fn typing_rules_and_hotstrings_never_put_the_text_in_any_output() {
+    const SECRET: &str = "SECRET-감사합니다";
+    let sb = Sandbox::new("typing");
+    let no_secret = |what: &str, d: &Value| {
+        let s = d.to_string();
+        assert!(
+            !s.contains("SECRET") && !s.contains("감사합니다"),
+            "{what} must not contain the snippet: {s}"
+        );
+    };
+    let text = format!("{SECRET}\\n둘째 줄\\t끝 \\u{{1F44D}}");
+    let (code, d) = sb.json(&[
+        "rule",
+        "add",
+        "--id",
+        "sign",
+        "--trigger",
+        "Ctrl+Shift+F2",
+        "--action",
+        "type_text",
+        "--text",
+        &text,
+        "--escapes",
+        "--allow",
+        "input-injection",
+    ]);
+    assert_eq!(code, 0, "{d:#}");
+    no_secret("rule add", &d);
+    let (code, d) = sb.json(&[
+        "rule",
+        "add",
+        "--id",
+        "btw",
+        "--hotstring",
+        "btw",
+        "--action",
+        "type_text",
+        "--text",
+        "by the way",
+        "--allow",
+        "input-injection",
+    ]);
+    assert_eq!(code, 0, "{d:#}");
+    let (code, d) = sb.json(&[
+        "rule",
+        "add",
+        "--id",
+        "today",
+        "--hotstring",
+        ";dd",
+        "--immediate",
+        "--case",
+        "sensitive",
+        "--action",
+        "type_text",
+        "--text",
+        "{date} {cursor}",
+        "--variables",
+        "--method",
+        "paste",
+        "--allow",
+        "input-injection",
+        "--allow",
+        "clipboard",
+    ]);
+    assert_eq!(code, 0, "{d:#}");
+    let (code, d) = sb.json(&[
+        "rule",
+        "add",
+        "--id",
+        "ac",
+        "--hotstring",
+        ";ac",
+        "--immediate",
+        "--action",
+        "send_keys",
+        "--keys",
+        "ctrl+a ctrl+c",
+        "--allow",
+        "input-injection",
+    ]);
+    assert_eq!(code, 0, "{d:#}");
+    let stored: Value = serde_json::from_slice(&sb.rules_bytes()).unwrap();
+    let rules = &stored["profiles"][0]["rules"];
+    assert_eq!(
+        rules[0]["steps"][0]["text"],
+        format!("{SECRET}\n둘째 줄\t끝 👍")
+    );
+    assert_eq!(
+        rules[0]["title"],
+        "Ctrl+Shift+F2: types 21 characters on 2 lines"
+    );
+    assert_eq!(
+        rules[2]["trigger"],
+        json!({ "hotstring": { "abbreviation": ";dd", "case": "sensitive", "immediate": true } })
+    );
+    assert_eq!(rules[2]["steps"][0]["variables"], true);
+    assert_eq!(rules[3]["steps"][0]["keys"], "Ctrl+A Ctrl+C");
+    // Refused, with nothing written and no text in the message.
+    let before = sb.rules_bytes();
+    let refusals: Vec<(Vec<&str>, &str)> = vec![
+        (
+            vec![
+                "--trigger",
+                "F13",
+                "--action",
+                "type_text",
+                "--text",
+                "SECRET {clipboard}",
+                "--variables",
+            ],
+            "rule_invalid",
+        ),
+        (
+            vec![
+                "--trigger",
+                "F13",
+                "--action",
+                "type_text",
+                "--text",
+                "SECRET\\u{7}",
+                "--escapes",
+            ],
+            "rule_invalid",
+        ),
+        (
+            vec![
+                "--hotstring",
+                "b t",
+                "--action",
+                "type_text",
+                "--text",
+                "SECRET",
+            ],
+            "hotkey_invalid",
+        ),
+        (
+            vec![
+                "--hotstring",
+                "BTW",
+                "--action",
+                "type_text",
+                "--text",
+                "SECRET",
+            ],
+            "rule_conflict",
+        ),
+        (
+            vec!["--hotstring", "x", "--action", "remap", "--to", "F16"],
+            "rule_invalid",
+        ),
+        (
+            vec![
+                "--trigger",
+                "F13",
+                "--hotstring",
+                "x",
+                "--action",
+                "type_text",
+                "--text",
+                "SECRET",
+            ],
+            "usage",
+        ),
+        (
+            vec![
+                "--trigger",
+                "F13",
+                "--case",
+                "sensitive",
+                "--action",
+                "type_text",
+                "--text",
+                "SECRET",
+            ],
+            "usage",
+        ),
+        (
+            vec![
+                "--trigger",
+                "F13",
+                "--action",
+                "type_text",
+                "--text",
+                "C:\\Users\\SECRET",
+                "--escapes",
+            ],
+            "usage",
+        ),
+    ];
+    for (args, want) in refusals {
+        let mut a = vec!["rule", "add", "--allow", "input-injection"];
+        a.extend(args.iter().copied());
+        let (code, d) = sb.json(&a);
+        assert_ne!(code, 0, "{a:?}");
+        assert_eq!(d["error"]["code"], want, "{a:?}: {d:#}");
+        if want != "usage" {
+            no_secret("a refusal", &d);
+        }
+        assert_eq!(sb.rules_bytes(), before, "{a:?}: nothing written");
+    }
+    // Read commands: counts, IDs and triggers only.
+    let (_, list) = sb.json(&["rule", "list"]);
+    no_secret("rule list", &list);
+    let rows = list["data"]["rules"].as_array().unwrap();
+    assert_eq!(rows[1]["trigger"], "\"btw\" (hotstring)");
+    assert_eq!(rows[0]["steps"], json!(["type_text"]));
+    assert!(rows.iter().all(|r| r["state"] == "active"), "{rows:?}");
+    let (_, show) = sb.json(&["rule", "show", "sign"]);
+    no_secret("rule show", &show);
+    assert_eq!(show["data"]["text_redacted"], true);
+    assert_eq!(
+        show["data"]["rule"]["steps"][0]["text"],
+        json!({ "redacted": true, "preview": { "characters": 21, "lines": 2, "method": "unicode" } })
+    );
+    let (_, shown) = sb.json(&["rule", "show", "sign", "--show-text"]);
+    assert_eq!(shown["data"]["text_redacted"], false);
+    assert!(shown.to_string().contains("SECRET"), "explicitly asked for");
+    for args in [
+        vec!["rule", "check"],
+        vec!["status"],
+        vec!["rules", "history"],
+        vec!["rules", "backup"],
+    ] {
+        let (_, d) = sb.json(&args);
+        no_secret(&args.join(" "), &d);
+    }
+    // Human output of the read commands keeps the text out as well.
+    for a in [vec!["rule", "list"], vec!["rule", "show", "sign"]] {
+        let out = sb.run(&a);
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(!text.contains("SECRET"), "{a:?}: {text}");
+    }
+    // Edits switch between keys and a hotstring.
+    let (code, d) = sb.json(&[
+        "rule",
+        "edit",
+        "btw",
+        "--hotstring",
+        "bytheway",
+        "--omit-end",
+    ]);
+    assert_eq!(code, 0, "{d:#}");
+    let stored: Value = serde_json::from_slice(&sb.rules_bytes()).unwrap();
+    assert_eq!(
+        stored["profiles"][0]["rules"][1]["trigger"],
+        json!({ "hotstring": { "abbreviation": "bytheway", "omit_end": true } })
+    );
+    let (code, d) = sb.json(&["rule", "edit", "btw", "--trigger", "F13"]);
+    assert_eq!(code, 0, "{d:#}");
+    let stored: Value = serde_json::from_slice(&sb.rules_bytes()).unwrap();
+    assert_eq!(
+        stored["profiles"][0]["rules"][1]["trigger"],
+        json!({ "keys": "F13" })
+    );
+    // The real test host loads them all as active rules and injects nothing.
+    let _host = sb.host();
+    if elevated() {
+        eprintln!("elevated: the engine stays off; the load is checked by status only");
+    } else {
+        let (_, d) = sb.json(&["engine", "start"]);
+        assert_eq!(d["data"]["engine"]["state"], "running", "{d:#}");
+    }
+    let (_, st) = sb.json(&["status"]);
+    no_secret("status with the app", &st);
+    assert_eq!(
+        st["data"]["rules"]["active_rules"],
+        json!(["sign", "btw", "today", "ac"]),
+        "{st:#}"
+    );
+    assert_eq!(st["data"]["activity"], json!([]), "nothing ran");
+}

@@ -262,6 +262,7 @@ fn agent_discovers_negotiates_and_probes_an_installed_subak() {
     );
     assert_eq!(code, 0, "{doc}");
     assert_eq!(doc["data"]["capabilities"]["implementation"], "placeholder");
+    // Subak implements `terminal.list` since Step 10, so requiring it succeeds...
     let (code, doc) = run_debug(
         p,
         &[
@@ -270,6 +271,20 @@ fn agent_discovers_negotiates_and_probes_an_installed_subak() {
             "subak",
             "--require-command",
             "terminal.list",
+            "--json",
+        ],
+    );
+    assert_eq!(code, 0, "{doc}");
+    // ...and the refusal path uses a command no tool will ever declare, so this scenario does
+    // not go stale as Subak grows (e2e run 1 failed exactly that way).
+    let (code, doc) = run_debug(
+        p,
+        &[
+            "tools",
+            "describe",
+            "subak",
+            "--require-command",
+            "e2e.never-implemented",
             "--json",
         ],
     );

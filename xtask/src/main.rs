@@ -260,12 +260,14 @@ fn run_e2e(root: &Path, force: bool) -> Result<(), String> {
     cargo(root, &["build", "--package", "kim"])?;
     let bin_dir = root.join("target").join("release");
     let cargo_bin = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-    println!("$ cargo test --package kim-e2e -- --ignored --test-threads=1");
+    // --no-fail-fast: one failing scenario file must not hide the results of the others.
+    println!("$ cargo test --package kim-e2e --no-fail-fast -- --ignored --test-threads=1");
     let status = Command::new(cargo_bin)
         .args([
             "test",
             "--package",
             "kim-e2e",
+            "--no-fail-fast",
             "--",
             "--ignored",
             "--test-threads=1",

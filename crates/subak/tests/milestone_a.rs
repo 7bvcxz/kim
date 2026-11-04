@@ -2158,9 +2158,18 @@ fn milestone_a_baseline_measurements() {
     lab.quiet("cmd1");
     lab.quiet("cmd2");
     lab.wait_no_clients();
-    std::thread::sleep(Duration::from_secs(1));
+    // Threads of the connections that just closed may still be exiting (CI saw 14 -> 13).
+    let mut threads0 = threads_of(host.pid);
+    let until = Instant::now() + LONG;
+    loop {
+        std::thread::sleep(Duration::from_millis(500));
+        let now = threads_of(host.pid);
+        if now == threads0 || Instant::now() > until {
+            break;
+        }
+        threads0 = now;
+    }
     let full_mem = lab.stats();
-    let threads0 = threads_of(host.pid);
     let cpu0 = cpu_ms(&host);
     std::thread::sleep(Duration::from_secs(idle_s));
     let idle_cpu = cpu_ms(&host) - cpu0;
@@ -2209,7 +2218,10 @@ fn milestone_a_baseline_measurements() {
         pct(idle_cpu_attached) < 0.1,
         "idle CPU with clients {idle_cpu_attached} ms over {idle_s} s"
     );
-    assert_eq!(threads1, threads0, "no thread appeared while idle");
+    assert!(
+        threads1 <= threads0,
+        "no thread appeared while idle: {threads0} -> {threads1}"
+    );
 
     // Attach latency: `pane.attach` sent -> the whole snapshot received, on a pane with 2 000
     // history rows and on the full-screen stand-in.

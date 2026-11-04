@@ -19,7 +19,7 @@ use crate::proto::{self, ClientKind, DetachKeys, FLAG_INPUT, Frame};
 use crate::win::pipe::{self, Pipe};
 use crate::win::{self, EnvBlock, NamedLock, console, spawn};
 use serde_json::{Value, json};
-use std::io::{self, IsTerminal, Read, Write};
+use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -683,37 +683,8 @@ pub fn health(endpoint: &str) -> Result<Value, CliError> {
     }))
 }
 
-/// Whether this command may ask the user (CLI_CONTRACT §4.4).
-pub fn can_prompt(a: &Args) -> bool {
-    let env_no_input = std::env::var("KIM_NO_INPUT")
-        .is_ok_and(|v| !(v.is_empty() || v == "0" || v.eq_ignore_ascii_case("false")));
-    !a.json
-        && !a.no_input
-        && !env_no_input
-        && io::stdin().is_terminal()
-        && io::stderr().is_terminal()
-}
-
-/// Asks a yes/no question on stderr when allowed (CLI_CONTRACT §4), or fails with
-/// `confirmation_required` naming what `--yes` would confirm. `--yes` skips the question.
-pub fn confirm(a: &Args, question: &str, what: &str, hint: &str) -> Result<(), CliError> {
-    if a.yes {
-        return Ok(());
-    }
-    if !can_prompt(a) {
-        return Err(
-            CliError::new(Code::ConfirmationRequired, what.to_string()).hint(hint.to_string())
-        );
-    }
-    eprint!("{question} [y/N] ");
-    let mut line = String::new();
-    let _ = io::stdin().read_line(&mut line);
-    if matches!(line.trim(), "y" | "Y" | "yes") {
-        Ok(())
-    } else {
-        Err(CliError::new(Code::Cancelled, "nothing changed"))
-    }
-}
+// The consent prompt is portable (the `hotkeys` commands use it on every target).
+pub use crate::cli::confirm;
 
 /// `host stop`: ends the live Terminals (only with `--kill-terminals`, destructive, needs
 /// consent; ADR 0003 §7) and then the Host.

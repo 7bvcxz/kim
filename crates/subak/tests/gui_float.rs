@@ -1122,3 +1122,34 @@ fn hidden_tabs_persist_across_runs_and_the_manager_shows_a_hidden_terminal_in_it
     .unwrap();
     assert_eq!(gui["hidden_terminals"], json!([]));
 }
+
+#[test]
+fn a_window_menu_starts_the_floating_ui_for_its_endpoint_once() {
+    let host = Host::start("float-from-window", &["--no-shell"]);
+    let ep = host.ep.clone();
+    new_terminal(&ep, "one");
+    let sb = sandbox("from-window");
+    let w = Window::start(&ep, &sb);
+    w.until("one tab", |d| d["tabs"].as_array().unwrap().len() == 1);
+    // "Floating icon and Terminal manager" in the tab menu (command 7): the user's choice.
+    copydata(w.0.hwnd, COPYDATA_TEST, &json!({"cmd": "menu", "id": 7}));
+    let started = w.0.wait("float_started", |_| true);
+    let pid = started["pid"].as_u64().unwrap();
+    // Its events arrive on the window's output (the test mode inherits it): it serves this
+    // endpoint, off-screen, and connects to the running Host.
+    let ready = w.0.wait("ready", |v| v["pid"] == pid);
+    assert_eq!(ready["endpoint"], ep.as_str());
+    assert!(ready["pos"][0].as_i64().unwrap() < -10_000);
+    w.0.wait("connected", |_| true);
+    // A second request only shows the running one: the new process forwards and exits.
+    copydata(w.0.hwnd, COPYDATA_TEST, &json!({"cmd": "menu", "id": 7}));
+    let second = w.0.wait("float_started", |_| true)["pid"].as_u64().unwrap();
+    w.0.wait("forwarded", |v| v["op"] == "show");
+    wait_for("the second one exits", || {
+        Proc::try_open(second as u32).is_none_or(|p| !p.alive())
+    });
+    assert!(
+        Proc::try_open(pid as u32).is_some_and(|p| p.alive()),
+        "the first keeps running"
+    );
+}

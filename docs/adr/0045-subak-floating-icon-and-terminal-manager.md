@@ -120,7 +120,11 @@ window is.
 - Idle, debug build, off-screen, connected to a Host with three Terminals, 10 s: **0.0 ms CPU,
   1.97 MiB private, 11.0 MiB working set, 6 threads, 136 handles** with the manager closed, and
   0.0 ms CPU, 1.96 MiB private with it open. 30 open/close cycles: GDI objects 4 → 4, USER
-  objects 5 → 5. (Release figures: [SUBAK_GUI §11.8](../SUBAK_GUI.md).)
+  objects 5 → 5. **Release build, 30 s: 0.0 ms CPU, 1.54 MiB private, 3 threads** (icon only,
+  connected); 1.82 MiB, 4 threads with the manager open; 1.27 MiB, 1 thread without a Host
+  ([SUBAK_GUI §11.8](../SUBAK_GUI.md)). For comparison, the Step 17 window: 4.34 MiB, 5 threads.
+  `subak-gui.exe` grows from 1.31 to 1.75 MB; `subak.exe` is unchanged (2.10 MB) and names no
+  window function.
 - The accessibility tree (MSAA, which the system's UI Automation proxies of these controls
   expose), read from the off-screen manager: editable text "Search", list "Terminals" with one
   item per row named as above, push buttons "New Terminal", "Open", "Rename", "Delete…", "Pin

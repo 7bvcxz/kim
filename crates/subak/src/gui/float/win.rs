@@ -2569,7 +2569,7 @@ impl Float {
                             .picture
                             .as_ref()
                             .map(|p| (p.size, p.size, p.pixels.clone()));
-                        shot_event(self, &path, r);
+                        shot_event(self, &path, r.as_ref());
                     }
                 }
                 return;
@@ -2666,11 +2666,9 @@ fn shot_window(hwnd: HWND) -> Option<(u32, u32, Vec<u32>)> {
 }
 
 /// Writes a test picture and reports it.
-fn shot_event(f: &Float, path: &str, r: Option<(u32, u32, Vec<u32>)>) {
-    let ok = r
-        .as_ref()
-        .is_some_and(|(w, h, px)| std::fs::write(path, bmp(*w, *h, px)).is_ok());
-    let (w, h) = r.as_ref().map_or((0, 0), |(w, h, _)| (*w, *h));
+fn shot_event(f: &Float, path: &str, r: Option<&(u32, u32, Vec<u32>)>) {
+    let ok = r.is_some_and(|(w, h, px)| std::fs::write(path, bmp(*w, *h, px)).is_ok());
+    let (w, h) = r.map_or((0, 0), |(w, h, _)| (*w, *h));
     f.event(&json!({"event": "shot", "path": path, "ok": ok, "width": w, "height": h}));
 }
 
@@ -2878,7 +2876,7 @@ fn run_after(after: Vec<After>) {
                     let r = (!hwnd.is_null()).then(|| shot_window(hwnd)).flatten();
                     FLOAT.with_borrow(|s| {
                         if let Some(f) = s.as_ref() {
-                            shot_event(f, &path, r);
+                            shot_event(f, &path, r.as_ref());
                         }
                     });
                 }

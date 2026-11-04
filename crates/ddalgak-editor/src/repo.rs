@@ -159,20 +159,45 @@ impl Repo {
         self.transact(command, op, ddalgak::mode_edit::review)
     }
 
+    /// Step 75: adds the planned profiles (never active, every rule off, no consent); problems of
+    /// the imported rules themselves do not refuse it ([`ddalgak::profile::review_import`]).
+    pub fn commit_profile_import(
+        &self,
+        plan: &ddalgak::profile::ImportPlan,
+    ) -> Result<Committed, CommitError> {
+        let ids = plan.rule_ids();
+        let p = plan.clone();
+        self.transact(
+            "profile.import",
+            move |d| ddalgak::profile::apply_import(d, &p),
+            move |before, after| ddalgak::profile::review_import(before, after, &ids),
+        )
+    }
+
+    /// Step 75: a save point of the saved rules for `profile` (`ddalgak profile save`).
+    pub fn save_point(
+        &self,
+        profile: &str,
+        label: Option<&str>,
+    ) -> Result<Option<(std::path::PathBuf, u64)>, CommitError> {
+        let lock = store::lock(&self.files, store::lock_timeout())?;
+        Ok(store::save_point(&self.files, &lock, profile, label)?)
+    }
+
     fn transact(
         &self,
         command: &str,
         op: impl FnOnce(&mut Document) -> Result<Change, EditError> + Send,
-        review: fn(&validate::Report, &validate::Report) -> Result<(), EditError>,
+        review: impl Fn(&validate::Report, &validate::Report) -> Result<(), EditError> + Send + Sync,
     ) -> Result<Committed, CommitError> {
-        isolated(|| self.transact_here(command, op, review))
+        isolated(|| self.transact_here(command, op, &review))
     }
 
     fn transact_here(
         &self,
         command: &str,
         op: impl FnOnce(&mut Document) -> Result<Change, EditError>,
-        review: fn(&validate::Report, &validate::Report) -> Result<(), EditError>,
+        review: &dyn Fn(&validate::Report, &validate::Report) -> Result<(), EditError>,
     ) -> Result<Committed, CommitError> {
         let lock = store::lock(&self.files, store::lock_timeout())?;
         let ctx = self.context();

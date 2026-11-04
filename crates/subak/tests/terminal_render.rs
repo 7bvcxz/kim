@@ -12,7 +12,7 @@
 //! capture being equal to what the view shows (the Host model and the client view agree).
 //! Keyboard input goes through the view's own input API, never the desktop.
 //!
-//! `SUBAK_TERM_SHOTS=<dir>` writes each rendered frame as a PPM screenshot for inspection.
+//! `SUBAK_TERM_SHOTS=<dir>` writes each rendered frame as a BMP screenshot for inspection.
 //! Lines starting with `EVIDENCE` record what was measured; run with `--nocapture` to see them.
 #![cfg(windows)]
 #![allow(unsafe_code)]
@@ -226,8 +226,8 @@ impl Client {
         if let Some(dir) = std::env::var_os("SUBAK_TERM_SHOTS") {
             let dir = std::path::PathBuf::from(dir);
             std::fs::create_dir_all(&dir).unwrap();
-            let path = dir.join(format!("{shot}.ppm"));
-            std::fs::write(&path, self.renderer.frame().to_ppm()).unwrap();
+            let path = dir.join(format!("{shot}.bmp"));
+            std::fs::write(&path, self.renderer.frame().to_bmp()).unwrap();
             eprintln!("EVIDENCE screenshot {}", path.display());
         }
     }

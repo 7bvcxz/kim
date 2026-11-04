@@ -156,6 +156,32 @@ impl Frame {
         out
     }
 
+    /// The frame as a 24-bit BMP image (opens in any Windows image viewer).
+    pub fn to_bmp(&self) -> Vec<u8> {
+        let row = (self.width as usize * 3).div_ceil(4) * 4;
+        let size = 54 + row * self.height as usize;
+        let mut b = Vec::with_capacity(size);
+        b.extend_from_slice(b"BM");
+        b.extend_from_slice(&u32::try_from(size).unwrap_or(0).to_le_bytes());
+        b.extend_from_slice(&[0; 4]);
+        b.extend_from_slice(&54u32.to_le_bytes());
+        b.extend_from_slice(&40u32.to_le_bytes());
+        b.extend_from_slice(&self.width.to_le_bytes());
+        b.extend_from_slice(&self.height.to_le_bytes());
+        b.extend_from_slice(&1u16.to_le_bytes());
+        b.extend_from_slice(&24u16.to_le_bytes());
+        b.extend_from_slice(&[0; 24]);
+        for y in (0..self.height).rev() {
+            let start = b.len();
+            for x in 0..self.width {
+                let c = self.pixel(x, y);
+                b.extend_from_slice(&[c.2, c.1, c.0]);
+            }
+            b.resize(start + row, 0);
+        }
+        b
+    }
+
     /// Bytes of pixel memory.
     pub fn bytes(&self) -> usize {
         self.pixels.capacity() * 4

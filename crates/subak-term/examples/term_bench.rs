@@ -3,6 +3,8 @@
 //!     cargo run --release -p subak-term --example term_bench -- [--quick] [--json]
 //!         [--only parse,render,long,fallback,dpi,theme,latency,idle] [--idle-secs N]
 //!         [--shot DIR] [--compare -- <program> [args]]
+//!     cargo run --release -p subak-term --example term_bench -- --show
+//!         [--attach <terminal> [--endpoint <ep>] [--subak <path>]] [--offscreen] [--exit-after N]
 //!
 //! Measures, in this process and without a visible window:
 //!
@@ -22,8 +24,11 @@
 //!   `--compare -- <program>` samples another program the same way (Kim Manager's egui + glow
 //!   preview places its own window off-screen and unactivated).
 //!
-//! `--shot DIR` writes PPM screenshots of the demo screen (system fonts, 100 % and 200 %, both
-//! themes) for inspection. Not shipped.
+//! `--shot DIR` writes BMP screenshots of the demo screen (system fonts, 100 % and 200 %, both
+//! themes) for inspection. `--show` is the maintainer's visible check (docs/TERMINAL_EMULATOR.md
+//! §9): a real, per-monitor-DPI-aware window with the demo screen, or with a live `subak attach`
+//! session whose keys go through the view's input API; `--offscreen` runs the same window off
+//! every monitor, unactivated, and closes it after `--exit-after` seconds. Not shipped.
 
 use std::time::{Duration, Instant};
 use subak_term::render::{BoxRasterizer, RenderOptions, Renderer, Theme};
@@ -534,8 +539,8 @@ fn shots(dir: &str) {
         v.select(0, 5, subak_term::SelectMode::Word);
         v.extend_selection(30, 5);
         r.render(&v);
-        let path = format!("{dir}/term-{theme}-{}.ppm", (scale * 100.0) as u32);
-        std::fs::write(&path, r.frame().to_ppm()).expect("write shot");
+        let path = format!("{dir}/term-{theme}-{}.bmp", (scale * 100.0) as u32);
+        std::fs::write(&path, r.frame().to_bmp()).expect("write shot");
         println!("wrote {path}");
         v.clear_selection();
     }
@@ -871,6 +876,440 @@ fn bench_idle(o: &mut Out, secs: u64, compare: &[String]) {
     }
 }
 
+// ---------------------------------------------------------------------------------------------
+// The manual check: the renderer in a real window (docs/TERMINAL_EMULATOR.md §9).
+
+#[cfg(windows)]
+#[allow(unsafe_code)]
+mod show {
+    use std::cell::RefCell;
+    use std::io::{Read, Write};
+    use std::os::windows::process::CommandExt;
+    use std::process::{Child, ChildStdin, Command, Stdio};
+    use std::ptr::{null, null_mut};
+    use std::sync::{Arc, Mutex};
+    use subak_term::render::{RenderOptions, Renderer, Theme};
+    use subak_term::{Key, Mods, TermView};
+    use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
+    use windows_sys::Win32::Graphics::Gdi::{
+        BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BeginPaint, DIB_RGB_COLORS, EndPaint, InvalidateRect,
+        PAINTSTRUCT, SetDIBitsToDevice,
+    };
+    use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+    use windows_sys::Win32::UI::HiDpi::{
+        AdjustWindowRectExForDpi, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForWindow,
+        SetProcessDpiAwarenessContext,
+    };
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetKeyState;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
+        GetMessageW, MSG, PostMessageW, PostQuitMessage, RegisterClassExW, SW_SHOW,
+        SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER, SetTimer, SetWindowPos,
+        ShowWindow, TranslateMessage, WM_APP, WM_CHAR, WM_DESTROY, WM_DPICHANGED, WM_KEYDOWN,
+        WM_KILLFOCUS, WM_PAINT, WM_SETFOCUS, WM_SYSCHAR, WM_SYSKEYDOWN, WM_TIMER, WNDCLASSEXW,
+        WS_CAPTION, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_MINIMIZEBOX, WS_OVERLAPPED, WS_POPUP,
+        WS_SYSMENU,
+    };
+
+    const WM_OUTPUT: u32 = WM_APP + 1;
+    const WM_ENDED: u32 = WM_APP + 2;
+
+    struct App {
+        view: TermView,
+        renderer: Renderer,
+        stdin: Option<ChildStdin>,
+        child: Option<Child>,
+        incoming: Arc<Mutex<Vec<u8>>>,
+        high_surrogate: Option<u16>,
+        bytes: usize,
+        frames: usize,
+    }
+
+    thread_local! {
+        static APP: RefCell<Option<App>> = const { RefCell::new(None) };
+    }
+
+    fn wide(s: &str) -> Vec<u16> {
+        s.encode_utf16().chain([0]).collect()
+    }
+
+    fn style() -> u32 {
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX
+    }
+
+    /// The outer window size for the renderer's frame at `dpi`.
+    fn outer(r: &Renderer, dpi: u32) -> (i32, i32) {
+        let f = r.frame();
+        let mut rc = RECT {
+            left: 0,
+            top: 0,
+            right: f.width as i32,
+            bottom: f.height as i32,
+        };
+        // SAFETY: a plain RECT computation.
+        unsafe { AdjustWindowRectExForDpi(&raw mut rc, style(), 0, 0, dpi) };
+        (rc.right - rc.left, rc.bottom - rc.top)
+    }
+
+    fn mods() -> Mods {
+        // SAFETY: reads this thread's keyboard state.
+        let down = |vk: i32| unsafe { GetKeyState(vk) } < 0;
+        Mods {
+            shift: down(0x10),
+            ctrl: down(0x11),
+            alt: down(0x12),
+        }
+    }
+
+    fn send(app: &mut App, bytes: &[u8]) {
+        if bytes.is_empty() {
+            return;
+        }
+        if let Some(stdin) = &mut app.stdin {
+            let _ = stdin.write_all(bytes);
+            let _ = stdin.flush();
+        }
+    }
+
+    fn redraw(hwnd: HWND, app: &mut App) {
+        let d = app.renderer.render(&app.view);
+        if !d.is_empty() {
+            app.frames += 1;
+            // SAFETY: invalidates our own window's client area.
+            unsafe { InvalidateRect(hwnd, null(), 0) };
+        }
+    }
+
+    unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+        // Calls below can send messages synchronously (re-entering this procedure while the
+        // state is borrowed): those fall through to the default handling, and closing the
+        // window waits until the borrow ends.
+        let mut destroy = false;
+        let handled = APP.with(|cell| {
+            let Ok(mut slot) = cell.try_borrow_mut() else {
+                return None;
+            };
+            let app = slot.as_mut()?;
+            match msg {
+                WM_PAINT => {
+                    let mut ps = PAINTSTRUCT::default();
+                    // SAFETY: standard paint handling on our own window with our own frame.
+                    unsafe {
+                        let dc = BeginPaint(hwnd, &raw mut ps);
+                        let f = app.renderer.frame();
+                        let bmi = BITMAPINFO {
+                            bmiHeader: BITMAPINFOHEADER {
+                                biSize: size_of::<BITMAPINFOHEADER>() as u32,
+                                biWidth: f.width as i32,
+                                biHeight: -(f.height as i32),
+                                biPlanes: 1,
+                                biBitCount: 32,
+                                biCompression: BI_RGB,
+                                ..BITMAPINFOHEADER::default()
+                            },
+                            ..BITMAPINFO::default()
+                        };
+                        SetDIBitsToDevice(
+                            dc,
+                            0,
+                            0,
+                            f.width,
+                            f.height,
+                            0,
+                            0,
+                            0,
+                            f.height,
+                            f.pixels.as_ptr().cast(),
+                            &raw const bmi,
+                            DIB_RGB_COLORS,
+                        );
+                        EndPaint(hwnd, &raw const ps);
+                    }
+                    Some(0)
+                }
+                WM_OUTPUT => {
+                    let bytes = std::mem::take(&mut *app.incoming.lock().unwrap());
+                    app.bytes += bytes.len();
+                    app.view.feed(&bytes);
+                    let replies = app.view.take_replies();
+                    send(app, &replies);
+                    redraw(hwnd, app);
+                    Some(0)
+                }
+                WM_KEYDOWN | WM_SYSKEYDOWN => {
+                    let key = match wp {
+                        0x26 => Key::Up,
+                        0x28 => Key::Down,
+                        0x25 => Key::Left,
+                        0x27 => Key::Right,
+                        0x24 => Key::Home,
+                        0x23 => Key::End,
+                        0x21 => Key::PageUp,
+                        0x22 => Key::PageDown,
+                        0x2D => Key::Insert,
+                        0x2E => Key::Delete,
+                        0x70..=0x7B => Key::F((wp - 0x70 + 1) as u8),
+                        0x1B if app.stdin.is_none() => {
+                            destroy = true;
+                            return Some(0);
+                        }
+                        _ => return None, // characters arrive as WM_CHAR
+                    };
+                    let bytes = app.view.key(key, mods());
+                    send(app, &bytes);
+                    redraw(hwnd, app);
+                    Some(0)
+                }
+                WM_CHAR | WM_SYSCHAR => {
+                    let unit = wp as u16;
+                    let c = if (0xD800..0xDC00).contains(&unit) {
+                        app.high_surrogate = Some(unit);
+                        return Some(0);
+                    } else if (0xDC00..0xE000).contains(&unit) {
+                        let hi = app.high_surrogate.take()?;
+                        char::decode_utf16([hi, unit]).next()?.ok()?
+                    } else {
+                        char::from_u32(u32::from(unit))?
+                    };
+                    let m = Mods {
+                        alt: msg == WM_SYSCHAR,
+                        ..Mods::NONE
+                    };
+                    let bytes = match c {
+                        '\r' => app.view.key(Key::Enter, m),
+                        '\t' => app.view.key(Key::Tab, mods()),
+                        '\u{8}' => app.view.key(Key::Backspace, m),
+                        '\u{1b}' => app.view.key(Key::Escape, m),
+                        // Ctrl+letter arrives already as its C0 control.
+                        c if (c as u32) < 0x20 => vec![c as u8],
+                        c => app.view.key(Key::Char(c), m),
+                    };
+                    send(app, &bytes);
+                    redraw(hwnd, app);
+                    Some(0)
+                }
+                WM_SETFOCUS | WM_KILLFOCUS => {
+                    let focused = msg == WM_SETFOCUS;
+                    app.renderer.set_focused(focused);
+                    if let Some(report) = app.view.focus(focused) {
+                        send(app, &report);
+                    }
+                    redraw(hwnd, app);
+                    Some(0)
+                }
+                WM_DPICHANGED => {
+                    // Re-rasterize at the new scale (never a bitmap scale) and take the size
+                    // Windows suggests for the new monitor's DPI.
+                    let dpi = (wp & 0xffff) as u32;
+                    app.renderer.set_scale(dpi as f32 / 96.0);
+                    app.renderer.render(&app.view);
+                    let (w, h) = outer(&app.renderer, dpi);
+                    // SAFETY: resizes our own window; lp points at the suggested RECT.
+                    unsafe {
+                        let rc = &*(lp as *const RECT);
+                        SetWindowPos(
+                            hwnd,
+                            null_mut(),
+                            rc.left,
+                            rc.top,
+                            w,
+                            h,
+                            SWP_NOZORDER | SWP_NOACTIVATE,
+                        );
+                        InvalidateRect(hwnd, null(), 0);
+                    }
+                    Some(0)
+                }
+                WM_TIMER | WM_ENDED => {
+                    destroy = true;
+                    Some(0)
+                }
+                WM_DESTROY => {
+                    if let Some(mut child) = app.child.take() {
+                        // Ending `subak attach` is a client exit: the Terminal keeps running.
+                        let _ = child.kill();
+                        let _ = child.wait();
+                    }
+                    println!(
+                        "show: {} bytes received, {} frames drawn; screen:\n{}",
+                        app.bytes,
+                        app.frames,
+                        (0..app.view.size().1)
+                            .map(|r| app.view.row_at(r).text().trim_end().to_string())
+                            .filter(|l| !l.is_empty())
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    );
+                    // SAFETY: ends this thread's message loop.
+                    unsafe { PostQuitMessage(0) };
+                    Some(0)
+                }
+                _ => None,
+            }
+        });
+        if destroy {
+            // SAFETY: closes our own window (WM_DESTROY then runs with the state free).
+            unsafe { DestroyWindow(hwnd) };
+            return 0;
+        }
+        // SAFETY: default handling of everything not handled above.
+        handled.unwrap_or_else(|| unsafe { DefWindowProcW(hwnd, msg, wp, lp) })
+    }
+
+    /// Opens a real window with the demo screen, or with a live `subak attach <target>` session
+    /// when `attach` is given. `offscreen` places it far off every monitor, never activated, and
+    /// closes it after `exit_after` seconds (for an automated smoke run that shows nothing).
+    pub fn run(
+        attach: Option<&(String, Option<String>, String)>,
+        offscreen: bool,
+        exit_after: u32,
+    ) {
+        // SAFETY: opts this process into per-monitor DPI awareness before any window exists.
+        unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
+        let (cols, rows) = (100u16, 30u16);
+        let mut view = TermView::new(cols, rows, 2000);
+        let renderer = Renderer::with_system_fonts(Theme::kim_dark(), RenderOptions::default())
+            .expect("system fonts");
+        let incoming = Arc::new(Mutex::new(Vec::new()));
+        let (mut stdin, mut child, mut stdout) = (None, None, None);
+        match attach {
+            None => view.feed(&super::demo_bytes()),
+            Some((target, endpoint, subak)) => {
+                view.set_answer_reports(true);
+                let mut args: Vec<String> = Vec::new();
+                if let Some(ep) = endpoint {
+                    args.extend(["--endpoint".into(), ep.clone()]);
+                }
+                args.extend([
+                    "attach".into(),
+                    target.clone(),
+                    "--size".into(),
+                    format!("{cols}x{rows}"),
+                ]);
+                let mut c = Command::new(subak)
+                    .args(&args)
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::null())
+                    .creation_flags(CREATE_NO_WINDOW)
+                    .spawn()
+                    .expect("run subak attach");
+                stdin = c.stdin.take();
+                stdout = c.stdout.take();
+                child = Some(c);
+            }
+        }
+        let class = wide("SubakTermBenchShow");
+        // SAFETY: registers a class and creates one window of this process; with `offscreen` it
+        // is a tool window far off every monitor and never activated.
+        let hwnd = unsafe {
+            let hinst = GetModuleHandleW(null());
+            let wc = WNDCLASSEXW {
+                cbSize: size_of::<WNDCLASSEXW>() as u32,
+                lpfnWndProc: Some(wndproc),
+                hInstance: hinst,
+                lpszClassName: class.as_ptr(),
+                ..WNDCLASSEXW::default()
+            };
+            RegisterClassExW(&raw const wc);
+            let title = wide(match attach {
+                None => "Subak terminal renderer (manual check, Step 15)",
+                Some(_) => "Subak terminal renderer: live session (manual check, Step 15)",
+            });
+            let (ex, st, x, y) = if offscreen {
+                (
+                    WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                    WS_POPUP,
+                    -20000,
+                    -20000,
+                )
+            } else {
+                (0, style(), CW_USEDEFAULT, CW_USEDEFAULT)
+            };
+            CreateWindowExW(
+                ex,
+                class.as_ptr(),
+                title.as_ptr(),
+                st,
+                x,
+                y,
+                400,
+                300,
+                null_mut(),
+                null_mut(),
+                hinst,
+                null(),
+            )
+        };
+        assert!(!hwnd.is_null(), "CreateWindowExW");
+        // SAFETY: our own window.
+        let dpi = unsafe { GetDpiForWindow(hwnd) }.max(96);
+        let mut renderer = renderer;
+        renderer.set_scale(dpi as f32 / 96.0);
+        renderer.render(&view);
+        let (w, h) = outer(&renderer, dpi);
+        APP.with_borrow_mut(|slot| {
+            *slot = Some(App {
+                view,
+                renderer,
+                stdin,
+                child,
+                incoming: Arc::clone(&incoming),
+                high_surrogate: None,
+                bytes: 0,
+                frames: 1,
+            });
+        });
+        if let Some(mut out) = stdout {
+            let hw = hwnd as isize;
+            std::thread::spawn(move || {
+                let mut buf = [0u8; 16 * 1024];
+                loop {
+                    match out.read(&mut buf) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => {
+                            incoming.lock().unwrap().extend_from_slice(&buf[..n]);
+                            // SAFETY: posts to the UI thread's window (thread-safe API).
+                            unsafe { PostMessageW(hw as HWND, WM_OUTPUT, 0, 0) };
+                        }
+                    }
+                }
+                // SAFETY: as above.
+                unsafe { PostMessageW(hw as HWND, WM_ENDED, 0, 0) };
+            });
+        }
+        // SAFETY: sizes and shows our own window, then runs this thread's message loop.
+        unsafe {
+            SetWindowPos(
+                hwnd,
+                null_mut(),
+                0,
+                0,
+                w,
+                h,
+                SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+            ShowWindow(
+                hwnd,
+                if offscreen {
+                    SW_SHOWNOACTIVATE
+                } else {
+                    SW_SHOW
+                },
+            );
+            if offscreen || exit_after > 0 {
+                SetTimer(hwnd, 1, exit_after.max(1) * 1000, None);
+            }
+            let mut msg = MSG::default();
+            while GetMessageW(&raw mut msg, null_mut(), 0, 0) > 0 {
+                TranslateMessage(&raw const msg);
+                DispatchMessageW(&raw const msg);
+            }
+        }
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--idle-child") {
@@ -887,6 +1326,25 @@ fn main() {
     };
     if let Some(dir) = value("--shot") {
         shots(&dir);
+        return;
+    }
+    if flag("--show") {
+        // The manual check (docs/TERMINAL_EMULATOR.md §9): a real window. Never run by tests,
+        // except `--offscreen`, which places it off every monitor and closes it by itself.
+        #[cfg(windows)]
+        {
+            let attach = value("--attach").map(|t| {
+                (
+                    t,
+                    value("--endpoint"),
+                    value("--subak").unwrap_or_else(|| "subak".into()),
+                )
+            });
+            let exit_after = value("--exit-after")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(if flag("--offscreen") { 5 } else { 0 });
+            show::run(attach.as_ref(), flag("--offscreen"), exit_after);
+        }
         return;
     }
     let quick = flag("--quick");

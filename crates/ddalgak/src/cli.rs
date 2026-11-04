@@ -191,6 +191,7 @@ impl Cmd {
     }
 
     /// A mode command that reads or writes rules.json (the others ask the running app).
+    #[cfg_attr(not(windows), allow(dead_code))] // only the Windows client runs commands (ADR 0011)
     pub fn is_mode_file(self) -> bool {
         matches!(
             self,

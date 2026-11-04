@@ -319,12 +319,26 @@ fn a_program_holding_the_pipe_name_is_refused_and_sent_nothing() {
     let ep = endpoint("squat");
     // A same-user squatter in another process: it creates the pipe first and reports how many
     // bytes each client sent before disconnecting.
+    //
+    // A brand-new pipe instance accepts a client even before ConnectNamedPipe runs. In e2e run
+    // 1 Subak connected, checked the server's identity and left before PowerShell reached
+    // WaitForConnection; .NET then threw ("The pipe is being closed"), refused to Disconnect,
+    // and the squatter's loop and process ended, so the next command found no pipe at all.
+    // So the squatter starts listening (BeginWaitForConnection) before it reports READY. After
+    // a Disconnect an instance is not connectable until it listens again, and Subak's client
+    // waits while the pipe is busy, so later rounds cannot race. Notes go to the output.
     let script = format!(
-        "$s = New-Object System.IO.Pipes.NamedPipeServerStream('{ep}', 'InOut', 1); \
-         [Console]::Out.WriteLine('READY'); [Console]::Out.Flush(); \
-         for ($i = 0; $i -lt 3; $i++) {{ $s.WaitForConnection(); $n = 0; $b = New-Object byte[] 4096; \
-         while (($r = $s.Read($b, 0, 4096)) -gt 0) {{ $n += $r }}; \
-         [Console]::Out.WriteLine(\"BYTES $n\"); [Console]::Out.Flush(); $s.Disconnect() }}"
+        "$s = New-Object System.IO.Pipes.NamedPipeServerStream('{ep}', \
+         [System.IO.Pipes.PipeDirection]::InOut, 1, [System.IO.Pipes.PipeTransmissionMode]::Byte, \
+         [System.IO.Pipes.PipeOptions]::Asynchronous); \
+         for ($i = 0; $i -lt 3; $i++) {{ $n = 0; $b = New-Object byte[] 4096; \
+         $ar = $s.BeginWaitForConnection($null, $null); \
+         if ($i -eq 0) {{ [Console]::Out.WriteLine('READY'); [Console]::Out.Flush() }}; \
+         try {{ $s.EndWaitForConnection($ar) }} catch {{ [Console]::Out.WriteLine('NOTE wait: ' + $_.Exception.Message) }}; \
+         try {{ while (($r = $s.Read($b, 0, 4096)) -gt 0) {{ $n += $r }} }} catch {{ [Console]::Out.WriteLine('NOTE read: ' + $_.Exception.Message) }}; \
+         [Console]::Out.WriteLine(\"BYTES $n\"); [Console]::Out.Flush(); \
+         try {{ $s.Disconnect() }} catch {{ [Console]::Out.WriteLine('NOTE disconnect: ' + $_.Exception.Message) }} }}; \
+         [Console]::Out.WriteLine('DONE')"
     );
     let mut squatter = Command::new("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
@@ -342,22 +356,32 @@ fn a_program_holding_the_pipe_name_is_refused_and_sent_nothing() {
         assert!(n > 0, "the squatter did not start");
         seen.extend_from_slice(&buf[..n]);
     }
+    let mut results = Vec::new();
     for args in [
         &["host", "status", "--endpoint", &ep][..],
         &["host", "health", "--endpoint", &ep],
         &["host", "start", "--endpoint", &ep, "--no-shell"],
     ] {
         let (code, doc) = json(&subak, args, &sb);
-        assert_eq!(
-            (code, doc["error"]["code"].as_str()),
-            (4, Some("host_identity_mismatch")),
-            "{args:?}: {doc}"
-        );
+        results.push((args.to_vec(), code, doc));
     }
-    let mut rest = String::new();
-    let _ = out.read_to_string(&mut rest);
+    // The squatter ends by itself after three connections; give it a moment, then make sure it
+    // is gone so its output can be read even when a command never reached it.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while squatter.try_wait().ok().flatten().is_none() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
     let _ = squatter.kill();
     let _ = squatter.wait();
+    let mut rest = String::new();
+    let _ = out.read_to_string(&mut rest);
+    for (args, code, doc) in &results {
+        assert_eq!(
+            (*code, doc["error"]["code"].as_str()),
+            (4, Some("host_identity_mismatch")),
+            "{args:?}: {doc}\nsquatter output:\n{rest}"
+        );
+    }
     let counts: Vec<&str> = rest.lines().filter(|l| l.starts_with("BYTES")).collect();
     assert_eq!(counts, ["BYTES 0", "BYTES 0", "BYTES 0"], "{rest}");
 }

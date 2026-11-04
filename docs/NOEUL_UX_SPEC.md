@@ -1,6 +1,6 @@
 # Noeul UX specification
 
-Status: **current** (specification; Step 49 implemented the app foundation, [ADR 0023](adr/0023-noeul-app-foundation.md); Step 50 the `F1` selection overlay with `Enter` to pin, [ADR 0026](adr/0026-noeul-capture-overlay.md), see §4.5; Step 53 the floating pin engine, [ADR 0029](adr/0029-noeul-pin-engine.md), see §4.6; Step 51 the double-click-to-pin gesture, the toolbar, the selection menu, copy, save and the gesture settings, [ADR 0032](adr/0032-noeul-double-click-pin-and-outputs.md), see §4.7; Step 52 window and element detection, the magnifier, the precision keys, snapping and the rectangle history, [ADR 0035](adr/0035-noeul-smart-selection-and-precision.md), see §4.8; Step 56 annotation in the overlay and on pins, [ADR 0038](adr/0038-noeul-annotation.md), see §4.9) · Step 48 ·
+Status: **current** (specification; Step 49 implemented the app foundation, [ADR 0023](adr/0023-noeul-app-foundation.md); Step 50 the `F1` selection overlay with `Enter` to pin, [ADR 0026](adr/0026-noeul-capture-overlay.md), see §4.5; Step 53 the floating pin engine, [ADR 0029](adr/0029-noeul-pin-engine.md), see §4.6; Step 51 the double-click-to-pin gesture, the toolbar, the selection menu, copy, save and the gesture settings, [ADR 0032](adr/0032-noeul-double-click-pin-and-outputs.md), see §4.7; Step 52 window and element detection, the magnifier, the precision keys, snapping and the rectangle history, [ADR 0035](adr/0035-noeul-smart-selection-and-precision.md), see §4.8; Step 56 annotation in the overlay and on pins, [ADR 0038](adr/0038-noeul-annotation.md), see §4.9; Step 57 mosaic, blur, the eraser and the solid redaction, [ADR 0041](adr/0041-noeul-privacy-tools.md), see §4.10) · Step 48 ·
 Philosophy: [NOEUL_PHILOSOPHY](NOEUL_PHILOSOPHY.md) · Requirements: [NOEUL_REQUIREMENTS](NOEUL_REQUIREMENTS.md) ·
 Parity: [NOEUL_SNIPASTE_MATRIX](NOEUL_SNIPASTE_MATRIX.md) · Shortcuts: [HOTKEY_CONTRACT §13.3](HOTKEY_CONTRACT.md) ·
 Decision: [ADR 0021](adr/0021-noeul-product-definition.md)
@@ -63,13 +63,13 @@ Each journey has a mouse path and a keyboard-only path; both reach the same resu
 |///////  |                                   |  //////  | 412, 188    |  //|
 |///////  o-----------------o-----------------o  //////  | #3A6EA5     |  //|
 |///////  +--------------------------------------------+ +-------------+  //|
-|///////  | [Pin] | Copy  Save | ▭ ◯ ／ → ✎ ▮ T ▦ ◌ ⌫ | ↶ ↷ |  ✕  | /////////|
+|///////  | [Pin] | Copy  Save | ▭ ◯ ／ → ✎ ▮ T ▦ ◌ ⌫ █ | ↶ ↷ |  ✕  | ///////|
 |///////  +--------------------------------------------+ //////////////////|
 |//////////////////////////////////////////////////////////////////////////|
 +--------------------------------------------------------------------------+
   o = resize handle   [Pin] = primary button (accent fill, first in tab order)
-  ▭ ◯ ／ → ✎ ▮ T ▦ ◌ ⌫ = rectangle, ellipse, line, arrow, pen, marker, text,
-  mosaic, blur, eraser (N3)   ↶ ↷ = undo, redo   ✕ = cancel (Esc)
+  ▭ ◯ ／ → ✎ ▮ T ▦ ◌ ⌫ █ = rectangle, ellipse, line, arrow, pen, marker, text,
+  mosaic, blur, eraser, solid redaction (N3)   ↶ ↷ = undo, redo   ✕ = cancel (Esc)
 ```
 
 - The toolbar sits below the selection, or above it when there is no room, or inside its
@@ -87,7 +87,9 @@ the button that has the keyboard focus. Step 56 ([ADR 0038](adr/0038-noeul-annot
 added the rectangle, ellipse, line, arrow, pen, marker and text tools, the colour and width buttons,
 Undo and Redo between Save and Cancel (icons are original vector drawings; the active tool has an
 accent bar; Undo and Redo grey out with nothing to undo or redo); on a monitor narrower than the bar
-the buttons wrap into rows. Mosaic, blur and the eraser are Step 57. Tooltips are
+the buttons wrap into rows. Step 57 ([ADR 0041](adr/0041-noeul-privacy-tools.md), §4.10) added
+mosaic, blur, the eraser and the solid redaction after the text tool (the bar is 744 logical pixels
+wide). Tooltips are
 not shown yet; the first-run hint is the overlay's keyboard help box, which now reads "Double-click
 inside pins it · Ctrl+C copies · Ctrl+S saves · Ctrl+Shift+S quick-saves" from the effective
 gesture and keys (`[capture] keyboard_help`, ADR 0026 §6).
@@ -699,6 +701,91 @@ date in the Step report and the matrix Evidence column):
 11. Keyboard only: `F1`, `Ctrl+A`, `Tab` four times (the rectangle tool has the focus ring),
     `Enter`, `Space`, `W A S D`, `Space`, `Enter`: a pin with a rectangle.
 
+### 4.10 Step 57: the privacy tools, their rules and the manual check
+
+Step 57 ships mosaic, blur, the eraser and the solid redaction in the overlay and on pins
+([ADR 0041](adr/0041-noeul-privacy-tools.md); NOEUL-FR-082). The rules:
+
+1. **Tools.** The toolbar's mosaic, blur, eraser and redaction buttons (after the text tool; or
+   their bindable `annotate.mosaic`, `.blur`, `.eraser`, `.redact` actions, no default keys) choose
+   a tool. Mosaic, blur and redaction draw a **box** from corner to corner (`Shift`: a square);
+   the eraser paints a **brush** stroke. Holding `Ctrl` at the press swaps the form (a brush
+   stroke for mosaic, blur and redaction; a box for the eraser). Everything else is as for the
+   other tools (§4.9): drawing is clipped to the selection, nothing pins while a tool is active,
+   `Esc` aborts the box being drawn, `Enter` and Pin still pin.
+2. **What each does.** Mosaic gives every cell of the area the average colour of its pixels; blur
+   is a Gaussian blur of the area; both read only the pixels inside their own area. The eraser
+   wipes drawings — shapes, strokes, labels, mosaic and blur — back to the picture under it, in
+   drawing order (what is drawn after it stays on top), and **never brings back what a redaction
+   covers**. The redaction is an opaque fill, black by default; with the redaction tool active the
+   colour button chooses its colour (always opaque), and a selected redaction takes a chosen
+   colour.
+3. **Weak and strong protection.** While the mosaic or blur tool is active, or such an object is
+   drawn or selected, the size chip's second line says "Visual only, weak protection: use Redact to
+   hide for good"; with the redaction: "Solid fill: nothing under it is copied or saved"; with the
+   eraser: "Erases drawings, never a redaction". The redaction tool's name is "Solid redaction
+   tool (irreversible on export)".
+4. **Strength and size.** The width level (`[`, `]`, the wheel, the width button) sets a mosaic's
+   cell size (4, 6, 8, 12, 16, 22, 30 logical pixels) and a blur's strength (standard deviation 2,
+   3, 4, 6, 8, 11, 15), and the brush width of a brush stroke (8, 12, 16, 24, 32, 44, 60); a box's
+   size is its drag and its handles. A selected effect takes the new level at once: the overlay
+   shows the result live — the preview — and nothing is applied to the picture before an output.
+5. **Objects.** A privacy box is picked by a press on its edge (a press inside draws another one
+   over it), then moved, resized by its handles, reordered, re-levelled or deleted like any other
+   object; an eraser stroke shows nothing of its own and is picked by keyboard only (`N`). Every
+   edit is one undo step (§4.9 rule 4).
+6. **Outputs.** Copy, Save, Quick save and a pin's window and outputs contain the flattened pixels
+   only: under a redaction the opaque fill and nothing else — no hidden layer, no metadata, no PNG
+   chunk beyond IHDR, IDAT and IEND, no original anywhere; a blur or mosaic drawn before or after a
+   redaction never spreads what it covers. No intermediate picture is written anywhere (Save
+   writes the finished PNG; replacing a file goes through a temporary file beside it holding the
+   same finished PNG).
+7. **Who restores the original.** Until an output the picture stays in memory under the objects,
+   so only the user brings it back: undo, delete, cancel the capture, or delete the redaction in
+   the pin editor and commit. A failed output (a busy clipboard, a folder that cannot be written)
+   keeps every object as it was. A pin keeps its picture and its redactions as objects in memory
+   (a pin is not an export); everything it outputs is redacted.
+8. **Privacy and cost.** `status` reports the tool, counts per kind and IDs only. The effects run
+   on the CPU, only when an edit or an output asks for pixels — nothing is processed while idle.
+
+What the automated tests cover, without anything on the visible desktop, synthesized input, the
+user's clipboard or real screen pixels on disk:
+
+| Layer | Where | What |
+| --- | --- | --- |
+| Model and pixels | `crates/noeul/src/annotation/privacy_tests.rs` | every tool's box and brush forms with exact undo and redo; strength and brush per level and DPI; the redaction's own colour and the chip's notes; picking on the edge, the eraser never by the mouse, `Ctrl` always draws; a redaction on opaque, translucent and transparent pictures of odd sizes leaves only the fill (no soft edge); the output does not depend on what lies under a redaction, whatever is drawn before or after it, in any order; mosaic cell averages with partial cells, alpha edges and a grid that moves with the object; the blur's Gaussian approximation, flat pictures stay exact, it reads only its box and makes no colour fringe at alpha edges; the eraser over strokes, mosaic and a redaction; the overlay's refresh equals a fresh export after every edit; repeated undo and redo restore exact pixels; clipping off the picture, a 1-pixel picture, `Esc` while drawing; a 1280 × 720 blur and mosaic |
+| Instance core (fake windows) | `crates/noeul/src/app.rs` tests | the overlay shows what the in-memory clipboard stand-in's PNG and `CF_DIBV5` and a quick save hold: the fill, nothing of the original, IHDR, IDAT and IEND only, no temporary file; a failed save and a busy clipboard keep the redactions editable (undo and redo only) and leave no file; a pin's window and copy are redacted and only the user's delete-and-commit restores the picture; idle redraws and pointer moves process nothing |
+| Real binary, test hook | `crates/noeul/tests/annotation.rs` | the redaction tool chosen on the toolbar, a redaction and a blur quick-saved with the fill only and only the needed chunks, and a pinned redaction in the pin's quick save |
+| e2e (ignored; `cargo xtask e2e` only) | `e2e/tests/step57_noeul_redaction.rs` | the four tool actions headlessly; redaction, mosaic and an eraser through it on the synthetic desktop, quick-saved with the fill only and nothing in the temporary folder |
+| Measurement | `crates/noeul/examples/redact_measure.rs` | `flatten` with each effect on a 3840 × 2160 picture, the refresh after an edit next to a blur, and no work while idle (numbers in ADR 0041) |
+
+These steps need the maintainer, on the real desktop with a physical mouse and keyboard (record
+the Windows build, the monitors and their scales, and the date in the Step report and the matrix
+Evidence column):
+
+1. `cargo build --release -p noeul`, then `target\release\noeul.exe start` (default profile).
+2. Press `F1`, select a region with text in it, click the toolbar's redaction tool (the solid bar
+   after the eraser): the chip reads "Solid fill: nothing under it is copied or saved". Drag over a
+   word: a black box covers it while you drag.
+3. Click the mosaic tool and drag over another word: the chip warns "Visual only, weak protection:
+   use Redact to hide for good"; press `]` twice: the cells grow. Hold `Ctrl` and drag: a mosaic
+   brush stroke. Do the same with the blur tool.
+4. Click the eraser and paint across the mosaic, the blur and the redaction: the mosaic and blur
+   are wiped back to the picture under the stroke, the redaction stays black.
+5. Press on the redaction's edge with the redaction tool: it is selected; drag it, drag a handle,
+   click the colour button (it turns red, still opaque); `Ctrl+Z` undoes each step.
+6. `Ctrl+C`, paste into Paint: the redacted words are a solid box, nothing shows through; zoom in
+   on its edges: no half-covered pixel. `F1`, redact, `Ctrl+S`: open the saved PNG in an image
+   viewer and a metadata viewer (for example `exiftool`, if installed): one picture, no text or
+   extra chunks.
+7. `F1`, redact, double-click inside (pin): the pin shows the box. `Space` on the pin, `N`,
+   `Delete`, `Esc`: the pin is still redacted; `Space`, `N`, `Delete`, `Enter`: the word is back
+   (your choice, before any export).
+8. On a monitor at 150 %: the brush and cells are 1.5 times as large in device pixels, and the
+   toolbar (wider now) wraps into rows only on a narrow monitor.
+9. With a redaction drawn, leave the overlay idle for a minute: the CPU use of `noeul.exe` in Task
+   Manager stays at 0 %.
+
 ## 5. Toolbar, menus and the tray
 
 - **Toolbar order** (tab order): Pin · Copy · Save · tools (N3) · Undo · Redo · Cancel. Pin is the
@@ -776,7 +863,7 @@ the other contexts, so its keys win there):
 | `annotate.bring-to-front` / `annotate.send-to-back` | `Shift+PageUp` / `Shift+PageDown` |
 
 Shipped since Step 56 ([ADR 0038](adr/0038-noeul-annotation.md), §4.9): every `annotate` action
-above except `mosaic`, `blur`, `eraser` and `redact` (Step 57); the object keys `annotate.delete`,
+above except `mosaic`, `blur`, `eraser` and `redact`, which Step 57 shipped ([ADR 0041](adr/0041-noeul-privacy-tools.md), §4.10); the object keys `annotate.delete`,
 `annotate.select-*` and the order keys were added to the final manifest by ADR 0038. The context is
 matched whenever the overlay has a confirmed selection (and in the pin editor), so `Ctrl+Z` works
 after the tool was left; `annotate.done` only while there is a label, a shape being drawn, a tool or
@@ -889,7 +976,9 @@ when a capture starts.
 - Password fields show what the screen shows (usually dots). Detection never reads them, and
   nothing is kept on disk by default, so a capture the user discards leaves no trace.
 - Before sharing, the user can redact with a solid fill, which is irreversible in the exported
-  pixels; blur and mosaic are labeled as weak protection (NOEUL-FR-082).
+  pixels; blur and mosaic are labeled as weak protection (NOEUL-FR-082). Shipped since Step 57
+  (§4.10): every output holds the flattened pixels only, under a redaction the opaque fill, and the
+  original stays in memory until the output so only the user can restore it.
 - Noeul's pins are part of the screen, so they appear in later captures; hiding pins while
   capturing is a planned option (NOEUL-FR-069).
 - Captures made from the CLI or an agent are announced by a notice and can be denied in the

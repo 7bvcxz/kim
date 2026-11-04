@@ -165,3 +165,9 @@ with text in it is invalid.
   manual script.
 - Mosaic, blur, eraser and solid redaction (NOEUL-FR-082) are Step 57; the manifest keeps their
   IDs and this build does not ship them.
+
+## Notes
+
+- 2026-11-04 (Step 57): mosaic, blur, the eraser and the solid redaction ship as objects of this
+  model ([ADR 0041](0041-noeul-privacy-tools.md)); `draw` fills every redaction before anything
+  else, `refresh` re-renders a mosaic or blur whole, and the toolbar is 744 logical pixels wide.

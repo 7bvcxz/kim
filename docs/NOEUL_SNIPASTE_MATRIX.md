@@ -154,8 +154,8 @@ Each row has a permanent ID so that commits, tests and later audits can cite it.
 | `ANN-02` | Line, line strip and arrow; `Tab` switches line or arrow | G, H | Same tools; tool actions bindable, unbound by default ◆ (`Tab` stays navigation). Step 56: line and arrow (`Shift`: 45° steps), their ends as handles; missing: the line strip (polyline) and the manual check | partial | NOEUL-FR-080 | N3 | T | T: `crates/noeul/src/annotation/tests.rs` lines_arrows_and_ellipses_cover_the_expected_pixels; T: `crates/noeul/tests/annotation.rs` shapes_drawn_in_the_overlay_are_saved_exactly |
 | `ANN-03` | Pencil and marker pen | H | Pen and marker. Step 56: freehand pen, a translucent marker without darker overlaps; missing: the manual check on the visible desktop (UX spec §4.9) | partial | NOEUL-FR-080 | N3 | T | T: `crates/noeul/src/annotation/tests.rs` a_marker_is_one_translucent_coat_and_text_uses_its_mask; T: `crates/noeul/src/overlay.rs` a_tool_draws_inside_never_pins_and_escape_leaves_it_with_the_drawing |
 | `ANN-04` | Text that can be scaled and rotated | G | Text with IME (Korean first) and font fallback; scaling now, rotation as an extra. Step 56: labels with inline compositions, the input method only while a label is edited, per-character GDI fallback (Malgun Gothic, Segoe UI Emoji, …), sizes by width level; monochrome emoji, no rotation; missing: the manual check on the visible desktop (UX spec §4.9) | partial | NOEUL-FR-080, NOEUL-NFR-014 | N3 | T, M | T: `crates/noeul/src/annotation/tests.rs` korean_composition_shows_inline_and_becomes_text_only_when_committed; T: `crates/noeul/src/win/typeset.rs` every_script_finds_a_face_and_draws_ink, hebrew_is_drawn_right_to_left; T: `crates/noeul/src/win/overlay.rs` the_layered_editor_is_clear_around_the_pin_and_ime_messages_become_events |
-| `ANN-05` | Mosaic and Gaussian blur | H, P | Same, labeled as weak protection, plus a solid redaction that is irreversible on export | planned | NOEUL-FR-082 | N3 | T | — |
-| `ANN-06` | Eraser | H, P | Same | planned | NOEUL-FR-082 | N3 | T | — |
+| `ANN-05` | Mosaic and Gaussian blur | H, P | Same, labeled as weak protection, plus a solid redaction that is irreversible on export. Step 57: mosaic and blur boxes or brush strokes (`Ctrl`), strength by width level, a live preview, the chip's "weak protection" note; a solid redaction (black by default, opaque, filled before anything else is drawn) whose outputs hold the fill only, no extra PNG chunk, no temporary picture; the original only in memory until an output; missing: the manual check on the visible desktop (UX spec §4.10) | partial | NOEUL-FR-082 | N3 | T, M | T: `crates/noeul/src/annotation/privacy_tests.rs` nothing_drawn_before_or_after_a_redaction_reveals_or_spreads_what_it_covers, a_solid_redaction_keeps_nothing_of_any_picture_odd_sizes_and_alpha_included, blur_is_gaussian_like_reads_only_its_box_and_keeps_colours_at_alpha_edges; T: `crates/noeul/src/app.rs` a_solid_redaction_is_shown_copied_and_saved_without_a_pixel_of_the_original, a_failed_export_keeps_every_redaction_editable_and_leaves_no_file; T: `crates/noeul/tests/annotation.rs` a_redaction_through_the_real_windows_is_saved_without_the_original |
+| `ANN-06` | Eraser | H, P | Same. Step 57: an eraser brush (or box with `Ctrl`) that wipes shapes, strokes, labels, mosaic and blur drawn before it back to the picture, never a solid redaction, as an undoable object; missing: the manual check on the visible desktop (UX spec §4.10) | partial | NOEUL-FR-082 | N3 | T, M | T: `crates/noeul/src/annotation/privacy_tests.rs` the_eraser_wipes_drawings_and_effects_back_to_the_picture_but_never_a_redaction, refreshing_the_layer_after_every_edit_equals_a_fresh_export |
 | `ANN-07` | Undo `Ctrl+Z`, redo `Ctrl+Y`; `Ctrl+Shift+Z` removes all edits without undo | K | `Ctrl+Z`; `Ctrl+Y` and `Ctrl+Shift+Z` redo ◆; "clear all" is an undoable command without a default key. Step 56: one step per stroke, move or label, exact restore, also after the tool was left; toolbar Undo and Redo | partial | NOEUL-FR-081 | N3 | T | T: `crates/noeul/src/annotation/tests.rs` undo_and_redo_are_lossless_over_a_long_session; T: `crates/noeul/src/app.rs` undo_redo_and_cancel_are_lossless_and_leave_nothing_behind |
 | `ANN-08` | Pen width with the wheel, `1`/`2` or `[`/`]` | G, K | Wheel and `[`/`]` (`char:` keys). Step 56: both, and the width button; levels 1–12 logical pixels | partial | NOEUL-FR-080 | N3 | T | T: `crates/noeul/src/overlay.rs` undo_redo_width_object_keys_order_delete_and_clear_all; T: `crates/noeul/src/app.rs` a_label_suspends_shortcuts_takes_characters_and_the_ime |
 | `ANN-09` | Custom colors and opacity through a color dialog | G, F | Color with opacity. Step 56: an eight-colour palette (the colour button, `Shift` backwards); missing: opacity and a custom colour | partial | NOEUL-FR-080 | N3 | T | T: `crates/noeul/src/overlay.rs` undo_redo_width_object_keys_order_delete_and_clear_all |
@@ -322,8 +322,8 @@ picture.
 | Status | Rows |
 | --- | --- |
 | `supported` | 0 |
-| `partial` | 72 |
-| `planned` | 75 (of which 6 are Noeul additions: `OUT-12` and five `ADD` rows) |
+| `partial` | 74 |
+| `planned` | 73 (of which 6 are Noeul additions: `OUT-12` and five `ADD` rows) |
 | `not intended` | 24 |
 | **Total** | **171** |
 
@@ -334,7 +334,7 @@ picture.
 | 3. Color picker (`COLOR`) | 0 | 7 | 0 | 7 |
 | 4. History (`HIST`) | 2 | 4 | 0 | 6 |
 | 5. Output and clipboard (`OUT`) | 7 | 4 | 1 | 12 |
-| 6. Annotation (`ANN`) | 12 | 5 | 0 | 17 |
+| 6. Annotation (`ANN`) | 14 | 3 | 0 | 17 |
 | 7. Floating pins (`PIN`) | 10 | 18 | 2 | 30 |
 | 8. Paste sources (`PASTE`) | 5 | 7 | 2 | 14 |
 | 9. Displays and color (`DISP`) | 3 | 2 | 1 | 6 |
@@ -358,3 +358,4 @@ Deviations from Snipaste's defaults (**◆**) are in `SNIP-05`, `DET-02`, `DET-0
 | 2026-11-04 | 2.11.3 (2026-01-18) | Step 51 | Double-click to pin, toolbar, selection menu, copy, save, quick save and gesture settings (ADR 0032): 9 more rows `partial` (`OUT-01`, `OUT-02`, `OUT-04`, `OUT-05`, `OUT-08`, `OUT-09`, `SET-12`, `SET-14`, `SET-22`), `OUT-03`, `SNIP-05` and `SET-13` extended; 49 `partial`, none `supported` until the manual check of UX spec §4.7. |
 | 2026-11-04 | 2.11.3 (2026-01-18) | Step 52 | Smart selection and pixel precision (ADR 0035): 11 more rows `partial` (`DET-01`, `DET-02`, `DET-04`, `DET-05`, `DET-06`, `DET-07`, `DET-10`, `DET-11`, `DET-12`, `HIST-01`, `HIST-02`), `DET-08` extended; 60 `partial`, none `supported` until the manual check of UX spec §4.8. The planned count of Noeul additions corrected to 6. |
 | 2026-11-04 | 2.11.3 (2026-01-18) | Step 56 | Annotation (ADR 0038): 12 rows `partial` (`ANN-01`…`04`, `ANN-07`…`11`, `ANN-15`…`17`); `ANN-05`, `ANN-06` (Step 57) and the N4 extras `ANN-12`…`14` stay planned; 72 `partial`, none `supported` until the manual check of UX spec §4.9. |
+| 2026-11-04 | 2.11.3 (2026-01-18) | Step 57 | Privacy tools (ADR 0041): `ANN-05` (mosaic, blur and the solid redaction) and `ANN-06` (eraser) `partial`; 74 `partial`, none `supported` until the manual check of UX spec §4.10. |

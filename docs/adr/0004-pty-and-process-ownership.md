@@ -68,3 +68,12 @@ tree (`SUBAK-FR-016`), but must never touch another Pane's tree.
   runs on a helper thread while output is drained. The pseudo console's `conhost.exe` is not in
   the pane job. Ctrl+C (§6) works only after the Host clears the "ignore Ctrl+C" flag inherited
   through `CREATE_NEW_PROCESS_GROUP`.
+- 2026-11-04 (Step 11): implemented with refinements recorded in
+  [ADR 0025](0025-pane-programs-environment-and-backpressure.md): the Host resolves the
+  program on the pane's `PATH` and passes it as `lpApplicationName`; scripts are refused
+  instead of running through an implicit `cmd.exe /c`; unusable program files are refused
+  before a pseudo console exists, because Windows 10's inbox ConPTY keeps one handle per
+  pseudo console after `ClosePseudoConsole` (measured). §3's "writer path" is a synchronous
+  write by the sending connection. §5: exit detection waits on the root process; the job's
+  completion port is not used, since teardown terminates leftovers anyway. Breakaway from a
+  pane's job is refused (measured from inside a pane). See [PTY_PROCESSES](../PTY_PROCESSES.md).

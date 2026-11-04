@@ -27,6 +27,14 @@ for differences listed in §6.
 >   has a client, then exits after its idle grace period (default 10 s).
 >
 > Where §2, §3 and §6 say otherwise about these points, they describe Step 08.
+>
+> **Step 11 update (2026-11-04).** What runs in a pane, its environment, I/O, exit status and
+> backpressure are now specified and measured in [PTY_PROCESSES.md](PTY_PROCESSES.md)
+> ([ADR 0025](adr/0025-pane-programs-environment-and-backpressure.md)). Two statements below are
+> superseded there: a lagging client is dropped by bytes queued (16 MiB), no longer after 4096
+> frames (§3, §6), and the Host now resolves the program itself instead of letting
+> `CreateProcessW` search. New measured limits of the inbox ConPTY on 19045: one handle kept per
+> pseudo console after `ClosePseudoConsole`, and no Ctrl+Break through its input.
 
 ## 1. Result
 

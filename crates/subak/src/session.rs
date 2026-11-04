@@ -10,6 +10,7 @@
 //! model already has the three levels, so ids and targets do not change when they arrive.
 
 use crate::proto::{ErrorCode, IpcError};
+use crate::pty::EnvNames;
 use serde_json::{Value, json};
 use std::collections::HashSet;
 use unicode_normalization::UnicodeNormalization;
@@ -381,6 +382,11 @@ pub struct Pane {
     pub command: Command,
     /// The working directory it was started in.
     pub cwd: Option<String>,
+    /// The program file that runs: `command.program` resolved on the pane's `PATH` (Step 11).
+    /// `None` until it started.
+    pub executable: Option<String>,
+    /// The names (never the values) of the environment overrides it was started with.
+    pub env: EnvNames,
     pub size: (u16, u16),
     /// The data-frame stream id of its output (unique per Host).
     pub stream: u32,
@@ -488,6 +494,8 @@ pub struct Spec {
     pub name: Option<Name>,
     pub command: Command,
     pub cwd: Option<String>,
+    /// Names of the environment overrides; their values never reach the model.
+    pub env: EnvNames,
     pub size: (u16, u16),
     pub remain_on_exit: bool,
 }
@@ -581,6 +589,8 @@ impl Registry {
                     index: 0,
                     command: spec.command,
                     cwd: spec.cwd,
+                    executable: None,
+                    env: spec.env,
                     size: spec.size,
                     stream: self.next_stream,
                     pid: None,
@@ -776,6 +786,11 @@ fn command_json(c: &Command) -> Value {
     json!({"program": c.program, "args": redact_args(&c.args)})
 }
 
+/// The names of a pane's environment overrides (values are never shown, CLI_CONTRACT §10).
+pub fn env_json(e: &EnvNames) -> Value {
+    json!({"set": e.set, "unset": e.unset})
+}
+
 /// The `Terminal` object of IPC v1 (docs/SESSION_MODEL.md §5): the stored shape of
 /// docs/contracts/STATE_SCHEMA.md plus volatile fields. `live` reports a pane's processes.
 pub fn terminal_json(t: &Terminal, live: &dyn Fn(&Pane) -> Live) -> Value {
@@ -798,6 +813,8 @@ pub fn terminal_json(t: &Terminal, live: &dyn Fn(&Pane) -> Live) -> Value {
                         "index": p.index,
                         "cwd": p.cwd,
                         "command": command_json(&p.command),
+                        "executable": p.executable,
+                        "env": env_json(&p.env),
                         "title": Value::Null,
                         "stream_id": p.stream,
                         "pid": p.pid.filter(|_| running),
@@ -889,6 +906,7 @@ mod tests {
                 args: vec![],
             },
             cwd: None,
+            env: EnvNames::default(),
             size: (120, 30),
             remain_on_exit: false,
         }

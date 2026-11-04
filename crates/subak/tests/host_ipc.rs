@@ -204,7 +204,13 @@ fn requests_are_validated_and_violations_close_only_that_connection() {
         ),
         (
             "terminal.create",
-            json!({"env": {"X": "1"}}),
+            // Environment overrides exist since Step 11; a malformed one is refused.
+            json!({"env": {"A=B": "1"}}),
+            "invalid_params",
+        ),
+        (
+            "terminal.create",
+            json!({"profile": "work"}),
             "invalid_params",
         ),
         ("Host.Status", json!({}), "unknown_request"),

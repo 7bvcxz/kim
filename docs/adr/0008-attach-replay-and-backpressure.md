@@ -55,3 +55,12 @@ never stall the program running in the Pane, or other clients.
 ## Requirements
 
 `SUBAK-FR-004`, `SUBAK-FR-012`, `SUBAK-FR-015`, `SUBAK-FR-042`, `KIM-NFR-001`.
+
+## Notes
+
+- 2026-11-04 (Step 11): the per-connection send queue is bounded by bytes only (16 MiB,
+  each frame counting its size plus 64), no longer also by 4096 frames: ConPTY delivers
+  ~83-byte chunks on Windows 10, so a frame count dropped a client after ~0.35 s of lag.
+  Output frames are shared by every client of a pane. A lagging client is still
+  disconnected until this ADR's resync arrives in Step 13
+  ([ADR 0025](0025-pane-programs-environment-and-backpressure.md) §6).

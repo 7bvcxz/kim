@@ -12,6 +12,10 @@
 //!    on a full pipe and `ClosePseudoConsole` can hang;
 //! 4. teardown: `ClosePseudoConsole` (attached processes get `CTRL_CLOSE_EVENT`) while the reader
 //!    keeps draining, then `TerminateJobObject` for anything left, then close the handles.
+//!
+//! What runs, where and with which environment is decided before, in [`super::launch`]; this
+//! module only creates the OS objects. [`ConPty`] implements the platform-neutral
+//! [`crate::pty::Pty`].
 
 use super::{AttrList, EnvBlock, Handle, exit_code, wait, wide};
 use std::ffi::c_void;
@@ -39,7 +43,7 @@ use windows_sys::Win32::System::Threading::{
 
 /// A running pseudo console session.
 #[derive(Debug)]
-pub struct Pty {
+pub struct ConPty {
     hpc: Mutex<Option<HPCON>>,
     input: Mutex<Option<Handle>>,
     output: Mutex<Option<Handle>>,
@@ -88,10 +92,13 @@ pub fn kill_on_close_job() -> io::Result<Handle> {
     Ok(job)
 }
 
-impl Pty {
+impl ConPty {
     /// Starts `command_line` in a new pseudo console of `cols`×`rows`, inside a new job, with
-    /// environment `env` (`None` inherits the Host's).
+    /// environment `env` (`None` inherits the Host's). `app` is the program file
+    /// (`lpApplicationName`, resolved by [`super::launch`]); `None` lets `CreateProcessW` take
+    /// the first word of `command_line` and search for it (only the unit tests do that).
     pub fn spawn(
+        app: Option<&Path>,
         command_line: &str,
         cwd: Option<&Path>,
         cols: u16,
@@ -138,13 +145,14 @@ impl Pty {
         si.lpAttributeList = attrs.as_ptr();
         let mut cmd = wide(command_line);
         let cwd_w = cwd.map(wide);
+        let app_w = app.map(wide);
         let mut pi = PROCESS_INFORMATION::default();
-        // SAFETY: `cmd` is a writable NUL-terminated buffer as CreateProcessW requires; `si`, the
-        // attribute list and the environment block are alive; handles are not inherited
-        // (bInheritHandles = FALSE).
+        // SAFETY: `cmd` is a writable NUL-terminated buffer as CreateProcessW requires; `app_w`,
+        // `si`, the attribute list and the environment block are alive; handles are not
+        // inherited (bInheritHandles = FALSE).
         let ok = unsafe {
             CreateProcessW(
-                std::ptr::null(),
+                app_w.as_ref().map_or(std::ptr::null(), |w| w.as_ptr()),
                 cmd.as_mut_ptr(),
                 std::ptr::null(),
                 std::ptr::null(),
@@ -183,14 +191,6 @@ impl Pty {
             job,
             pid: pi.dwProcessId,
         })
-    }
-
-    pub fn pid(&self) -> u32 {
-        self.pid
-    }
-
-    pub fn process_handle(&self) -> windows_sys::Win32::Foundation::HANDLE {
-        self.process.raw()
     }
 
     /// The output read end, for the reader thread (once).
@@ -284,10 +284,92 @@ impl Pty {
     }
 }
 
-impl Drop for Pty {
+impl Drop for ConPty {
     fn drop(&mut self) {
         // The job handle closes after this (kill-on-close) even if teardown was skipped.
         self.close_console();
+    }
+}
+
+/// The output end of a pseudo console as a byte stream (`Ok(0)` once it closed).
+#[derive(Debug)]
+pub struct Output(Handle);
+
+impl io::Read for Output {
+    /// Waits for output, then also takes what is already queued behind it (up to `buf`), so a
+    /// fast producer yields a few large chunks instead of thousands of tiny ones: every chunk
+    /// becomes one data frame per attached client, and a client is judged by its queue of
+    /// frames (ADR 0025). Never waits for more than the first byte.
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let mut n = read_output(&self.0, buf)?;
+        while n > 0 && n < buf.len() {
+            let avail = available(&self.0);
+            if avail == 0 {
+                break;
+            }
+            let end = n + avail.min(buf.len() - n);
+            match read_output(&self.0, &mut buf[n..end])? {
+                0 => break,
+                m => n += m,
+            }
+        }
+        Ok(n)
+    }
+}
+
+/// Bytes waiting in a pipe (0 when none, or when it cannot tell).
+fn available(h: &Handle) -> usize {
+    let mut avail = 0u32;
+    // SAFETY: valid pipe handle; only the count is requested (no buffer).
+    let ok = unsafe {
+        windows_sys::Win32::System::Pipes::PeekNamedPipe(
+            h.raw(),
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null_mut(),
+            &raw mut avail,
+            std::ptr::null_mut(),
+        )
+    };
+    if ok == 0 { 0 } else { avail as usize }
+}
+
+/// The Windows implementation of the platform-neutral interface (ADR 0011).
+impl crate::pty::Pty for ConPty {
+    fn pid(&self) -> u32 {
+        self.pid
+    }
+
+    fn take_output(&self) -> Option<Box<dyn io::Read + Send>> {
+        ConPty::take_output(self).map(|h| Box::new(Output(h)) as Box<dyn io::Read + Send>)
+    }
+
+    fn write_input(&self, bytes: &[u8]) -> io::Result<()> {
+        ConPty::write_input(self, bytes)
+    }
+
+    fn resize(&self, cols: u16, rows: u16) -> io::Result<()> {
+        ConPty::resize(self, cols, rows)
+    }
+
+    fn close(&self) {
+        self.close_console();
+    }
+
+    fn wait_exit(&self, timeout: Option<Duration>) -> Option<u32> {
+        ConPty::wait_exit(self, timeout)
+    }
+
+    fn running(&self) -> bool {
+        exit_code(self.process.raw()).is_none()
+    }
+
+    fn processes(&self) -> u32 {
+        self.job_processes()
+    }
+
+    fn kill_tree(&self, code: u32) {
+        self.terminate_job(code);
     }
 }
 
@@ -384,7 +466,7 @@ mod tests {
     }
 
     struct Session {
-        pty: Arc<Pty>,
+        pty: Arc<ConPty>,
         rx: mpsc::Receiver<Vec<u8>>,
         seen: Vec<u8>,
         reader: std::thread::JoinHandle<()>,
@@ -392,8 +474,9 @@ mod tests {
 
     impl Session {
         fn start(cols: u16, rows: u16) -> Self {
-            let pty =
-                Arc::new(Pty::spawn("cmd.exe /d /q", None, cols, rows, None).expect("spawn cmd"));
+            let pty = Arc::new(
+                ConPty::spawn(None, "cmd.exe /d /q", None, cols, rows, None).expect("spawn cmd"),
+            );
             let out = pty.take_output().expect("output");
             let (tx, rx) = mpsc::channel();
             let reader = std::thread::spawn(move || {
@@ -474,8 +557,82 @@ mod tests {
         eprintln!("ConPTY teardown: ClosePseudoConsole alone ended the shell: {graceful}");
     }
 
+    /// Measured on Windows 10 19045: the inbox ConPTY keeps one handle per pseudo console after
+    /// `ClosePseudoConsole`, even for one that never ran a process (50 bare create/close pairs
+    /// added 53 handles). That is the OS's, not ours: a whole session (pipes, job, process,
+    /// thread, attribute list, reader) adds nothing beyond it. Newer ConPTY builds may keep
+    /// none; the bounds hold either way (docs/PTY_PROCESSES.md §9).
+    #[test]
+    fn sessions_hold_no_handle_beyond_the_one_the_inbox_conpty_keeps() {
+        let _serial = crate::win::handle_test_lock();
+        let count = || {
+            (0..5)
+                .map(|_| {
+                    std::thread::sleep(Duration::from_millis(50));
+                    crate::win::handle_count()
+                })
+                .min()
+                .unwrap()
+        };
+        let a = count();
+        for _ in 0..50 {
+            drop(kill_on_close_job().unwrap());
+        }
+        let b = count();
+        for _ in 0..50 {
+            let (in_read, _in_write) = anonymous_pipe().unwrap();
+            let (_out_read, out_write) = anonymous_pipe().unwrap();
+            let mut hpc: HPCON = 0;
+            // SAFETY: probe only.
+            let hr = unsafe {
+                CreatePseudoConsole(
+                    size(80, 25),
+                    in_read.raw(),
+                    out_write.raw(),
+                    0,
+                    &raw mut hpc,
+                )
+            };
+            assert!(hr >= 0);
+            drop(in_read);
+            drop(out_write);
+            // SAFETY: probe only.
+            unsafe { ClosePseudoConsole(hpc) };
+        }
+        let c = count();
+        for _ in 0..50 {
+            let pty = ConPty::spawn(None, "cmd.exe /d /c exit 0", None, 80, 25, None).unwrap();
+            let out = pty.take_output().unwrap();
+            let t = std::thread::spawn(move || {
+                let mut buf = [0u8; 4096];
+                while matches!(read_output(&out, &mut buf), Ok(n) if n > 0) {}
+            });
+            pty.wait_exit(Some(Duration::from_secs(5)));
+            pty.close_console();
+            t.join().unwrap();
+        }
+        let d = count();
+        eprintln!(
+            "EVIDENCE handles: start {a}; after 50 jobs {b}; after 50 bare pseudo consoles {c}; \
+             after 50 full sessions {d}"
+        );
+        // Other tests of this binary open handles concurrently; the minimum of several samples
+        // filters most of that, the slack the rest.
+        assert!(b <= a + 16, "jobs leak: {a} -> {b}");
+        let os = c.saturating_sub(b);
+        assert!(
+            os <= 50 + 16,
+            "more than one handle per pseudo console: {b} -> {c}"
+        );
+        assert!(
+            d.saturating_sub(c) <= os + 24,
+            "a session holds more than the bare pseudo console: {c} -> {d} (bare: +{os})"
+        );
+    }
+
     #[test]
     fn repeated_sessions_do_not_leak_handles() {
+        let _serial = crate::win::handle_test_lock();
         // The handle count is process-wide, and other tests in this binary open and close
         // handles at the same time. Take the minimum of several samples, which filters out
         // their short-lived handles, and run enough cycles that a real leak (about 8 handles

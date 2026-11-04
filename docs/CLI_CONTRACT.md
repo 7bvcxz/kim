@@ -20,7 +20,7 @@ written reason to break.
 - The rules are enforced by tests: `kim` runs every command against the JSON schemas
   (`crates/kim/tests/cli_contract.rs`), checks streams, exit codes, prompts, permissions,
   partial downloads, offline mode and redaction (`cli_functional.rs`), and proves that headless
-  commands start no process (`cli_headless.rs`). Subak's placeholder is validated against the
+  commands start no process (`cli_headless.rs`). Subak is validated against the
   same schemas (`crates/subak/tests/cli.rs`).
 
 ## 2. Names and verbs
@@ -144,7 +144,7 @@ lifecycle). `subak` also uses `io`, `internal`, `permission_denied`, `usage`, `t
 
 | Code | Exit | Meaning |
 | --- | --- | --- |
-| `spawn_failed` | 1 | The Host, its shell or a Terminal's program could not be started (missing program, bad working directory, access denied); `details` carry the `reason`. |
+| `spawn_failed` | 1 | The Host, its shell or a Terminal's program could not be started (missing program, bad working directory, access denied, a script or file Windows cannot start: `not_executable`); `details` carry the `reason`, and the `hint` says what to run instead. |
 | `invalid_name` | 2 | A Terminal name breaks the naming rules ([SESSION_MODEL §3](SESSION_MODEL.md)). |
 | `ambiguous_target` | 2 | Several objects match the target (e.g. `host attach` with several running Terminals); `details` list the candidates. Name one exactly. |
 | `host_not_running` | 3 | No Subak Host serves the endpoint. |
@@ -209,7 +209,11 @@ the fields listed there and in [CONPTY_PROOF.md](CONPTY_PROOF.md). The `data` of
 for `list`, `null` when no Host runs). Their meanings and consent rules are in
 [SESSION_MODEL §4](SESSION_MODEL.md): `stop`, `kill` and `rm` are `destructive` and ask, or need
 `--yes`; `host stop` with live Terminals also needs `--kill-terminals`. `new`, `info` and `rm` are
-tmux words outside §2's standard verbs, chosen to match the IPC methods (ADR 0020). There is no
+tmux words outside §2's standard verbs, chosen to match the IPC methods (ADR 0020).
+`terminal new` (Step 11) runs `-- <program> [args…]` as separate words, never through a shell,
+with the program resolved on the pane's `PATH`; `--env NAME=VALUE`, `--env NAME` and
+`--unset-env NAME` (repeatable) adjust the pane's environment; `--dry-run` reports the resolved
+`executable` also without a Host ([PTY_PROCESSES](PTY_PROCESSES.md)). There is no
 published Subak CLI schema yet (Step 12); the envelopes are validated against `cli-envelope-v1`.
 
 ## 7. Output streams and the `--json` envelope
@@ -294,7 +298,7 @@ Every tool MUST implement `capabilities`. Its `data` is a
 
 ```json
 { "schema": "kim.capabilities", "schema_version": 1, "tool": "subak", "version": "0.0.1",
-  "cli_contract": 1, "json_schema_version": 1, "implementation": "placeholder",
+  "cli_contract": 1, "json_schema_version": 1, "implementation": "implemented",
   "summary": "…",
   "commands": [ { "name": "capabilities", "usage": "subak capabilities [--json]",
                   "summary": "…", "effect": "read", "network": false, "dry_run": false,
@@ -302,7 +306,8 @@ Every tool MUST implement `capabilities`. Its `data` is a
 ```
 
 - It lists every command the tool really has, nothing planned. A placeholder says
-  `"implementation": "placeholder"` (Subak today).
+  `"implementation": "placeholder"`; a tool whose listed commands all work says `implemented`
+  even while it is pre-alpha (Subak since Step 11; its `summary` says what is missing).
 - `effect` is the strongest effect the command can have with any flag; `network` says it may use
   the network; `dry_run` and `requires_yes` describe §4; `opens_window` is true only for GUI
   launchers.
@@ -398,6 +403,12 @@ Secrets never appear in JSON output, human output, diagnostics or stored state (
   still used internally (e.g. to download), it is only never shown or stored.
 - Tools MUST NOT print environment variable values, request headers or file contents that may
   hold secrets; proxy URLs from `HTTPS_PROXY`/`HTTP_PROXY` are redacted like any other URL.
+- Subak's environment overrides (`subak terminal new --env NAME=VALUE`, `--env NAME`, IPC
+  `terminal.create` `env`) are used once to start the pane and never stored, logged or shown:
+  every output names the variables only (`env: {set, unset}`), and errors never echo a value.
+  `--env NAME` copies the caller's own value, so a token need not appear on a command line
+  ([PTY_PROCESSES §3](PTY_PROCESSES.md); proven by
+  `crates/subak/tests/pty_shells.rs::the_pane_environment_keeps_the_users_locations_and_secrets_never_leak`).
 - Kim's implementation is `kim::redact`; `cli_functional.rs` proves that credentials in a source
   URL, a proxy URL and a signed download URL never reach stdout, stderr (also with `--verbose`)
   or `current.json`.

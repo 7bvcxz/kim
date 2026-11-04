@@ -38,12 +38,14 @@ pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 /// Event topics a client can subscribe to.
 pub const TOPICS: [&str; 4] = ["terminals", "panes", "claude", "host"];
 /// Additive capabilities announced in `welcome.features`.
-pub const FEATURES: [&str; 5] = [
+pub const FEATURES: [&str; 6] = [
     "host.health",
     "host.stats",
     "events.subscribe",
     "identity.verified",
     "terminal.lifecycle",
+    // Step 11: `terminal.create` `env`, panes report `executable` and `env` names.
+    "terminal.environment",
 ];
 
 /// One decoded frame.
@@ -778,6 +780,10 @@ mod tests {
             .join("../../docs/contracts/examples/ipc-v1");
         for (file, def) in [
             ("response-terminal-create.json", "result_terminal_create"),
+            (
+                "response-terminal-create-dry-run.json",
+                "result_terminal_create",
+            ),
             ("response-terminal-list.json", "result_terminal_list"),
             ("response-terminal-info.json", "result_terminal_info"),
             ("response-terminal-stop.json", "result_terminal_end"),

@@ -234,7 +234,8 @@ No metric includes content, names, paths or command lines (`KIM-SEC-012`).
 
 Platform-specific code is confined to five interfaces — `Pty`, `ProcessTree`, `IpcTransport`,
 `Paths`, `SecretStore` ([ADR 0011](adr/0011-portability-boundary.md)). On non-Windows targets
-they return `unsupported_platform` until milestone M4.
+they return `unsupported_platform` until milestone M4. Since Step 11 `Pty` and `ProcessTree` of
+one pane are the single trait `pty::Pty` ([PTY_PROCESSES §8](PTY_PROCESSES.md), ADR 0025).
 
 ## 10. Implementation status
 
@@ -254,7 +255,8 @@ they return `unsupported_platform` until milestone M4.
 | ConPTY + detached Host proof: `subak host start\|status\|attach\|stop` prototype (one shell per Host, prototype pipe; [CONPTY_PROOF](CONPTY_PROOF.md), ADR 0016) | implemented (prototype) | 08 |
 | Host supervisor and IPC v1: identity-checked per-user pipe, version negotiation, authorization by client kind, start on demand under a start lock, idle exit, health, user logon environment ([IPC_PROTOCOL](contracts/IPC_PROTOCOL.md), ADR 0019) | implemented | 09 |
 | Terminal session lifecycle: named Terminals (Terminal → Window → Pane, one window and pane each), the state machine, names and targets, create/list/info/rename/stop/kill/remove over IPC and `subak terminal …`, `host stop --kill-terminals` ([SESSION_MODEL](SESSION_MODEL.md), ADR 0020) | implemented (no persistence before Step 29) | 10 |
-| PTY management, CLI, replay | planned | 11–14 |
+| PTY and shell process management: the platform-neutral `pty::Pty` interface (Windows ConPTY + job; `unsupported_platform` stub elsewhere), program resolution on the pane's `PATH` with scripts refused, MSVC-rule quoting, fresh logon environment per pane plus `--env`/`--unset-env` overrides and `SUBAK_PANE_ID`/`SUBAK_TERMINAL_ID` (values never shown), precise `spawn_failed` reasons, exit status, byte-bounded send queues ([PTY_PROCESSES](PTY_PROCESSES.md), ADR 0025) | implemented (Ctrl+Break, verbatim command lines and profiles: not yet) | 11 |
+| CLI, replay | planned | 12–14 |
 | GUI, tabs, floating icon | planned | 15–20 |
 | Windows/panes, layout, tmux engine | planned | 21–26 |
 | Claude integration, persistence, recovery | planned | 27–31 |

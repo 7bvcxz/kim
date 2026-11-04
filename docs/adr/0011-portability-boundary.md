@@ -36,3 +36,11 @@ the codebase.
 ## Requirements
 
 `KIM-NFR-010`, `KIM-NFR-011`, `SUBAK-FR-070`.
+
+## Notes
+
+- 2026-11-04 (Step 11): the `Pty` and `ProcessTree` rows of §1 are one trait for a pane,
+  `pty::Pty` in `crates/subak/src/pty.rs`, because the pseudo terminal and its container are
+  created together; the foreground-process query of `ProcessTree` arrives with Step 21.
+  Non-Windows targets get the `unsupported_platform` stub of §3
+  ([ADR 0025](0025-pane-programs-environment-and-backpressure.md) §7).

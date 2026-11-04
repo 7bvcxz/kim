@@ -300,6 +300,16 @@
         "args": {"type": "array", "items": {"type": "string"}}
       }
     },
+    "env_names": {
+      "description": "The names (never the values) of a pane's environment overrides (Step 11, docs/PTY_PROCESSES.md).",
+      "type": "object",
+      "required": ["set", "unset"],
+      "additionalProperties": false,
+      "properties": {
+        "set": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "unset": {"type": "array", "items": {"type": "string", "minLength": 1}}
+      }
+    },
     "pane": {
       "description": "A pane of a Terminal object: stored fields (STATE_SCHEMA.md) plus volatile ones.",
       "type": "object",
@@ -308,6 +318,8 @@
         "index",
         "cwd",
         "command",
+        "executable",
+        "env",
         "title",
         "stream_id",
         "pid",
@@ -323,6 +335,11 @@
         "index": {"type": "integer", "minimum": 0},
         "cwd": {"type": ["string", "null"]},
         "command": {"$ref": "#/$defs/command"},
+        "executable": {
+          "description": "The program file that runs (command.program resolved on the pane's PATH); null before it started.",
+          "type": ["string", "null"]
+        },
+        "env": {"$ref": "#/$defs/env_names"},
         "title": {"type": ["string", "null"]},
         "stream_id": {"type": "integer", "minimum": 1},
         "pid": {"type": ["integer", "null"], "minimum": 1},
@@ -390,7 +407,7 @@
               "additionalProperties": false,
               "properties": {
                 "code": {"const": "spawn_failed"},
-                "reason": {"enum": ["not_found", "access_denied", "bad_cwd", "other"]},
+                "reason": {"enum": ["not_found", "access_denied", "bad_cwd", "not_executable", "other"]},
                 "message": {"type": "string", "minLength": 1}
               }
             }
@@ -515,12 +532,14 @@
             "dry_run": {"const": true},
             "would_create": {
               "type": "object",
-              "required": ["name", "command", "cwd", "size", "remain_on_exit", "keep_on_failure"],
+              "required": ["name", "command", "executable", "cwd", "env", "size", "remain_on_exit", "keep_on_failure"],
               "additionalProperties": false,
               "properties": {
                 "name": {"$ref": "#/$defs/terminal_name"},
                 "command": {"$ref": "#/$defs/command"},
+                "executable": {"type": "string", "minLength": 1},
                 "cwd": {"type": ["string", "null"]},
+                "env": {"$ref": "#/$defs/env_names"},
                 "size": {"$ref": "#/$defs/size"},
                 "remain_on_exit": {"type": "boolean"},
                 "keep_on_failure": {"type": "boolean"}

@@ -9,7 +9,7 @@ is retired or re-assessed with evidence.
 
 | ID | Risk | L | I | Mitigation | Owner step |
 | --- | --- | --- | --- | --- | --- |
-| R-01 | Inbox ConPTY differs across Windows 10 1809 → 11 builds (resize reflow artifacts, missing passthrough, mouse input, cursor inheritance) | H | M | Detect OS build; conformance tests per build; consider shipping `conpty.dll`/`OpenConsole.exe` (MIT) if inbox gaps hurt. **Step 08:** I/O, resize, Ctrl+C and teardown verified on 19045; CI on Server 2025 (26100) showed `ClosePseudoConsole` not ending the shell (job kill required) and a win32-input-mode request that clients must not pass to their console ([CONPTY_PROOF](CONPTY_PROOF.md) §6); builds in between untested | 08, 11, 15 |
+| R-01 | Inbox ConPTY differs across Windows 10 1809 → 11 builds (resize reflow artifacts, missing passthrough, mouse input, cursor inheritance) | H | M | Detect OS build; conformance tests per build; consider shipping `conpty.dll`/`OpenConsole.exe` (MIT) if inbox gaps hurt. **Step 08:** I/O, resize, Ctrl+C and teardown verified on 19045; CI on Server 2025 (26100) showed `ClosePseudoConsole` not ending the shell (job kill required) and a win32-input-mode request that clients must not pass to their console ([CONPTY_PROOF](CONPTY_PROOF.md) §6); builds in between untested. **Step 11:** on 19045 the inbox ConPTY keeps one handle per pseudo console after `ClosePseudoConsole` (50 bare pairs: +53), ignores Ctrl+Break sent as a win32-input-mode key, and delivers output in ~83-byte chunks at ~1 MiB/s; the Host refuses most failed starts before a pseudo console exists and bounds send queues by bytes ([PTY_PROCESSES](PTY_PROCESSES.md) §4, §7, §9) | 08, 11, 15 |
 | R-02 | ConPTY output is a re-rendered stream, not the program's raw bytes (e.g. it may repaint, reorder or drop some sequences) | M | M | Treat ConPTY as the terminal source of truth; replay via VT snapshot (ADR 0008) rather than raw byte fidelity | 13, 15 |
 | R-03 | Host started from a terminal that lives in a Job without breakaway permission dies with that terminal | M | H | `CREATE_BREAKAWAY_FROM_JOB` attempt; report `job_breakaway=false` and `in_job`; warn on `host start`. **Step 08 measured:** confirmed (closing such a kill-on-close job ends Host, shell and conhost); breakaway is per job level; conhost window close is safe. **Step 09 measured** (ADR 0019 §10): a launcher job with silent breakaway frees the Host; in nested jobs the Host leaves only the levels that allow breakaway and dies with an outer kill-on-close job; status reports the Host's immediate job limits and `host start` the launcher's. Read-only on this machine: Windows Terminal 1.24 and its OpenConsole are in a job, but its tab shells are not, so a Host started from a tab is in no job. Closing a WT window, VS Code terminal and SSH: still not verified (manual) | 08, 09 |
 
@@ -17,7 +17,7 @@ is retired or re-assessed with evidence.
 
 | ID | Risk | L | I | Mitigation | Owner step |
 | --- | --- | --- | --- | --- | --- |
-| R-04 | Programs that create their own jobs or break away escape kill-pane | M | M | Disallow breakaway in pane jobs by default; document; enumerate escaped processes in diagnostics | 11 |
+| R-04 | Programs that create their own jobs or break away escape kill-pane | M | M | Disallow breakaway in pane jobs by default; document; enumerate escaped processes in diagnostics. **Step 11 measured:** a pane's job refuses `CREATE_BREAKAWAY_FROM_JOB` (access denied, from a real child); a process started on the user's behalf by another service (Task Scheduler, WMI, a COM server) is outside any pane job by nature and is not tracked; enumerating escapes is not implemented | 11, 21 |
 | R-05 | Kill-on-close means a Host crash ends every session | M | H | Panic containment per request/pane; crash tests; restore path; never run untrusted plugins in the Host. **Step 09:** `catch_unwind` per request and connection (counted in `host.stats`); 300 fuzzed connections gave 0 panics; a killed Host is replaced without stale state | 09, 30, 39 |
 | R-06 | Graceful stop: some programs ignore `CTRL_CLOSE_EVENT`, others need longer than 5 s to flush | M | L | Configurable grace period; forced termination clearly reported | 10 |
 
@@ -49,7 +49,7 @@ is retired or re-assessed with evidence.
 
 | ID | Risk | L | I | Mitigation | Owner step |
 | --- | --- | --- | --- | --- | --- |
-| R-16 | Secrets leak via logs, JSON, state or crash dumps | M | H | Secret types that redact on `Debug`/`Display`; Credential Manager/DPAPI; tests grepping outputs | 34, 39 |
+| R-16 | Secrets leak via logs, JSON, state or crash dumps | M | H | Secret types that redact on `Debug`/`Display`; Credential Manager/DPAPI; tests grepping outputs. **Step 11:** pane environment overrides are used once and never stored or shown (names only); a test greps 17 outputs (JSON, events, `-v` diagnostics) for an explicit and a copied value; panes never inherit a launcher's tokens ([PTY_PROCESSES §3](PTY_PROCESSES.md)) | 11, 34, 39 |
 | R-17 | Host-key changes accepted silently | L | H | Strict known_hosts; explicit warning UI; tests with changed keys | 34 |
 | R-18 | Pure-Rust SSH stack gaps (agents, algorithms, jump hosts) vs OpenSSH | M | M | Evaluate `russh` vs invoking Windows OpenSSH; record ADR | 34 |
 

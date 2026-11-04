@@ -4,6 +4,7 @@
 
 pub mod conpty;
 pub mod console;
+pub mod launch;
 pub mod pipe;
 pub mod spawn;
 
@@ -35,6 +36,15 @@ use windows_sys::Win32::System::Threading::{
     PROCESS_SYNCHRONIZE, QueryFullProcessImageNameW, ReleaseMutex, SetEvent,
     UpdateProcThreadAttribute, WaitForSingleObject,
 };
+
+/// Held by the unit tests that count this process's handles, and by the one that creates many
+/// pseudo consoles (each keeps a handle on Windows 10), so they never measure each other.
+#[cfg(test)]
+pub(crate) fn handle_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 
 /// An owned kernel handle, closed exactly once on drop.
 #[derive(Debug)]
@@ -181,6 +191,42 @@ pub fn handle_count() -> u32 {
         )
     };
     n
+}
+
+/// Memory of this process in bytes (a local metric, ADR 0012).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Memory {
+    pub working_set: u64,
+    pub private: u64,
+    /// The highest commit charge (private bytes) since the process started.
+    pub peak_private: u64,
+}
+
+pub fn memory() -> Memory {
+    use windows_sys::Win32::System::ProcessStatus::{
+        K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, PROCESS_MEMORY_COUNTERS_EX,
+    };
+    let mut c = PROCESS_MEMORY_COUNTERS_EX {
+        cb: u32::try_from(size_of::<PROCESS_MEMORY_COUNTERS_EX>()).expect("small"),
+        ..Default::default()
+    };
+    // SAFETY: pseudo handle of this process; `c` is writable and its size is passed in `cb`
+    // (the _EX layout starts with the basic one, as the API documents).
+    let ok = unsafe {
+        K32GetProcessMemoryInfo(
+            GetCurrentProcess(),
+            (&raw mut c).cast::<PROCESS_MEMORY_COUNTERS>(),
+            c.cb,
+        )
+    };
+    if ok == 0 {
+        return Memory::default();
+    }
+    Memory {
+        working_set: c.WorkingSetSize as u64,
+        private: c.PrivateUsage as u64,
+        peak_private: c.PeakPagefileUsage as u64,
+    }
 }
 
 /// The string SID (`S-1-5-21-…`) of the user running this process.
@@ -341,18 +387,84 @@ impl EnvBlock {
         Ok(Self(v))
     }
 
+    /// This process's own environment, without the hidden per-drive `=C:=C:\…` entries (they
+    /// describe this process's working directories, not a pane's). The fallback when the logon
+    /// environment cannot be built.
+    pub fn from_process() -> Self {
+        Self::from_entries(
+            std::env::vars_os()
+                .filter(|(k, _)| !k.to_string_lossy().starts_with('='))
+                .map(|(k, v)| {
+                    let mut e: Vec<u16> = k.encode_wide().collect();
+                    e.push(u16::from(b'='));
+                    e.extend(v.encode_wide());
+                    e
+                })
+                .collect(),
+        )
+    }
+
+    /// A block of `K=V` entries (UTF-16, no terminators), sorted by name case-insensitively as
+    /// Windows keeps environment blocks.
+    fn from_entries(mut entries: Vec<Vec<u16>>) -> Self {
+        entries.sort_by_cached_key(|e| crate::pty::var_key(&entry_name(e)));
+        let mut v: Vec<u16> = Vec::new();
+        for e in entries {
+            v.extend(e);
+            v.push(0);
+        }
+        if v.is_empty() {
+            v.push(0);
+        }
+        v.push(0);
+        Self(v)
+    }
+
+    /// The raw `K=V` entries.
+    fn entries(&self) -> impl Iterator<Item = &[u16]> + '_ {
+        self.0.split(|&c| c == 0).filter(|s| !s.is_empty())
+    }
+
+    /// This block with `overrides` applied (in order: an unset removes, a set replaces or adds;
+    /// names compare case-insensitively) and `host_vars` set last, so they always win. Values
+    /// are copied as UTF-16, never through a lossy conversion. Hidden `=C:` entries are dropped.
+    pub fn with_overrides(
+        &self,
+        overrides: &crate::pty::EnvOverrides,
+        host_vars: &[(&str, &str)],
+    ) -> Self {
+        use crate::pty::same_var;
+        let replaced = |name: &str| {
+            name.starts_with('=')
+                || overrides.vars.iter().any(|(k, _)| same_var(k, name))
+                || host_vars.iter().any(|(k, _)| same_var(k, name))
+        };
+        let mut entries: Vec<Vec<u16>> = self
+            .entries()
+            .filter(|e| !replaced(&entry_name(e)))
+            .map(<[u16]>::to_vec)
+            .collect();
+        let entry = |k: &str, v: &str| -> Vec<u16> { format!("{k}={v}").encode_utf16().collect() };
+        for (k, v) in &overrides.vars {
+            if let Some(v) = v {
+                entries.push(entry(k, v));
+            }
+        }
+        for (k, v) in host_vars {
+            entries.push(entry(k, v));
+        }
+        Self::from_entries(entries)
+    }
+
     /// `(name, value)` pairs.
     pub fn vars(&self) -> impl Iterator<Item = (String, String)> + '_ {
-        self.0
-            .split(|&c| c == 0)
-            .filter(|s| !s.is_empty())
-            .filter_map(|s| {
-                let text = String::from_utf16_lossy(s);
-                // `=C:=C:\…` entries start with '='; their name is up to the second '='.
-                let skip = text.chars().next()?.len_utf8();
-                let at = text[skip..].find('=')? + skip;
-                Some((text[..at].to_string(), text[at + 1..].to_string()))
-            })
+        self.entries().filter_map(|s| {
+            let text = String::from_utf16_lossy(s);
+            // `=C:=C:\…` entries start with '='; their name is up to the second '='.
+            let skip = text.chars().next()?.len_utf8();
+            let at = text[skip..].find('=')? + skip;
+            Some((text[..at].to_string(), text[at + 1..].to_string()))
+        })
     }
 
     /// A variable, case-insensitively as Windows does.
@@ -365,6 +477,17 @@ impl EnvBlock {
     pub fn as_ptr(&self) -> *const c_void {
         self.0.as_ptr().cast()
     }
+}
+
+/// The name of a `K=V` entry (a leading `=` belongs to the name, as in `=C:=C:\…`).
+fn entry_name(e: &[u16]) -> String {
+    let eq = u16::from(b'=');
+    let end = e
+        .iter()
+        .skip(1)
+        .position(|&c| c == eq)
+        .map_or(e.len(), |i| i + 1);
+    String::from_utf16_lossy(&e[..end])
 }
 
 /// The limits of the job the current process belongs to (its immediate job when nested).
@@ -543,6 +666,128 @@ mod tests {
         assert_eq!(quote_arg(r"C:\a b\"), r#""C:\a b\\""#);
         assert_eq!(quote_arg(r#"say "hi""#), r#""say \"hi\"""#);
         assert_eq!(quote_arg(r#"a\"b"#), r#""a\\\"b""#);
+    }
+
+    /// What the OS parser (`CommandLineToArgvW`, the rules of the MSVC runtime) reads back.
+    fn os_argv(line: &str) -> Vec<String> {
+        use windows_sys::Win32::UI::Shell::CommandLineToArgvW;
+        let w = wide(line);
+        let mut n = 0i32;
+        // SAFETY: NUL-terminated line; on success the result is one LocalAlloc'ed block of `n`
+        // NUL-terminated strings, freed below.
+        let argv = unsafe { CommandLineToArgvW(w.as_ptr(), &raw mut n) };
+        assert!(!argv.is_null(), "CommandLineToArgvW failed for {line:?}");
+        let out = (0..usize::try_from(n).unwrap())
+            // SAFETY: `argv` holds `n` valid string pointers.
+            .map(|i| unsafe { from_wide_ptr(*argv.add(i)) })
+            .collect();
+        // SAFETY: allocated by CommandLineToArgvW, freed exactly once.
+        unsafe { LocalFree(argv as HLOCAL) };
+        out
+    }
+
+    #[test]
+    fn quoting_round_trips_through_the_os_parser() {
+        let tricky = [
+            "",
+            " ",
+            "a b",
+            "\t",
+            "\"",
+            "\"\"",
+            "\\",
+            "\\\\",
+            "a\\",
+            "a\\\\",
+            "a\\\"b",
+            "C:\\Program Files\\x\\",
+            "\\\\server\\share\\",
+            "say \"hi\" there",
+            "--flag=\"quoted value\"",
+            "100%",
+            "^&|<>()",
+            "한글 인자",
+            "emoji 🙂 \"x\"",
+            "trailing space ",
+            "multi\nline",
+            "=C:=C:\\",
+        ];
+        let line = std::iter::once("prog.exe".to_string())
+            .chain(tricky.iter().map(|a| quote_arg(a)))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert_eq!(&os_argv(&line)[1..], tricky.map(String::from).as_slice());
+        // Generated arguments over the characters that matter, from a fixed seed.
+        let alphabet = ['a', ' ', '\t', '"', '\\', '한', '=', '-'];
+        let mut seed = 0x9E37_79B9_7F4A_7C15_u64;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        for _ in 0..500 {
+            let args: Vec<String> = (0..(next() % 4 + 1))
+                .map(|_| {
+                    (0..next() % 9)
+                        .map(|_| alphabet[usize::try_from(next() % 8).unwrap()])
+                        .collect()
+                })
+                .collect();
+            let line = std::iter::once("p".to_string())
+                .chain(args.iter().map(|a| quote_arg(a)))
+                .collect::<Vec<_>>()
+                .join(" ");
+            assert_eq!(os_argv(&line)[1..], args[..], "line {line:?}");
+        }
+    }
+
+    #[test]
+    fn overrides_replace_remove_and_add_case_insensitively() {
+        use crate::pty::EnvOverrides;
+        let base = EnvBlock::from_entries(
+            [
+                "Path=C:\\a",
+                "HOME=C:\\h",
+                "=C:=C:\\x",
+                "Keep=1",
+                "SUBAK_PANE_ID=forged",
+            ]
+            .iter()
+            .map(|e| e.encode_utf16().collect())
+            .collect(),
+        );
+        let o = EnvOverrides {
+            vars: vec![
+                ("PATH".into(), Some("C:\\b".into())),
+                ("home".into(), None),
+                ("GREETING".into(), Some("안녕하세요 =x".into())),
+            ],
+        };
+        let env = base.with_overrides(&o, &[("SUBAK_PANE_ID", "p-0123456789ab")]);
+        let vars: Vec<(String, String)> = env.vars().collect();
+        assert_eq!(
+            vars,
+            [
+                ("GREETING".to_string(), "안녕하세요 =x".to_string()),
+                ("Keep".into(), "1".into()),
+                ("PATH".into(), "C:\\b".into()),
+                ("SUBAK_PANE_ID".into(), "p-0123456789ab".into()),
+            ],
+            "sorted case-insensitively; replaced, removed, added; no hidden `=C:` entry; the Host's variable wins"
+        );
+        assert_eq!(env.get("path").as_deref(), Some("C:\\b"));
+        assert_eq!(env.get("HOME"), None);
+        // Without overrides the block is the base (minus hidden entries), still terminated.
+        let same = base.with_overrides(&EnvOverrides::default(), &[]);
+        assert_eq!(same.vars().count(), 4);
+        assert_eq!(same.0[same.0.len() - 2..], [0, 0]);
+        let empty = EnvBlock::from_entries(Vec::new());
+        assert_eq!(empty.0, [0, 0], "an empty block is two NULs");
+        // The process's own environment is a usable fallback without hidden entries.
+        let own = EnvBlock::from_process();
+        assert!(own.get("SystemRoot").is_some());
+        assert!(own.vars().all(|(k, _)| !k.starts_with('=')));
     }
 
     #[test]

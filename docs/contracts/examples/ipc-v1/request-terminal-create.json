@@ -1,1 +1,1 @@
-{"type": "request", "id": 1, "method": "terminal.create", "params": {"name": "work", "command": {"program": "pwsh.exe", "args": ["-NoLogo"]}, "cwd": "C:\\Users\\me\\src", "size": {"cols": 120, "rows": 30}}}
+{"type": "request", "id": 1, "method": "terminal.create", "params": {"name": "work", "command": {"program": "pwsh.exe", "args": ["-NoLogo"]}, "cwd": "C:\\Users\\me\\src", "env": {"POWERSHELL_UPDATECHECK": "Off", "HTTP_PROXY": null}, "size": {"cols": 120, "rows": 30}}}

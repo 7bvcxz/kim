@@ -124,9 +124,12 @@ fn capabilities_are_honest_and_follow_the_contract() {
     let data = &doc["data"];
     assert_eq!(data["tool"], "subak");
     assert_eq!(data["version"], env!("CARGO_PKG_VERSION"));
-    assert_eq!(
-        data["implementation"], "placeholder",
-        "pre-alpha: no GUI, splits or recovery yet"
+    // Every listed command really works (Steps 09–11); what is missing (GUI, splits, recovery)
+    // is simply not listed, and the summary says pre-alpha (CLI_CONTRACT §9.1).
+    assert_eq!(data["implementation"], "implemented");
+    assert!(
+        data["summary"].as_str().unwrap().starts_with("Pre-alpha"),
+        "{data}"
     );
     let names: Vec<&str> = data["commands"]
         .as_array()

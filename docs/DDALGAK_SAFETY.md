@@ -2,8 +2,8 @@
 
 Status: **current** (Step 65, specification; Step 66 ran the engine checks it owns on real
 Windows, Step 68 the remap checks, Step 69 the typing checks, Step 70 the launch checks, Step 71
-the mouse checks, §11) · Requirements: `DDALGAK-SEC-001…014`, `DDALGAK-NFR-002`, `DDALGAK-NFR-006`,
-`DDALGAK-NFR-009`, `KIM-SEC-020…023` · Decisions: [ADR 0022](adr/0022-ddalgak-rule-model-and-safety.md), [ADR 0037](adr/0037-ddalgak-program-and-website-launches.md), [ADR 0040](adr/0040-ddalgak-mouse-actions.md)
+the mouse checks, Step 72 the mode checks, §11) · Requirements: `DDALGAK-SEC-001…014`, `DDALGAK-NFR-002`, `DDALGAK-NFR-006`,
+`DDALGAK-NFR-009`, `KIM-SEC-020…023` · Decisions: [ADR 0022](adr/0022-ddalgak-rule-model-and-safety.md), [ADR 0037](adr/0037-ddalgak-program-and-website-launches.md), [ADR 0040](adr/0040-ddalgak-mouse-actions.md), [ADR 0043](adr/0043-ddalgak-modes-layers-and-runtime-mode-state.md)
 
 A keyboard hook sees every key, and an injector can type into any window the user can reach.
 This document fixes what Ddalgak may and may not do with that power, what the operating system
@@ -224,7 +224,9 @@ Linux build can read Windows rules and report what it cannot do.
   mode switch, session lock or secure-desktop switch, a failing run, and in the process exit
   handler. Before typing or sending, held trigger modifiers are logically released and restored
   only if still physically down (`SendInput` does not reset keyboard state, *documented*, M2).
-  A consumed key-down always has its key-up consumed.
+  A consumed key-down always has its key-up consumed. A mode switch (Step 72) is a release path
+  like any other: a remap or held button of the old mode never stays down in the new one, and a
+  held layer whose key-up may never arrive (another desktop, a lock) ends.
 - **Remaps** (Step 68, [ADR 0031](adr/0031-ddalgak-remap-execution-and-mouse-hook.md)): the
   engine core decides every output event and the worker, which owns the ledger, sends it. Shared
   outputs are reference-counted (released when the last remap lets go); a key the user already
@@ -365,3 +367,17 @@ machine): real pointer movement, scrolling and clicks on real monitors and scale
 Windows lands on the exact normalized pixel, an administrator window under the real pointer, a
 real drag, games and anti-cheat (no promise is made: programs that read raw relative input may
 ignore absolute moves), and a killed app while a button is held (Step 73).
+
+**Step 72** (modes and layers, Windows 10 19045; details in [DDALGAK_ENGINE §15](DDALGAK_ENGINE.md),
+decision [ADR 0043](adr/0043-ddalgak-modes-layers-and-runtime-mode-state.md)): mode switches
+inject nothing. When the active mode changes, every held remap, held button and motion is
+released and pending taps, hold triggers and sequences end, so no key of the old mode stays down
+in the new one; held layers end with their key-up, on a key reset, a session lock and a pause;
+the active mode is never restored after a restart, a pause or the emergency chord (the default
+mode is the one predictable state), and `ddalgak mode reset` and the tray's "Back to …" are the
+safe reset. **Tested**: the state machine, precedence along a layer's chain, the releases in the
+decision core and the real worker thread, a synthetic typing stream across switches, and mode
+rules fired through the real hook by injected obscure keys (F13 held layer, F14 set) in the real
+test host. **Not tested** (manual script in DDALGAK_ENGINE §15): switching modes while typing on
+the physical keyboard in real applications, the Korean IME during a switch, and the real tray
+indicator and its menu.

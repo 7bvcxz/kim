@@ -36,10 +36,13 @@ pub enum Code {
     ConfirmationRequired,
     Busy,
     Cancelled,
+    // Step 72: mode CRUD (docs/DDALGAK_RULE_MODEL.md §13).
+    ModeInvalid,
+    ModeInUse,
 }
 
 impl Code {
-    pub const ALL: [Self; 28] = [
+    pub const ALL: [Self; 30] = [
         Self::Io,
         Self::Internal,
         Self::PermissionDenied,
@@ -68,6 +71,8 @@ impl Code {
         Self::ConfirmationRequired,
         Self::Busy,
         Self::Cancelled,
+        Self::ModeInvalid,
+        Self::ModeInUse,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -100,6 +105,8 @@ impl Code {
             Self::ConfirmationRequired => "confirmation_required",
             Self::Busy => "busy",
             Self::Cancelled => "cancelled",
+            Self::ModeInvalid => "mode_invalid",
+            Self::ModeInUse => "mode_in_use",
         }
     }
 
@@ -111,7 +118,11 @@ impl Code {
     pub fn exit_code(self) -> u8 {
         match self {
             Self::Io | Self::Internal | Self::PermissionDenied | Self::HookFailed => 1,
-            Self::Usage | Self::RuleInvalid | Self::HotkeyInvalid | Self::HotkeyReserved => 2,
+            Self::Usage
+            | Self::RuleInvalid
+            | Self::HotkeyInvalid
+            | Self::HotkeyReserved
+            | Self::ModeInvalid => 2,
             Self::NotInstalled
             | Self::EngineNotRunning
             | Self::RuleNotFound
@@ -126,7 +137,8 @@ impl Code {
             | Self::RuleConflict
             | Self::ConsentRequired
             | Self::ConfirmationRequired
-            | Self::Busy => 7,
+            | Self::Busy
+            | Self::ModeInUse => 7,
             Self::Cancelled => 8,
         }
     }

@@ -1,0 +1,35 @@
+{
+  "command": "mode.status",
+  "data": {
+    "app_running": false,
+    "engine": "off",
+    "mode": {
+      "active": "base",
+      "chain": [
+        "base"
+      ],
+      "color": null,
+      "default": "base",
+      "held": [],
+      "icon": null,
+      "indicator": {
+        "away_from_default": false,
+        "color": null,
+        "icon": null,
+        "label": "Base",
+        "title": "Base",
+        "visible": true
+      },
+      "latched": "base",
+      "live": false,
+      "origin": "start",
+      "previous": "base",
+      "since": null,
+      "title": "Base"
+    },
+    "profile": "default"
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

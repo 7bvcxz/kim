@@ -374,6 +374,8 @@ mod tests {
             | "hotstring-immediate-with-end-chars" => "trigger_invalid",
             // whole-file problems
             "newer-schema-version" | "no-modes" | "rule-id-with-dot" => "file",
+            // a bad mode is a whole-file problem (Step 72's mode fields like `color`)
+            "mode-timeout-below-one-second" | "mode-icon-with-a-space" => "file",
             _ => "step_invalid",
         }
     }

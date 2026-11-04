@@ -1,16 +1,17 @@
-# Ddalgak engine (Steps 66–71)
+# Ddalgak engine (Steps 66–72)
 
 Status: **current** (engine implemented in Step 66 for Windows, the rule store and live reload in
 Step 67, §10; remaps, blocks and mouse-button triggers in Step 68, §11; sent keys, typed text,
 paste and hotstrings in Step 69, §12; program and website launches in Step 70, §13; mouse moves,
-wheel, clicks and holds in Step 71, §14; modes follow in Step 72) · Decisions:
+wheel, clicks and holds in Step 71, §14; modes and layers in Step 72, §15) · Decisions:
 [ADR 0022](adr/0022-ddalgak-rule-model-and-safety.md),
 [ADR 0024](adr/0024-ddalgak-windows-input-apis-and-permissions.md),
 [ADR 0028](adr/0028-ddalgak-rule-store-validation-and-reload.md),
 [ADR 0031](adr/0031-ddalgak-remap-execution-and-mouse-hook.md),
 [ADR 0034](adr/0034-ddalgak-typing-runs-hotstrings-and-clipboard.md),
 [ADR 0037](adr/0037-ddalgak-program-and-website-launches.md),
-[ADR 0040](adr/0040-ddalgak-mouse-actions.md) · Code: `crates/ddalgak` ·
+[ADR 0040](adr/0040-ddalgak-mouse-actions.md),
+[ADR 0043](adr/0043-ddalgak-modes-layers-and-runtime-mode-state.md) · Code: `crates/ddalgak` ·
 Requirements: `DDALGAK-FR-001…010`, `DDALGAK-FR-017`, `DDALGAK-FR-020`, `DDALGAK-FR-060`, `DDALGAK-FR-071`,
 `DDALGAK-FR-011`, `DDALGAK-FR-012`, `DDALGAK-FR-013`, `DDALGAK-FR-014`, `DDALGAK-FR-015`, `DDALGAK-FR-070`,
 `DDALGAK-NFR-001`, `DDALGAK-NFR-002`, `DDALGAK-NFR-004`, `DDALGAK-SEC-001…005`,
@@ -27,14 +28,14 @@ the rule format is [DDALGAK_RULE_MODEL](DDALGAK_RULE_MODEL.md); the safety scope
 | Delivered | Not yet (owner Step) |
 | --- | --- |
 | `ddalgak-gui.exe`: the tray app that owns the engine (tray icon with state by shape and text, single instance per user session, hidden window, no editor) | the rule editor and playground windows (74, 76) |
-| The low-level keyboard hook engine: event model, trigger tables, decision core, worker, lifecycle, emergency chord, held-key ledger, rate limit, stepping aside; since Step 68 remaps and blocks, mouse-button triggers with the on-demand mouse hook (§11); since Step 69 sent keys, typed text, paste with clipboard restore and hotstrings (§12); since Step 70 program and website launches on a launch thread (§13); since Step 71 mouse moves, wheel, clicks and holds across monitors and DPI (§14) | modes (72), ordered multi-step runs (78), wheel triggers (unassigned, ADR 0040) |
+| The low-level keyboard hook engine: event model, trigger tables, decision core, worker, lifecycle, emergency chord, held-key ledger, rate limit, stepping aside; since Step 68 remaps and blocks, mouse-button triggers with the on-demand mouse hook (§11); since Step 69 sent keys, typed text, paste with clipboard restore and hotstrings (§12); since Step 70 program and website launches on a launch thread (§13); since Step 71 mouse moves, wheel, clicks and holds across monitors and DPI (§14); since Step 72 modes and layers with per-mode precedence (§15) | ordered multi-step runs (78), wheel triggers (unassigned, ADR 0040), the compact floating mode indicator (73) |
 | Ddalgak's own global shortcuts `engine.toggle` and `engine.pause` from `hotkeys.json`, registered with `RegisterHotKey` | the `ddalgak hotkeys …` commands (81; bind by editing `hotkeys.json` until then) |
-| Rules: the engine runs **engine-control rules** (`engine` steps), since Step 68 **remap** and **block** rules (§11), since Step 69 **`send_keys`**, **`type_text`** and **hotstring** rules (§12), since Step 70 **`open_program`** and **`open_url`** rules (§13), since Step 71 **`mouse_move`**, **`mouse_scroll`** and **`mouse_click`** rules (§14), and keeps every other rule inactive with a stated code; since Step 67 the rule store with full validation, CRUD, drafts, history and live reload (§10) | the other action types (72, 78) |
-| `ddalgak status`, `health`, `engine start|pause|resume|stop`, `pause`, `resume`, `quit`, `startup status|enable|disable`, `capabilities` with `--json` and `--dry-run`; since Step 67 `rule …` and `rules …` | `profile`, `mode`, `test`, `explain` (72, 75, 76, 77, 81) |
+| Rules: the engine runs **engine-control rules** (`engine` steps), since Step 68 **remap** and **block** rules (§11), since Step 69 **`send_keys`**, **`type_text`** and **hotstring** rules (§12), since Step 70 **`open_program`** and **`open_url`** rules (§13), since Step 71 **`mouse_move`**, **`mouse_scroll`** and **`mouse_click`** rules (§14), since Step 72 **`mode`** rules (§15), and keeps every other rule inactive with a stated code; since Step 67 the rule store with full validation, CRUD, drafts, history and live reload (§10) | `delay` and mixed steps (78) |
+| `ddalgak status`, `health`, `engine start|pause|resume|stop`, `pause`, `resume`, `quit`, `startup status|enable|disable`, `capabilities` with `--json` and `--dry-run`; since Step 67 `rule …` and `rules …`; since Step 72 `mode …` | `profile`, `test`, `explain` (75, 76, 77, 81) |
 | Opt-in start at sign-in through the user's Run key | — |
 
 **Never broader.** A rule this version does not run is listed in `status` as inactive with its
-code: `step_unsupported` (an action type of a later Step — modes in 72, `delay`, a typing
+code: `step_unsupported` (an action type of a later Step — `delay`, a typing or mode
 step among other steps and launches or mouse steps mixed with other steps in 78 — or an unknown one),
 `condition_unsupported` (`when`, Step 77), `rule_unsupported` (an unknown field inside the rule),
 `trigger_invalid`/`trigger_reserved`, `duplicate_rule_id`, `duplicate_trigger` and every other
@@ -190,6 +191,8 @@ is safe mode: nothing is registered.
 | `startup status|enable|disable` | read / write, `--dry-run` | The user's Run value only. |
 | `capabilities` | read | [tool-capabilities-v1](contracts/schemas/tool-capabilities-v1.schema.json) |
 | `rule list|show|check`, `rule add|edit|delete|duplicate|enable|disable|move|revoke`, `rules history|backup|restore|reload|draft` | read / write / destructive | Step 67, §10. They work without the app (only `rules reload` needs it); after a saved change they ask a running app to reload. |
+| `mode list|show|add|edit|rename|copy|delete` | read / write / destructive | Step 72, §15. The mode definitions in `rules.json`, through the rule store like `rule …`; they work without the app. |
+| `mode set|toggle|reset|status` | write / read, `--dry-run` | Step 72, §15. The running engine's active mode (`engine_off` while off, `engine_not_running` without the app); `status` shows it too (`profile.mode_state`). |
 
 Every command that talks to the app first checks that the pipe is served by `ddalgak-gui.exe` of
 the same user (`app_identity_mismatch`, 4) and sends nothing otherwise. Without the app it fails
@@ -266,11 +269,12 @@ tray icon on your desktop):
 | `crates/ddalgak/src/{event,trigger,table,core,worker,lifecycle,inject,shortcuts,rules,ipc,startup,stats}.rs` | portable engine, unit-tested on every platform |
 | `crates/ddalgak/src/remap.rs` | remap outputs (`Output`), the playground preview, the editor's summary sentence and form fields (Step 68, §11) |
 | `crates/ddalgak/src/{text,hotstring,run}.rs` | typed text (encoding, variables, insertion point, previews, the text editor's data model), the hotstring matcher and its bounded buffer, typing runs with their target checks, clipboard handling and fakes (Step 69, §12) |
+| `crates/ddalgak/src/modes.rs`, `modes/tests.rs`, `mode_edit.rs`, `mode_edit/tests.rs` | modes (Step 72, §15): the mode set and chains, the mode state machine (latched, held layers, one-shot and timed exits, the safe reset, reloads by ID), previews, summaries, the indicator and the mode menu; mode CRUD on the document, the Modes page and Switch mode form data |
 | `crates/ddalgak/src/{model,schema,validate,store,edit}.rs` | the rule store (Step 67, §10): typed model, run-time schema, validation, files, operations |
 | `crates/ddalgak/src/launch.rs` | launches (Step 70, §13): path, argument, environment and URL checks, quoting, normalization and redaction, the launch plan and gate, the fake and test-host launchers, the program picker and website field data models |
 | `crates/ddalgak/src/mouse.rs`, `mouse/tests.rs` | mouse actions (Step 71, §14): monitor geometry, DPI scaling, clamping and path stops, normalization, the grid, motions, the plan runner, the simulated pointer, previews, summaries, the playground and the Mouse form's data model |
 | `crates/ddalgak/src/win/{hook,inject,context,host,tray,pipe,instance,startup,watch,typing,launch,mouse}.rs` | Windows layer (`watch`: the folder change notifications of §10; `typing`: key translation, the target probe, the clipboard and the local clock of §12; `launch`: `CreateProcessW`, `ShellExecuteExW`, window activation and icon extraction of §13; `mouse`: the monitor layout with DPI, the pointer, the active window's content area and the input window at a point, read in per-monitor DPI mode, §14) |
-| `crates/ddalgak/src/main.rs`, `cli.rs`, `output.rs`, `rule_cmd.rs` | the `ddalgak` CLI (`rule_cmd`: the `rule` and `rules` commands) |
+| `crates/ddalgak/src/main.rs`, `cli.rs`, `output.rs`, `rule_cmd.rs`, `mode_cmd.rs` | the `ddalgak` CLI (`rule_cmd`: the `rule` and `rules` commands; `mode_cmd`: the `mode` commands) |
 | `crates/ddalgak/src/bin/ddalgak-gui.rs` | the tray app |
 | `crates/ddalgak/hotkeys.manifest.json` | the built-in hotkey manifest (equal to the contract example) |
 | `crates/ddalgak/tests/{cli,hook_windows,launch_windows}.rs`, `tests/common/marker.rs` | real-binary, real-hook and real-launch tests; the marker program the launch tests build and start hidden |
@@ -715,3 +719,90 @@ primary and at a different display scale):
     Ctrl+Alt+Shift+Enter: beyond 20 presses a second they are `rate_limited`.
 11. Remove the rules: `ddalgak rule delete m-right m-left m-up m-down m-cell m-nudge m-centre m-far m-wheel m-hwheel m-click m-double m-drag m-back --yes`,
     then quit the app.
+
+## 15. Modes and layers (Step 72)
+
+Decision: [ADR 0043](adr/0043-ddalgak-modes-layers-and-runtime-mode-state.md). Format:
+[DDALGAK_RULE_MODEL §5.10, §7.1, §7.3](DDALGAK_RULE_MODEL.md).
+
+**What runs.** User-defined modes per profile: exclusive modes and **layers** over a parent (a key
+falls back along the layer's chain to its parent's rules), switched by `mode` rules — `set`,
+`toggle`, `cycle`, `hold` (a temporary layer while the key is held), `previous`, `default` — on
+any permitted trigger, by `ddalgak mode set|toggle|reset` and by the tray's `Mode` menu. Optional
+exits: `one_shot` (the mode ends with the up of the next key) and `timeout_ms` (the default mode
+returns after that long without a key). The active mode is shown by `status` and `mode status`
+and, when useful, in the tray; it is never stored and never restored.
+
+**How.**
+
+| Part | What it does |
+| --- | --- |
+| Loader (`rules.rs`, `modes::ModeSet`) | Every valid rule of the active profile becomes a binding with the bit set of the modes it is limited to; a rule naming an unknown mode is inactive (`unknown_mode`). The mode set drops missing and cyclic parents and the default mode's parent and exits (never broader) |
+| Table (`table.rs`) | One precedence list per mode: rules of the mode, then of its parent, …, then rules without modes, each in priority and file order; one hotstring list per mode |
+| Core (hook thread, `core.rs`, `modes::ModeState`) | Scans only the active mode's list. A mode rule fired on press, release, repeat or as a sequence changes the state in the callback; a switch of the active mode drops held remaps and buttons, motions, pending taps, holds, sequences and the hotstring buffer and sends `Signal::Mode { switched, restore }`. Held layers end with their key-up (`Decision::last`), on a key reset, a lock and a pause; a one-shot mode ends with the up of its key; a timed mode ends at the hook thread's timer, which exists only while one waits |
+| Hook thread (`win::hook`) | Answers the host's mode requests (`ModeRequest`: query, set, toggle, reset, a rule the worker timed) on its message loop and sends the resulting signal; a pause posts the safe reset; a reload carries the mode over by ID |
+| Worker | On a switch: releases its whole ledger, stops motions, ends armed hold triggers, presses again still-held lifted modifiers; records the rule's outcome under the mode it ran in, follows the new mode for later activity, tells the host; a mode rule on an `on: hold` trigger becomes a request to the host |
+| Host and tray (`win::host`, `win::tray`) | Starts every engine in the default mode; `mode set|toggle|reset` (refused with `engine_off` while off); `status.profile.mode_state` read live from the hook thread; the tray tooltip, icon shape and `Mode` submenu follow `settings.mode_indicator` |
+| CLI (`mode_cmd.rs`) | Mode CRUD through the rule store (`mode_edit.rs`), refusing introduced mode problems (`mode_invalid`) and deletes of modes in use (`mode_in_use`); the live-mode commands over the pipe |
+| Editor data (`mode_edit::MODE_FIELDS`, `SWITCH_FIELDS`, `ModeDraft`, `modes::Indicator`, `modes::menu`) | The Step 74 Modes page and Switch mode form, the header switcher and the compact indicator of Step 73, checked against the schema |
+
+**Measurements** (Windows 10 Pro 19045, this machine; numbers stay local, ADR 0012):
+
+| What | Method | Result |
+| --- | --- | --- |
+| Decision cost, 1000 rules over 8 modes (layers three deep, exclusive modes), a key no rule uses, in the deepest layer | `core::tests::decisions_with_modes_stay_far_below_the_hook_budget`, 20 000 calls | **0.51 µs** (release), 2.3 µs (debug) |
+| Idle cost | unchanged: no timer exists unless a timed mode or an undecided dual role waits (`modes::tests`, `core::tests::one_shot_and_timed_modes_…`) | §7 |
+
+**Verification** (the shared machine: automated tests never type characters and never show the
+tray):
+
+| Check | Status | Evidence |
+| --- | --- | --- |
+| Chains, dropped parents, every policy (exclusive, layer, held layers stacking and ending in any order, toggle and previous over held layers, the four-layer limit), one-shot and timed exits with clock wrap-around, the safe reset, reloads by ID, previews against `preview_mode`, summaries, the indicator (off where not needed, never color only) and the menu | **tested** | `modes::tests` |
+| Precedence along a layer's chain and in exclusive modes; a held layer that releases its remap when its key goes up first; switching modes while typing (a synthetic stream with a held remap across toggles, Shift, letters: every key paired, nothing held); every mode action on a plain key, a chord, a lock key, a physical key, a sequence, a bare modifier tapped alone and a mouse button; pass-through, previous, default, rate limits; key resets, locks, pauses, reloads and requests never leaving a layer; the emergency chord and a fresh core in the default mode | **tested** (decision core, no input injected) | `core::tests` (Step 72 section) |
+| The worker releasing its ledger and restoring lifted modifiers on a switch, recording under the right mode, telling the host, ignoring an old table's view but still releasing; a worker-timed mode rule asking the host; a switch ending armed hold triggers | **tested** (the real worker thread, recording backend) | `worker::tests::a_mode_switch_…`, `…a_mode_rule_on_a_held_trigger_…` |
+| Mode CRUD: IDs from titles, refusals (`usage`, `rule_conflict`, `mode_invalid` for cycles, unknown parents and a default mode with a parent or timeout, `mode_in_use`), copy with and without rules (consent kept for unchanged targets), delete with `--delete-rules`, the editor draft and the form fields checked against the schema | **tested** | `mode_edit::tests` |
+| The real CLI without the app (refusals write nothing, `--dry-run` creates no file) and the real test host: set, toggle, `mode list` naming the live mode, a pause resetting to the default mode, deleting the active mode falling back on the reload, `mode reset`, stop and start never restoring a mode; every document valid against `ddalgak-cli-v1` | **tested** | `tests/cli.rs::modes_through_the_cli_and_the_real_test_host` |
+| Mode rules fired through the **real hook** by injected obscure keys as another program: F14 sets a mode (`origin rule:to-game`), F13 held holds a layer over it (`held: [nav]`, `latched: game`) and its key-up ends the layer (`released:hold-nav`) | **tested** on an unlocked desktop of this machine; reports **skipped** when locked | same test |
+| **Switching modes while typing in real applications** with the physical keyboard (a CapsLock layer with H/J arrows in Notepad and a terminal, a toggle while a remap is held), the Korean IME during a switch, the **real tray icon** (tooltip, the notched icon outside the default mode, the `Mode` submenu and "Back to …"), `settings.mode_indicator` | **not tested**: physical typing and the tray icon on the maintainer's desktop are manual (AGENTS.md §5); the manual script below | — |
+
+**Manual checks for the maintainer** (about fifteen minutes; release build, the real tray app;
+everything below is removed again at the end; keep Notepad open):
+
+1. `cargo build -p ddalgak --release`, start `target\release\ddalgak-gui.exe`, then
+   `target\release\ddalgak engine start`.
+2. Add the modes and rules:
+   - `ddalgak mode add --id nav --title Navigation --parent base --icon N --color "#B7A6F5"`
+   - `ddalgak mode add --id game --title Gaming`
+   - `ddalgak mode add --id once --title Once --one-shot`
+   - `ddalgak mode add --id brief --title Brief --timeout-ms 5000`
+   - `ddalgak rule add --id m-hold --trigger CapsLock --action mode --op hold --target-mode nav`
+   - `ddalgak rule add --id m-h --trigger code:KeyH --mode nav --action remap --to Left --allow input-injection`
+   - `ddalgak rule add --id m-j --trigger code:KeyJ --mode nav --action remap --to Down --allow input-injection`
+   - `ddalgak rule add --id m-game --trigger Ctrl+Alt+Shift+F9 --action mode --op toggle --target-mode game`
+   - `ddalgak rule add --id m-once --trigger Ctrl+Alt+Shift+F10 --action mode --op set --target-mode once`
+   - `ddalgak rule add --id m-brief --trigger Ctrl+Alt+Shift+F11 --action mode --op set --target-mode brief`
+   - `ddalgak rule add --id once-e --trigger code:KeyE --mode once --action type_text --text "é" --allow input-injection`
+
+   `ddalgak mode list` shows the four new modes with their policy; `ddalgak status` lists the rules.
+3. **A held layer while typing** (Notepad): type `hello`; hold CapsLock and press H and J: the
+   caret moves left and down (no letters); release CapsLock and type `hj`: letters again. Hover the
+   tray icon while holding CapsLock: the tooltip says "mode N Navigation" and the icon has a notch.
+4. **No stuck key at a switch**: hold CapsLock, hold J (the caret runs down), release CapsLock
+   first while J is still held: the caret stops at once; release J: nothing is typed. Type
+   letters: they appear normally (no Down stuck).
+5. **Toggle and the tray menu**: Ctrl+Alt+Shift+F9: the tooltip says Gaming, H types `h`;
+   Ctrl+Alt+Shift+F9 again: back to Base. Right-click the tray icon: the `Mode` submenu checks the
+   active mode; choose Navigation, then "Back to Base".
+6. **One key and timeout**: Ctrl+Alt+Shift+F10, then E: `é` is typed and the next E types `e`.
+   Ctrl+Alt+Shift+F11, wait 5 s without typing: `ddalgak mode status` shows Base, by `timeout`.
+7. **CLI**: `ddalgak mode set game`, `ddalgak mode status` (Gaming, by `cli`), `ddalgak pause`,
+   `ddalgak mode status` (Base, by `pause`), `ddalgak resume`.
+8. **Korean IME** (if installed): in 한글 mode hold CapsLock and press H: report whether the caret
+   moves (the layer works on keys, not characters) and whether any jamo is left behind.
+9. **Restart and emergency**: `ddalgak mode set game`, quit the app and start it again, `ddalgak
+   engine start`: the mode is Base. `ddalgak mode set game`, hold CapsLock, press
+   Ctrl+Alt+Shift+Escape: the engine turns off, nothing stays pressed; turned on again it is in Base.
+10. Remove everything: `ddalgak rule delete m-hold m-h m-j m-game m-once m-brief once-e --yes`,
+    `ddalgak mode delete nav --yes`, `ddalgak mode delete game --yes`, `ddalgak mode delete once --yes`,
+    `ddalgak mode delete brief --yes`, then quit the app.

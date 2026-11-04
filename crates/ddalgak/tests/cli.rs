@@ -157,7 +157,7 @@ impl Sandbox {
         c.args(args);
         // Rule changes ask a running app to reload: always this sandbox's app, never the user's.
         let talks_to_app = [
-            "status", "health", "engine", "pause", "resume", "quit", "rule", "rules",
+            "status", "health", "engine", "pause", "resume", "quit", "rule", "rules", "mode",
         ]
         .iter()
         .any(|c| args.first() == Some(c));
@@ -2560,6 +2560,317 @@ fn mouse_rules_through_the_cli_and_the_real_test_host() {
     } else {
         eprintln!("skipped (locked or SendInput refused): the injected-input check");
     }
+    sb.json(&["quit"]);
+    assert_eq!(host.wait_exit(Duration::from_secs(10)), Some(0));
+}
+
+/// Step 72 (`DDALGAK-FR-016`, `DDALGAK-FR-060`, `DDALGAK-SEC-005`): mode CRUD through the real CLI
+/// without the app (refusals write nothing), then the active mode of the real test host: set,
+/// toggle, the safe reset by pause, deleting the active mode, a restart that never restores a
+/// mode, and on an unlocked desktop mode rules fired by injected obscure keys (a held layer that
+/// ends with its key-up).
+#[test]
+fn modes_through_the_cli_and_the_real_test_host() {
+    let sb = Sandbox::new("modes");
+    let ok = |args: &[&str]| {
+        let (exit, d) = sb.json(args);
+        assert_eq!(exit, 0, "{args:?}: {d:#}");
+        d
+    };
+    let err = |args: &[&str], code: &str| {
+        let (exit, d) = sb.json(args);
+        assert_eq!(d["error"]["code"], code, "{args:?}: {d:#}");
+        assert_ne!(exit, 0);
+        d
+    };
+    // A dry run writes nothing, not even a file.
+    let d = ok(&[
+        "mode",
+        "add",
+        "--title",
+        "Navigation",
+        "--id",
+        "nav",
+        "--dry-run",
+    ]);
+    assert_eq!(d["data"]["created"], "nav");
+    assert!(sb.rules_bytes().is_empty(), "a dry run creates no file");
+    let d = ok(&[
+        "mode",
+        "add",
+        "--title",
+        "Navigation",
+        "--id",
+        "nav",
+        "--parent",
+        "base",
+        "--icon",
+        "N",
+        "--color",
+        "#b7a6f5",
+    ]);
+    assert_eq!(
+        (
+            d["data"]["created"].as_str(),
+            d["data"]["changed"].as_bool()
+        ),
+        (Some("nav"), Some(true))
+    );
+    bless("mode-add", &d);
+    ok(&["mode", "add", "--title", "Symbols", "--parent", "nav"]);
+    ok(&["mode", "add", "--title", "Gaming", "--id", "game"]);
+    ok(&[
+        "rule",
+        "add",
+        "--id",
+        "hold-nav",
+        "--trigger",
+        "F13",
+        "--accept-injected",
+        "--action",
+        "mode",
+        "--op",
+        "hold",
+        "--target-mode",
+        "nav",
+    ]);
+    ok(&[
+        "rule",
+        "add",
+        "--id",
+        "to-game",
+        "--trigger",
+        "F14",
+        "--accept-injected",
+        "--action",
+        "mode",
+        "--op",
+        "set",
+        "--target-mode",
+        "game",
+    ]);
+    ok(&[
+        "rule",
+        "add",
+        "--id",
+        "nav-h",
+        "--trigger",
+        "code:KeyH",
+        "--mode",
+        "nav",
+        "--action",
+        "remap",
+        "--to",
+        "Left",
+        "--allow",
+        "input-injection",
+    ]);
+    let list = ok(&["mode", "list"]);
+    let modes = list["data"]["modes"].as_array().unwrap();
+    assert_eq!(modes.len(), 4);
+    assert_eq!(modes[2]["chain"], json!(["symbols", "nav", "base"]));
+    assert_eq!(modes[1]["switched_by"], json!(["hold-nav"]));
+    assert_eq!(
+        list["data"]["active"],
+        Value::Null,
+        "no app, no active mode"
+    );
+    bless("mode-list", &list);
+    let show = ok(&["mode", "show", "nav"]);
+    assert_eq!(show["data"]["mode"]["rule_ids"], json!(["nav-h"]));
+    bless("mode-show", &show);
+    // Rename and copy keep IDs and references.
+    ok(&["mode", "rename", "symbols", "Signs"]);
+    let d = ok(&["mode", "copy", "nav", "--id", "nav2"]);
+    assert_eq!(
+        d["data"]["rules"].as_array().unwrap().len(),
+        1,
+        "nav-h was copied"
+    );
+    ok(&[
+        "mode",
+        "edit",
+        "nav2",
+        "--timeout-ms",
+        "5000",
+        "--one-shot",
+        "--no-icon",
+    ]);
+    let (_, rl) = sb.json(&["rule", "list", "--mode", "symbols"]);
+    let ids: Vec<&str> = rl["data"]["rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["id"].as_str().unwrap())
+        .collect();
+    assert!(
+        ids.contains(&"nav-h"),
+        "Signs falls back to Navigation's rules: {ids:?}"
+    );
+    // Refusals write nothing.
+    let before = sb.rules_bytes();
+    let d = err(
+        &["mode", "edit", "base", "--parent", "symbols"],
+        "mode_invalid",
+    );
+    assert_eq!(d["error"]["exit_code"], 2);
+    bless("error-mode-invalid", &d);
+    err(&["mode", "delete", "base", "--yes"], "mode_in_use");
+    let d = err(&["mode", "delete", "nav", "--yes"], "mode_in_use");
+    assert!(
+        d["error"]["details"].to_string().contains("symbols"),
+        "{d:#}"
+    );
+    bless("error-mode-in-use", &d);
+    err(&["mode", "delete", "game"], "confirmation_required");
+    err(&["mode", "show", "ghost"], "mode_not_found");
+    err(
+        &[
+            "rule",
+            "add",
+            "--trigger",
+            "F19",
+            "--action",
+            "mode",
+            "--op",
+            "set",
+            "--target-mode",
+            "ghost",
+        ],
+        "mode_not_found",
+    );
+    err(
+        &["mode", "add", "--title", "Bad", "--timeout-ms", "10"],
+        "usage",
+    );
+    assert_eq!(sb.rules_bytes(), before, "refusals write nothing");
+    let d = ok(&["mode", "delete", "nav2", "--delete-rules", "--yes"]);
+    assert_eq!(d["data"]["rules"].as_array().unwrap().len(), 1);
+    bless("mode-delete", &d);
+    let (_, check) = sb.json(&["rule", "check"]);
+    assert_eq!(check["data"]["summary"]["errors"], 0, "{check:#}");
+    // Without the app: the mode the engine starts in; changing it needs the app.
+    let st = ok(&["mode", "status"]);
+    assert_eq!(st["data"]["mode"]["live"], false);
+    assert_eq!(st["data"]["mode"]["active"], "base");
+    bless("mode-status-not-running", &st);
+    err(&["mode", "set", "nav"], "engine_not_running");
+
+    // The real test host.
+    let mut host = sb.host();
+    err(&["mode", "set", "nav"], "engine_off");
+    if elevated() {
+        eprintln!("skipped (elevated): the app refuses to turn its engine on as administrator");
+        sb.json(&["quit"]);
+        return;
+    }
+    ok(&["engine", "start"]);
+    let mode = |sb: &Sandbox| {
+        let (_, st) = sb.json(&["mode", "status"]);
+        st["data"]["mode"].clone()
+    };
+    let m = mode(&sb);
+    assert_eq!(
+        (m["active"].as_str(), m["live"].as_bool()),
+        (Some("base"), Some(true))
+    );
+    let d = ok(&["mode", "set", "game", "--dry-run"]);
+    assert_eq!(d["data"]["change"]["to"], Value::Null);
+    assert_eq!(mode(&sb)["active"], "base", "a dry run changes nothing");
+    let d = ok(&["mode", "set", "game"]);
+    assert_eq!(
+        d["data"]["change"],
+        json!({"op": "set", "from": "base", "to": "game", "changed": true})
+    );
+    bless("mode-set", &d);
+    let (_, st) = sb.json(&["status"]);
+    assert_eq!(st["data"]["profile"]["mode"], "game");
+    assert_eq!(st["data"]["profile"]["mode_state"]["origin"], "cli");
+    let d = ok(&["mode", "toggle", "game"]);
+    assert_eq!(
+        d["data"]["change"]["to"], "base",
+        "toggled back to the previous mode"
+    );
+    // `mode list` names the live mode.
+    ok(&["mode", "set", "symbols"]);
+    let list = ok(&["mode", "list"]);
+    assert_eq!(list["data"]["active"], "symbols");
+    let st = mode(&sb);
+    assert_eq!(st["chain"], json!(["symbols", "nav", "base"]));
+    bless("mode-status", &ok(&["mode", "status"]));
+    // A pause is the safe reset to the default mode.
+    ok(&["pause"]);
+    let m = mode(&sb);
+    assert_eq!(
+        (m["active"].as_str(), m["origin"].as_str()),
+        (Some("base"), Some("pause"))
+    );
+    ok(&["resume"]);
+    // Deleting the active mode: the reload returns the engine to the default mode.
+    ok(&["mode", "add", "--title", "Temporary", "--id", "temp"]);
+    ok(&["mode", "set", "temp"]);
+    ok(&["mode", "delete", "temp", "--yes"]);
+    let until = Instant::now() + Duration::from_secs(5);
+    loop {
+        let m = mode(&sb);
+        if m["active"] == "base" {
+            assert_eq!(m["origin"], "reload");
+            break;
+        }
+        assert!(
+            Instant::now() < until,
+            "the deleted mode stayed active: {m:#}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    err(&["mode", "set", "temp"], "mode_not_found");
+    ok(&["mode", "reset"]);
+    // A restart never restores a mode (ADR 0043).
+    ok(&["mode", "set", "game"]);
+    ok(&["engine", "stop"]);
+    let m = mode(&sb);
+    assert_eq!(
+        (m["active"].as_str(), m["live"].as_bool()),
+        (Some("base"), Some(false))
+    );
+    err(&["mode", "set", "game"], "engine_off");
+    ok(&["engine", "start"]);
+    assert_eq!(mode(&sb)["active"], "base");
+    // Mode rules on obscure keys through the real hook, as another program's input.
+    let wait = |want: &str| {
+        let until = Instant::now() + Duration::from_secs(5);
+        loop {
+            let m = mode(&sb);
+            if m["active"] == want {
+                return m;
+            }
+            assert!(Instant::now() < until, "never {want}: {m:#}");
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    };
+    let send =
+        |vk: u16, up: bool| ddalgak::win::inject::send_as_other_program(&[OutKey { vk, up }]) == 1;
+    if ddalgak::win::input_desktop_available() && send(VK_F14, false) && send(VK_F14, true) {
+        let m = wait("game");
+        assert_eq!(m["origin"], "rule:to-game");
+        if send(VK_F13, false) {
+            let m = wait("nav");
+            assert_eq!(m["held"], json!(["nav"]));
+            assert_eq!(m["latched"], "game");
+            assert!(send(VK_F13, true), "F13 must be released");
+            let m = wait("game");
+            assert_eq!(m["origin"], "released:hold-nav");
+            eprintln!("verified with real SendInput: a set and a held layer through the hook");
+        } else {
+            let _ = send(VK_F13, true);
+            eprintln!("skipped (SendInput refused) at F13");
+        }
+    } else {
+        let _ = send(VK_F14, true);
+        eprintln!("skipped (locked or SendInput refused): mode rules through the real hook");
+    }
+    let (_, st) = sb.json(&["status"]);
+    bless("status-running-in-a-mode", &st);
     sb.json(&["quit"]);
     assert_eq!(host.wait_exit(Duration::from_secs(10)), Some(0));
 }

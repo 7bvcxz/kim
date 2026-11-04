@@ -1,0 +1,103 @@
+{
+  "command": "mode.list",
+  "data": {
+    "active": null,
+    "default": "base",
+    "indicator": "auto",
+    "modes": [
+      {
+        "active": null,
+        "chain": [
+          "base"
+        ],
+        "color": null,
+        "default": true,
+        "icon": null,
+        "id": "base",
+        "layers": [
+          "nav"
+        ],
+        "one_shot": false,
+        "parent": null,
+        "policy": "exclusive",
+        "problems": [],
+        "rules": 0,
+        "switched_by": [],
+        "timeout_ms": null,
+        "title": "Base"
+      },
+      {
+        "active": null,
+        "chain": [
+          "nav",
+          "base"
+        ],
+        "color": "#B7A6F5",
+        "default": false,
+        "icon": "N",
+        "id": "nav",
+        "layers": [
+          "symbols"
+        ],
+        "one_shot": false,
+        "parent": "base",
+        "policy": "layer",
+        "problems": [],
+        "rules": 1,
+        "switched_by": [
+          "hold-nav"
+        ],
+        "timeout_ms": null,
+        "title": "Navigation"
+      },
+      {
+        "active": null,
+        "chain": [
+          "symbols",
+          "nav",
+          "base"
+        ],
+        "color": null,
+        "default": false,
+        "icon": null,
+        "id": "symbols",
+        "layers": [],
+        "one_shot": false,
+        "parent": "nav",
+        "policy": "layer",
+        "problems": [],
+        "rules": 0,
+        "switched_by": [],
+        "timeout_ms": null,
+        "title": "Symbols"
+      },
+      {
+        "active": null,
+        "chain": [
+          "game"
+        ],
+        "color": null,
+        "default": false,
+        "icon": null,
+        "id": "game",
+        "layers": [],
+        "one_shot": false,
+        "parent": null,
+        "policy": "exclusive",
+        "problems": [],
+        "rules": 0,
+        "switched_by": [
+          "to-game"
+        ],
+        "timeout_ms": null,
+        "title": "Gaming"
+      }
+    ],
+    "profile": "default",
+    "revision": 6,
+    "source": "saved"
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

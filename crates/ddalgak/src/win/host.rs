@@ -24,22 +24,23 @@
 //! `engine.toggle`) or the opt-in `engine_on_start: on` at a clean start.
 
 use super::context::Watcher;
-use super::hook::{self, HookThread, STATE_OFF, STATE_PAUSED, STATE_RUNNING};
+use super::hook::{self, HookThread, ModeRequest, STATE_OFF, STATE_PAUSED, STATE_RUNNING};
 use super::inject::SendInputBackend;
 use super::pipe::{self, Listener};
 use super::tray::{MenuCmd, Tray};
 use super::watch::FolderWatcher;
 use super::{instance, process_cpu_us, wide};
-use crate::ipc::{self, Method};
+use crate::ipc::{self, Method, ModeCmd};
 use crate::lifecycle::{
     Lifecycle, Markers, OffReason, Origin, Refusal, Request, StartFacts, State,
 };
+use crate::modes::{self, ModeOrigin, ModeStatus};
 use crate::paths::Paths;
 use crate::rules::{self, FileState};
 use crate::shortcuts::Shortcuts;
 use crate::stats::Stats;
 use crate::store::{self, Files};
-use crate::table::{EngineOp, Table};
+use crate::table::EngineOp;
 use crate::validate::Context;
 use crate::worker::{Activity, Control, Msg, Rules, Worker};
 use serde_json::{Value, json};
@@ -168,6 +169,8 @@ struct Host {
     cmd_rx: Receiver<HostCmd>,
     control_rx: Receiver<Control>,
     taskbar_created: u32,
+    /// The mode state as last seen (the hook thread owns it) and since when (Step 72).
+    mode: Option<(ModeStatus, String)>,
 }
 
 thread_local! {
@@ -249,12 +252,13 @@ impl Host {
             let bindings = self.loaded.bindings.clone();
             self.worker.queue().send(Msg::Rules(Rules {
                 generation: self.generation,
-                bindings: Arc::new(bindings.clone()),
+                bindings: Arc::new(bindings),
                 profile: self.loaded.profile.clone(),
                 mode: self.loaded.mode.clone(),
+                modes: self.loaded.modes.clone(),
             }));
             self.shared.set_state(STATE_RUNNING);
-            let table = Table::compile(bindings, self.loaded.max_runs_per_second);
+            let table = self.loaded.table();
             match HookThread::start(
                 table,
                 self.generation,
@@ -277,6 +281,8 @@ impl Host {
             }
             self.watcher = Some(Watcher::install(Arc::clone(&self.shared)));
             let _ = self.markers.engine_on();
+            // Every start begins in the default mode; the active mode is never restored (ADR 0043).
+            self.set_mode(Some(self.loaded.modes.initial()));
         }
         self.shared.set_state(match change.to {
             State::Off => STATE_OFF,
@@ -287,7 +293,15 @@ impl Host {
             // The worker owns the output ledger: it releases every held key and button.
             self.worker.queue().send(Msg::Cancel);
             if let Some(h) = &self.hook {
-                h.cancel_pending();
+                if change.to == State::Paused {
+                    // A pause is the safe reset: the default mode is active again (ADR 0043).
+                    h.cancel_and_reset_mode();
+                    let mut st = self.loaded.modes.initial();
+                    st.origin = "pause".into();
+                    self.set_mode(Some(st));
+                } else {
+                    h.cancel_pending();
+                }
             }
         }
         if change.removes_hook() {
@@ -295,6 +309,7 @@ impl Host {
                 h.stop();
             }
             self.watcher = None;
+            self.set_mode(None);
             let _ = if req == Request::Emergency {
                 self.markers.emergency_off()
             } else {
@@ -425,15 +440,129 @@ impl Host {
             let bindings = self.loaded.bindings.clone();
             self.worker.queue().send(Msg::Rules(Rules {
                 generation: self.generation,
-                bindings: Arc::new(bindings.clone()),
+                bindings: Arc::new(bindings),
                 profile: self.loaded.profile.clone(),
                 mode: self.loaded.mode.clone(),
+                modes: self.loaded.modes.clone(),
             }));
-            h.swap_table(
-                self.generation,
-                Table::compile(bindings, self.loaded.max_runs_per_second),
-            );
+            h.swap_table(self.generation, self.loaded.table());
+            // The hook thread carries the mode over by ID (the latched mode stays when it still
+            // exists); until its signal arrives the mirror says the same.
+            let carried = self
+                .mode
+                .as_ref()
+                .map(|(m, _)| m.carried(&self.loaded.modes));
+            if let Some(m) = carried {
+                self.set_mode(Some(m));
+            }
         }
+    }
+
+    /// Updates the mode mirror (for the tray and as a fallback for `status`) and the tray.
+    fn set_mode(&mut self, status: Option<ModeStatus>) {
+        let since = match (&self.mode, &status) {
+            (Some((old, at)), Some(new))
+                if old.active == new.active && old.latched == new.latched =>
+            {
+                at.clone()
+            }
+            _ => crate::time::now_rfc3339(),
+        };
+        self.mode = status.map(|s| (s, since));
+        let ind = self
+            .mode
+            .as_ref()
+            .map(|(s, _)| modes::indicator(self.loaded.mode_indicator, &self.loaded.modes, s));
+        if let Some(t) = &mut self.tray {
+            t.set_mode(ind);
+        }
+    }
+
+    /// The live mode state from the hook thread (Step 72), or the mode the engine starts in.
+    fn mode_now(&mut self) -> (ModeStatus, bool) {
+        let reply = self
+            .hook
+            .as_ref()
+            .filter(|_| self.state().has_hook())
+            .and_then(|h| h.mode(ModeRequest::Query));
+        match reply {
+            Some(Ok(r)) => {
+                self.set_mode(Some(r.status.clone()));
+                (r.status, true)
+            }
+            _ => match (&self.mode, self.state().has_hook()) {
+                (Some((m, _)), true) => (m.clone(), true),
+                _ => (self.loaded.modes.initial(), false),
+            },
+        }
+    }
+
+    /// The `mode` block of `status` and `mode …` answers.
+    fn mode_json(&mut self) -> Value {
+        let (st, live) = self.mode_now();
+        let since = self
+            .mode
+            .as_ref()
+            .map(|(_, at)| at.clone())
+            .filter(|_| live);
+        let ind = modes::indicator(self.loaded.mode_indicator, &self.loaded.modes, &st);
+        let mut v = st.to_json(live, since.as_deref());
+        v["indicator"] = ind.to_json();
+        v
+    }
+
+    /// `mode set|toggle|reset` from the CLI (Step 72): only a running or paused engine has a
+    /// mode to change; the hook thread changes it exactly as a mode rule would.
+    fn mode_cmd(
+        &mut self,
+        cmd: ModeCmd,
+        dry_run: bool,
+        origin: ModeOrigin,
+    ) -> Result<Value, (String, String)> {
+        if !self.state().has_hook() {
+            return Err(refusal(Refusal::EngineOff));
+        }
+        if let ModeCmd::Set(m) | ModeCmd::Toggle(m) = &cmd
+            && self.loaded.modes.index(m).is_none()
+        {
+            return Err((
+                "mode_not_found".into(),
+                format!(
+                    "no mode `{m}` in the active profile `{}`",
+                    self.loaded.profile
+                ),
+            ));
+        }
+        let (req, op) = match cmd {
+            ModeCmd::Set(mode) => (ModeRequest::Set { mode, origin }, "set"),
+            ModeCmd::Toggle(mode) => (ModeRequest::Toggle { mode, origin }, "toggle"),
+            ModeCmd::Reset => (ModeRequest::Reset { origin }, "reset"),
+        };
+        if dry_run {
+            let (st, _) = self.mode_now();
+            return Ok(json!({
+                "dry_run": true,
+                "change": { "op": op, "from": st.active, "to": null, "changed": null },
+                "mode": self.mode_json(),
+                "engine": self.engine_json(),
+            }));
+        }
+        let reply = self
+            .hook
+            .as_ref()
+            .and_then(|h| h.mode(req))
+            .ok_or((
+                "app_unresponsive".to_string(),
+                "the engine's hook thread did not answer".to_string(),
+            ))?
+            .map_err(|(c, m)| (c.to_string(), m))?;
+        self.set_mode(Some(reply.status.clone()));
+        Ok(json!({
+            "dry_run": false,
+            "change": { "op": op, "from": reply.from, "to": reply.status.active, "changed": reply.changed },
+            "mode": self.mode_json(),
+            "engine": self.engine_json(),
+        }))
     }
 
     fn engine_json(&self) -> Value {
@@ -460,7 +589,8 @@ impl Host {
             .map(|(_, _, s)| *s)
     }
 
-    fn status(&self) -> Value {
+    fn status(&mut self) -> Value {
+        let mode = self.mode_json();
         let activity = self
             .activity
             .lock()
@@ -488,7 +618,7 @@ impl Host {
             },
             "engine": self.engine_json(),
             "start": { "off_reason": self.start_reason.as_str() },
-            "profile": { "id": self.loaded.profile, "mode": self.loaded.mode },
+            "profile": { "id": self.loaded.profile, "mode": mode["active"], "mode_state": mode },
             "rules": rules_json,
             "shortcuts": self.shortcuts.to_json(&|a| self.registration(a)),
             "session": { "locked": self.locked },
@@ -549,6 +679,7 @@ impl Host {
             Method::Health => Ok(self.health()),
             Method::Engine(req) => self.engine(req, &Origin::Cli, dry_run),
             Method::RulesReload => Ok(self.reload("cli", dry_run)),
+            Method::Mode(cmd) => self.mode_cmd(cmd, dry_run, ModeOrigin::Cli),
             Method::Quit => {
                 if !dry_run {
                     // SAFETY: posts a plain message to this thread's own window.
@@ -564,6 +695,26 @@ impl Host {
 
     fn control(&mut self, c: Control) {
         let (req, origin) = match c {
+            // A mode rule the worker timed (`on: hold`): the hook thread runs its step.
+            Control::ModeRequest {
+                binding,
+                generation,
+            } => {
+                if let Some(h) = &self.hook {
+                    let _ = h.mode(ModeRequest::Rule {
+                        binding,
+                        generation,
+                    });
+                }
+                return;
+            }
+            // The mode changed: the tray shows it (views of older rules are ignored).
+            Control::Mode { generation, status } => {
+                if generation == self.generation && self.state().has_hook() {
+                    self.set_mode(Some(*status));
+                }
+                return;
+            }
             Control::Emergency => (Request::Emergency, Origin::Emergency),
             Control::Engine { op, rule } => (
                 match op {
@@ -615,10 +766,34 @@ impl Host {
                 unsafe { PostMessageW(self.hwnd, WM_CLOSE, 0, 0) };
                 Ok(Value::Null)
             }
+            (MenuCmd::Mode(id), _) => self.mode_cmd(ModeCmd::Set(id), false, ModeOrigin::Tray),
+            (MenuCmd::ResetMode, _) => self.mode_cmd(ModeCmd::Reset, false, ModeOrigin::Tray),
         };
         if let Err((_, msg)) = result {
             self.notify("Ddalgak", &msg);
         }
+    }
+
+    /// What the tray menu shows: the state line and, while the engine is on and the mode
+    /// indicator is visible, the mode menu with the default mode's title (Step 72).
+    fn menu_model(&self) -> (State, String, Option<(Vec<modes::MenuEntry>, String)>) {
+        let state = self.state();
+        let ind = self
+            .mode
+            .as_ref()
+            .map(|(s, _)| modes::indicator(self.loaded.mode_indicator, &self.loaded.modes, s));
+        let title = modes::tooltip(state, ind.as_ref());
+        let entries = match (&self.mode, &ind) {
+            (Some((s, _)), Some(i)) if i.visible && state.has_hook() => Some((
+                modes::menu(&self.loaded.modes, s),
+                self.loaded
+                    .modes
+                    .title(self.loaded.modes.default_mode())
+                    .to_string(),
+            )),
+            _ => None,
+        };
+        (state, title, entries)
     }
 
     fn session(&mut self, code: usize) {
@@ -687,8 +862,13 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             let event = u32::try_from(lparam & 0xFFFF).unwrap_or(0);
             if matches!(event, WM_RBUTTONUP | WM_LBUTTONUP | WM_CONTEXTMENU) {
                 // The menu runs a modal loop that dispatches messages: no borrow across it.
-                if let Some(state) = with_host(|h| h.state())
-                    && let Some(cmd) = Tray::menu(hwnd, state)
+                if let Some((state, title, modes)) = with_host(|h| h.menu_model())
+                    && let Some(cmd) = Tray::menu(
+                        hwnd,
+                        state,
+                        &title,
+                        modes.as_ref().map(|(e, d)| (e.as_slice(), d.as_str())),
+                    )
                 {
                     with_host(|h| h.menu(cmd));
                 }
@@ -993,6 +1173,7 @@ pub fn run(opts: Options) -> Result<(), RunError> {
             cmd_rx,
             control_rx,
             taskbar_created,
+            mode: None,
         });
     });
     if policy.is_ok() {

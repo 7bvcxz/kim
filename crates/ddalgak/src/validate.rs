@@ -258,6 +258,30 @@ pub fn semantic_errors(doc: &Value, skip: &dyn Fn(usize, usize) -> bool) -> Vec<
         if !known(&p["default_mode"]) {
             push("unknown_mode", format!("{at_p}.default_mode"));
         }
+        // Step 72: a layer's parent exists, and following parents never comes back to the mode.
+        let parent_of: BTreeMap<&str, &str> = list(&p["modes"])
+            .filter_map(|m| Some((m["id"].as_str()?, m["parent"].as_str()?)))
+            .collect();
+        for (mi, m) in list(&p["modes"]).enumerate() {
+            let Some(parent) = m["parent"].as_str() else {
+                continue;
+            };
+            if !known(&m["parent"]) {
+                push("unknown_mode", format!("{at_p}.modes[{mi}].parent"));
+                continue;
+            }
+            let start = m["id"].as_str().unwrap_or_default();
+            let mut at = Some(parent);
+            // A cycle further up the chain is reported at the modes that lie on it.
+            for _ in 0..=modes.len() {
+                let Some(cur) = at else { break };
+                if cur == start {
+                    push("mode_cycle", format!("{at_p}.modes[{mi}].parent"));
+                    break;
+                }
+                at = parent_of.get(cur).copied();
+            }
+        }
 
         let mut triggers: BTreeMap<String, usize> = BTreeMap::new();
         for (ri, r) in list(&p["rules"]).enumerate() {
@@ -418,8 +442,9 @@ fn profile_index(at: &str) -> Option<usize> {
 
 /// The Step that implements each step type this version does not run yet (ADR 0031 moved `delay`
 /// to Step 78, with ordered multi-step runs; `send_keys` and `type_text` run since Step 69,
-/// `open_program` and `open_url` since Step 70, the mouse steps since Step 71).
-pub const LATER_STEPS: &[(&str, &str)] = &[("delay", "Step 78"), ("mode", "Step 72")];
+/// `open_program` and `open_url` since Step 70, the mouse steps since Step 71, `mode` since
+/// Step 72).
+pub const LATER_STEPS: &[(&str, &str)] = &[("delay", "Step 78")];
 
 fn message(code: &str) -> &'static str {
     match code {
@@ -427,6 +452,9 @@ fn message(code: &str) -> &'static str {
         "unknown_profile" => "`active_profile` names no profile of the file",
         "duplicate_mode_id" => "the mode ID appears twice in the profile",
         "unknown_mode" => "the mode does not exist in this profile",
+        "mode_cycle" => {
+            "following the mode's parents leads back to it; the mode works without a parent until this is fixed"
+        }
         "duplicate_rule_id" => "an earlier rule has the same ID; this one is inactive",
         "output_is_trigger" => {
             "the step sends the rule's own trigger (a recursive remap); the rule is inactive"
@@ -633,6 +661,41 @@ fn extend(
     r: &mut Report,
 ) {
     for (pi, profile) in typed.profiles.iter().enumerate() {
+        // Step 72: the default mode is where every exit ends, so it is no layer and has no exit
+        // of its own; the engine ignores those fields there (never broader).
+        if let Some((mi, m)) = profile
+            .modes
+            .iter()
+            .enumerate()
+            .find(|(_, m)| m.id == profile.default_mode)
+        {
+            let what: Vec<&str> = [
+                (m.parent.is_some(), "a parent"),
+                (m.one_shot == Some(true), "`one_shot`"),
+                (m.timeout_ms.is_some(), "`timeout_ms`"),
+            ]
+            .into_iter()
+            .filter_map(|(on, w)| on.then_some(w))
+            .collect();
+            if !what.is_empty() {
+                r.problems.push(Problem {
+                    code: "mode_invalid",
+                    severity: Severity::Error,
+                    profile: Some(profile.id.clone()),
+                    rule: None,
+                    pos: None,
+                    at: format!("profiles[{pi}].modes[{mi}]"),
+                    message: format!(
+                        "profiles[{pi}].modes[{mi}]: the default mode `{}` has {}; the default mode is where every mode returns, so it has none (they are ignored)",
+                        m.id,
+                        what.join(" and ")
+                    ),
+                    with: None,
+                    offers: Vec::new(),
+                });
+            }
+        }
+        let mode_set = crate::modes::ModeSet::from_profile(profile);
         let items: Vec<Item> = profile
             .rules
             .iter()
@@ -893,44 +956,62 @@ fn extend(
                 i.rule.enabled && i.trigger.is_some() && !duplicate_trigger.contains(&(i.pi, i.ri))
             })
             .collect();
-        // What the pairwise checks compare, computed once per rule.
+        // What the pairwise checks compare, computed once per rule. Step 72: a rule works in the
+        // modes whose chain (the mode, its parent, …) reaches one of its modes, and in each mode
+        // it ranks by how near its mode is, then priority, then file order (§7.1).
         struct Pre<'a> {
             item: &'a Item<'a>,
             when: String,
             modes: BTreeSet<String>,
             first: String,
-            rank: (bool, i64, std::cmp::Reverse<usize>),
+            mask: Option<u32>,
         }
         let pre: Vec<Pre> = enabled
             .iter()
-            .map(|i| Pre {
-                item: i,
-                when: canonical(
-                    i.rule
-                        .when
-                        .as_ref()
-                        .map(|w| serde_json::to_value(w).unwrap_or_default())
-                        .as_ref(),
-                ),
-                modes: match &i.rule.modes {
-                    Some(m) => m.iter().cloned().collect(),
-                    None => all_modes.iter().map(|s| (*s).to_string()).collect(),
-                },
-                first: i
-                    .rule
-                    .trigger
-                    .keys_text()
-                    .split(' ')
-                    .next()
-                    .unwrap_or_default()
-                    .to_string(),
-                rank: (
-                    i.rule.modes.is_some(),
-                    i.rule.priority(),
-                    std::cmp::Reverse(i.ri),
-                ),
+            .map(|i| {
+                let mask = match &i.rule.modes {
+                    Some(m) => mode_set.mask(m),
+                    None => Some(0),
+                };
+                Pre {
+                    item: i,
+                    when: canonical(
+                        i.rule
+                            .when
+                            .as_ref()
+                            .map(|w| serde_json::to_value(w).unwrap_or_default())
+                            .as_ref(),
+                    ),
+                    modes: match mask {
+                        Some(k) => (0..mode_set.len())
+                            .filter_map(|m| u8::try_from(m).ok())
+                            .filter(|m| mode_set.rank(*m, k).is_some())
+                            .map(|m| mode_set.id(m).to_string())
+                            .filter(|m| all_modes.contains(m.as_str()))
+                            .collect(),
+                        None => BTreeSet::new(),
+                    },
+                    first: i
+                        .rule
+                        .trigger
+                        .keys_text()
+                        .split(' ')
+                        .next()
+                        .unwrap_or_default()
+                        .to_string(),
+                    mask,
+                }
             })
             .collect();
+        // Lower is stronger: the nearest mode, then higher priority, then earlier in the list.
+        let rank_in = |p: &Pre, m: &str| {
+            let d = mode_set
+                .index(m)
+                .zip(p.mask)
+                .and_then(|(m, k)| mode_set.rank(m, k))
+                .unwrap_or(usize::MAX);
+            (d, std::cmp::Reverse(p.item.rule.priority()), p.item.ri)
+        };
         // Only rules that share their first chord can take each other's trigger.
         let mut by_first: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
         for (k, p) in pre.iter().enumerate() {
@@ -948,11 +1029,16 @@ fn extend(
                     if overlap.is_empty() {
                         continue;
                     }
-                    let shared: Vec<&str> = overlap.iter().map(|s| s.as_str()).collect();
                     let (ra, rb) = (a.item.rule, b.item.rule);
-                    // `b` loses against `a` on the same keys.
-                    if ra.trigger.keys == rb.trigger.keys && a.rank > b.rank {
-                        let all = b.modes.iter().all(|m| overlap.contains(m));
+                    // The modes in which `b` loses against `a` on the same keys.
+                    let lost: BTreeSet<&String> = overlap
+                        .iter()
+                        .copied()
+                        .filter(|m| rank_in(a, m) < rank_in(b, m))
+                        .collect();
+                    let shared: Vec<&str> = lost.iter().map(|s| s.as_str()).collect();
+                    if ra.trigger.keys == rb.trigger.keys && !lost.is_empty() {
+                        let all = b.modes.iter().all(|m| lost.contains(m));
                         let code = if all {
                             "trigger_shadowed"
                         } else {

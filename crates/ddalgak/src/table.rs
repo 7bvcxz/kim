@@ -10,6 +10,7 @@
 //! never allocates.
 
 use crate::hotstring;
+use crate::modes::ModeSet;
 use crate::remap::Output;
 use crate::run::{KeysSpec, TextSpec};
 use crate::trigger::{TKey, Trigger};
@@ -76,10 +77,12 @@ pub struct RemapSpec {
 
 /// What a binding does when it fires. Step 66 runs engine-control rules, Step 68 remaps and
 /// blocks, Step 69 typed text and sent keys, Step 70 program and website launches, Step 71 mouse
-/// moves, wheel, clicks and holds; modes arrive in Step 72 and are inactive until then (never
-/// broader, §9).
+/// moves, wheel, clicks and holds, Step 72 mode switches.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Action {
+    /// Switches, toggles, cycles or holds a mode (§5.10, Step 72). The core runs it in the hook
+    /// callback, so the very next key is decided in the new mode; nothing is injected.
+    Mode(crate::modes::ModeAction),
     Engine(Vec<EngineOp>),
     /// The trigger acts as another key, chord or button while held (§5.1). The core decides the
     /// output events; the worker sends them.
@@ -141,6 +144,9 @@ pub struct Binding {
     /// A hotstring trigger (Step 69): `trigger` is then [`Trigger::none`] and the core matches
     /// typed characters.
     pub hotstring: Option<Arc<hotstring::Spec>>,
+    /// The modes the rule is limited to, as bits of the profile's mode indexes (Step 72); `0`:
+    /// every mode.
+    pub modes: u32,
 }
 
 impl Binding {
@@ -186,6 +192,8 @@ pub struct Compiled {
     /// A held motion (`mouse_move` with `while_held`, Step 71): the core tells the worker when
     /// its trigger goes up.
     pub motion: bool,
+    /// A mode step (Step 72): the core runs it itself ([`Table::mode_action`]).
+    pub mode: bool,
 }
 
 /// Most bindings a table holds (one profile's rule limit, DDALGAK_RULE_MODEL §2).
@@ -198,12 +206,20 @@ pub struct Table {
     pub(crate) bindings: Vec<Binding>,
     /// The compiled outputs of each remap binding (`None` for other bindings).
     pub(crate) remaps: Vec<Option<RemapSpec>>,
-    /// The hotstring bindings in precedence order, with their binding index.
+    /// The hotstring bindings in precedence order, with their binding index (every mode).
     pub(crate) hotstrings: Vec<(u16, Arc<hotstring::Spec>)>,
     /// The longest active abbreviation (the bound of the core's buffer).
     pub(crate) longest_hotstring: usize,
     /// Per-rule rate limit (`settings.max_runs_per_second`, 1–100).
     pub max_runs_per_second: u32,
+    /// The active profile's modes (Step 72).
+    pub(crate) modes: ModeSet,
+    /// Per mode: the bindings that work in it, in precedence order (DDALGAK_RULE_MODEL §7.1:
+    /// rules of the mode itself, then of its parent, …, then rules without modes; within each,
+    /// higher priority, then file order). The core scans only the active mode's list.
+    pub(crate) order: Vec<Vec<u16>>,
+    /// Per mode: the hotstrings that work in it, in the same precedence.
+    pub(crate) mode_hotstrings: Vec<Vec<(u16, Arc<hotstring::Spec>)>>,
 }
 
 fn compile_chord(c: &crate::trigger::TChord) -> CChord {
@@ -219,9 +235,54 @@ fn compile_chord(c: &crate::trigger::TChord) -> CChord {
 }
 
 impl Table {
-    /// Compiles bindings given in precedence order. At most [`MAX_BINDINGS`]; the rest are
-    /// dropped and reported by the caller.
+    /// Compiles bindings given in precedence order for a profile with one mode (tests, a missing
+    /// rules file). At most [`MAX_BINDINGS`]; the rest are dropped and reported by the caller.
     pub fn compile(bindings: Vec<Binding>, max_runs_per_second: u32) -> Table {
+        Table::compile_modes(bindings, ModeSet::single(), max_runs_per_second)
+    }
+
+    /// Compiles bindings given in priority and file order for the profile's `modes`: each mode
+    /// gets its own precedence list over its chain (Step 72).
+    pub fn compile_modes(
+        bindings: Vec<Binding>,
+        modes: ModeSet,
+        max_runs_per_second: u32,
+    ) -> Table {
+        let mut t = Table::compile_flat(bindings, max_runs_per_second);
+        t.order = (0..modes.len())
+            .map(|m| {
+                let m = u8::try_from(m).unwrap_or(u8::MAX);
+                let mut ranked: Vec<(usize, u16)> = t
+                    .bindings
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, b)| {
+                        let rank = modes.rank(m, b.modes)?;
+                        Some((rank, u16::try_from(i).ok()?))
+                    })
+                    .collect();
+                // A stable sort keeps priority and file order inside each rank.
+                ranked.sort_by_key(|(rank, _)| *rank);
+                ranked.into_iter().map(|(_, i)| i).collect()
+            })
+            .collect();
+        t.mode_hotstrings = t
+            .order
+            .iter()
+            .map(|list| {
+                list.iter()
+                    .filter_map(|i| {
+                        let h = t.bindings[usize::from(*i)].hotstring.clone()?;
+                        Some((*i, h))
+                    })
+                    .collect()
+            })
+            .collect();
+        t.modes = modes;
+        t
+    }
+
+    fn compile_flat(bindings: Vec<Binding>, max_runs_per_second: u32) -> Table {
         let mut bindings = bindings;
         bindings.truncate(MAX_BINDINGS);
         let _ = vk::vk_name(0, false); // build the name table outside any hook callback
@@ -247,6 +308,7 @@ impl Table {
                     engine_control: b.is_engine_control(),
                     is_remap: b.action.remap_spec().is_some(),
                     motion: matches!(b.action, Action::Motion(_)),
+                    mode: matches!(b.action, Action::Mode(_)),
                 }
             })
             .collect();
@@ -264,18 +326,49 @@ impl Table {
             .map(|(_, h)| h.abbreviation.len())
             .max()
             .unwrap_or(0);
+        let all: Vec<u16> = (0..bindings.len())
+            .filter_map(|i| u16::try_from(i).ok())
+            .collect();
         Table {
             compiled,
             bindings,
             remaps,
+            mode_hotstrings: vec![hotstrings.clone()],
             hotstrings,
             longest_hotstring,
             max_runs_per_second: max_runs_per_second.clamp(1, 100),
+            modes: ModeSet::single(),
+            order: vec![all],
         }
     }
 
     pub fn len(&self) -> usize {
         self.compiled.len()
+    }
+
+    /// The profile's modes.
+    pub fn modes(&self) -> &ModeSet {
+        &self.modes
+    }
+
+    /// The bindings that work in mode `m`, in precedence order.
+    pub fn order(&self, m: u8) -> &[u16] {
+        self.order.get(usize::from(m)).map_or(&[], Vec::as_slice)
+    }
+
+    /// The hotstrings that work in mode `m`, in precedence order.
+    pub fn hotstrings_in(&self, m: u8) -> &[(u16, Arc<hotstring::Spec>)] {
+        self.mode_hotstrings
+            .get(usize::from(m))
+            .map_or(&[], Vec::as_slice)
+    }
+
+    /// The mode step of binding `index`, if it is a mode rule.
+    pub fn mode_action(&self, index: usize) -> Option<&crate::modes::ModeAction> {
+        match self.bindings.get(index).map(|b| &b.action) {
+            Some(Action::Mode(a)) => Some(a),
+            _ => None,
+        }
     }
 
     /// The compiled outputs of binding `index`, if it is a remap.
@@ -301,9 +394,14 @@ impl Table {
         self.bindings.iter().any(|b| b.trigger.mouse().is_some())
     }
 
-    /// Whether a hotstring rule is active (only then does the core translate keys and keep its
-    /// bounded buffer).
+    /// Whether a hotstring rule is active in any mode.
     pub fn has_hotstrings(&self) -> bool {
         !self.hotstrings.is_empty()
+    }
+
+    /// Whether a hotstring rule works in mode `m` (only then does the core translate keys and
+    /// keep its bounded buffer).
+    pub fn has_hotstrings_in(&self, m: u8) -> bool {
+        !self.hotstrings_in(m).is_empty()
     }
 }

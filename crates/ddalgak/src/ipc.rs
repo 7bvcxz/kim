@@ -20,8 +20,18 @@ pub const MAX_RESPONSE: usize = 256 * 1024;
 /// How long either side waits for the other's line.
 pub const TIMEOUT_MS: u64 = 3000;
 
+/// A mode change the CLI asks for (Step 72). Mode IDs only; the app resolves them in its active
+/// profile.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum ModeCmd {
+    Set(String),
+    Toggle(String),
+    /// Back to the default mode (the safe reset).
+    Reset,
+}
+
 /// What a client may ask.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Method {
     Status,
     Health,
@@ -31,16 +41,21 @@ pub enum Method {
     /// Read `rules.json` again now and apply it if it is valid (Step 67; the app also reloads on
     /// file-change notifications).
     RulesReload,
+    /// Change the active mode of the running engine (Step 72).
+    Mode(ModeCmd),
 }
 
 impl Method {
-    pub fn name(self) -> String {
+    pub fn name(&self) -> String {
         match self {
             Method::Status => "status".into(),
             Method::Health => "health".into(),
             Method::Engine(r) => format!("engine.{}", r.as_str()),
             Method::Quit => "app.quit".into(),
             Method::RulesReload => "rules.reload".into(),
+            Method::Mode(ModeCmd::Set(_)) => "mode.set".into(),
+            Method::Mode(ModeCmd::Toggle(_)) => "mode.toggle".into(),
+            Method::Mode(ModeCmd::Reset) => "mode.reset".into(),
         }
     }
 
@@ -62,13 +77,16 @@ impl Method {
 }
 
 /// One request line.
-pub fn request(method: Method, dry_run: bool) -> String {
-    let mut line = json!({
+pub fn request(method: &Method, dry_run: bool) -> String {
+    let mut v = json!({
         "ddalgak_ipc": PROTOCOL,
         "method": method.name(),
         "dry_run": dry_run,
-    })
-    .to_string();
+    });
+    if let Method::Mode(ModeCmd::Set(m) | ModeCmd::Toggle(m)) = method {
+        v["mode"] = json!(m);
+    }
+    let mut line = v.to_string();
     line.push('\n');
     line
 }
@@ -81,7 +99,19 @@ pub fn parse_request(line: &[u8]) -> Result<(Method, bool), (&'static str, Strin
         return Err(("protocol_error", "unsupported protocol version".into()));
     }
     let name = v["method"].as_str().unwrap_or_default();
-    let method = Method::parse(name).ok_or(("usage", format!("unknown method `{name}`")))?;
+    let mode = || {
+        v["mode"]
+            .as_str()
+            .filter(|m| crate::model::is_short_id(m))
+            .map(str::to_string)
+            .ok_or(("usage", format!("`{name}` needs a mode ID")))
+    };
+    let method = match name {
+        "mode.set" => Method::Mode(ModeCmd::Set(mode()?)),
+        "mode.toggle" => Method::Mode(ModeCmd::Toggle(mode()?)),
+        "mode.reset" => Method::Mode(ModeCmd::Reset),
+        _ => Method::parse(name).ok_or(("usage", format!("unknown method `{name}`")))?,
+    };
     Ok((method, v["dry_run"].as_bool().unwrap_or(false)))
 }
 
@@ -147,12 +177,23 @@ mod tests {
             Method::Engine(Request::Pause),
             Method::Engine(Request::Resume),
             Method::Engine(Request::Stop),
+            Method::Mode(ModeCmd::Set("nav".into())),
+            Method::Mode(ModeCmd::Toggle("sym-2".into())),
+            Method::Mode(ModeCmd::Reset),
         ] {
-            let line = request(m, true);
+            let line = request(&m, true);
             assert!(line.ends_with('\n') && line.len() < MAX_REQUEST);
             assert_eq!(parse_request(line.trim_end().as_bytes()), Ok((m, true)));
         }
         assert_eq!(Method::parse("engine.emergency"), None);
+        // A mode request names one mode ID, nothing else.
+        for bad in [
+            br#"{"ddalgak_ipc":1,"method":"mode.set"}"#.as_slice(),
+            br#"{"ddalgak_ipc":1,"method":"mode.set","mode":"Not An ID"}"#.as_slice(),
+            br#"{"ddalgak_ipc":1,"method":"mode.toggle","mode":7}"#.as_slice(),
+        ] {
+            assert_eq!(parse_request(bad).unwrap_err().0, "usage");
+        }
         assert_eq!(
             parse_request(br#"{"ddalgak_ipc":1,"method":"keylog"}"#)
                 .unwrap_err()

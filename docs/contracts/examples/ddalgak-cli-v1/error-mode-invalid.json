@@ -1,0 +1,17 @@
+{
+  "command": "mode.edit",
+  "error": {
+    "code": "mode_invalid",
+    "details": [
+      "mode_cycle (error): profiles[0].modes[0].parent: following the mode's parents leads back to it; the mode works without a parent until this is fixed",
+      "mode_cycle (error): profiles[0].modes[1].parent: following the mode's parents leads back to it; the mode works without a parent until this is fixed",
+      "mode_cycle (error): profiles[0].modes[2].parent: following the mode's parents leads back to it; the mode works without a parent until this is fixed",
+      "mode_invalid (error): profiles[0].modes[0]: the default mode `base` has a parent; the default mode is where every mode returns, so it has none (they are ignored)"
+    ],
+    "exit_code": 2,
+    "hint": "see `ddalgak --help`",
+    "message": "profiles[0].modes[0].parent: following the mode's parents leads back to it; the mode works without a parent until this is fixed; nothing was written"
+  },
+  "ok": false,
+  "schema_version": 1
+}

@@ -46,6 +46,7 @@ the requirements it serves. ADRs are immutable once **Accepted**; a later ADR ma
 | [0040](0040-ddalgak-mouse-actions.md) | Ddalgak mouse actions: physical desktop pixels, normalized absolute moves, holds on the remap ledger | Accepted (Step 71; real pointer, monitors, DPI and games checks manual) |
 | [0041](0041-noeul-privacy-tools.md) | Noeul privacy tools: effects as objects, redactions applied first, outputs hold pixels only | Accepted (Step 57; real-desktop checks manual) |
 | [0042](0042-subak-window-tabs-and-safe-close.md) | Subak window tabs, the tab keys and safe close: the Host's Terminals as tabs, one attached pane, hide/close/remove as three requests, `Ctrl+W` asks when the Host says busy, keys from the hotkey contract | Accepted (Step 17; visible-window checks pending the maintainer) |
+| [0043](0043-ddalgak-modes-layers-and-runtime-mode-state.md) | Ddalgak modes: layers over a parent, runtime mode state in the hook, never restored | Accepted (Step 72; real typing in applications and the real tray indicator checks manual) |
 | [0045](0045-subak-floating-icon-and-terminal-manager.md) | Subak's floating icon, tray icon and Terminal manager: a tiny optional process of the window's binary, system controls for the manager, delete that always asks, the foreground handed on explicitly | Accepted (Step 18; visible icon, real tray and drags pending the maintainer) |
 
 "Accepted (validated in Step N)" means the decision is made, but the named Step must confirm it

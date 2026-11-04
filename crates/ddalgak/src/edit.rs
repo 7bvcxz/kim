@@ -50,6 +50,13 @@ pub enum EditError {
         rule: String,
         permissions: Vec<Permission>,
     },
+    /// `mode_in_use` (Step 72): the mode is the default mode, the parent of a layer, or rules
+    /// use it; nothing was changed.
+    ModeInUse {
+        message: String,
+        /// The rules and modes that use it.
+        users: Vec<String>,
+    },
 }
 
 impl EditError {
@@ -63,12 +70,15 @@ impl EditError {
             EditError::Invalid { code, .. } => code,
             EditError::Conflict { .. } => "rule_conflict",
             EditError::ConsentRequired { .. } => "consent_required",
+            EditError::ModeInUse { .. } => "mode_in_use",
         }
     }
 
     pub fn message(&self) -> String {
         match self {
-            EditError::Usage(m) | EditError::Invalid { message: m, .. } => m.clone(),
+            EditError::Usage(m)
+            | EditError::Invalid { message: m, .. }
+            | EditError::ModeInUse { message: m, .. } => m.clone(),
             EditError::Conflict { message, .. } => message.clone(),
             EditError::RuleNotFound(id) => format!("no rule `{id}`"),
             EditError::ProfileNotFound(id) => format!("no profile `{id}`"),
@@ -108,6 +118,10 @@ pub struct Change {
     pub consent_needed: Vec<Permission>,
     /// Plain notes for the user ("disabled because …").
     pub notes: Vec<String>,
+    /// The modes it touched (Step 72 mode commands), in order.
+    pub modes: Vec<String>,
+    /// A mode it created (Step 72).
+    pub created_mode: Option<String>,
 }
 
 /// Where a rule goes in its profile's list (the list order is the last precedence step, §7.1).
@@ -585,6 +599,16 @@ fn check_modes(doc: &Document, pi: usize, rule: &Rule) -> Result<(), EditError> 
     for m in rule.modes.iter().flatten() {
         if !known.contains(m.as_str()) {
             return Err(EditError::ModeNotFound(m.clone()));
+        }
+    }
+    // Step 72: the modes a mode step switches to.
+    for s in &rule.steps {
+        if let Action::Mode(m) = s {
+            for target in m.mode.iter().chain(m.modes.iter().flatten()) {
+                if !known.contains(target.as_str()) {
+                    return Err(EditError::ModeNotFound(target.clone()));
+                }
+            }
         }
     }
     Ok(())

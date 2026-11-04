@@ -37,7 +37,35 @@ pub enum Cmd {
     RulesDraft,
     RulesDraftApply,
     RulesDraftDiscard,
+    // Step 72: modes (definitions in rules.json; the active mode in the running app).
+    ModeList,
+    ModeShow,
+    ModeAdd,
+    ModeEdit,
+    ModeRename,
+    ModeCopy,
+    ModeDelete,
+    ModeSet,
+    ModeToggle,
+    ModeReset,
+    ModeStatus,
 }
+
+/// Options of the mode fields (`mode add`, `mode edit`; Step 72).
+const MODE_FIELDS: &[(&str, Kind)] = &[
+    ("--title", Value),
+    ("--icon", Value),
+    ("--color", Value),
+    ("--parent", Value),
+    ("--one-shot", Flag),
+    ("--timeout-ms", Value),
+    ("--default", Flag),
+    ("--id", Value),
+    ("--profile", Value),
+];
+
+/// Value-taking options of the mode commands that are not rule fields.
+const MODE_VALUES: [&str; 4] = ["--icon", "--color", "--parent", "--timeout-ms"];
 
 /// How an option takes its value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -148,7 +176,33 @@ impl Cmd {
             Self::RulesDraft => "rules.draft".into(),
             Self::RulesDraftApply => "rules.draft.apply".into(),
             Self::RulesDraftDiscard => "rules.draft.discard".into(),
+            Self::ModeList => "mode.list".into(),
+            Self::ModeShow => "mode.show".into(),
+            Self::ModeAdd => "mode.add".into(),
+            Self::ModeEdit => "mode.edit".into(),
+            Self::ModeRename => "mode.rename".into(),
+            Self::ModeCopy => "mode.copy".into(),
+            Self::ModeDelete => "mode.delete".into(),
+            Self::ModeSet => "mode.set".into(),
+            Self::ModeToggle => "mode.toggle".into(),
+            Self::ModeReset => "mode.reset".into(),
+            Self::ModeStatus => "mode.status".into(),
         }
+    }
+
+    /// A mode command that reads or writes rules.json (the others ask the running app).
+    #[cfg_attr(not(windows), allow(dead_code))] // only the Windows client runs commands (ADR 0011)
+    pub fn is_mode_file(self) -> bool {
+        matches!(
+            self,
+            Self::ModeList
+                | Self::ModeShow
+                | Self::ModeAdd
+                | Self::ModeEdit
+                | Self::ModeRename
+                | Self::ModeCopy
+                | Self::ModeDelete
+        )
     }
 
     /// The options the command accepts (besides `--json`, `-q`, `-v`, `-h`, `--no-input`).
@@ -217,6 +271,57 @@ impl Cmd {
             ],
             Self::RulesDraftApply => vec![("--dry-run", Flag), ("--endpoint", Value)],
             Self::RulesDraftDiscard => vec![("--yes", Flag), ("--dry-run", Flag)],
+            Self::ModeList | Self::ModeShow => vec![
+                ("--profile", Value),
+                ("--draft", Flag),
+                ("--endpoint", Value),
+            ],
+            Self::ModeAdd => {
+                let mut v = MODE_FIELDS.to_vec();
+                v.extend_from_slice(WRITE);
+                v
+            }
+            Self::ModeEdit => {
+                let mut v = MODE_FIELDS.to_vec();
+                v.retain(|(n, _)| *n != "--id");
+                v.extend([
+                    ("--no-icon", Flag),
+                    ("--no-color", Flag),
+                    ("--no-parent", Flag),
+                    ("--no-one-shot", Flag),
+                    ("--no-timeout", Flag),
+                ]);
+                v.extend_from_slice(WRITE);
+                v
+            }
+            Self::ModeRename => {
+                let mut v = vec![("--profile", Value)];
+                v.extend_from_slice(WRITE);
+                v
+            }
+            Self::ModeCopy => {
+                let mut v = vec![
+                    ("--id", Value),
+                    ("--title", Value),
+                    ("--without-rules", Flag),
+                    ("--profile", Value),
+                ];
+                v.extend_from_slice(WRITE);
+                v
+            }
+            Self::ModeDelete => {
+                let mut v = vec![
+                    ("--delete-rules", Flag),
+                    ("--yes", Flag),
+                    ("--profile", Value),
+                ];
+                v.extend_from_slice(WRITE);
+                v
+            }
+            Self::ModeSet | Self::ModeToggle | Self::ModeReset => {
+                vec![("--endpoint", Value), ("--dry-run", Flag)]
+            }
+            Self::ModeStatus => vec![("--endpoint", Value)],
         };
         // Every rule command may name the app endpoint (writes ask that app to reload; scripts
         // can pass the same options to every command).
@@ -233,7 +338,13 @@ impl Cmd {
         match self {
             Self::RuleShow | Self::RuleEdit | Self::RuleDuplicate | Self::RuleMove => (1, 1),
             Self::RuleDelete | Self::RuleEnable | Self::RuleDisable => (1, 1000),
-            Self::RuleRevoke => (2, 2),
+            Self::RuleRevoke | Self::ModeRename => (2, 2),
+            Self::ModeShow
+            | Self::ModeEdit
+            | Self::ModeCopy
+            | Self::ModeDelete
+            | Self::ModeSet
+            | Self::ModeToggle => (1, 1),
             Self::RulesRestore => (0, 1),
             _ => (0, 0),
         }
@@ -318,6 +429,23 @@ fn command(words: &[&str]) -> Result<(Cmd, usize), String> {
         ["rules", "draft", "discard", ..] => (Cmd::RulesDraftDiscard, 3),
         ["rules", "draft", "show", ..] => (Cmd::RulesDraft, 3),
         ["rules", "draft"] => (Cmd::RulesDraft, 2),
+        ["mode", "list", ..] => (Cmd::ModeList, 2),
+        ["mode", "show", ..] => (Cmd::ModeShow, 2),
+        ["mode", "add", ..] => (Cmd::ModeAdd, 2),
+        ["mode", "edit", ..] => (Cmd::ModeEdit, 2),
+        ["mode", "rename", ..] => (Cmd::ModeRename, 2),
+        ["mode", "copy" | "duplicate", ..] => (Cmd::ModeCopy, 2),
+        ["mode", "delete", ..] => (Cmd::ModeDelete, 2),
+        ["mode", "set", ..] => (Cmd::ModeSet, 2),
+        ["mode", "toggle", ..] => (Cmd::ModeToggle, 2),
+        ["mode", "reset", ..] => (Cmd::ModeReset, 2),
+        ["mode", "status", ..] => (Cmd::ModeStatus, 2),
+        ["mode"] | ["mode", ..] => {
+            return Err(
+                "`mode` needs list, show, add, edit, rename, copy, delete, set, toggle, reset or status"
+                    .into(),
+            );
+        }
         ["engine", ..] => return Err("`engine` needs start, pause, resume or stop".into()),
         ["rule"] | ["rule", ..] => {
             return Err(
@@ -348,6 +476,7 @@ pub fn parse(raw: &[String]) -> Result<(Cmd, Args), (String, CliError)> {
                     .iter()
                     .chain(WRITE)
                     .any(|(n, k)| *n == name && *k != Flag)
+                    || MODE_VALUES.contains(&name)
                     || matches!(
                         name,
                         "--endpoint"
@@ -377,12 +506,13 @@ pub fn parse(raw: &[String]) -> Result<(Cmd, Args), (String, CliError)> {
             "resume",
             "rule",
             "rules",
+            "mode",
         ];
         match words.first() {
             Some(w) if known.contains(w) => {
                 let mut n = w.to_string();
                 if let Some(second) = words.get(1)
-                    && ["engine", "startup", "rule", "rules"].contains(w)
+                    && ["engine", "startup", "rule", "rules", "mode"].contains(w)
                     && second.chars().all(|c| c.is_ascii_lowercase())
                 {
                     n = format!("{n}.{second}");
@@ -435,8 +565,19 @@ pub fn parse(raw: &[String]) -> Result<(Cmd, Args), (String, CliError)> {
                 let f = if flag == "-y" { "--yes" } else { flag };
                 let Some((_, kind)) = allowed.iter().find(|(n, _)| *n == f) else {
                     if f.starts_with('-') && !allowed.iter().any(|(n, _)| *n == f) {
-                        let known = RULE_FIELDS.iter().chain(WRITE).any(|(n, _)| *n == f)
+                        let known = RULE_FIELDS
+                            .iter()
+                            .chain(WRITE)
+                            .chain(MODE_FIELDS)
+                            .any(|(n, _)| *n == f)
                             || [
+                                "--no-icon",
+                                "--no-color",
+                                "--no-parent",
+                                "--no-one-shot",
+                                "--no-timeout",
+                                "--without-rules",
+                                "--delete-rules",
                                 "--endpoint",
                                 "--dry-run",
                                 "--yes",
@@ -504,6 +645,8 @@ pub fn parse(raw: &[String]) -> Result<(Cmd, Args), (String, CliError)> {
             name.replace('.', " "),
             match cmd {
                 Cmd::RuleRevoke => "a rule ID and a permission".to_string(),
+                Cmd::ModeRename => "a mode ID and a new title".to_string(),
+                c if c.name().starts_with("mode.") => "a mode ID".to_string(),
                 _ => "a rule ID".to_string(),
             }
         ));

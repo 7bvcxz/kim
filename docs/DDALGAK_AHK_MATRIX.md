@@ -1,6 +1,6 @@
 # Ddalgak and AutoHotkey v2: feature matrix
 
-Status: **current** (inventory) · **Matrix v2, 2026-11-04** (Step 68: remap rows; Step 69: hotstring and sending rows; Step 70: `Run` rows; Step 71: mouse rows) · Reference: AutoHotkey **v2.0.31**
+Status: **current** (inventory) · **Matrix v2, 2026-11-04** (Step 68: remap rows; Step 69: hotstring and sending rows; Step 70: `Run` rows; Step 71: mouse rows; Step 72: mode rows) · Reference: AutoHotkey **v2.0.31**
 (the newest v2 entry of the official changelog, dated 2026-10-25) · Owner: mouv · Applies to:
 Ddalgak · Created in Step 65
 
@@ -79,7 +79,7 @@ Where a page did not state something, the row says so instead of filling the gap
 | 1.7 | `$`: force the hook so `Send` cannot re-trigger the hotkey | H | Always the case: every rule uses the hook, and Ddalgak's own input never triggers a rule (RULE_MODEL §7.4) | supported | 66 | — |
 | 1.8 | `UP`: fire on key release | H | `on: release` fires when the chord is released with no other key in between (a tap). A release after other keys is not a trigger in v1 | partial | 66 | — |
 | 1.9 | Long-press detection (scripted with key-state waits) | H | `on: hold` with `hold_ms` 200–5000, no script | supported | 66 | — |
-| 1.10 | Custom combinations `a & b`, where any key acts as a prefix | H | Real modifiers only. The main use, a layer while a key is held, is `mode` `hold` (CapsLock held → Navigation). A non-modifier prefix key in a chord is not in v1 | partial | 72 | — |
+| 1.10 | Custom combinations `a & b`, where any key acts as a prefix | H | Real modifiers only. The main use, a layer while a key is held, is `mode` `hold` (CapsLock held → Navigation). A non-modifier prefix key in a chord is not in v1 | partial | 72 | Step 72: `mode` `hold` layers (stacked, ending with their own key-up, released outputs on the way out) in core, worker and CLI tests and through the real hook with injected obscure keys; real typing manual (DDALGAK_ENGINE §15) |
 | 1.11 | Multi-key sequences (no built-in hotkey syntax; scripts use Input hooks) | H, IH | Up to four chords: `Ctrl+K Ctrl+U` | supported | 66 | — |
 | 1.12 | Creating, changing, enabling and disabling hotkeys at run time with the `Hotkey` function | H | Rule CRUD in the GUI and CLI with live reload | supported | 67 | — |
 | 1.13 | Calling a named function with `ThisHotkey` | H | No functions: a rule has declarative steps | not intended | — | — |
@@ -121,7 +121,7 @@ Where a page did not state something, the row says so instead of filling the gap
 | 3.6 | A mouse button to another button or key (`XButton1::LButton`) | RM | `remap` from `MouseMiddle`/`MouseX1`/`MouseX2` to a key, chord or any mouse button (`MouseLeft`/`MouseRight` are the logical primary and secondary buttons); a key can also act as a mouse button | supported | 68 | Step 68: core and worker tests (no mouse input injected; real buttons are a manual check) |
 | 3.7 | The mouse wheel cannot be remapped | RM | Wheel as output: `mouse_scroll` (four directions, one event per notch). Wheel as trigger: not yet (row 1.16) | partial | 71 | Step 71: mouse, core and worker tests on synthetic monitor layouts with a simulated pointer, the exact `INPUT` structures, a real-hook smoke test on obscure keys; real pointer manual (DDALGAK_ENGINE §14) |
 | 3.8 | Disabling a key (`RWin::return`) | RM | `block`, for any key except reserved ones (the Win keys among them), and for the middle and X mouse buttons; a plain trigger is widened (Ctrl+Insert too) | partial | 68 | Step 68: core and worker tests; real-input smoke on obscure keys (DDALGAK_ENGINE §11) |
-| 3.9 | Context-specific remaps (`#HotIf` around remaps) | RM, HI | Modes now; app conditions in Step 77 | supported | 72, 77 | — |
+| 3.9 | Context-specific remaps (`#HotIf` around remaps) | RM, HI | Modes (exclusive, or layers that fall back to a parent's rules) since Step 72; app conditions in Step 77 | supported | 72, 77 | Step 72: per-mode precedence along a layer's chain in core and loader tests; conditions pending (77) |
 | 3.10 | Remaps do not trigger other hook hotkeys unless `#InputLevel` is raised | RM, IL, SL | Ddalgak's own output never triggers rules; no levels. `injected: accept` admits only other programs' input, for rules that inject nothing | partial | 66 | — |
 | 3.11 | Registry `Scancode Map` as an alternative (needs a reboot, applies to all users) | RM | Ddalgak never edits system-wide keyboard settings | not intended | — | — |
 | 3.12 | Tap for one key, hold for another (scripted in AutoHotkey) | RM | `remap` with `tap`, `tap_ms`: another key pressed during the hold is sent after the target, unchanged | supported | 68 | Step 68: core and worker tests; real-input smoke on obscure keys (DDALGAK_ENGINE §11) |
@@ -167,7 +167,7 @@ Where a page did not state something, the row says so instead of filling the gap
 | 5.4 | `ahk_group` window groups | WT | A list of app matchers in one rule | partial | 77 | — |
 | 5.5 | Any Boolean expression as a condition, evaluated on the main thread when the key is pressed | HI | Fixed condition kinds only, evaluated at trigger time off the hook thread | not intended | — | — |
 | 5.6 | Precedence: the topmost eligible variant wins; the global variant has the lowest precedence | HI | Deterministic precedence: mode-scoped, app, title, priority, order (RULE_MODEL §7.1), shown by `explain` | supported | 77 | — |
-| 5.7 | Context from script variables (`#HotIf MyMode`) | HI | User-defined modes | supported | 72 | — |
+| 5.7 | Context from script variables (`#HotIf MyMode`) | HI | User-defined modes with set, toggle, cycle, hold, previous and default, one-shot and timed exits, `ddalgak mode set`, `toggle`, `reset`, `status` | supported | 72 | Step 72: `modes::tests`, `core::tests`, `tests/cli.rs::modes_through_the_cli_and_the_real_test_host` (DDALGAK_ENGINE §15) |
 
 ## 6. Window actions
 

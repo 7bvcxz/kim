@@ -248,12 +248,13 @@ commands, [DDALGAK_RULE_MODEL §13](DDALGAK_RULE_MODEL.md)). `ddalgak` also uses
 reserved) with the meaning and exit code above. `crates/ddalgak/src/output.rs` tests that this
 table matches its code; the `data` of every command is published as
 [ddalgak-cli-v1](contracts/schemas/ddalgak-cli-v1.schema.json), with examples generated from
-real runs. The profile and mode commands (Steps 72, 75, 81) use the codes below.
+real runs. The mode commands (Step 72) and the profile commands (Steps 75, 81) use the codes below.
 
 | Code | Exit | Meaning |
 | --- | --- | --- |
 | `hook_failed` | 1 | Windows refused the low-level keyboard hook; the engine stays off. |
 | `rule_invalid` | 2 | The requested rule breaks the schema or a semantic rule (DDALGAK_RULE_MODEL §8); nothing was written. |
+| `mode_invalid` | 2 | Step 72: the requested mode breaks the schema or a semantic rule (a parent cycle, an unknown parent, a default mode with a parent, `one_shot` or `timeout_ms`; DDALGAK_RULE_MODEL §7.3); nothing was written. |
 | `engine_not_running` | 3 | The command needs the running tray app (`ddalgak-gui.exe`); the CLI never starts it. |
 | `rule_not_found` | 3 | No rule with this ID. |
 | `profile_not_found` | 3 | No profile with this ID. |
@@ -264,10 +265,11 @@ real runs. The profile and mode commands (Steps 72, 75, 81) use the codes below.
 | `rules_from_newer_version` | 5 | `rules.json` was written by a newer Ddalgak; it is not run and never rewritten. |
 | `engine_elevated` | 5 | The app runs as administrator; it refuses to turn its engine on elevated (DDALGAK_SAFETY §3). |
 | `app_unresponsive` | 6 | The verified app accepted the connection but did not answer in time. It is neither stopped nor restarted. |
-| `engine_off` | 7 | Pause or resume needs the engine on; resume never turns it on. |
+| `engine_off` | 7 | Pause or resume needs the engine on; resume never turns it on. Since Step 72 also `mode set`, `toggle` and `reset`: an engine that is off has no active mode. |
 | `app_already_running` | 7 | `ddalgak-gui.exe`: another instance already owns this user session; the new one exits without touching it. |
 | `rule_conflict` | 7 | The change would give a rule a trigger another enabled rule (or Ddalgak's own shortcut) already has, an ID is taken, or the rules changed since the revision the caller read; nothing was written. `details` list the problems with their offers. |
 | `consent_required` | 7 | The change needs `--allow <permission>`; a new rule was saved disabled, anything else was not written. |
+| `mode_in_use` | 7 | Step 72: `mode delete` of the default mode, of a mode other modes are layers over, of a mode a rule switches to, or of a mode rules are limited to without `--delete-rules`; nothing was written. `details` name the rules and modes that use it. |
 
 ## 7. Output streams and the `--json` envelope
 

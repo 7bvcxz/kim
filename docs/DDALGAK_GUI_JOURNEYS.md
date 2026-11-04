@@ -1,6 +1,6 @@
 # Ddalgak GUI journeys and wireframes
 
-Status: **current** (Step 65, design; implemented in Steps 73–76) · Requirements:
+Status: **current** (Step 65, design; implemented in Steps 73–76; the type-text, shortcut and hotstring forms and the text editor's data model are machine-checked since Step 69) · Requirements:
 `DDALGAK-FR-050…053`, `DDALGAK-FR-030…042`, `DDALGAK-NFR-007` · Visual language:
 [DESIGN_SYSTEM](DESIGN_SYSTEM.md) · Model: [DDALGAK_RULE_MODEL](DDALGAK_RULE_MODEL.md)
 
@@ -207,6 +207,35 @@ every field against the rules schema and every preview against the playground co
 | `steps[0].tap` | capture | no | — | **A quick tap alone sends**: dual role; a press and release with no other key within the tap time sends this instead |
 | `steps[0].tap_ms` | number | no | 200 | **Tap time (ms)**: 100–1000; held longer, or another key pressed meanwhile, the key acts as the target |
 | `trigger.pass_through` | toggle | no | off | **Also let the original key through**: not with a tap alternative |
+
+**The "Type text" form, hotstrings and the text editor** (Step 69 fixed their data;
+`crates/ddalgak/src/text.rs` `TYPE_TEXT_FIELDS`, `SEND_KEYS_FIELDS`, `EditorDraft`, `summary` and
+`preview`, whose tests check every field against the rules schema and every preview against the
+playground contract; the visible editor is Step 74):
+
+| Field (rule document) | Input | Required | Default | Label and help |
+| --- | --- | --- | --- | --- |
+| `title` | text | yes | — | **Snippet name**: shown in the list and the tray menu instead of the text, which stays private |
+| `steps[0].text` | multi-line text | yes | — | **Text**: up to 4096 characters, Hangul, emoji, new lines, tabs; typed exactly as written; "rules.json keeps it in plain form: not for passwords" |
+| `steps[0].variables` | toggle | no | off | **Fill in variables**: `{date}`, `{time}`, `{datetime}`, `{year}`…`{second}` and `{cursor}`, inserted from a menu; `{{` `}}` for braces; no environment or clipboard variables |
+| `steps[0].method` | choice | no | type | **Paste instead of typing**: needs the clipboard permission; the clipboard is restored |
+| `steps[0].key_delay_ms` | number | no | 0 | **Delay between characters (ms)**: 0–200 |
+| `trigger.hotstring.abbreviation` | text | yes (hotstring) | — | **Abbreviation**: 1–40 characters without spaces (`btw`, `;sig`) |
+| `trigger.hotstring.case`, `inside_words`, `immediate`, `end_chars`, `omit_end`, `erase` | choice, toggles, text | no | conform, off, off, AutoHotkey's set, off, on | **Case**, **Also inside words**, **Fire as soon as it is typed**, **End characters**, **Leave out the end character**, **Erase the abbreviation** (RULE_MODEL §3.4) |
+
+- **Live preview.** Under the text box the editor shows the text as it would be typed now (the
+  variables filled in) in its own field, the summary sentence ("Types 17 characters on 2 lines
+  with {date}, then moves the cursor back 12 characters") and each field problem with its
+  position ("character 7 names no variable of the whitelist"); the problem never quotes the text.
+- **Insertion point.** `{cursor}` marks where the cursor ends up: the preview shows the number of
+  Left presses; one per character after it, a new line counts.
+- **Explicit save and test.** Nothing is saved or typed by itself. **Save** is enabled only for a
+  changed, valid draft and writes through the rule store (revision checked; *Save as draft*
+  writes `rules.draft.json`); **Test** is enabled for a valid draft and types into the
+  playground's own field only (J5, Step 76).
+- **Trigger choice.** *When I press* (keys, J3) or *When I type* (an abbreviation): the hotstring
+  options appear under the abbreviation; the summary reads "Typing btw then a space or punctuation
+  types 10 characters".
 
 "Block this key" has no inputs ("Insert does nothing (blocked)"). Under the summary the form says
 when a plain trigger combines with held modifiers ("Shift+CapsLock sends Shift+Escape") and, for

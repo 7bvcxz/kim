@@ -143,3 +143,9 @@ discloses Ddalgak's permissions (`keyboard-hook`, `input-injection`, `launch-pro
   its rules decides whether the file loads and each rule is checked on its own; its port of the
   reference cross-references is compared with `xtask/src/ddalgak.rs` on every fixture. `ddalgak`
   therefore depends on `regex` and `sha2` at run time.
+- 2026-11-04 (Step 69): hotstrings arrived as their own trigger kind (`trigger.hotstring`), as
+  planned here, and the hook now translates keys to characters for them — only while a hotstring
+  rule is active, only for keys that reach the application unchanged, and with `ToUnicodeEx`'s
+  "keyboard state is not changed" flag, so the dead-key concern behind "no character translation
+  in the hook" does not arise. `char:` triggers stay out of v1. See
+  [ADR 0034](0034-ddalgak-typing-runs-hotstrings-and-clipboard.md).

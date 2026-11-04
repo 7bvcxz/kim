@@ -1,15 +1,16 @@
-# Ddalgak engine (Steps 66–68)
+# Ddalgak engine (Steps 66–69)
 
 Status: **current** (engine implemented in Step 66 for Windows, the rule store and live reload in
-Step 67, §10; remaps, blocks and mouse-button triggers in Step 68, §11; the other actions follow in
-Steps 69–72) · Decisions:
+Step 67, §10; remaps, blocks and mouse-button triggers in Step 68, §11; sent keys, typed text,
+paste and hotstrings in Step 69, §12; the other actions follow in Steps 70–72) · Decisions:
 [ADR 0022](adr/0022-ddalgak-rule-model-and-safety.md),
 [ADR 0024](adr/0024-ddalgak-windows-input-apis-and-permissions.md),
 [ADR 0028](adr/0028-ddalgak-rule-store-validation-and-reload.md),
-[ADR 0031](adr/0031-ddalgak-remap-execution-and-mouse-hook.md) · Code: `crates/ddalgak` ·
+[ADR 0031](adr/0031-ddalgak-remap-execution-and-mouse-hook.md),
+[ADR 0034](adr/0034-ddalgak-typing-runs-hotstrings-and-clipboard.md) · Code: `crates/ddalgak` ·
 Requirements: `DDALGAK-FR-001…010`, `DDALGAK-FR-017`, `DDALGAK-FR-020`, `DDALGAK-FR-060`, `DDALGAK-FR-071`,
-`DDALGAK-NFR-001`, `DDALGAK-NFR-002`, `DDALGAK-NFR-004`, `DDALGAK-SEC-001…005`, `DDALGAK-SEC-007`,
-`DDALGAK-SEC-010`, `DDALGAK-SEC-011`
+`DDALGAK-FR-011`, `DDALGAK-FR-012`, `DDALGAK-FR-070`, `DDALGAK-NFR-001`, `DDALGAK-NFR-002`,
+`DDALGAK-NFR-004`, `DDALGAK-SEC-001…005`, `DDALGAK-SEC-007`, `DDALGAK-SEC-010`, `DDALGAK-SEC-011`
 
 This document describes what the Ddalgak engine does today, how it is built, how to drive it
 from the CLI, what was measured and what was verified on real Windows. The *why* is in the ADRs;
@@ -21,15 +22,15 @@ the rule format is [DDALGAK_RULE_MODEL](DDALGAK_RULE_MODEL.md); the safety scope
 | Delivered | Not yet (owner Step) |
 | --- | --- |
 | `ddalgak-gui.exe`: the tray app that owns the engine (tray icon with state by shape and text, single instance per user session, hidden window, no editor) | the rule editor and playground windows (74, 76) |
-| The low-level keyboard hook engine: event model, trigger tables, decision core, worker, lifecycle, emergency chord, held-key ledger, rate limit, stepping aside; since Step 68 remaps and blocks, mouse-button triggers with the on-demand mouse hook (§11) | send keys and text (69), launches (70), mouse actions and wheel triggers (71), modes (72), ordered multi-step runs (78) |
+| The low-level keyboard hook engine: event model, trigger tables, decision core, worker, lifecycle, emergency chord, held-key ledger, rate limit, stepping aside; since Step 68 remaps and blocks, mouse-button triggers with the on-demand mouse hook (§11); since Step 69 sent keys, typed text, paste with clipboard restore and hotstrings (§12) | launches (70), mouse actions and wheel triggers (71), modes (72), ordered multi-step runs (78) |
 | Ddalgak's own global shortcuts `engine.toggle` and `engine.pause` from `hotkeys.json`, registered with `RegisterHotKey` | the `ddalgak hotkeys …` commands (81; bind by editing `hotkeys.json` until then) |
-| Rules: the engine runs **engine-control rules** (`engine` steps), since Step 68 **remap** and **block** rules (§11), and keeps every other rule inactive with a stated code; since Step 67 the rule store with full validation, CRUD, drafts, history and live reload (§10) | the other action types (69–72, 78) |
+| Rules: the engine runs **engine-control rules** (`engine` steps), since Step 68 **remap** and **block** rules (§11), since Step 69 **`send_keys`**, **`type_text`** and **hotstring** rules (§12), and keeps every other rule inactive with a stated code; since Step 67 the rule store with full validation, CRUD, drafts, history and live reload (§10) | the other action types (70–72, 78) |
 | `ddalgak status`, `health`, `engine start|pause|resume|stop`, `pause`, `resume`, `quit`, `startup status|enable|disable`, `capabilities` with `--json` and `--dry-run`; since Step 67 `rule …` and `rules …` | `profile`, `mode`, `test`, `explain` (72, 75, 76, 77, 81) |
 | Opt-in start at sign-in through the user's Run key | — |
 
 **Never broader.** A rule this version does not run is listed in `status` as inactive with its
-code: `step_unsupported` (an action type of a later Step — `send_keys` and `type_text` in 69,
-launches in 70, mouse actions in 71, modes in 72, `delay` in 78 — or an unknown one),
+code: `step_unsupported` (an action type of a later Step — launches in 70, mouse actions in 71,
+modes in 72, `delay` and a typing step among other steps in 78 — or an unknown one),
 `condition_unsupported` (`when`, Step 77), `rule_unsupported` (an unknown field inside the rule),
 `trigger_invalid`/`trigger_reserved`, `duplicate_rule_id`, `duplicate_trigger` and every other
 error of DDALGAK_RULE_MODEL §8. A file that is not a usable `ddalgak.rules` v1 document is not
@@ -64,7 +65,10 @@ and the primary and secondary buttons pass on without reaching the core.
 **IME and layouts.** No character translation happens in the hook (dead keys stay intact).
 While an IME window reports a composition (`EVENT_OBJECT_IME_SHOW`), no rule fires and keys pass
 (`skipped_ime_composition`); IMEs that compose inline without an IME window may not report it,
-which Steps 68–69 verify with the Korean IME. Layout switches change nothing in the rules.
+which is left to the manual checks with the Korean IME (§11, §12). Layout switches change nothing
+in the rules. Since Step 69, and only while a hotstring rule is active, keys that reach the
+application unchanged are translated to characters with the foreground layout's `ToUnicodeEx`
+and its "keyboard state is not changed" flag (§12).
 
 ## 3. The decision pipeline
 
@@ -256,13 +260,14 @@ tray icon on your desktop):
 | --- | --- |
 | `crates/ddalgak/src/{event,trigger,table,core,worker,lifecycle,inject,shortcuts,rules,ipc,startup,stats}.rs` | portable engine, unit-tested on every platform |
 | `crates/ddalgak/src/remap.rs` | remap outputs (`Output`), the playground preview, the editor's summary sentence and form fields (Step 68, §11) |
+| `crates/ddalgak/src/{text,hotstring,run}.rs` | typed text (encoding, variables, insertion point, previews, the text editor's data model), the hotstring matcher and its bounded buffer, typing runs with their target checks, clipboard handling and fakes (Step 69, §12) |
 | `crates/ddalgak/src/{model,schema,validate,store,edit}.rs` | the rule store (Step 67, §10): typed model, run-time schema, validation, files, operations |
-| `crates/ddalgak/src/win/{hook,inject,context,host,tray,pipe,instance,startup,watch}.rs` | Windows layer (`watch`: the folder change notifications of §10) |
+| `crates/ddalgak/src/win/{hook,inject,context,host,tray,pipe,instance,startup,watch,typing}.rs` | Windows layer (`watch`: the folder change notifications of §10; `typing`: key translation, the target probe, the clipboard and the local clock of §12) |
 | `crates/ddalgak/src/main.rs`, `cli.rs`, `output.rs`, `rule_cmd.rs` | the `ddalgak` CLI (`rule_cmd`: the `rule` and `rules` commands) |
 | `crates/ddalgak/src/bin/ddalgak-gui.rs` | the tray app |
 | `crates/ddalgak/hotkeys.manifest.json` | the built-in hotkey manifest (equal to the contract example) |
 | `crates/ddalgak/tests/{cli,hook_windows}.rs` | real-binary and real-hook tests |
-| `e2e/tests/step66_ddalgak_engine.rs`, `e2e/tests/step67_ddalgak_rules.rs`, `e2e/tests/step68_ddalgak_remap.rs` | the e2e scenarios (run only through `cargo xtask e2e`) |
+| `e2e/tests/step66_ddalgak_engine.rs`, `e2e/tests/step67_ddalgak_rules.rs`, `e2e/tests/step68_ddalgak_remap.rs`, `e2e/tests/step69_ddalgak_typing.rs` | the e2e scenarios (run only through `cargo xtask e2e`) |
 
 ## 10. The rule store and live reload (Step 67)
 
@@ -401,3 +406,96 @@ every rule below is removed again at the end):
 11. **Kill** (known limit, Step 73): hold CapsLock and end `ddalgak-gui.exe` in Task Manager; if
     Ctrl then acts stuck, one press of a physical Ctrl clears it. Report what you see.
 12. Remove the rules: `ddalgak rule delete caps hangul jdown x1 noins z --yes`, then quit the app.
+
+## 12. Typed text, sent keys, paste and hotstrings (Step 69)
+
+Decision: [ADR 0034](adr/0034-ddalgak-typing-runs-hotstrings-and-clipboard.md). Format:
+[DDALGAK_RULE_MODEL §3.4, §5.3, §5.4](DDALGAK_RULE_MODEL.md).
+
+**What runs.** `type_text` types its text (Hangul, emoji, new lines, tabs; optional date and time
+variables and a `{cursor}` insertion point) as Unicode key events, or pastes it through the
+clipboard; `send_keys` taps up to eight chords; a **hotstring** trigger (`btw` + space) erases the
+abbreviation and runs one of them. Each is the rule's only step in this version.
+
+**How.**
+
+| Part | What it does |
+| --- | --- |
+| Core (hook thread) | Keys triggers fire as before. While a hotstring rule is active, a key that reaches the application unchanged is translated (`ToUnicodeEx`, flag 4: no keyboard-state change) and fed into a bounded buffer (the longest abbreviation plus one); a completing key is consumed and `Signal::Hotstring` carries how many characters to erase, the case form, the key and its modifiers. Every reset clears the buffer (RULE_MODEL §3.4). The core publishes the modifiers the application sees, the physical ones and a count of physical key presses, and consumes the physical release of a modifier a run released |
+| Worker | One run at a time, as pieces: release modifiers (masking key before Alt), one `SendInput` call per piece (32 characters, or one with a key delay), waits as timeouts, clipboard copy and restore, press Ctrl and Shift again if still held. Other messages are handled between pieces: remaps keep working; pause, stop, session lock, a reload and the emergency chord end the run with `cancelled`; a trigger meanwhile is `busy` (a hotstring's key is given back) |
+| Probe (`win::typing::WinProbe`) | Before the first piece and before every call: foreground window and focused control (`focus_changed` when they change), session state, `ES_PASSWORD`, integrity level, IME composition, focused control present, enabled and not `ES_READONLY` (`skipped_disabled_field`); for hotstrings also the IME's native mode via `WM_IME_CONTROL` (100 ms limit) |
+| Clipboard (`win::typing::WinClipboard`) | Opened with the app's hidden window as owner; copies every format or refuses (`clipboard_not_restorable`); text marked out of clipboard history and the cloud clipboard; restore after 500 ms unless another program changed it; every exit path restores first |
+| Test host | Its worker sends nothing (`Discard`), its runs see a fixed editable target and a clipboard that is always busy: an automated test can never type for the user or touch their clipboard |
+
+**Measurements** (Windows 10 Pro 19045, this machine; numbers stay local, ADR 0012):
+
+| What | Method | Result |
+| --- | --- | --- |
+| Decision cost per key with 100 hotstrings and 900 key rules (translation by a table, no match) | `core::tests::decisions_with_100_hotstrings_stay_far_below_the_hook_budget`, 20 000 calls | **0.76 µs** (release), 6.4 µs (debug) |
+| Real translation per key in the hook (foreground layout lookup and `ToUnicodeEx`, read-only) | `win::typing::tests::translation_cost_per_key`, 10 000 calls | **3.8 µs** (release), 4.6 µs (debug) |
+| Idle cost | unchanged: no timer exists without a waiting run; the buffer exists only while a hotstring rule does | §7 |
+
+**Verification** (the shared machine: automated tests never type characters, never touch the real
+clipboard and never drive the IME):
+
+| Check | Status | Evidence |
+| --- | --- | --- |
+| Exact event sequences for multiline text, emoji (surrogate pairs), composed and decomposed Hangul, Tab, Enter and characters that are syntax elsewhere; the `INPUT` structures (`KEYEVENTF_UNICODE`, unit in `wScan`, no virtual key, Ddalgak's marker) | **tested** (built, never sent) | `text::tests`, `win::inject::tests::typed_text_becomes_exactly_these_unicode_inputs` |
+| Chunking, key delays, the insertion point, variables, the 60 s timeout, `send_keys` chords, released and restored modifiers (Alt masked, never pressed again; a modifier the user let go not pressed again), partial `SendInput` leaving nothing pressed | **tested** (fake injector and probe) | `run::tests`, `inject::tests` |
+| Focus change mid-run stops before the next call and types nothing into the new window; password field, secure desktop, elevated window, IME composition and disabled field refused before the run and during it | **tested** (fake probe) | `run::tests::a_focus_change_stops_the_run…`, `…the_target_is_checked_before_every_call` |
+| Paste: copy, set (marked private), Ctrl+V, 500 ms, restore; busy clipboard retried then `clipboard_busy`; unrestorable content refused and untouched; a newer clipboard wins; a stuck restore reported; cancellation restores | **tested** (fake clipboard) | `run::tests` |
+| Cancellation by pause, the emergency chord and a reload in the middle of a run; `busy`; a hotstring key given back; a hotstring from an older table | **tested** (the real worker thread, recording backend) | `worker::tests` |
+| Hotstring matching: end characters, case forms, word boundaries, `immediate`, kept abbreviations, rate limit, every buffer reset, the buffer bound, published modifier state and consumed releases | **tested** (synthetic event streams through the core) | `core::tests` (Step 69 section), `hotstring::tests` |
+| Read-only and disabled edits and password edits recognized | **tested** on hidden, unfocused windows of the test itself | `win::typing::tests`, `win::context::tests` |
+| CLI: add, refuse and edit typing rules and hotstrings; no snippet text in any JSON or human output (rule add, refusals, list, show, check, status, history, backup) unless `rule show --show-text`; the real test host loads them active and runs nothing | **tested** | `tests/cli.rs::typing_rules_and_hotstrings_never_put_the_text_in_any_output` |
+| **Real typing into applications** (Notepad, a browser, Windows Terminal), the Korean IME (Hangul mode and an active composition), the real clipboard (restore of text, an image, Office content), a browser password field, an elevated window, a focus switch during a long text, the emergency chord during typing | **not tested**: typing injects into whatever window has focus on the maintainer's machine (AGENTS.md §5); the manual script below | — |
+
+**Manual checks for the maintainer** (about twenty minutes; release build, the real tray app; every
+rule below is removed again at the end; keep Notepad open):
+
+1. `cargo build -p ddalgak --release`, start `target\release\ddalgak-gui.exe`, then
+   `target\release\ddalgak engine start`.
+2. Add the rules (all need `--allow input-injection`; the paste rule also `--allow clipboard`):
+   - `ddalgak rule add --id t-sign --trigger Ctrl+Shift+F2 --action type_text --text "감사합니다.\n김민수 드림 👍\tend" --escapes --allow input-injection`
+   - `ddalgak rule add --id t-jamo --trigger Ctrl+Shift+F3 --action type_text --text "\u{1100}\u{1161} 가" --escapes --allow input-injection`
+   - `ddalgak rule add --id t-slow --trigger Ctrl+Shift+F4 --action type_text --text "0123456789012345678901234567890123456789" --key-delay-ms 100 --allow input-injection`
+   - `ddalgak rule add --id t-paste --trigger Ctrl+Shift+F5 --action type_text --text "붙여넣기 테스트\n둘째 줄" --escapes --method paste --allow input-injection --allow clipboard`
+   - `ddalgak rule add --id t-cursor --trigger Ctrl+Shift+F6 --action type_text --text "<p>{cursor}</p> {date} {time}" --variables --allow input-injection`
+   - `ddalgak rule add --id h-btw --hotstring btw --action type_text --text "by the way" --allow input-injection`
+   - `ddalgak rule add --id h-sig --hotstring ";sig" --immediate --action type_text --text "Kim Minsu" --allow input-injection`
+   - `ddalgak rule add --id h-ac --hotstring ";ac" --immediate --action send_keys --keys "Ctrl+A Ctrl+C" --allow input-injection`
+   - `ddalgak rule add --id k-copy --trigger Ctrl+Shift+F7 --action send_keys --keys "Ctrl+A Ctrl+C" --allow input-injection`
+
+   `ddalgak status` lists them active.
+3. **Notepad, typing**: Ctrl+Shift+F2 types the two lines with 👍, a tab and `end`; Ctrl and Shift
+   are not stuck afterwards (type letters). Ctrl+Shift+F3 types the decomposed and the composed
+   syllable (they look alike; `End`, then Backspace twice shows the difference). Ctrl+Shift+F6
+   types `<p></p>` with the date and time and leaves the cursor between the tags.
+4. **Hotstrings**: type `btw ` → `by the way `; `Btw.` → `By the way.`; `BTW!` → `BY THE WAY!`;
+   `abtw ` stays (inside a word); `;sig` → `Kim Minsu` as soon as `g` is typed; in a chat or
+   browser field, `btw` + Enter expands **before** Enter is sent. Type `bt`, click elsewhere in
+   another window, come back, type `w ` → no expansion (focus change).
+5. **Korean IME** (add Korean 2-set if needed): switch to 한글 mode and type the keys `btw` +
+   space → Hangul jamo appear and no expansion happens (`ddalgak status` activity:
+   `skipped_ime_composition`); while a syllable is still composing, press Ctrl+Shift+F2 → skipped,
+   the composition is not committed by Ddalgak. Switch back to English: expansion works again.
+6. **Focus switch**: Ctrl+Shift+F4 (slow, 4 s), then click into another window after a second:
+   typing stops; nothing appears in the other window; activity shows `focus_changed`.
+7. **Emergency and pause during typing**: Ctrl+Shift+F4 again, then press Ctrl+Alt+Shift+Escape:
+   typing stops at once, the engine is off, activity shows `cancelled`. Turn the engine on again;
+   repeat with `ddalgak pause` from a second terminal.
+8. **Clipboard**: copy a word in Notepad, press Ctrl+Shift+F5 in Notepad: the two Korean lines
+   are pasted; Ctrl+V afterwards pastes the copied word again (restored). Repeat after copying an
+   image in Paint (restored), after copying cells in Excel or a paragraph in Word (restored or, if
+   it holds formats that cannot be copied, `clipboard_not_restorable` and nothing pasted — report
+   which). Win+V (clipboard history, if enabled) never shows the Korean snippet.
+9. **Password field**: in a browser login form and in a Win32 password box (for example the
+   "Connect" dialog of Remote Desktop), type `btw ` and press Ctrl+Shift+F2: report whether
+   anything is typed (Win32 `ES_PASSWORD` boxes must refuse; browser fields are not recognized
+   yet, DDALGAK_SAFETY §8).
+10. **Elevated window**: open an administrator Notepad yourself, press Ctrl+Shift+F2 and type
+    `btw `: nothing happens; activity shows `skipped_elevated_target`.
+11. **Disabled field**: with focus on a window without a text field (the desktop, after a click on
+    it), press Ctrl+Shift+F2: `skipped_disabled_field`.
+12. Remove the rules: `ddalgak rule delete t-sign t-jamo t-slow t-paste t-cursor h-btw h-sig h-ac k-copy --yes`,
+    then quit the app.

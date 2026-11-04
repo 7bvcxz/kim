@@ -2,9 +2,10 @@
 
 Status: **current** · Rules document **v1** · Step 65 (specification); the engine since Step 66, the
 rule store, validation and rule commands since Step 67, remaps, blocks and mouse-button triggers
-since Step 68 (§14) · Decisions:
+since Step 68, `send_keys`, `type_text` and hotstrings since Step 69 (§14) · Decisions:
 [ADR 0022](adr/0022-ddalgak-rule-model-and-safety.md), [ADR 0028](adr/0028-ddalgak-rule-store-validation-and-reload.md),
-[ADR 0031](adr/0031-ddalgak-remap-execution-and-mouse-hook.md) · Schemas:
+[ADR 0031](adr/0031-ddalgak-remap-execution-and-mouse-hook.md),
+[ADR 0034](adr/0034-ddalgak-typing-runs-hotstrings-and-clipboard.md) · Schemas:
 [ddalgak-rules-v1](contracts/schemas/ddalgak-rules-v1.schema.json),
 [ddalgak-simulation-v1](contracts/schemas/ddalgak-simulation-v1.schema.json) · Requirements:
 `DDALGAK-FR-005…042`, `DDALGAK-SEC-001…013`
@@ -25,7 +26,7 @@ What has been run against real Windows input, and what has not, is listed in §1
 | Term | Meaning |
 | --- | --- |
 | **Rule** | *When* a trigger happens (in these modes, under these conditions) *do* these steps. Identified by a stable `id`. |
-| **Trigger** | The keys that start a rule, with how they fire (`press`, `release`, `hold`) and options (§3). |
+| **Trigger** | The keys that start a rule, with how they fire (`press`, `release`, `hold`) and options (§3), or (Step 69) a typed abbreviation, a **hotstring** (§3.4). |
 | **Step** | One action in a rule's ordered list. A rule with one step is what the GUI calls "the action". |
 | **Action type** | The kind of a step: `remap`, `block`, `send_keys`, `type_text`, `open_program`, `open_url`, `mouse_move`, `mouse_scroll`, `mouse_click`, `mode`, `engine`, `delay` (§5). |
 | **Mode** | A user-defined named state of a profile (Base, Navigation, …). Exactly one mode is active; rules may be limited to modes (§7.3). |
@@ -117,7 +118,7 @@ release and hold), with these differences:
 | **Lock keys** `CapsLock` and `NumLock` are keys, alone or with modifiers (`Shift+CapsLock`). | The contract leaves them to Ddalgak (§5.2 there); CapsLock is the most remapped key there is. |
 | **Bare side-specific modifiers** `LCtrl`, `RCtrl`, `LAlt`, `RAlt`, `LShift`, `RShift` are single-step triggers. | Right Alt as 한/영, a tap of Right Ctrl. Only with `remap` or `on: release` (§3.3). |
 | **Mouse buttons** `MouseMiddle`, `MouseX1`, `MouseX2` (Step 68), optionally with modifiers (`Ctrl+MouseX1`), as a whole trigger (never a sequence step). `MouseLeft` and `MouseRight` are never triggers. The CLI also accepts `MButton`, `XButton1`, `XButton2`. | Side buttons as Back, Copy or a modifier are popular remaps. A rule must never take away clicking. Mouse triggers need the low-level mouse hook, which exists only while such a rule is active ([ADR 0031](adr/0031-ddalgak-remap-execution-and-mouse-hook.md), permission `mouse-hook`, §6.1). Wheel triggers: Step 71. |
-| **No `char:` keys.** | Translating keys to characters inside the hook changes dead-key state in the focused application. Hotstrings (Step 69) get their own trigger kind. |
+| **No `char:` keys.** | Translating keys to characters inside the hook can change dead-key state in the focused application. Hotstrings (Step 69) are their own trigger kind (§3.4), whose translation leaves the keyboard state untouched ([ADR 0034](adr/0034-ddalgak-typing-runs-hotstrings-and-clipboard.md)). |
 | **No leaders (`@…`).** | Rules have no prefix tables; a sequence such as `Ctrl+K Ctrl+U` is written out. |
 | Typing and navigation keys (`A`, `Space`, `Escape`, `code:KeyH`) are allowed. | `kim_reserved` (contract §7.2) protects Kim GUIs' own controls; remapping plain keys is Ddalgak's purpose. `Alt+F4` and the emergency chord stay reserved. |
 
@@ -173,6 +174,51 @@ for `Ctrl+Alt` with a letter, digit or punctuation key; `ime_toggle` for `Ctrl+S
 with `op: hold`, `mouse_move` with `while_held`) are the rule's only step, on a single chord with
 `on: press`, no `repeat` and no `pass_through` (schema `holds_trigger`); only a `remap` without
 `tap` may pass the original key through.
+
+### 3.4 Hotstrings (Step 69)
+
+```json
+{ "hotstring": { "abbreviation": "btw", "case": "conform", "inside_words": false,
+                 "immediate": false, "end_chars": " .\n", "omit_end": false, "erase": true } }
+```
+
+A hotstring trigger has `hotstring` instead of `keys` (and none of `on`, `hold_ms`, `repeat`,
+`pass_through`; schema `trigger` `oneOf`). Typing the abbreviation erases it and runs the rule
+(AutoHotkey's `::btw::by the way`). An older Ddalgak keeps such a rule inactive.
+
+| Field | Values | Rule |
+| --- | --- | --- |
+| `abbreviation` | 1–40 characters, no spaces or control characters | Required. What the user types: letters, digits, punctuation, Hangul (`;sig`, `@@addr`, `ㄱㅅ`). |
+| `case` | `conform` (default), `insensitive`, `sensitive` | `conform`: any case matches and the replacement follows it (`BTW` → all upper case, `Btw` → first letter upper case); `insensitive`: any case, replacement as written; `sensitive`: only the exact case. |
+| `inside_words` | `false` (default) | `false`: only when the character before the abbreviation is not a letter or digit (or there is none); `true`: also inside a word (AutoHotkey's `?`). |
+| `immediate` | `false` (default) | `true`: fires as soon as the last character is typed (AutoHotkey's `*`); otherwise an end character fires it. |
+| `end_chars` | 1–32 characters | The end characters; default `-()[]{}':;"/\,.?!`, space, Tab and Enter (`\n`). Not with `immediate`. |
+| `omit_end` | `false` (default) | `true`: the end character is not typed after the replacement (AutoHotkey's `O`). Not with `immediate`. |
+| `erase` | `true` (default) | `false`: the abbreviation stays and the replacement follows it (AutoHotkey's `B0`). |
+
+- **Behavior.** The key that completes the abbreviation (the end character, or the last character
+  of an `immediate` hotstring that erases) is consumed; the run erases what the application shows
+  of the abbreviation with Backspace, types the replacement (the rule's one `type_text` or
+  `send_keys` step) and types the end character again with the same key and modifiers, unless
+  `omit_end`. When nothing is typed (`busy`, a skip, a reload in between), the key is given back
+  unchanged. If another key is typed before the first Backspace, the run ends with `cancelled`
+  without erasing anything.
+- **The buffer.** While a hotstring rule is active, the engine keeps the last characters typed
+  into the focused control, at most the longest abbreviation plus one, and only for keys that
+  reach the application unchanged. It is cleared by a focus change, a password field, an IME
+  composition, the secure desktop, an elevated window, pause, other programs' input, navigation
+  and other non-text keys, shortcuts with Ctrl, Alt or Win, IME keys, a dead key, a key a rule
+  takes, a match and 10 s without typing; Backspace forgets the last character. It is never
+  stored, logged or shown (`DDALGAK-SEC-001`). Characters come from the focused window's layout
+  without changing its keyboard state.
+- **Stepping aside.** Never in a password field or on the secure desktop; not during an IME
+  composition or while the IME is in a native mode such as Hangul (`skipped_ime_composition`).
+- **Limits.** A hotstring runs exactly one `type_text` or `send_keys` step in v1 (other steps:
+  `step_unsupported` until Step 78); input from other programs (an on-screen keyboard) never
+  feeds the buffer (`injected: accept` rules cannot inject, §7.4); a mouse click inside the same
+  field does not clear the buffer (no mouse hook for hotstrings). Two enabled hotstrings with the
+  same abbreviation (in any case, unless `sensitive`), modes, conditions and priority are a
+  `duplicate_trigger`.
 
 ## 4. Rules
 
@@ -256,12 +302,15 @@ never blocks the emergency chord. A rule of `block` and `engine` steps is an eng
 | `keys` | Required. One to eight output steps separated by spaces (`Ctrl+K Ctrl+V`, `Win+D`), each tapped in order. Never the Secure Attention Sequence (Windows does not allow synthesizing it, *documented* for AutoHotkey's `Send`) or the emergency chord. |
 | `step_delay_ms` | 0–1000 between steps, default 0. |
 
-- **Behavior.** Before tapping, modifiers of the trigger that are physically held are logically
-  released so that `Ctrl+Shift+F1` → `Ctrl+C` really sends Ctrl+C; they are restored afterwards
-  if still held. `SendInput` inserts the events serially, not interleaved with user input
-  (*documented*).
+- **Behavior** (runs since Step 69). Before tapping, the modifiers the application sees held are
+  logically released so that `Ctrl+Shift+F1` → `Ctrl+C` really sends Ctrl+C (an Alt release is
+  preceded by a masking key so no menu bar opens); Ctrl and Shift are pressed again afterwards
+  if still held, Alt and Win are not (their physical release is consumed instead). Each chord
+  is one `SendInput` call, inserted serially, not interleaved with user input (*documented*).
+  The run is checked and cancelled like `type_text` (§5.4).
 - **Outputs.** Preview `{ "keys": "Ctrl+K Ctrl+V" }`.
-- **Errors.** `output_is_trigger`, `output_reserved`; runtime `skipped_*`, `injection_failed`.
+- **Errors.** `output_is_trigger`, `output_reserved`; runtime `skipped_*`, `focus_changed`,
+  `injection_failed`, `busy`, `cancelled`.
 - **Safety.** `input-injection`.
 
 ### 5.4 `type_text`: type a Unicode string
@@ -271,16 +320,45 @@ never blocks the emergency chord. A rule of `block` and `engine` steps is an eng
 | `text` | Required, 1–4096 characters. `\n` types Enter and `\t` types Tab; other control characters are refused. Hangul, emoji and characters outside the Basic Multilingual Plane are allowed. |
 | `method` | `unicode` (default): one Unicode key event per UTF-16 unit (`KEYEVENTF_UNICODE`), independent of layout and IME. `paste`: put the text on the clipboard, send `Ctrl+V`, restore the previous clipboard contents. |
 | `key_delay_ms` | 0–200 between characters, default 0, for applications that drop fast input. |
+| `variables` | `false` (default). `true` (Step 69): `text` is a template with a fixed whitelist: `{date}` (2026-11-04), `{time}` (14:05), `{datetime}`, `{year}`, `{month}`, `{day}`, `{hour}`, `{minute}`, `{second}` (the local time when the rule runs, fixed width) and at most one `{cursor}`, the insertion point; `{{` and `}}` type a brace. Nothing else in braces (schema `text_template`): no environment, clipboard or user-defined variables. |
 
-- **Behavior.** Before typing, held trigger modifiers are logically released (as for
-  `send_keys`). Typing pauses the user's own keystrokes only for the duration of one `SendInput`
-  call (*documented* serial insertion). An IME composition in progress is never committed or
-  cancelled by Ddalgak; the rule is skipped with `skipped_ime_composition`.
-- **Outputs.** Preview `{ "characters": 13, "lines": 2, "method": "unicode" }`: counts only. The
-  text appears in the playground's own field, never in JSON output or logs (`DDALGAK-SEC-011`).
-- **Errors.** Runtime `skipped_password_field` (never typed into a password field,
-  `DDALGAK-SEC-002`), `skipped_elevated_target`, `clipboard_busy` (paste: another program holds
-  the clipboard), `injection_failed`.
+- **Behavior** (runs since Step 69, [ADR 0034](adr/0034-ddalgak-typing-runs-hotstrings-and-clipboard.md)).
+  Every character is typed exactly as written: one `KEYEVENTF_UNICODE` down and up per UTF-16 unit
+  (an emoji is a surrogate pair, high unit first), nothing normalized (composed `가` and
+  decomposed `가` arrive as written), `\n` and `\t` as the Enter and Tab keys. The text goes out
+  in calls of 32 characters, or one character per call with `key_delay_ms`; the engine handles its
+  other work between calls (remaps keep working). Before typing, the modifiers the application
+  sees held are logically released (as for `send_keys`). With `{cursor}`, the caret moves back one
+  Left per character after it (a newline counts; an application that moves over a whole emoji
+  sequence or a decomposed syllable with one Left will land elsewhere — the preview gives the
+  number). An IME composition in progress is never committed or cancelled by Ddalgak; the rule is
+  skipped with `skipped_ime_composition`.
+- **Checks before every call.** The session state, a password edit, the target's integrity
+  level, an IME composition and whether a control has keyboard focus and is enabled and not
+  read-only are checked before the first call (`skipped_*`); before every later call a different
+  window or control ends the run with `focus_changed` and nothing more is typed. Pause, turning
+  off, the emergency chord, a session lock and a reload end it with `cancelled`; more than 60 s,
+  with `timeout`. One typing run at a time: a trigger meanwhile is `busy`.
+- **Paste.** The clipboard is opened (retried for 200 ms, otherwise `clipboard_busy` and nothing
+  is pasted), every format on it is copied (text, HTML, RTF, images as DIB, file lists,
+  registered formats byte for byte, enhanced metafiles by their bits; formats Windows makes from
+  others are left to it), and content that cannot be copied faithfully (owner-drawn, private or
+  other GDI formats, more than 32 MiB) **refuses the paste with `clipboard_not_restorable`
+  without touching the clipboard**. The text is put on it marked so clipboard history and the
+  cloud clipboard skip it, Ctrl+V is pressed, and after 500 ms the copy is put back, unless
+  another program changed the clipboard meanwhile (its newer content wins). A restore that cannot
+  open the clipboard within 500 ms ends with `clipboard_restore_failed` (the snippet stays on the
+  clipboard). Every way out of the run restores the clipboard first.
+- **Outputs.** Preview `{ "characters": 13, "lines": 2, "method": "unicode" }` plus, with
+  variables, `"variables": ["date"]` and `"cursor_back": 3`: counts and names only. The text
+  appears in the playground's own field, never in JSON output, validation messages or logs
+  (`DDALGAK-SEC-011`); `ddalgak rule show` replaces it with its counts unless `--show-text`.
+- **Errors.** Validation: `step_invalid` for control characters, length and template errors (the
+  message names the position, never the text). Runtime `skipped_password_field` (never typed
+  into a password field, `DDALGAK-SEC-002`), `skipped_elevated_target`, `skipped_secure_desktop`,
+  `skipped_ime_composition`, `skipped_disabled_field`, `focus_changed`, `clipboard_busy`,
+  `clipboard_not_restorable`, `clipboard_restore_failed`, `injection_failed`, `busy`,
+  `cancelled`, `timeout`.
 - **Safety.** `input-injection`, plus `clipboard` for `paste`. The rules file stores the text in
   plain form: it is for snippets, not for passwords, and the GUI says so.
 
@@ -415,10 +493,12 @@ the rule is inactive (`step_unsupported`, §9).
 | `repeat`, `if`, variables | Step 78 | — |
 | Recorded macros (steps produced by the recorder) | Step 78 | as their steps |
 
-Trigger kinds planned additively: hotstrings (Step 69) and mouse wheel notches (Step 71). Mouse
-buttons arrived in Step 68 (§3.1; the `mouse-hook` permission, §6.1). `send_keys` runs from Step
-69 and `delay`, with ordered multi-step runs, from Step 78 ([ADR 0031](adr/0031-ddalgak-remap-execution-and-mouse-hook.md));
-until then they are `step_unsupported`.
+Trigger kinds planned additively: mouse wheel notches (Step 71). Mouse buttons arrived in Step 68
+(§3.1; the `mouse-hook` permission, §6.1) and hotstrings in Step 69 (§3.4). `send_keys` and
+`type_text` run from Step 69, each as the rule's only step, and `delay`, with ordered multi-step
+runs, from Step 78 ([ADR 0031](adr/0031-ddalgak-remap-execution-and-mouse-hook.md),
+[ADR 0034](adr/0034-ddalgak-typing-runs-hotstrings-and-clipboard.md)); until then they are
+`step_unsupported`.
 
 ## 6. Permissions and consent
 
@@ -551,7 +631,7 @@ and needs a guaranteed way out of that mode.
 | `output_is_trigger` | error | semantic | §7.4 3. |
 | `duplicate_trigger` | error | semantic | §7.1. The later rule is the subject. |
 | `consent_stale` | error | semantic | A launch fingerprint no longer matches (§6.2). |
-| `run_too_long` | error | semantic | Delays of one run exceed 60 s. |
+| `run_too_long` | error | semantic | Delays of one run exceed 60 s; since Step 69 `key_delay_ms` between the characters of a text as written and `step_delay_ms` between sent chords count too. |
 | `rule_invalid` | error | schema | Any other field of the rule breaks the schema (title, priority, modes, consent record, …). |
 | `duplicate_binding` | error | runtime | The trigger equals one of Ddalgak's own bound GUI shortcuts in `hotkeys.json`; the shortcut wins (§7.5). |
 | `step_unsupported`, `condition_unsupported`, `rule_unsupported` | info | runtime | Inactive in this version: an unknown step type or one a later Step implements, a condition not evaluated yet, or an unknown field inside the rule (§9). |
@@ -654,12 +734,15 @@ Every trigger event that reaches a candidate produces one outcome:
 | --- | --- |
 | `ok` | The run finished. |
 | `skipped_paused` | The engine is paused. |
-| `skipped_password_field`, `skipped_secure_desktop`, `skipped_elevated_target`, `skipped_ime_composition` | Ddalgak stepped aside; the key passed unchanged. |
+| `skipped_password_field`, `skipped_secure_desktop`, `skipped_elevated_target`, `skipped_ime_composition` | Ddalgak stepped aside; the key passed unchanged (a hotstring's end key is given back). |
+| `skipped_disabled_field` | Typing (Step 69): no control had keyboard focus, or it was disabled or read-only; nothing was typed. |
+| `focus_changed` | Typing (Step 69): another window or control took focus during the run; it stopped, and nothing was typed into the new window. |
 | `skipped_injected_input` | Injected input and the rule accepts only physical input. |
 | `busy` | The rule is still running. |
 | `rate_limited` | §7.4 4. |
 | `injection_failed` | `SendInput` inserted fewer events than requested. UIPI failures are silent (*documented*), so the elevated-target check runs first. |
 | `program_not_found`, `program_requires_elevation`, `launch_failed`, `browser_unavailable`, `clipboard_busy` | §5. |
+| `clipboard_not_restorable`, `clipboard_restore_failed` | Paste (Step 69, §5.4): the clipboard held content that cannot be copied faithfully, so nothing was pasted and it was left alone; or the previous content could not be put back after the paste. |
 | `cancelled` | Pause, turn-off, emergency or a profile switch ended the run. |
 | `timeout` | A step did not finish in its time limit. |
 
@@ -680,8 +763,8 @@ behavior may not get weaker.
 
 | Command | Effect |
 | --- | --- |
-| `ddalgak rule list [--profile p] [--mode m]` · `rule show <id>` · `rule check` (each `[--draft]`) | read |
-| `ddalgak rule add --trigger <keys> (--action <type> [inputs] \| --step <json>…) [--allow <permission>]…` · `rule edit <id> … [--patch <json>]` · `rule duplicate <id>` · `rule enable/disable <id>…` · `rule move <id> --before <id> \| --after <id> \| --to start\|end\|<n>` | write, `--dry-run`, `--draft`, `--if-revision <n>` |
+| `ddalgak rule list [--profile p] [--mode m]` · `rule show <id> [--show-text]` · `rule check` (each `[--draft]`) | read (snippet text only with `--show-text`) |
+| `ddalgak rule add (--trigger <keys> \| --hotstring <abbreviation> [--case c] [--inside-words] [--immediate] [--end-chars s] [--omit-end] [--keep-abbreviation]) (--action <type> [inputs] \| --step <json>…) [--allow <permission>]…` (text inputs: `--text`, `--escapes`, `--variables`, `--method`, `--key-delay-ms`; Step 69) · `rule edit <id> … [--patch <json>]` · `rule duplicate <id>` · `rule enable/disable <id>…` · `rule move <id> --before <id> \| --after <id> \| --to start\|end\|<n>` | write, `--dry-run`, `--draft`, `--if-revision <n>` |
 | `ddalgak rule delete <id>…` | destructive: `--dry-run`, `--yes` |
 | `ddalgak rule revoke <id> <permission>` | write (the rule is disabled when it needs the permission) |
 | `ddalgak rules history` · `rules draft [show]` | read |
@@ -714,13 +797,24 @@ as `hotkey_invalid`, `hotkey_reserved`, `usage`, `confirmation_required`, `busy`
 
 | Artifact | Pins down |
 | --- | --- |
-| [ddalgak-rules-v1](contracts/schemas/ddalgak-rules-v1.schema.json) + `contracts/examples/ddalgak-rules-v1/` | Eleven valid documents (remaps and swaps, text, programs, websites, mouse, modes, engine control, profiles and conditions, an export, a future step type, and since Step 68 mouse-button remaps, pass-through and a physical-position trigger in `11-remap-mouse-and-pass-through.json`). Forty-one invalid ones, including recursive remaps (`recursive-remap-accepts-injected`, `recursive-send-keys-accepts-injected`), a dual role that also passes the key through (`remap-tap-with-pass-through`), the primary button and a mouse button in a sequence as triggers, the emergency chord as trigger and output, reserved OS chords (`Win+L`, `Alt+Tab`, `Ctrl+Shift+Escape`, the Secure Attention Sequence), missing consent for programs, websites, injection and clipboard, shell hosts, `file:` URLs and newer versions. |
-| `contracts/examples/ddalgak-rules-v1/semantic-invalid/` | Eleven schema-valid documents named `<code>--<what>.json`, each producing exactly that semantic error: `output_is_trigger` (the recursive remap `F13` → `F13`, and `send_keys` to its own trigger), duplicate IDs and triggers, unknown modes and profiles, a stale launch consent, a run over 60 s. |
+| [ddalgak-rules-v1](contracts/schemas/ddalgak-rules-v1.schema.json) + `contracts/examples/ddalgak-rules-v1/` | Twelve valid documents (remaps and swaps, text, programs, websites, mouse, modes, engine control, profiles and conditions, an export, a future step type, since Step 68 mouse-button remaps, pass-through and a physical-position trigger in `11-remap-mouse-and-pass-through.json`, and since Step 69 hotstrings, variables and the insertion point in `12-hotstrings-and-snippets.json`). Forty-seven invalid ones (Step 69 added a hotstring with keys, with a space, `immediate` with end characters, a hotstring remap, an unknown and a second-cursor template), including recursive remaps (`recursive-remap-accepts-injected`, `recursive-send-keys-accepts-injected`), a dual role that also passes the key through (`remap-tap-with-pass-through`), the primary button and a mouse button in a sequence as triggers, the emergency chord as trigger and output, reserved OS chords (`Win+L`, `Alt+Tab`, `Ctrl+Shift+Escape`, the Secure Attention Sequence), missing consent for programs, websites, injection and clipboard, shell hosts, `file:` URLs and newer versions. |
+| `contracts/examples/ddalgak-rules-v1/semantic-invalid/` | Thirteen schema-valid documents named `<code>--<what>.json`, each producing exactly that semantic error: `output_is_trigger` (the recursive remap `F13` → `F13`, and `send_keys` to its own trigger), duplicate IDs and triggers (since Step 69 also two hotstrings `btw`/`BTW`), unknown modes and profiles, a stale launch consent, a run over 60 s (delays, and since Step 69 slow typing). |
 | [ddalgak-simulation-v1](contracts/schemas/ddalgak-simulation-v1.schema.json) + examples | Twenty-three playground results named `<rules example>--<what>.json` and fourteen invalid ones (effects performed or input injected in `simulate`, live launches without confirmation, live input outside the playground, previews that echo text, paths, arguments or URL paths). |
 | [kim-hotkey-manifest-v1/ddalgak.json](contracts/examples/kim-hotkey-manifest-v1/ddalgak.json) | Ddalgak's final GUI actions: four global ones (matching the Kim catalog) and the `rules` and `playground` contexts. |
 
 **Step 66** implements the engine for engine-control rules ([DDALGAK_ENGINE](DDALGAK_ENGINE.md));
 every other step type is inactive with `step_unsupported` until its Step.
+
+**Step 69** runs `send_keys` (§5.3) and `type_text` (§5.4) and adds hotstring triggers (§3.4),
+the variable whitelist with the insertion point, and the paste method with clipboard restore
+([ADR 0034](adr/0034-ddalgak-typing-runs-hotstrings-and-clipboard.md),
+[DDALGAK_ENGINE §12](DDALGAK_ENGINE.md)). The CLI writes them:
+`ddalgak rule add --hotstring btw --action type_text --text "by the way" --allow input-injection`,
+`ddalgak rule add --trigger Ctrl+Shift+F2 --action type_text --text "감사합니다.\n김민수 드림" --escapes --allow input-injection`,
+`ddalgak rule add --hotstring ";dd" --immediate --action type_text --text "{date}" --variables --allow input-injection`.
+The text editor's form fields, live preview and save/test gating are `crates/ddalgak/src/text.rs`
+(`TYPE_TEXT_FIELDS`, `EditorDraft`), checked against this schema
+([GUI_JOURNEYS J4](DDALGAK_GUI_JOURNEYS.md)).
 
 **Step 68** runs `remap` (§5.1) and `block` (§5.2) and adds mouse-button triggers and outputs
 (§3.1, §5.1) with the on-demand mouse hook, pass-through for remaps (§3.3) and the "exact chord

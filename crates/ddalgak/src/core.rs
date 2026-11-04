@@ -3013,6 +3013,42 @@ mod tests {
     }
 
     #[test]
+    fn decisions_with_100_hotstrings_stay_far_below_the_hook_budget() {
+        // 100 hotstrings of 3–12 characters plus 900 key rules: every typed key is translated
+        // and matched against all of them (the worst case: no match).
+        let mut rules: Vec<Binding> = (0..100)
+            .map(|i| {
+                let abbr: String = (0..3 + i % 10)
+                    .map(|k| char::from(b'a' + u8::try_from((i + k) % 26).unwrap()))
+                    .collect();
+                hot(&format!("h{i}"), Spec::new(&format!(";{abbr}")))
+            })
+            .collect();
+        rules.extend(
+            (0..900).map(|i| binding(&format!("k{i}"), &format!("Ctrl+Alt+F{}", 13 + i % 12))),
+        );
+        let mut t = T::new(rules);
+        t.core.set_translator(hs::us_qwerty);
+        let flags = Flags::default();
+        let (vk, scan) = (0x51u16, 0x10u16); // Q: no abbreviation contains it after `;`
+        let n = 20_000u32;
+        let start = std::time::Instant::now();
+        for i in 0..n / 2 {
+            let down = RawKey::physical(vk, scan, false, i * 20);
+            let up = RawKey::physical(vk, scan, true, i * 20 + 10);
+            t.core.decide(&down, Mode::Running, &flags);
+            t.core.decide(&up, Mode::Running, &flags);
+        }
+        let per = start.elapsed() / n;
+        eprintln!("100 hotstrings + 900 rules: {per:?} per event");
+        assert!(per < std::time::Duration::from_micros(500), "{per:?}");
+        assert!(
+            t.core.hotstring_buffer().0 <= 14,
+            "the longest abbreviation is 13"
+        );
+    }
+
+    #[test]
     fn keys_rules_with_typing_steps_fire_and_step_aside() {
         let mut b = binding("sign", "Ctrl+Shift+F2");
         b.injects = true;

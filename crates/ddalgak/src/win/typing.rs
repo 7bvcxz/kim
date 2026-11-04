@@ -537,6 +537,20 @@ mod tests {
     }
 
     #[test]
+    fn translation_cost_per_key() {
+        // What the hook pays per typed key while a hotstring rule is active: the foreground
+        // layout lookup and ToUnicodeEx (read-only, flag 4). Nothing is injected.
+        let n = 10_000u32;
+        let start = std::time::Instant::now();
+        for _ in 0..n {
+            std::hint::black_box(translate(0x41, 0x1E, false, false));
+        }
+        let per = start.elapsed() / n;
+        eprintln!("translate: {per:?} per key");
+        assert!(per < std::time::Duration::from_micros(200), "{per:?}");
+    }
+
+    #[test]
     fn translation_needs_no_window_and_never_types() {
         // A pure table lookup for the foreground layout: Space is a space on every layout, a
         // navigation key is nothing. Nothing is injected and no keyboard state changes.

@@ -65,10 +65,10 @@ use windows_sys::Win32::Graphics::Gdi::{
     DIB_RGB_COLORS, DT_CENTER, DT_END_ELLIPSIS, DT_LEFT, DT_NOPREFIX, DT_RIGHT, DT_SINGLELINE,
     DT_VCENTER, DeleteDC, DeleteObject, DrawTextW, EndPaint, FW_NORMAL, FW_SEMIBOLD, FillRect,
     FrameRect, GetDC, GetSysColor, HBRUSH, HDC, HFONT, HGDIOBJ, InvalidateRect, OUT_DEFAULT_PRECIS,
-    PAINTSTRUCT, PS_SOLID, ReleaseDC, RoundRect, SelectObject, SetBkColor, SetBkMode, SetTextColor,
-    TRANSPARENT,
+    PAINTSTRUCT, PS_SOLID, RDW_ALLCHILDREN, RDW_INVALIDATE, RedrawWindow, ReleaseDC, RoundRect,
+    SelectObject, SetBkColor, SetBkMode, SetTextColor, TRANSPARENT,
 };
-use windows_sys::Win32::Storage::Xps::{PRINT_WINDOW_FLAGS, PrintWindow};
+use windows_sys::Win32::Storage::Xps::PrintWindow;
 use windows_sys::Win32::System::DataExchange::COPYDATASTRUCT;
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::{CreateMutexW, GetCurrentProcess, GetGuiResources};
@@ -127,8 +127,6 @@ const COPYDATA_TEST: usize = 0x5355_424B;
 const WINDOW_CLASS: &str = "SubakWindow";
 const ICON_CLASS: &str = "SubakFloat";
 const MANAGER_CLASS: &str = "SubakManager";
-/// `PW_RENDERFULLCONTENT`: the window's content including its child controls.
-const PW_RENDERFULLCONTENT: PRINT_WINDOW_FLAGS = 2;
 /// `SS_NOPREFIX` | `SS_LEFT`: a static text control that shows `&` as it is.
 const SS_TEXT: u32 = 0x0080;
 /// `SPI_SETWORKAREA`: the work area changed (a taskbar moved).
@@ -545,6 +543,11 @@ enum After {
     Open(Option<Entry>, bool),
     /// Quit: tray removed, windows destroyed, the message loop ends.
     Quit,
+    /// The test hook's picture of the manager (`PrintWindow`, its own content only).
+    Shot {
+        hwnd: HWND,
+        path: String,
+    },
 }
 
 /// A press on the icon that may become a drag.
@@ -585,19 +588,23 @@ impl Paint {
                 on_accent: s(COLOR_HIGHLIGHTTEXT),
                 danger: s(COLOR_WINDOWTEXT),
                 field: s(COLOR_BTNFACE),
+                edge: s(COLOR_WINDOWTEXT),
+                focus: s(COLOR_HIGHLIGHT),
             }
         } else {
             Colors {
                 bg: tokens::BG_OVERLAY,
                 text: tokens::TEXT_PRIMARY,
                 muted: tokens::TEXT_MUTED,
-                selected: Rgb(0x2A, 0x28, 0x38),
+                selected: tokens::BG_SELECTED,
                 selected_text: tokens::TEXT_PRIMARY,
                 border: tokens::BORDER_SUBTLE,
                 accent: tokens::ACCENT,
                 on_accent: tokens::BG_BASE,
                 danger: tokens::DANGER,
                 field: tokens::BG_RAISED,
+                edge: tokens::BORDER_STRONG,
+                focus: tokens::FOCUS_RING,
             }
         }
     }
@@ -672,6 +679,9 @@ struct Colors {
     on_accent: Rgb,
     danger: Rgb,
     field: Rgb,
+    /// Input and control boundaries (WCAG 1.4.11: 3:1).
+    edge: Rgb,
+    focus: Rgb,
 }
 
 /// The open Terminal manager.
@@ -1272,6 +1282,8 @@ const BS_NOTIFY: u32 = 0x4000;
 const LB_ITEMFROMPOINT: u32 = 0x01A9;
 /// `WA_INACTIVE`.
 const WA_INACTIVE: u32 = 0;
+/// `WM_PRINTCLIENT`: draw into the given DC (`PrintWindow`, the test hook's picture).
+const WM_PRINTCLIENT: u32 = 0x0318;
 
 impl Float {
     fn toggle_manager(&mut self, anchor: Option<(i32, i32)>) {
@@ -1347,8 +1359,9 @@ impl Float {
         }
         let stat = WS_VISIBLE | SS_TEXT;
         let button = WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW as u32 | BS_NOTIFY;
+        // Creation order is the z-order, which the system's accessibility proxies use to name
+        // a control by the label before it: "Search" names the field, "Terminals" the list.
         let ctls = vec![
-            (ID_TITLE, child(hwnd, "STATIC", "Terminals", stat, ID_TITLE)),
             (ID_SUMMARY, child(hwnd, "STATIC", "", stat, ID_SUMMARY)),
             (
                 ID_PIN,
@@ -1372,6 +1385,7 @@ impl Float {
                     ID_SEARCH,
                 ),
             ),
+            (ID_TITLE, child(hwnd, "STATIC", "Terminals", stat, ID_TITLE)),
             (
                 ID_LIST,
                 child(
@@ -1602,7 +1616,7 @@ impl Float {
         let hint = {
             let k = |a| self.matcher.keys_for(a).unwrap_or("—").to_string();
             format!(
-                "{} open · {} new · {} rename · {} delete · {} search",
+                "{}: open · {}: new · {}: rename · {}: delete · {}: search",
                 k(Action::ManagerOpen),
                 k(Action::ManagerNew),
                 k(Action::ManagerRename),
@@ -1759,7 +1773,14 @@ impl Float {
         }
         ui.syncing = false;
         // SAFETY: repaints our own window (the owner-drawn buttons).
-        unsafe { InvalidateRect(ui.hwnd, null(), 1) };
+        unsafe {
+            RedrawWindow(
+                ui.hwnd,
+                null(),
+                null_mut(),
+                RDW_INVALIDATE | RDW_ALLCHILDREN,
+            )
+        };
         if let Some(f) = focus_to {
             self.set_focus(f);
         }
@@ -1778,7 +1799,14 @@ impl Float {
             self.after.push(After::Focus(h));
         }
         // SAFETY: repaints our own window (focus rings).
-        unsafe { InvalidateRect(ui.hwnd, null(), 0) };
+        unsafe {
+            RedrawWindow(
+                ui.hwnd,
+                null(),
+                null_mut(),
+                RDW_INVALIDATE | RDW_ALLCHILDREN,
+            )
+        };
         let (hwnd, focus) = (ui.hwnd, ui.focus);
         self.event(
             &json!({"event": "focus", "control": ctl_name(focus), "manager": hwnd as usize}),
@@ -2138,7 +2166,7 @@ impl Float {
                 one | DT_RIGHT,
             );
             if focused {
-                self.focus_ring(hdc, r, c.accent, 1);
+                self.focus_ring(hdc, r, c.focus, 1);
             }
             return;
         }
@@ -2153,7 +2181,7 @@ impl Float {
             ID_OPEN if !disabled => (c.accent, c.on_accent, c.accent),
             ID_PIN if pinned => (c.accent, c.on_accent, c.accent),
             ID_DELETE | ID_END => (c.bg, c.danger, c.danger),
-            _ => (c.field, c.text, c.border),
+            _ => (c.field, c.text, c.edge),
         };
         let fg = if disabled { c.muted } else { fg };
         // SAFETY: drawing into the DC Windows passed with WM_DRAWITEM; the brush and pen are
@@ -2183,7 +2211,7 @@ impl Float {
         };
         draw(&label, r, font, fg, one | DT_CENTER);
         if focused {
-            self.focus_ring(hdc, r, c.accent, 2);
+            self.focus_ring(hdc, r, c.focus, 2);
         }
     }
 
@@ -2205,18 +2233,48 @@ impl Float {
     }
 
     fn paint_manager(&self, hwnd: HWND) {
+        let mut ps = PAINTSTRUCT::default();
+        // SAFETY: a paint cycle of our own window.
+        unsafe {
+            let hdc = BeginPaint(hwnd, &raw mut ps);
+            self.paint_manager_to(hwnd, hdc);
+            EndPaint(hwnd, &raw const ps);
+        }
+    }
+
+    /// The manager's background and its 1 px border (a paint, or `WM_PRINTCLIENT`).
+    fn paint_manager_to(&self, hwnd: HWND, hdc: HDC) {
         let Some(ui) = &self.ui else {
             return;
         };
-        let mut ps = PAINTSTRUCT::default();
-        // SAFETY: a paint cycle of our own window: background and a 1 px border.
+        // SAFETY: drawing into a DC Windows passed for our own window; the brush is deleted.
         unsafe {
-            let hdc = BeginPaint(hwnd, &raw mut ps);
             let mut rc = RECT::default();
             GetClientRect(hwnd, &raw mut rc);
             FillRect(hdc, &raw const rc, ui.paint.bg);
             FrameRect(hdc, &raw const rc, ui.paint.border);
-            EndPaint(hwnd, &raw const ps);
+            // The search field: a raised box with a boundary that has 3:1 contrast; the focus
+            // colour while it has the keyboard.
+            let c = Paint::colors(ui.paint.hc);
+            let mut sr = RECT::default();
+            GetWindowRect(ui.ctl(ID_SEARCH), &raw mut sr);
+            let mut mr = RECT::default();
+            GetWindowRect(hwnd, &raw mut mr);
+            let pad = px(3.0, ui.dpi);
+            let field = RECT {
+                left: sr.left - mr.left - px(6.0, ui.dpi),
+                top: sr.top - mr.top - pad,
+                right: sr.right - mr.left + px(2.0, ui.dpi),
+                bottom: sr.bottom - mr.top + pad,
+            };
+            FillRect(hdc, &raw const field, ui.paint.field);
+            let edge = CreateSolidBrush(colorref(if ui.focus == ID_SEARCH {
+                c.focus
+            } else {
+                c.edge
+            }));
+            FrameRect(hdc, &raw const field, edge);
+            DeleteObject(edge as HGDIOBJ);
         }
     }
 
@@ -2499,20 +2557,21 @@ impl Float {
             }
             "shot" => {
                 let path = cmd["path"].as_str().unwrap_or("").to_string();
-                let r = match cmd["what"].as_str() {
-                    Some("manager") => self.ui.as_ref().map(|u| u.hwnd).and_then(shot_window),
-                    _ => self
-                        .picture
-                        .as_ref()
-                        .map(|p| (p.size, p.size, p.pixels.clone())),
-                };
-                let ok = r
-                    .as_ref()
-                    .is_some_and(|(w, h, px)| std::fs::write(&path, bmp(*w, *h, px)).is_ok());
-                let (w, h) = r.as_ref().map_or((0, 0), |(w, h, _)| (*w, *h));
-                self.event(
-                    &json!({"event": "shot", "path": path, "ok": ok, "width": w, "height": h}),
-                );
+                match cmd["what"].as_str() {
+                    // The manager draws itself into memory once the state is free (its
+                    // controls ask this window for their colours and owner-drawn parts).
+                    Some("manager") => {
+                        let hwnd = self.ui.as_ref().map_or(null_mut(), |u| u.hwnd);
+                        self.after.push(After::Shot { hwnd, path });
+                    }
+                    _ => {
+                        let r = self
+                            .picture
+                            .as_ref()
+                            .map(|p| (p.size, p.size, p.pixels.clone()));
+                        shot_event(self, &path, r);
+                    }
+                }
                 return;
             }
             "close" => {
@@ -2594,7 +2653,7 @@ fn shot_window(hwnd: HWND) -> Option<(u32, u32, Vec<u32>)> {
             return None;
         }
         let old = SelectObject(mem, dib as HGDIOBJ);
-        PrintWindow(hwnd, mem, PW_RENDERFULLCONTENT);
+        PrintWindow(hwnd, mem, 0);
         let px = std::slice::from_raw_parts(bits.cast::<u32>(), (w * h) as usize)
             .iter()
             .map(|p| p | 0xFF00_0000)
@@ -2604,6 +2663,15 @@ fn shot_window(hwnd: HWND) -> Option<(u32, u32, Vec<u32>)> {
         DeleteDC(mem);
         Some((w as u32, h as u32, px))
     }
+}
+
+/// Writes a test picture and reports it.
+fn shot_event(f: &Float, path: &str, r: Option<(u32, u32, Vec<u32>)>) {
+    let ok = r
+        .as_ref()
+        .is_some_and(|(w, h, px)| std::fs::write(path, bmp(*w, *h, px)).is_ok());
+    let (w, h) = r.as_ref().map_or((0, 0), |(w, h, _)| (*w, *h));
+    f.event(&json!({"event": "shot", "path": path, "ok": ok, "width": w, "height": h}));
 }
 
 /// A 32-bit top-down BMP of BGRA pixels.
@@ -2805,6 +2873,14 @@ fn run_after(after: Vec<After>) {
                         Some(std::mem::take(&mut f.after))
                     });
                     run_after(more.unwrap_or_default());
+                }
+                After::Shot { hwnd, path } => {
+                    let r = (!hwnd.is_null()).then(|| shot_window(hwnd)).flatten();
+                    FLOAT.with_borrow(|s| {
+                        if let Some(f) = s.as_ref() {
+                            shot_event(f, &path, r);
+                        }
+                    });
                 }
                 After::Quit => {
                     let (more, icon) = FLOAT
@@ -3041,6 +3117,10 @@ fn handle(f: &mut Float, hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> Option
             Some(0)
         }
         WM_ERASEBKGND if is_manager => Some(1),
+        WM_PRINTCLIENT if is_manager => {
+            f.paint_manager_to(hwnd, wp as HDC);
+            Some(0)
+        }
         WM_DRAWITEM if is_manager => {
             // SAFETY: `lp` points at the DRAWITEMSTRUCT of this message.
             let d = unsafe { &*(lp as *const DRAWITEMSTRUCT) };

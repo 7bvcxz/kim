@@ -41,10 +41,13 @@ pub enum Code {
     ModeInUse,
     // Step 73: a switch to a disabled mode.
     ModeDisabled,
+    // Step 75: profiles (docs/DDALGAK_RULE_MODEL.md §10, §13).
+    ProfileInUse,
+    ImportInvalid,
 }
 
 impl Code {
-    pub const ALL: [Self; 31] = [
+    pub const ALL: [Self; 33] = [
         Self::Io,
         Self::Internal,
         Self::PermissionDenied,
@@ -76,6 +79,8 @@ impl Code {
         Self::ModeInvalid,
         Self::ModeInUse,
         Self::ModeDisabled,
+        Self::ProfileInUse,
+        Self::ImportInvalid,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -111,6 +116,8 @@ impl Code {
             Self::ModeInvalid => "mode_invalid",
             Self::ModeInUse => "mode_in_use",
             Self::ModeDisabled => "mode_disabled",
+            Self::ProfileInUse => "profile_in_use",
+            Self::ImportInvalid => "import_invalid",
         }
     }
 
@@ -133,7 +140,10 @@ impl Code {
             | Self::ProfileNotFound
             | Self::ModeNotFound
             | Self::SnapshotNotFound => 3,
-            Self::ProtocolError | Self::AppIdentityMismatch | Self::RulesInvalid => 4,
+            Self::ProtocolError
+            | Self::AppIdentityMismatch
+            | Self::RulesInvalid
+            | Self::ImportInvalid => 4,
             Self::UnsupportedPlatform | Self::RulesFromNewerVersion | Self::EngineElevated => 5,
             Self::AppUnresponsive => 6,
             Self::EngineOff
@@ -143,7 +153,8 @@ impl Code {
             | Self::ConfirmationRequired
             | Self::Busy
             | Self::ModeInUse
-            | Self::ModeDisabled => 7,
+            | Self::ModeDisabled
+            | Self::ProfileInUse => 7,
             Self::Cancelled => 8,
         }
     }

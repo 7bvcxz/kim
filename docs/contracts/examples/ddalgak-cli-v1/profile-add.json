@@ -1,0 +1,29 @@
+{
+  "command": "profile.add",
+  "data": {
+    "app": {
+      "running": false
+    },
+    "backup": "rules.json.bak",
+    "changed": true,
+    "created": "development",
+    "dry_run": false,
+    "notes": [
+      "profile `development` is not active; `ddalgak profile apply development` switches to it"
+    ],
+    "problems": [],
+    "profiles": [
+      "development"
+    ],
+    "revision": {
+      "from": 1,
+      "to": 2
+    },
+    "rules": [],
+    "snapshot": "20261104T141418Z-r2.json",
+    "target": "saved"
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

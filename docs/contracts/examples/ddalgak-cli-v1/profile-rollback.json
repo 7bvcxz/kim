@@ -1,0 +1,136 @@
+{
+  "command": "profile.rollback",
+  "data": {
+    "app": {
+      "running": false
+    },
+    "backup": "rules.json.bak",
+    "changed": true,
+    "created": null,
+    "dry_run": false,
+    "notes": [],
+    "preview": {
+      "align": "rule_id",
+      "counts": {
+        "changed": 1,
+        "only_left": 0,
+        "only_right": 0,
+        "same": 2
+      },
+      "left": {
+        "default_mode": "base",
+        "id": "work",
+        "modes": [
+          "base",
+          "nav"
+        ],
+        "title": "Work"
+      },
+      "right": {
+        "default_mode": "base",
+        "id": "work",
+        "modes": [
+          "base",
+          "nav"
+        ],
+        "title": "Work"
+      },
+      "rows": [
+        {
+          "key": "w-pause",
+          "left": {
+            "enabled": true,
+            "id": "w-pause",
+            "modes": [
+              "deleted-mode"
+            ],
+            "steps": [
+              "engine"
+            ],
+            "title": "F13 pauses",
+            "trigger": "F13"
+          },
+          "right": {
+            "enabled": true,
+            "id": "w-pause",
+            "modes": [],
+            "steps": [
+              "engine"
+            ],
+            "title": "F13 pauses",
+            "trigger": "F13"
+          },
+          "status": "changed"
+        },
+        {
+          "key": "w-nav",
+          "left": {
+            "enabled": true,
+            "id": "w-nav",
+            "modes": [],
+            "steps": [
+              "mode"
+            ],
+            "title": "F14 holds Navigation",
+            "trigger": "F14"
+          },
+          "right": {
+            "enabled": true,
+            "id": "w-nav",
+            "modes": [],
+            "steps": [
+              "mode"
+            ],
+            "title": "F14 holds Navigation",
+            "trigger": "F14"
+          },
+          "status": "same"
+        },
+        {
+          "key": "w-tool",
+          "left": {
+            "enabled": true,
+            "id": "w-tool",
+            "modes": [],
+            "steps": [
+              "open_program"
+            ],
+            "title": "F16 opens the tool",
+            "trigger": "Ctrl+Alt+Shift+F16"
+          },
+          "right": {
+            "enabled": true,
+            "id": "w-tool",
+            "modes": [],
+            "steps": [
+              "open_program"
+            ],
+            "title": "F16 opens the tool",
+            "trigger": "Ctrl+Alt+Shift+F16"
+          },
+          "status": "same"
+        }
+      ]
+    },
+    "problems": [],
+    "profiles": [
+      "work"
+    ],
+    "restored_revision": 8,
+    "revision": {
+      "from": 9,
+      "to": 10
+    },
+    "rules": [
+      "w-pause",
+      "w-nav",
+      "w-tool"
+    ],
+    "snapshot": "20261104T141419Z-r10.json",
+    "source": "20261104T141419Z-r8-save.json",
+    "target": "saved"
+  },
+  "ok": true,
+  "schema_version": 1,
+  "warnings": []
+}

@@ -106,7 +106,10 @@ pub(crate) fn edit_err(e: EditError) -> CliError {
             "see `ddalgak mode list`; `ddalgak mode add --title <name>` creates one".into()
         }
         EditError::ProfileNotFound(_) => {
-            "profiles are created in the editor (Step 75) or in rules.json".into()
+            "see `ddalgak profile list`; `ddalgak profile add --title <name>` creates one".into()
+        }
+        EditError::ProfileInUse(_) => {
+            "nothing was written; `ddalgak profile apply <other>` switches first".into()
         }
         EditError::ModeInUse { .. } => "nothing was written".into(),
         _ => "see `ddalgak --help`".into(),
@@ -935,7 +938,7 @@ pub(crate) fn confirm(a: &Args, question: &str) -> Result<(), CliError> {
 }
 
 /// What a running app said about a reload, for the `app` field.
-fn app_json(r: Result<Value, CliError>, warnings: &mut Vec<String>) -> Value {
+pub(crate) fn app_json(r: Result<Value, CliError>, warnings: &mut Vec<String>) -> Value {
     match r {
         Ok(v) => {
             if v["outcome"] == "kept_previous" {
@@ -944,12 +947,17 @@ fn app_json(r: Result<Value, CliError>, warnings: &mut Vec<String>) -> Value {
                     v["reason"].as_str().unwrap_or("the file is not usable")
                 ));
             }
-            json!({
+            let mut app = json!({
                 "running": true,
                 "outcome": v["outcome"],
                 "in_sync": v["in_sync"],
                 "active_revision": v["active_set"]["revision"],
-            })
+            });
+            // Step 75: the profile the app now runs (a `profile apply` checks it switched).
+            if let Some(p) = v["active_set"]["profile"].as_str() {
+                app["active_profile"] = json!(p);
+            }
+            app
         }
         Err(e) if e.code == Code::EngineNotRunning => json!({ "running": false }),
         Err(e) => {
@@ -963,11 +971,15 @@ fn app_json(r: Result<Value, CliError>, warnings: &mut Vec<String>) -> Value {
     }
 }
 
-fn file_name(p: &std::path::Path) -> String {
+pub(crate) fn file_name(p: &std::path::Path) -> String {
     p.file_name()
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_default()
 }
+
+/// How a change is reviewed: the validation reports before and after.
+pub(crate) type Review<'a> =
+    &'a dyn Fn(&validate::Report, &validate::Report) -> Result<(), EditError>;
 
 /// One rule change: lock, read (saved or draft), change, review, save, ask the app to reload.
 pub(crate) fn write(
@@ -977,6 +989,19 @@ pub(crate) fn write(
     ctx: &Context,
     notify: Notify<'_>,
     op: impl FnOnce(&mut Document) -> Result<edit::Change, EditError>,
+) -> Outcome {
+    write_with(cmd, a, files, ctx, notify, op, None)
+}
+
+/// [`write`] with its own review (Step 75: an import tolerates problems of the rules it adds).
+pub(crate) fn write_with(
+    cmd: Cmd,
+    a: &Args,
+    files: &Files,
+    ctx: &Context,
+    notify: Notify<'_>,
+    op: impl FnOnce(&mut Document) -> Result<edit::Change, EditError>,
+    review: Option<Review<'_>>,
 ) -> Outcome {
     let draft_mode = a.has("--draft");
     // A dry run takes no lock: it creates no file at all.
@@ -1003,11 +1028,13 @@ pub(crate) fn write(
     let after = validate::check(&doc.to_value(), ctx);
     // Mode commands (Step 72) refuse introduced mode problems with `mode_invalid`.
     let mode_cmd = cmd.name().starts_with("mode.");
-    if mode_cmd {
-        ddalgak::mode_edit::review(&before, &after).map_err(edit_err)?;
-    } else {
-        edit::review(&before, &after).map_err(edit_err)?;
+    let profile_cmd = cmd.name().starts_with("profile.");
+    match review {
+        Some(r) => r(&before, &after),
+        None if mode_cmd => ddalgak::mode_edit::review(&before, &after),
+        None => edit::review(&before, &after),
     }
+    .map_err(edit_err)?;
     let touched: Vec<Value> = after
         .all()
         .filter(|p| {
@@ -1046,6 +1073,10 @@ pub(crate) fn write(
     if mode_cmd {
         data["modes"] = json!(change.modes);
         data["created"] = json!(change.created_mode);
+    }
+    if profile_cmd {
+        data["profiles"] = json!(change.profiles);
+        data["created"] = json!(change.created_profile);
     }
     if !a.dry_run && change.changed {
         let lock = lock.as_ref().expect("locked");
@@ -1471,7 +1502,7 @@ pub fn run(cmd: Cmd, a: &Args, paths: &Paths, notify: Notify<'_>) -> Outcome {
     }
 }
 
-fn s(v: &Value) -> String {
+pub(crate) fn s(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
         Value::Null => "-".into(),
@@ -1479,7 +1510,7 @@ fn s(v: &Value) -> String {
     }
 }
 
-fn app_line(app: &Value) -> String {
+pub(crate) fn app_line(app: &Value) -> String {
     if app.is_null() {
         return String::new();
     }
@@ -1496,7 +1527,7 @@ fn app_line(app: &Value) -> String {
     }
 }
 
-fn problems_text(v: &Value) -> String {
+pub(crate) fn problems_text(v: &Value) -> String {
     let mut o = String::new();
     for p in v.as_array().into_iter().flatten() {
         o.push_str(&format!(

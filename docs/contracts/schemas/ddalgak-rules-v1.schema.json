@@ -22,7 +22,8 @@
       "required": ["exported_at", "by_version"],
       "properties": {
         "exported_at": {"type": "string", "format": "date-time"},
-        "by_version": {"$ref": "#/$defs/semver"}
+        "by_version": {"$ref": "#/$defs/semver"},
+        "withheld": {"description": "Step 75 (additive): what the export left out on purpose. `env_values`: the values of open_program environment overrides (they may be secrets; the names stay, the values are empty) unless `ddalgak profile export --include-env-values`.", "type": "array", "maxItems": 1, "items": {"enum": ["env_values"]}}
       }
     },
     "profiles": {"type": "array", "minItems": 1, "maxItems": 64, "items": {"$ref": "#/$defs/profile"}}

@@ -1,0 +1,12 @@
+{
+  "command": "profile.delete",
+  "error": {
+    "code": "profile_in_use",
+    "details": [],
+    "exit_code": 7,
+    "hint": "nothing was written; `ddalgak profile apply <other>` switches first",
+    "message": "`work` is the active profile; switch to another one first (`ddalgak profile apply <id>`); nothing was written"
+  },
+  "ok": false,
+  "schema_version": 1
+}

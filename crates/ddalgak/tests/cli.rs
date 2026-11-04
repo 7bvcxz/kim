@@ -20,7 +20,11 @@
 //! running app that keeps its hook installed. Every sandbox is its own `%APPDATA%`, so the user's
 //! real rules are never read or written.
 //!
-//! Step 75: every real-input step whose result a person's input on this desktop can change (a
+//! Step 75 adds the profile commands (CRUD, search and sort, switch with its preview and the
+//! running app's acknowledgement, save points, history, rollback, export and import with corrupt,
+//! newer and tricky files) and an app or CLI that ends in the middle of a switch.
+//!
+//! Step 75 also: every real-input step whose result a person's input on this desktop can change (a
 //! held modifier keeps an exact trigger such as `F13` from matching) runs as attempts
 //! (`common/quiet.rs`), judged with the test host's own count of physical events (`health`
 //! counters): only an attempt without physical input may fail the test, a disturbed one is
@@ -167,7 +171,7 @@ impl Sandbox {
         // Rule changes ask a running app to reload: always this sandbox's app, never the user's.
         let talks_to_app = [
             "status", "health", "engine", "pause", "resume", "quit", "rule", "rules", "mode",
-            "enable", "disable", "release",
+            "enable", "disable", "release", "profile",
         ]
         .iter()
         .any(|c| args.first() == Some(c));
@@ -3659,6 +3663,533 @@ fn a_hook_that_reaches_the_timeout_turns_the_engine_off() {
     // Turning it on again installs a fresh hook (never by itself).
     let (_, d) = sb.json(&["engine", "start"]);
     assert_eq!(d["data"]["engine"]["hook"]["installed"], true);
+    sb.json(&["quit"]);
+    assert_eq!(host.wait_exit(Duration::from_secs(10)), Some(0));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Step 75: profiles (DDALGAK-FR-030…032, DDALGAK-SEC-005, DDALGAK-SEC-006, DDALGAK-SEC-011,
+// DDALGAK-SEC-013, DDALGAK-NFR-005, DDALGAK-NFR-008). Every file lives in the sandbox; every
+// write names the sandbox's own endpoint, so the maintainer's app is never asked to reload. No
+// key is injected: the switch's real-input behavior is covered by the core tests, and the app
+// here only reloads and reports.
+// ---------------------------------------------------------------------------------------------
+
+const PROFILE_SECRET: &str = "Step75-SECRET-토큰";
+
+/// Two profiles with obscure keys: `work` (active) and `gaming`, a launch rule with an
+/// environment value that must never leave the computer unasked.
+fn profiles_doc(on_start: &str, program: &Path) -> Value {
+    let mut launch = json!({ "id": "w-tool", "title": "F16 opens the tool", "enabled": true,
+        "trigger": { "keys": "Ctrl+Alt+Shift+F16" },
+        "steps": [ { "type": "open_program", "path": program.display().to_string(),
+                     "env": [ { "name": "TOOL_TOKEN", "value": PROFILE_SECRET } ] } ] });
+    let fp = ddalgak::validate::launch_fingerprint(&launch);
+    launch["consent"] = json!({ "launch-programs": { "granted_at": "2026-11-04T09:00:00Z", "via": "gui", "fingerprint": fp } });
+    json!({
+        "schema": "ddalgak.rules", "schema_version": 1, "hotkey_contract": 1,
+        "revision": 1, "active_profile": "work",
+        "settings": { "engine_on_start": on_start },
+        "profiles": [
+            { "id": "work", "title": "Work", "description": "Office keyboard", "default_mode": "base",
+              "modes": [ { "id": "base", "title": "Base" }, { "id": "nav", "title": "Navigation", "parent": "base" } ],
+              "rules": [
+                { "id": "w-pause", "title": "F13 pauses", "enabled": true,
+                  "trigger": { "keys": "F13", "injected": "accept" },
+                  "steps": [ { "type": "engine", "op": "toggle_pause" } ] },
+                { "id": "w-nav", "title": "F14 holds Navigation", "enabled": true,
+                  "trigger": { "keys": "F14" }, "steps": [ { "type": "mode", "op": "hold", "mode": "nav" } ] },
+                launch
+              ] },
+            { "id": "gaming", "title": "Gaming", "description": "Games, no launches", "default_mode": "base",
+              "modes": [ { "id": "base", "title": "Base" }, { "id": "nav", "title": "Arrows" } ],
+              "rules": [
+                { "id": "g-off", "title": "F13 turns the engine off", "enabled": true,
+                  "trigger": { "keys": "F13", "injected": "accept" },
+                  "steps": [ { "type": "engine", "op": "disable" } ] }
+              ] }
+        ]
+    })
+}
+
+fn no_profile_secret(what: &str, text: &str) {
+    assert!(
+        !text.contains(PROFILE_SECRET),
+        "{what} shows the environment value: {text}"
+    );
+}
+
+/// `--json` of a command that must fail with `code`.
+fn fails(sb: &Sandbox, args: &[&str], code: &str) -> Value {
+    let (exit, d) = sb.json(args);
+    assert_ne!(exit, 0, "{args:?}: {d:#}");
+    assert_eq!(d["error"]["code"], code, "{args:?}: {d:#}");
+    d
+}
+
+#[test]
+fn profiles_are_managed_switched_versioned_and_transferred_through_the_cli() {
+    let sb = Sandbox::new("profiles");
+    let program = sb.root.join("Programs").join("도구 app").join("tool.exe");
+    std::fs::create_dir_all(program.parent().unwrap()).unwrap();
+    std::fs::write(&program, b"not run by any test").unwrap();
+    sb.write_rules(&profiles_doc("off", &program));
+    let ok = |args: &[&str]| -> Value {
+        let (code, d) = sb.json(args);
+        assert_eq!(code, 0, "{args:?}: {d:#}");
+        no_profile_secret(&args.join(" "), &d.to_string());
+        d
+    };
+    // --- Browse: search and sort.
+    let d = ok(&["profile", "list"]);
+    assert_eq!(d["data"]["active"], "work");
+    assert_eq!(d["data"]["total"], 2);
+    assert_eq!(d["data"]["profiles"][0]["rules"], 3);
+    bless("profile-list", &d);
+    let d = ok(&["profile", "list", "--search", "GAMES", "--sort", "title"]);
+    assert_eq!(d["data"]["profiles"].as_array().unwrap().len(), 1);
+    assert_eq!(d["data"]["profiles"][0]["id"], "gaming");
+    fails(&sb, &["profile", "list", "--sort", "size"], "usage");
+    // --- Show: modes, rules (no target, no environment value) and the switch preview.
+    let d = ok(&["profile", "show", "gaming"]);
+    assert_eq!(d["data"]["profile"]["active"], false);
+    assert_eq!(d["data"]["switch_preview"]["align"], "trigger");
+    let rows = d["data"]["switch_preview"]["rows"].as_array().unwrap();
+    assert!(
+        rows.iter()
+            .any(|r| r["key"] == "F13" && r["status"] == "changed"),
+        "{rows:?}"
+    );
+    assert!(rows.iter().any(|r| r["status"] == "only_left"), "{rows:?}");
+    assert!(
+        !d.to_string().contains("tool.exe"),
+        "no launch target in show"
+    );
+    bless("profile-show", &d);
+    fails(&sb, &["profile", "show", "nope"], "profile_not_found");
+    // --- CRUD.
+    let d = ok(&[
+        "profile",
+        "add",
+        "--title",
+        "개발 Development",
+        "--description",
+        "Rust",
+    ]);
+    assert_eq!(d["data"]["created"], "development");
+    bless("profile-add", &d);
+    ok(&["profile", "rename", "development", "Dev"]);
+    ok(&["profile", "edit", "development", "--no-description"]);
+    let d = ok(&["profile", "duplicate", "work", "--id", "work-copy"]);
+    assert_eq!(
+        d["data"]["rules"],
+        json!(["w-pause-2", "w-nav-2", "w-tool-2"])
+    );
+    let d = fails(
+        &sb,
+        &["profile", "delete", "work", "--yes"],
+        "profile_in_use",
+    );
+    assert_eq!(d["error"]["exit_code"], 7);
+    bless("failure-profile-in-use", &d);
+    fails(
+        &sb,
+        &["profile", "delete", "work-copy"],
+        "confirmation_required",
+    );
+    ok(&["profile", "delete", "work-copy", "--yes"]);
+    fails(
+        &sb,
+        &["profile", "add", "--title", "X", "--id", "Bad Id"],
+        "usage",
+    );
+    fails(
+        &sb,
+        &["profile", "add", "--title", "X", "--id", "gaming"],
+        "rule_conflict",
+    );
+    // A draft change leaves the saved file alone.
+    let before = sb.rules_bytes();
+    let d = ok(&["profile", "add", "--title", "Draft only", "--draft"]);
+    assert_eq!(d["data"]["target"], "draft");
+    assert_eq!(sb.rules_bytes(), before);
+    sb.run(&["rules", "draft", "discard", "--yes"]);
+    // --- Apply: the preview changes nothing; the switch changes only active_profile.
+    let before = sb.rules_bytes();
+    let d = ok(&["profile", "apply", "gaming", "--dry-run"]);
+    assert_eq!(
+        (d["data"]["from"].as_str(), d["data"]["to"].as_str()),
+        (Some("work"), Some("gaming"))
+    );
+    assert_eq!(d["data"]["switched"], Value::Null);
+    assert_eq!(sb.rules_bytes(), before, "a preview writes nothing");
+    bless("profile-apply-dry-run", &d);
+    let d = ok(&["profile", "apply", "gaming"]);
+    assert_eq!(d["data"]["changed"], true);
+    assert_eq!(
+        d["data"]["app"]["running"], false,
+        "no app: it starts with the saved profile"
+    );
+    assert_eq!(d["data"]["mode"], "base");
+    let (_, st) = sb.json(&["status"]);
+    assert_eq!(
+        st["data"]["rules"]["active_rules"],
+        json!(["g-off"]),
+        "{st:#}"
+    );
+    // An outdated --if-revision is refused before anything is written.
+    fails(
+        &sb,
+        &["profile", "apply", "work", "--if-revision", "1"],
+        "rule_conflict",
+    );
+    ok(&["profile", "apply", "work"]);
+    // --- Save points, history and rollback to the last working version.
+    let d = ok(&[
+        "profile",
+        "save",
+        "work",
+        "--label",
+        "before the experiment",
+    ]);
+    let save_point = d["data"]["save_point"].as_str().unwrap().to_string();
+    bless("profile-save", &d);
+    // A broken change by hand (a rule limited to a mode that does not exist), kept in the
+    // history by `rules backup`.
+    let mut doc: Value = serde_json::from_slice(&sb.rules_bytes()).unwrap();
+    doc["profiles"][0]["rules"][0]["modes"] = json!(["deleted-mode"]);
+    doc["revision"] = json!(doc["revision"].as_u64().unwrap() + 1);
+    sb.write_rules(&doc);
+    ok(&["rules", "backup"]);
+    let d = ok(&["profile", "history", "work"]);
+    assert_eq!(d["data"]["versions"][0]["working"], false, "{d:#}");
+    assert_eq!(d["data"]["rollback_to"], save_point.as_str(), "{d:#}");
+    bless("profile-history", &d);
+    fails(
+        &sb,
+        &["profile", "rollback", "work"],
+        "confirmation_required",
+    );
+    let d = ok(&["profile", "rollback", "work", "--yes"]);
+    assert_eq!(d["data"]["source"], save_point.as_str());
+    assert_eq!(d["data"]["preview"]["align"], "rule_id");
+    bless("profile-rollback", &d);
+    let (_, chk) = sb.json(&["rule", "check"]);
+    assert_eq!(
+        chk["data"]["ok"], true,
+        "the rollback removed the error: {chk:#}"
+    );
+    // Restore by name is the same, for any version.
+    let d = ok(&[
+        "profile",
+        "restore",
+        "work",
+        &save_point,
+        "--yes",
+        "--dry-run",
+    ]);
+    assert_eq!(d["data"]["dry_run"], true);
+    fails(
+        &sb,
+        &["profile", "restore", "work", "../rules.json", "--yes"],
+        "snapshot_not_found",
+    );
+    // --- Export: portable, inert, no secrets (environment values left out).
+    let file = sb.root.join("내보내기 export.json");
+    let file_s = file.display().to_string();
+    let (code, d) = sb.json(&["profile", "export", "work", "gaming", "--output", &file_s]);
+    assert_eq!(code, 0, "{d:#}");
+    assert_eq!(d["data"]["env_values_removed"], 1);
+    assert!(d["warnings"][0].as_str().unwrap().contains("left out"));
+    bless("profile-export", &d);
+    let text = std::fs::read_to_string(&file).unwrap();
+    no_profile_secret("the export file", &text);
+    let v: Value = serde_json::from_str(&text).unwrap();
+    assert!(v.get("revision").is_none() && v.get("settings").is_none());
+    assert!(!text.contains("consent"));
+    assert!(v["exported"]["by_version"].is_string());
+    assert!(
+        v["profiles"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|p| p["rules"].as_array().unwrap())
+            .all(|r| r["enabled"] == false),
+        "every exported rule is off"
+    );
+    fails(
+        &sb,
+        &["profile", "export", "work", "--output", &file_s],
+        "confirmation_required",
+    );
+    fails(&sb, &["profile", "export", "--output", &file_s], "usage");
+    // --- Import: the preview, then the import (never active, rules off, no consent).
+    let d = ok(&["profile", "import", &file_s, "--dry-run"]);
+    let p0 = &d["data"]["profiles"][0];
+    assert_eq!(
+        (p0["id"].as_str(), p0["renamed_from"].as_str()),
+        (Some("work-2"), Some("work"))
+    );
+    let tool = p0["rules"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == "w-tool-2")
+        .unwrap();
+    assert_eq!(tool["permissions"], json!(["launch-programs"]));
+    assert_eq!(tool["targets"], json!({ "redacted": true, "count": 1 }));
+    bless("profile-import-dry-run", &d);
+    let d = ok(&["profile", "import", &file_s, "--dry-run", "--show-targets"]);
+    assert!(d.to_string().contains("tool.exe"), "targets on request");
+    let before_active = sb.json(&["profile", "list"]).1["data"]["active"].clone();
+    let d = ok(&["profile", "import", &file_s]);
+    assert_eq!(d["data"]["changed"], true);
+    bless("profile-import", &d);
+    let d = ok(&["profile", "list"]);
+    assert_eq!(
+        d["data"]["active"], before_active,
+        "an import never switches"
+    );
+    assert_eq!(d["data"]["total"], 5);
+    let saved: Value = serde_json::from_slice(&sb.rules_bytes()).unwrap();
+    for p in saved["profiles"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|p| p["id"].as_str().unwrap().ends_with("-2"))
+    {
+        for r in p["rules"].as_array().unwrap() {
+            assert_eq!(r["enabled"], false, "{r}");
+            assert!(r.get("consent").is_none(), "{r}");
+        }
+    }
+    // --- Corrupt, foreign and newer files are refused; nothing is written.
+    let before = sb.rules_bytes();
+    for (name, bytes) in [
+        ("empty.json", b"".to_vec()),
+        ("torn.json", text.as_bytes()[..text.len() / 2].to_vec()),
+        (
+            "hotkeys.json",
+            br#"{"schema":"kim.hotkeys","schema_version":1}"#.to_vec(),
+        ),
+    ] {
+        let f = sb.root.join(name);
+        std::fs::write(&f, bytes).unwrap();
+        let d = fails(
+            &sb,
+            &["profile", "import", &f.display().to_string()],
+            "import_invalid",
+        );
+        assert_eq!(d["error"]["exit_code"], 4);
+        if name == "torn.json" {
+            bless("failure-import-invalid", &d);
+        }
+    }
+    let newer = sb.root.join("newer.json");
+    std::fs::write(
+        &newer,
+        text.replace("\"schema_version\": 1", "\"schema_version\": 7"),
+    )
+    .unwrap();
+    let d = fails(
+        &sb,
+        &["profile", "import", &newer.display().to_string()],
+        "rules_from_newer_version",
+    );
+    assert_eq!(d["error"]["exit_code"], 5);
+    fails(
+        &sb,
+        &[
+            "profile",
+            "import",
+            &sb.root.join("missing.json").display().to_string(),
+        ],
+        "io",
+    );
+    assert_eq!(sb.rules_bytes(), before, "refused imports write nothing");
+    // --- A missing program, a deleted mode and duplicate conflicting hotkeys in one file.
+    let tricky = json!({
+        "schema": "ddalgak.rules", "schema_version": 1, "hotkey_contract": 1, "active_profile": "dev",
+        "exported": { "exported_at": "2026-11-04T11:00:00Z", "by_version": "0.0.1" },
+        "profiles": [ { "id": "dev", "title": "Development", "default_mode": "base",
+            "modes": [ { "id": "base", "title": "Base" } ],
+            "rules": [
+                { "id": "d-build", "title": "F17 builds", "enabled": false, "trigger": { "keys": "Ctrl+Alt+Shift+F17" },
+                  "steps": [ { "type": "open_program", "path": r"C:\Ddalgak-Step75-Missing\build.exe" } ] },
+                { "id": "d-again", "title": "F17 again", "enabled": false, "trigger": { "keys": "Ctrl+Alt+Shift+F17" },
+                  "steps": [ { "type": "engine", "op": "pause" } ] },
+                { "id": "d-vim", "title": "F18 in a deleted mode", "enabled": false, "modes": ["vim"],
+                  "trigger": { "keys": "Ctrl+Alt+Shift+F18" }, "steps": [ { "type": "engine", "op": "pause" } ] }
+            ] } ]
+    });
+    let tf = sb.root.join("tricky.json");
+    std::fs::write(&tf, tricky.to_string()).unwrap();
+    let tf_s = tf.display().to_string();
+    let d = ok(&["profile", "import", &tf_s, "--dry-run"]);
+    let p = &d["data"]["profiles"][0];
+    assert_eq!(p["restored_modes"], json!(["vim"]));
+    let rule = |id: &str| {
+        p["rules"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == id)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(rule("d-build")["missing_programs"], 1);
+    assert_eq!(rule("d-again")["conflicts"], json!([{ "rule": "d-build" }]));
+    assert_eq!(d["data"]["counts"]["conflicts"], 1);
+    ok(&["profile", "import", &tf_s, "--id", "dev", "--title", "개발"]);
+    // Turning both F17 rules on is refused like any duplicate trigger.
+    let d = fails(
+        &sb,
+        &[
+            "rule",
+            "enable",
+            "d-again",
+            "d-build",
+            "--allow",
+            "launch-programs",
+        ],
+        "rule_conflict",
+    );
+    let _ = d;
+    // --- The help names every profile command and no output carried the secret.
+    let help = String::from_utf8_lossy(&sb.run(&["--help"]).stdout).to_string();
+    for c in [
+        "profile apply",
+        "profile export",
+        "profile import",
+        "profile history | restore | rollback",
+    ] {
+        assert!(help.contains(c), "{c}");
+    }
+    let human = sb.run(&["profile", "import", &file_s, "--dry-run"]);
+    no_profile_secret(
+        "human import preview",
+        &String::from_utf8_lossy(&human.stdout),
+    );
+}
+
+/// The real test host switches when a profile is applied (the reload acknowledges the profile and
+/// the revision), starts the new profile in its default mode, and an app or a CLI that ends in
+/// the middle of a switch leaves either the old or the new profile — never a torn file, never an
+/// engine that turned itself back on.
+#[test]
+fn a_running_app_switches_profiles_atomically_and_survives_an_exit_during_a_switch() {
+    if elevated() {
+        eprintln!("skipped (elevated): the app refuses to turn its engine on as administrator");
+        return;
+    }
+    let sb = Sandbox::new("switch");
+    let program = sb.root.join("tool.exe");
+    std::fs::write(&program, b"never started").unwrap();
+    sb.write_rules(&profiles_doc("on", &program));
+    let mut host = sb.host();
+    let (_, st) = sb.json(&["status"]);
+    assert_eq!(st["data"]["engine"]["state"], "running", "{st:#}");
+    assert_eq!(st["data"]["profile"]["id"], "work");
+    // Apply: the app acknowledges the new profile and the saved revision.
+    let (code, d) = sb.json(&["profile", "apply", "gaming"]);
+    assert_eq!(code, 0, "{d:#}");
+    assert_eq!(d["data"]["switched"], true, "{d:#}");
+    assert_eq!(d["data"]["app"]["active_profile"], "gaming");
+    assert_eq!(d["data"]["app"]["in_sync"], true);
+    bless("profile-apply", &d);
+    let (_, st) = sb.json(&["status"]);
+    assert_eq!(st["data"]["profile"]["id"], "gaming");
+    assert_eq!(st["data"]["rules"]["active_rules"], json!(["g-off"]));
+    assert_eq!(
+        st["data"]["engine"]["state"], "running",
+        "a switch keeps the engine state"
+    );
+    assert_eq!(
+        st["data"]["engine"]["hook"]["installed"], true,
+        "and the same hook"
+    );
+    let (_, m) = sb.json(&["mode", "status"]);
+    assert_eq!(
+        m["data"]["mode"]["active"], "base",
+        "the new profile's default mode"
+    );
+    // Back to work, with Navigation latched first: the switch never carries a mode over.
+    sb.json(&["profile", "apply", "work"]);
+    sb.json(&["mode", "set", "nav"]);
+    let (_, d) = sb.json(&["profile", "apply", "gaming"]);
+    assert_eq!(d["data"]["switched"], true);
+    let (_, m) = sb.json(&["mode", "status"]);
+    assert_eq!(
+        m["data"]["mode"]["active"], "base",
+        "gaming has a `nav` too, never carried"
+    );
+    // A CLI killed in the middle of saving a switch: the old profile stays, file intact.
+    let before = sb.rules_bytes();
+    let marker = sb.root.join("switch.marker");
+    let mut writer = sb.spawn_cli(
+        &["profile", "apply", "work"],
+        &[("DDALGAK_TEST_CRASH_IN_SAVE", marker.as_os_str())],
+    );
+    let until = Instant::now() + Duration::from_secs(30);
+    while !marker.exists() {
+        if let Ok(Some(s)) = writer.try_wait() {
+            panic!("the writer ended before the crash point: {s}");
+        }
+        assert!(
+            Instant::now() < until,
+            "the writer never reached the crash point"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    writer.kill().unwrap();
+    let _ = writer.wait();
+    assert_eq!(
+        sb.rules_bytes(),
+        before,
+        "rules.json is exactly the previous version"
+    );
+    let (_, st) = sb.json(&["status"]);
+    assert_eq!(st["data"]["profile"]["id"], "gaming");
+    assert_eq!(st["data"]["rules"]["in_sync"], true, "{st:#}");
+    assert_eq!(st["data"]["rules"]["saved"]["interrupted_save"], true);
+    // The app killed right after a switch was saved: the next start runs the new profile with
+    // the engine off (an unclean exit), never re-enabled by itself; the stale-key check ran.
+    let (_, d) = sb.json(&["profile", "apply", "work"]);
+    assert_eq!(d["data"]["changed"], true);
+    host.child.kill().unwrap();
+    let _ = host.child.wait();
+    drop(host);
+    let mut host = sb.host();
+    let (_, st) = sb.json(&["status"]);
+    assert_eq!(st["data"]["profile"]["id"], "work");
+    assert_eq!(
+        st["data"]["engine"]["state"], "off",
+        "never back on after a crash"
+    );
+    assert_eq!(st["data"]["start"]["off_reason"], "unclean_exit");
+    assert!(
+        st["data"]["start"]["recovered"]["checked"]
+            .as_u64()
+            .is_some(),
+        "{st:#}"
+    );
+    assert_eq!(
+        st["data"]["rules"]["saved"]["interrupted_save"], false,
+        "the next save replaced the leftover"
+    );
+    // Importing a profile into a running app never activates it.
+    let file = sb.root.join("export.json");
+    sb.json(&[
+        "profile",
+        "export",
+        "gaming",
+        "--output",
+        &file.display().to_string(),
+    ]);
+    let (_, d) = sb.json(&["profile", "import", &file.display().to_string()]);
+    assert_eq!(d["data"]["changed"], true, "{d:#}");
+    let (_, st) = sb.json(&["status"]);
+    assert_eq!(st["data"]["profile"]["id"], "work", "{st:#}");
     sb.json(&["quit"]);
     assert_eq!(host.wait_exit(Duration::from_secs(10)), Some(0));
 }

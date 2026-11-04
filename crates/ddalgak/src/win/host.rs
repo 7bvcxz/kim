@@ -11,7 +11,13 @@
 //!   rule fires while the session is locked (DDALGAK_SAFETY §4);
 //! - the **context watchers** (foreground integrity, password edits, IME windows) while the engine
 //!   is on;
-//! - the **IPC server** thread for `ddalgak status|health|engine …|quit`.
+//! - the **IPC server** thread for `ddalgak status|health|engine …|quit|rules reload`;
+//! - the **rules reload** (Step 67, `DDALGAK-FR-009`): a folder watcher thread notices changes to
+//!   `rules.json` and the CLI asks after every write. A valid new file replaces the active rules
+//!   at once — with the engine on, a new table is swapped into the running hook between two
+//!   callbacks, the hook stays installed and keys it consumed stay paired; an unusable file keeps
+//!   the previous active rules and says why (`kept_previous`). Saved and active revisions are
+//!   shown apart in `status`.
 //!
 //! The main thread sleeps in `GetMessageW`; the hook and worker threads sleep in their own waits.
 //! Nothing polls (`DDALGAK-NFR-001`). The engine never turns itself on: only the user (tray, CLI,
@@ -22,6 +28,7 @@ use super::hook::{self, HookThread, STATE_OFF, STATE_PAUSED, STATE_RUNNING};
 use super::inject::SendInputBackend;
 use super::pipe::{self, Listener};
 use super::tray::{MenuCmd, Tray};
+use super::watch::FolderWatcher;
 use super::{instance, process_cpu_us, wide};
 use crate::inject::Injector;
 use crate::ipc::{self, Method};
@@ -32,7 +39,9 @@ use crate::paths::Paths;
 use crate::rules::{self, FileState};
 use crate::shortcuts::Shortcuts;
 use crate::stats::Stats;
+use crate::store::{self, Files};
 use crate::table::{EngineOp, Table};
+use crate::validate::Context;
 use crate::worker::{Activity, Control, Msg, Rules, Worker};
 use serde_json::{Value, json};
 use std::cell::RefCell;
@@ -59,6 +68,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 const WM_HOST_CMD: u32 = WM_APP + 1;
 const WM_HOST_CONTROL: u32 = WM_APP + 2;
 const WM_TRAY: u32 = WM_APP + 3;
+const WM_HOST_RELOAD: u32 = WM_APP + 4;
 
 // WTS session change codes (documented WM_WTSSESSION_CHANGE wParam values).
 const WTS_CONSOLE_CONNECT: usize = 0x1;
@@ -106,11 +116,37 @@ enum HostCmd {
     },
 }
 
+/// What `rules.json` on disk looked like at the last read (it can differ from the active rules).
+#[derive(Clone, Debug)]
+struct SavedFile {
+    state: FileState,
+    revision: Option<u64>,
+    hash: u64,
+}
+
+impl SavedFile {
+    fn of(l: &rules::Loaded) -> SavedFile {
+        SavedFile {
+            state: l.state.clone(),
+            revision: l.revision,
+            hash: l.hash,
+        }
+    }
+}
+
 struct Host {
     opts: Options,
     hwnd: HWND,
     lifecycle: Lifecycle,
+    /// The active rules (the last usable file).
     loaded: rules::Loaded,
+    loaded_at: String,
+    /// The file as last read.
+    saved: SavedFile,
+    last_reload: Option<Value>,
+    /// The saved file hash of the last `kept_previous` notice (one notice per bad version).
+    noticed: u64,
+    folder_watch: Option<FolderWatcher>,
     generation: u32,
     shared: Arc<hook::Shared>,
     stats: Arc<Stats>,
@@ -172,9 +208,13 @@ impl Host {
                         .into(),
                 ));
             }
-            // Each start reads rules.json again (the live reload is Step 67).
-            self.loaded = rules::load(&self.opts.paths.rules());
-            match &self.loaded.state {
+            // Each start reads rules.json again; an unusable file keeps the engine off and the
+            // previous rules stay what they were.
+            let next = rules::load_with(&self.opts.paths.rules(), &self.ctx());
+            if !dry_run {
+                self.saved = SavedFile::of(&next);
+            }
+            match &next.state {
                 FileState::Invalid(why) => {
                     return Err((
                         "rules_invalid".into(),
@@ -188,6 +228,10 @@ impl Host {
                     ));
                 }
                 _ => {}
+            }
+            if !dry_run && (next.hash != self.loaded.hash || self.loaded.state != next.state) {
+                self.loaded = next;
+                self.loaded_at = crate::time::now_rfc3339();
             }
         }
         let plan = self.lifecycle.plan(req, origin).map_err(refusal)?;
@@ -272,6 +316,125 @@ impl Host {
         }))
     }
 
+    /// What validation knows beyond the file: Ddalgak's own bound shortcuts (§7.5).
+    fn ctx(&self) -> Context {
+        Context {
+            shortcuts: self
+                .shortcuts
+                .list
+                .iter()
+                .map(|s| (s.action.clone(), s.keys.clone()))
+                .collect(),
+            check_targets: false,
+        }
+    }
+
+    /// The saved file and the active rules, as `status` and `rules reload` show them.
+    fn states_json(&self) -> Value {
+        let files = Files::new(&self.opts.paths);
+        let in_sync = self.saved.state.usable() && self.saved.hash == self.loaded.hash;
+        json!({
+            "saved": {
+                "file": self.saved.state.as_str(),
+                "revision": self.saved.revision,
+                "problem": self.saved.state.problem(),
+                "interrupted_save": store::interrupted_save(&files),
+            },
+            "active_set": self.loaded.state.usable().then(|| json!({
+                "revision": self.loaded.revision,
+                "loaded_at": self.loaded_at,
+            })),
+            "in_sync": in_sync,
+        })
+    }
+
+    /// Reads `rules.json` again and applies it if it is usable and changed (`DDALGAK-FR-009`).
+    /// An unusable file keeps the previous active rules (`kept_previous`).
+    fn reload(&mut self, origin: &'static str, dry_run: bool) -> Value {
+        let next = rules::load_with(&self.opts.paths.rules(), &self.ctx());
+        let outcome = if !next.state.usable() {
+            "kept_previous"
+        } else if next.hash == self.loaded.hash && next.state == self.loaded.state {
+            "unchanged"
+        } else {
+            "applied"
+        };
+        let code = match next.state {
+            FileState::Invalid(_) => Some("rules_invalid"),
+            FileState::NewerVersion(_) => Some("rules_from_newer_version"),
+            _ => None,
+        };
+        let reason = next.state.problem();
+        let revision = next.revision;
+        if !dry_run {
+            self.saved = SavedFile::of(&next);
+            match outcome {
+                "applied" => {
+                    self.apply_rules(next);
+                    self.last_reload = Some(json!({
+                        "at": crate::time::now_rfc3339(), "origin": origin, "outcome": outcome,
+                        "revision": revision, "code": null, "reason": null,
+                    }));
+                }
+                "kept_previous" => {
+                    if self.noticed != self.saved.hash {
+                        self.noticed = self.saved.hash;
+                        self.notify(
+                            "Ddalgak keeps the previous rules",
+                            "rules.json has a problem and was not applied. Run `ddalgak rule check` to see why.",
+                        );
+                    }
+                    self.last_reload = Some(json!({
+                        "at": crate::time::now_rfc3339(), "origin": origin, "outcome": outcome,
+                        "revision": revision, "code": code, "reason": reason,
+                    }));
+                }
+                _ => {}
+            }
+        }
+        let mut v = self.states_json();
+        if let Some(o) = v.as_object_mut() {
+            o.insert("dry_run".into(), json!(dry_run));
+            o.insert("outcome".into(), json!(outcome));
+            o.insert("code".into(), json!(code));
+            o.insert("reason".into(), json!(reason));
+            o.insert("engine".into(), self.engine_json());
+            o.insert(
+                "active_rules".into(),
+                json!(
+                    self.loaded
+                        .bindings
+                        .iter()
+                        .map(|b| b.rule.clone())
+                        .collect::<Vec<_>>()
+                ),
+            );
+        }
+        v
+    }
+
+    /// Makes `next` the active rules; with the engine on, the running hook gets the new table.
+    fn apply_rules(&mut self, next: rules::Loaded) {
+        self.loaded = next;
+        self.loaded_at = crate::time::now_rfc3339();
+        if let Some(h) = &self.hook {
+            self.generation = self.generation.wrapping_add(1);
+            // Timers of the old rules end; signals of the old table are dropped by generation.
+            self.worker.queue().send(Msg::Cancel);
+            let bindings = self.loaded.bindings.clone();
+            self.worker.queue().send(Msg::Rules(Rules {
+                generation: self.generation,
+                bindings: Arc::new(bindings.clone()),
+                profile: self.loaded.profile.clone(),
+                mode: self.loaded.mode.clone(),
+            }));
+            h.swap_table(
+                self.generation,
+                Table::compile(bindings, self.loaded.max_runs_per_second),
+            );
+        }
+    }
+
     fn engine_json(&self) -> Value {
         let last = self
             .lifecycle
@@ -301,6 +464,14 @@ impl Host {
             .lock()
             .map(|a| a.to_json(20))
             .unwrap_or_else(|_| json!([]));
+        let mut rules_json = rules::to_json(&self.loaded);
+        if let (Some(o), Value::Object(s)) = (rules_json.as_object_mut(), self.states_json()) {
+            o.extend(s);
+            o.insert(
+                "last_reload".into(),
+                self.last_reload.clone().unwrap_or(Value::Null),
+            );
+        }
         json!({
             "app": {
                 "running": true,
@@ -316,7 +487,7 @@ impl Host {
             "engine": self.engine_json(),
             "start": { "off_reason": self.start_reason.as_str() },
             "profile": { "id": self.loaded.profile, "mode": self.loaded.mode },
-            "rules": rules::to_json(&self.loaded),
+            "rules": rules_json,
             "shortcuts": self.shortcuts.to_json(&|a| self.registration(a)),
             "session": { "locked": self.locked },
             "activity": activity,
@@ -340,8 +511,8 @@ impl Host {
         if st.panics.load(Ordering::Relaxed) > 0 {
             problems.push(json!({ "code": "callback_panicked", "message": "the hook callback failed and passed the event on" }));
         }
-        if !self.loaded.state.usable() {
-            problems.push(json!({ "code": "rules_invalid", "message": "rules.json is not usable; the engine cannot be turned on with it" }));
+        if !self.saved.state.usable() {
+            problems.push(json!({ "code": "rules_invalid", "message": "rules.json is not usable; the engine keeps the previous rules and cannot be turned on with this file" }));
         }
         for (_, a, s) in &self.registered {
             if *s == "taken" {
@@ -374,6 +545,7 @@ impl Host {
             Method::Status => Ok(self.status()),
             Method::Health => Ok(self.health()),
             Method::Engine(req) => self.engine(req, &Origin::Cli, dry_run),
+            Method::RulesReload => Ok(self.reload("cli", dry_run)),
             Method::Quit => {
                 if !dry_run {
                     // SAFETY: posts a plain message to this thread's own window.
@@ -480,6 +652,7 @@ impl Host {
         }
         self.registered.clear();
         self.tray = None;
+        self.folder_watch = None;
     }
 }
 
@@ -522,6 +695,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         WM_HOTKEY => {
             with_host(|h| h.hotkey(i32::try_from(wparam).unwrap_or(-1)));
+            0
+        }
+        WM_HOST_RELOAD => {
+            with_host(|h| h.reload("watcher", false));
             0
         }
         WM_WTSSESSION_CHANGE => {
@@ -680,7 +857,16 @@ pub fn run(opts: Options) -> Result<(), RunError> {
     let me = super::user_sid().map_err(|e| RunError::Io(e.to_string()))?;
     let markers = Markers::new(&opts.paths.local);
     let (unclean_exit, emergency) = markers.take_start_facts();
-    let loaded = rules::load(&opts.paths.rules());
+    let shortcuts = Shortcuts::load(&opts.paths, opts.no_hotkeys);
+    let ctx = Context {
+        shortcuts: shortcuts
+            .list
+            .iter()
+            .map(|s| (s.action.clone(), s.keys.clone()))
+            .collect(),
+        check_targets: false,
+    };
+    let loaded = rules::load_with(&opts.paths.rules(), &ctx);
     let elevated = super::is_elevated();
     let facts = StartFacts {
         engine_on_start: loaded.engine_on_start,
@@ -714,8 +900,18 @@ pub fn run(opts: Options) -> Result<(), RunError> {
     } else {
         None
     };
-    let shortcuts = Shortcuts::load(&opts.paths, opts.no_hotkeys);
     let registered = register_shortcuts(hwnd, &shortcuts);
+    // Changes to rules.json reach the app as a posted message (no polling). Creating the folder
+    // (empty) lets the watcher work before the first rule is saved.
+    let _ = std::fs::create_dir_all(&opts.paths.config);
+    let folder_watch = FolderWatcher::start(
+        &opts.paths.config,
+        Box::new(move || {
+            // SAFETY: posts a plain message to the app window (harmless once it is gone).
+            unsafe { PostMessageW(hwnd_bits as HWND, WM_HOST_RELOAD, 0, 0) };
+        }),
+    )
+    .ok();
     // SAFETY: registers this thread's window for this session's lock/unlock notifications.
     let wts = unsafe { WTSRegisterSessionNotification(hwnd, NOTIFY_FOR_THIS_SESSION) } != 0;
     // SAFETY: NUL-terminated message name.
@@ -738,7 +934,12 @@ pub fn run(opts: Options) -> Result<(), RunError> {
             opts,
             hwnd,
             lifecycle: Lifecycle::new(start_reason),
+            saved: SavedFile::of(&loaded),
             loaded,
+            loaded_at: crate::time::now_rfc3339(),
+            last_reload: None,
+            noticed: 0,
+            folder_watch,
             generation: 0,
             shared,
             stats: Arc::clone(&stats),

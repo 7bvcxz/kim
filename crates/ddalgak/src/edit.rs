@@ -703,19 +703,29 @@ pub fn review(before: &Report, after: &Report) -> Result<(), EditError> {
         )
     });
     if let Some(c) = conflict {
-        let other = c
-            .with
-            .as_ref()
-            .and_then(|w| w.get("rule").or_else(|| w.get("action")))
-            .and_then(Value::as_str)
-            .map(|o| format!(" (`{o}`)"))
-            .unwrap_or_default();
-        return Err(EditError::Conflict {
-            message: format!(
-                "rule `{}` would collide with another binding{other}: {}; nothing was written",
-                c.rule.as_deref().unwrap_or("?"),
-                c.message
+        let subject = c.rule.as_deref().unwrap_or("?");
+        let with = |k: &str| {
+            c.with
+                .as_ref()
+                .and_then(|w| w.get(k))
+                .and_then(Value::as_str)
+                .unwrap_or("?")
+                .to_string()
+        };
+        let message = match c.code {
+            "duplicate_trigger" => format!(
+                "rule `{subject}` would have the same trigger as rule `{}` (same modes, conditions and priority), so one of them could never fire; nothing was written",
+                with("rule")
             ),
+            "duplicate_binding" => format!(
+                "rule `{subject}` would use `{}`, which is Ddalgak's own shortcut `{}` in hotkeys.json; nothing was written",
+                with("keys"),
+                with("action")
+            ),
+            _ => format!("{}; nothing was written", c.message),
+        };
+        return Err(EditError::Conflict {
+            message,
             problems: new,
         });
     }

@@ -1,9 +1,10 @@
 //! Argument parsing for the `ddalgak` CLI (docs/CLI_CONTRACT.md §2–§4). Hand-written like
-//! Subak's: the command set is small and the binary stays dependency-free. Flags may appear
-//! anywhere; each command accepts only its documented options.
+//! Subak's: the binary stays dependency-free. Flags may appear anywhere; each command accepts
+//! only its documented options, and words after the command are its positional arguments.
 
 use crate::output::CliError;
 use ddalgak::lifecycle::Request;
+use std::collections::BTreeMap;
 
 /// What to run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,7 +19,80 @@ pub enum Cmd {
     StartupStatus,
     StartupEnable,
     StartupDisable,
+    RuleList,
+    RuleShow,
+    RuleCheck,
+    RuleAdd,
+    RuleEdit,
+    RuleDelete,
+    RuleDuplicate,
+    RuleEnable,
+    RuleDisable,
+    RuleMove,
+    RuleRevoke,
+    RulesHistory,
+    RulesBackup,
+    RulesRestore,
+    RulesReload,
+    RulesDraft,
+    RulesDraftApply,
+    RulesDraftDiscard,
 }
+
+/// How an option takes its value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Flag,
+    Value,
+    /// Repeatable value.
+    Multi,
+}
+
+use Kind::{Flag, Multi, Value};
+
+/// Options of the rule fields (`rule add`, `rule edit`).
+const RULE_FIELDS: &[(&str, Kind)] = &[
+    ("--trigger", Value),
+    ("--title", Value),
+    ("--description", Value),
+    ("--on", Value),
+    ("--hold-ms", Value),
+    ("--repeat", Flag),
+    ("--pass-through", Flag),
+    ("--accept-injected", Flag),
+    ("--mode", Multi),
+    ("--priority", Value),
+    ("--on-error", Value),
+    ("--allow", Multi),
+    ("--action", Value),
+    ("--step", Multi),
+    ("--to", Value),
+    ("--tap", Value),
+    ("--tap-ms", Value),
+    ("--keys", Value),
+    ("--step-delay-ms", Value),
+    ("--text", Value),
+    ("--method", Value),
+    ("--key-delay-ms", Value),
+    ("--path", Value),
+    ("--app-id", Value),
+    ("--arg", Multi),
+    ("--working-dir", Value),
+    ("--window", Value),
+    ("--if-running", Value),
+    ("--url", Value),
+    ("--op", Value),
+    ("--target-mode", Multi),
+    ("--ms", Value),
+];
+
+/// Options of every command that writes rules.
+const WRITE: &[(&str, Kind)] = &[
+    ("--dry-run", Flag),
+    ("--draft", Flag),
+    ("--if-revision", Value),
+    ("--endpoint", Value),
+];
 
 impl Cmd {
     /// The dotted command name used in the JSON envelope.
@@ -33,17 +107,108 @@ impl Cmd {
             Self::StartupStatus => "startup.status".into(),
             Self::StartupEnable => "startup.enable".into(),
             Self::StartupDisable => "startup.disable".into(),
+            Self::RuleList => "rule.list".into(),
+            Self::RuleShow => "rule.show".into(),
+            Self::RuleCheck => "rule.check".into(),
+            Self::RuleAdd => "rule.add".into(),
+            Self::RuleEdit => "rule.edit".into(),
+            Self::RuleDelete => "rule.delete".into(),
+            Self::RuleDuplicate => "rule.duplicate".into(),
+            Self::RuleEnable => "rule.enable".into(),
+            Self::RuleDisable => "rule.disable".into(),
+            Self::RuleMove => "rule.move".into(),
+            Self::RuleRevoke => "rule.revoke".into(),
+            Self::RulesHistory => "rules.history".into(),
+            Self::RulesBackup => "rules.backup".into(),
+            Self::RulesRestore => "rules.restore".into(),
+            Self::RulesReload => "rules.reload".into(),
+            Self::RulesDraft => "rules.draft".into(),
+            Self::RulesDraftApply => "rules.draft.apply".into(),
+            Self::RulesDraftDiscard => "rules.draft.discard".into(),
         }
     }
 
-    fn accepts(self, opt: &str) -> bool {
-        let allowed: &[&str] = match self {
-            Self::Help | Self::Version | Self::Capabilities | Self::StartupStatus => &[],
-            Self::Status | Self::Health => &["--endpoint"],
-            Self::Engine(_) | Self::Quit => &["--endpoint", "--dry-run"],
-            Self::StartupEnable | Self::StartupDisable => &["--dry-run"],
+    /// The options the command accepts (besides `--json`, `-q`, `-v`, `-h`, `--no-input`).
+    fn options(self) -> Vec<(&'static str, Kind)> {
+        let mut o: Vec<(&'static str, Kind)> = match self {
+            Self::Help | Self::Version | Self::Capabilities | Self::StartupStatus => vec![],
+            Self::Status | Self::Health => vec![("--endpoint", Value)],
+            Self::Engine(_) | Self::Quit | Self::RulesReload => {
+                vec![("--endpoint", Value), ("--dry-run", Flag)]
+            }
+            Self::StartupEnable | Self::StartupDisable => vec![("--dry-run", Flag)],
+            Self::RuleList => vec![("--profile", Value), ("--mode", Value), ("--draft", Flag)],
+            Self::RuleShow | Self::RuleCheck => vec![("--draft", Flag)],
+            Self::RulesDraft | Self::RulesHistory => vec![],
+            Self::RuleAdd => {
+                let mut v = RULE_FIELDS.to_vec();
+                v.extend([
+                    ("--id", Value),
+                    ("--profile", Value),
+                    ("--disabled", Flag),
+                    ("--before", Value),
+                    ("--after", Value),
+                    ("--rule", Value),
+                ]);
+                v.extend_from_slice(WRITE);
+                v
+            }
+            Self::RuleEdit => {
+                let mut v = RULE_FIELDS.to_vec();
+                v.extend([("--all-modes", Flag), ("--patch", Value)]);
+                v.extend_from_slice(WRITE);
+                v
+            }
+            Self::RuleDelete => {
+                let mut v = vec![("--yes", Flag)];
+                v.extend_from_slice(WRITE);
+                v
+            }
+            Self::RuleDuplicate => {
+                let mut v = vec![("--id", Value), ("--title", Value), ("--trigger", Value)];
+                v.extend_from_slice(WRITE);
+                v
+            }
+            Self::RuleEnable => {
+                let mut v = vec![("--allow", Multi)];
+                v.extend_from_slice(WRITE);
+                v
+            }
+            Self::RuleDisable | Self::RuleRevoke => WRITE.to_vec(),
+            Self::RuleMove => {
+                let mut v = vec![("--before", Value), ("--after", Value), ("--to", Value)];
+                v.extend_from_slice(WRITE);
+                v
+            }
+            Self::RulesBackup => vec![("--dry-run", Flag)],
+            Self::RulesRestore => vec![
+                ("--backup", Flag),
+                ("--yes", Flag),
+                ("--dry-run", Flag),
+                ("--endpoint", Value),
+            ],
+            Self::RulesDraftApply => vec![("--dry-run", Flag), ("--endpoint", Value)],
+            Self::RulesDraftDiscard => vec![("--yes", Flag), ("--dry-run", Flag)],
         };
-        allowed.contains(&opt)
+        // Every rule command may name the app endpoint (writes ask that app to reload; scripts
+        // can pass the same options to every command).
+        if self.name().starts_with("rule") {
+            o.push(("--endpoint", Value));
+        }
+        o.sort_by_key(|(n, _)| *n);
+        o.dedup_by_key(|(n, _)| *n);
+        o
+    }
+
+    /// How many positional arguments the command takes: (at least, at most).
+    fn positionals(self) -> (usize, usize) {
+        match self {
+            Self::RuleShow | Self::RuleEdit | Self::RuleDuplicate | Self::RuleMove => (1, 1),
+            Self::RuleDelete | Self::RuleEnable | Self::RuleDisable => (1, 1000),
+            Self::RuleRevoke => (2, 2),
+            Self::RulesRestore => (0, 1),
+            _ => (0, 0),
+        }
     }
 }
 
@@ -54,7 +219,30 @@ pub struct Args {
     pub quiet: bool,
     pub verbose: bool,
     pub dry_run: bool,
+    pub yes: bool,
+    pub no_input: bool,
     pub endpoint: Option<String>,
+    /// Words after the command (rule IDs, …).
+    pub positional: Vec<String>,
+    /// Option values by option name (a flag has one empty value).
+    pub opts: BTreeMap<String, Vec<String>>,
+}
+
+impl Args {
+    pub fn get(&self, name: &str) -> Option<&str> {
+        self.opts
+            .get(name)
+            .and_then(|v| v.last())
+            .map(String::as_str)
+    }
+
+    pub fn all(&self, name: &str) -> &[String] {
+        self.opts.get(name).map_or(&[], Vec::as_slice)
+    }
+
+    pub fn has(&self, name: &str) -> bool {
+        self.opts.contains_key(name)
+    }
 }
 
 /// Endpoint names are one pipe-name component: `\\.\pipe\<name>`.
@@ -65,21 +253,53 @@ pub fn valid_endpoint(name: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
 }
 
-fn command(words: &[&str]) -> Result<Cmd, String> {
+/// The command words at the start of `words`, and how many words they used.
+fn command(words: &[&str]) -> Result<(Cmd, usize), String> {
     Ok(match words {
-        [] => Cmd::Help,
-        ["capabilities"] => Cmd::Capabilities,
-        ["status"] => Cmd::Status,
-        ["health"] => Cmd::Health,
-        ["engine", "start" | "on"] => Cmd::Engine(Request::Start),
-        ["engine", "pause"] | ["pause"] => Cmd::Engine(Request::Pause),
-        ["engine", "resume"] | ["resume"] => Cmd::Engine(Request::Resume),
-        ["engine", "stop" | "off"] => Cmd::Engine(Request::Stop),
-        ["quit"] => Cmd::Quit,
-        ["startup"] | ["startup", "status"] => Cmd::StartupStatus,
-        ["startup", "enable"] => Cmd::StartupEnable,
-        ["startup", "disable"] => Cmd::StartupDisable,
-        ["engine"] => return Err("`engine` needs start, pause, resume or stop".into()),
+        [] => (Cmd::Help, 0),
+        ["capabilities", ..] => (Cmd::Capabilities, 1),
+        ["status", ..] => (Cmd::Status, 1),
+        ["health", ..] => (Cmd::Health, 1),
+        ["engine", "start" | "on", ..] => (Cmd::Engine(Request::Start), 2),
+        ["engine", "pause", ..] => (Cmd::Engine(Request::Pause), 2),
+        ["pause", ..] => (Cmd::Engine(Request::Pause), 1),
+        ["engine", "resume", ..] => (Cmd::Engine(Request::Resume), 2),
+        ["resume", ..] => (Cmd::Engine(Request::Resume), 1),
+        ["engine", "stop" | "off", ..] => (Cmd::Engine(Request::Stop), 2),
+        ["quit", ..] => (Cmd::Quit, 1),
+        ["startup", "status", ..] => (Cmd::StartupStatus, 2),
+        ["startup", "enable", ..] => (Cmd::StartupEnable, 2),
+        ["startup", "disable", ..] => (Cmd::StartupDisable, 2),
+        ["startup"] => (Cmd::StartupStatus, 1),
+        ["rule", "list", ..] => (Cmd::RuleList, 2),
+        ["rule", "show", ..] => (Cmd::RuleShow, 2),
+        ["rule", "check", ..] => (Cmd::RuleCheck, 2),
+        ["rule", "add", ..] => (Cmd::RuleAdd, 2),
+        ["rule", "edit", ..] => (Cmd::RuleEdit, 2),
+        ["rule", "delete", ..] => (Cmd::RuleDelete, 2),
+        ["rule", "duplicate", ..] => (Cmd::RuleDuplicate, 2),
+        ["rule", "enable", ..] => (Cmd::RuleEnable, 2),
+        ["rule", "disable", ..] => (Cmd::RuleDisable, 2),
+        ["rule", "move", ..] => (Cmd::RuleMove, 2),
+        ["rule", "revoke", ..] => (Cmd::RuleRevoke, 2),
+        ["rules", "history", ..] => (Cmd::RulesHistory, 2),
+        ["rules", "backup", ..] => (Cmd::RulesBackup, 2),
+        ["rules", "restore", ..] => (Cmd::RulesRestore, 2),
+        ["rules", "reload", ..] => (Cmd::RulesReload, 2),
+        ["rules", "draft", "apply", ..] => (Cmd::RulesDraftApply, 3),
+        ["rules", "draft", "discard", ..] => (Cmd::RulesDraftDiscard, 3),
+        ["rules", "draft", "show", ..] => (Cmd::RulesDraft, 3),
+        ["rules", "draft"] => (Cmd::RulesDraft, 2),
+        ["engine", ..] => return Err("`engine` needs start, pause, resume or stop".into()),
+        ["rule"] | ["rule", ..] => {
+            return Err(
+                "`rule` needs list, show, check, add, edit, delete, duplicate, enable, disable, move or revoke"
+                    .into(),
+            );
+        }
+        ["rules"] | ["rules", ..] => {
+            return Err("`rules` needs history, backup, restore, reload or draft".into());
+        }
         _ => return Err(format!("unknown command `{}`", words.join(" "))),
     })
 }
@@ -87,54 +307,34 @@ fn command(words: &[&str]) -> Result<Cmd, String> {
 /// Parses `args` (without the program name). On failure returns the longest recognized
 /// command name and a `usage` error, so `--json` callers still get one document.
 pub fn parse(raw: &[String]) -> Result<(Cmd, Args), (String, CliError)> {
-    let mut a = Args::default();
+    // Pass 1: find the command words (the leading words that are not option values).
     let mut words: Vec<&str> = Vec::new();
-    let mut opts: Vec<&'static str> = Vec::new();
-    let (mut help, mut version) = (false, false);
-    let mut bad: Option<CliError> = None;
     let mut i = 0;
     while i < raw.len() {
-        let arg = raw[i].as_str();
-        let (flag, inline) = match arg.split_once('=') {
-            Some((f, v)) if f.starts_with("--") => (f, Some(v.to_string())),
-            _ => (arg, None),
-        };
-        match flag {
-            "--json" => a.json = true,
-            "-q" | "--quiet" => a.quiet = true,
-            "-v" | "--verbose" => a.verbose = true,
-            "-h" | "--help" => help = true,
-            "-V" | "--version" => version = true,
-            "--dry-run" => {
-                a.dry_run = true;
-                opts.push("--dry-run");
-            }
-            "--endpoint" => {
-                opts.push("--endpoint");
-                let v = inline.or_else(|| {
-                    let v = raw.get(i + 1).filter(|v| !v.starts_with("--")).cloned();
-                    if v.is_some() {
-                        i += 1;
-                    }
-                    v
-                });
-                match v {
-                    Some(v) if valid_endpoint(&v) => a.endpoint = Some(v),
-                    Some(_) => {
-                        bad.get_or_insert(CliError::usage(
-                            "--endpoint takes a pipe name of letters, digits, `-`, `_` and `.`",
-                        ));
-                    }
-                    None => {
-                        bad.get_or_insert(CliError::usage("--endpoint needs a value"));
-                    }
-                }
-            }
-            f if f.starts_with('-') => {
-                bad.get_or_insert(CliError::usage(format!("unknown option `{f}`")));
-            }
-            w => words.push(w),
+        let a = raw[i].as_str();
+        if a.starts_with('-') && a.len() > 1 {
+            // An option: with a known value-taking name, skip its value.
+            let name = a.split_once('=').map_or(a, |(n, _)| n);
+            let takes_value = !a.contains('=')
+                && (RULE_FIELDS
+                    .iter()
+                    .chain(WRITE)
+                    .any(|(n, k)| *n == name && *k != Flag)
+                    || matches!(
+                        name,
+                        "--endpoint"
+                            | "--profile"
+                            | "--id"
+                            | "--before"
+                            | "--after"
+                            | "--rule"
+                            | "--patch"
+                            | "--to"
+                    ));
+            i += if takes_value { 2 } else { 1 };
+            continue;
         }
+        words.push(a);
         i += 1;
     }
     let partial = |words: &[&str]| {
@@ -147,12 +347,14 @@ pub fn parse(raw: &[String]) -> Result<(Cmd, Args), (String, CliError)> {
             "startup",
             "pause",
             "resume",
+            "rule",
+            "rules",
         ];
         match words.first() {
             Some(w) if known.contains(w) => {
                 let mut n = w.to_string();
                 if let Some(second) = words.get(1)
-                    && ["engine", "startup"].contains(w)
+                    && ["engine", "startup", "rule", "rules"].contains(w)
                     && second.chars().all(|c| c.is_ascii_lowercase())
                 {
                     n = format!("{n}.{second}");
@@ -162,29 +364,127 @@ pub fn parse(raw: &[String]) -> Result<(Cmd, Args), (String, CliError)> {
             _ => "ddalgak".into(),
         }
     };
-    if a.quiet && a.verbose {
-        bad.get_or_insert(CliError::usage("--quiet and --verbose conflict"));
-    }
+    let help = raw.iter().any(|a| a == "-h" || a == "--help");
+    let version = raw.iter().any(|a| a == "-V" || a == "--version");
+    let mut a = Args::default();
     if help {
         return Ok((Cmd::Help, a));
     }
     if version && words.is_empty() {
         return Ok((Cmd::Version, a));
     }
-    let cmd = match command(&words) {
+    let (cmd, used) = match command(&words) {
         Ok(c) => c,
         Err(e) => return Err((partial(&words), CliError::usage(e))),
     };
-    if let Some(e) = bad {
-        return Err((cmd.name(), e));
+    let name = cmd.name();
+    let usage = |m: String| Err((name.clone(), CliError::usage(m)));
+    let allowed = cmd.options();
+    // Pass 2: options and positional arguments.
+    let mut seen_words = 0;
+    let mut i = 0;
+    while i < raw.len() {
+        let arg = raw[i].as_str();
+        i += 1;
+        if !(arg.starts_with('-') && arg.len() > 1) {
+            seen_words += 1;
+            if seen_words > used {
+                a.positional.push(arg.to_string());
+            }
+            continue;
+        }
+        let (flag, inline) = match arg.split_once('=') {
+            Some((f, v)) if f.starts_with("--") => (f, Some(v.to_string())),
+            _ => (arg, None),
+        };
+        match flag {
+            "--json" => a.json = true,
+            "-q" | "--quiet" => a.quiet = true,
+            "-v" | "--verbose" => a.verbose = true,
+            "--no-input" => a.no_input = true,
+            "-h" | "--help" | "-V" | "--version" => {}
+            _ => {
+                let f = if flag == "-y" { "--yes" } else { flag };
+                let Some((_, kind)) = allowed.iter().find(|(n, _)| *n == f) else {
+                    if f.starts_with('-') && !allowed.iter().any(|(n, _)| *n == f) {
+                        let known = RULE_FIELDS.iter().chain(WRITE).any(|(n, _)| *n == f)
+                            || [
+                                "--endpoint",
+                                "--dry-run",
+                                "--yes",
+                                "--profile",
+                                "--id",
+                                "--disabled",
+                                "--before",
+                                "--after",
+                                "--rule",
+                                "--patch",
+                                "--all-modes",
+                                "--backup",
+                            ]
+                            .contains(&f);
+                        return usage(if known {
+                            format!("`{}` does not take {f}", name.replace('.', " "))
+                        } else {
+                            format!("unknown option `{f}`")
+                        });
+                    }
+                    continue;
+                };
+                let value = match kind {
+                    Flag => {
+                        if inline.is_some() {
+                            return usage(format!("{f} takes no value"));
+                        }
+                        String::new()
+                    }
+                    Value | Multi => match inline {
+                        Some(v) => v,
+                        None => match raw.get(i) {
+                            Some(v) => {
+                                i += 1;
+                                v.clone()
+                            }
+                            None => return usage(format!("{f} needs a value")),
+                        },
+                    },
+                };
+                if *kind == Value && a.opts.contains_key(f) {
+                    return usage(format!("{f} is given twice"));
+                }
+                a.opts.entry(f.to_string()).or_default().push(value);
+            }
+        }
     }
-    if let Some(o) = opts.iter().find(|o| !cmd.accepts(o)) {
-        return Err((
-            cmd.name(),
-            CliError::usage(format!(
-                "`{}` does not take {o}",
-                cmd.name().replace('.', " ")
-            )),
+    a.dry_run = a.has("--dry-run");
+    a.yes = a.has("--yes");
+    if let Some(e) = a.get("--endpoint") {
+        if !valid_endpoint(e) {
+            return usage(
+                "--endpoint takes a pipe name of letters, digits, `-`, `_` and `.`".into(),
+            );
+        }
+        a.endpoint = Some(e.to_string());
+    }
+    if a.quiet && a.verbose {
+        return usage("--quiet and --verbose conflict".into());
+    }
+    let (min, max) = cmd.positionals();
+    if a.positional.len() < min {
+        return usage(format!(
+            "`{}` needs {}",
+            name.replace('.', " "),
+            match cmd {
+                Cmd::RuleRevoke => "a rule ID and a permission".to_string(),
+                _ => "a rule ID".to_string(),
+            }
+        ));
+    }
+    if a.positional.len() > max {
+        return usage(format!(
+            "unexpected `{}` after `{}`",
+            a.positional[max],
+            name.replace('.', " ")
         ));
     }
     Ok((cmd, a))
@@ -196,6 +496,10 @@ mod tests {
 
     fn p(s: &str) -> Result<(Cmd, Args), (String, CliError)> {
         parse(&s.split_whitespace().map(String::from).collect::<Vec<_>>())
+    }
+
+    fn pv(v: &[&str]) -> Result<(Cmd, Args), (String, CliError)> {
+        parse(&v.iter().map(|s| (*s).to_string()).collect::<Vec<_>>())
     }
 
     #[test]
@@ -223,6 +527,57 @@ mod tests {
     }
 
     #[test]
+    fn rule_commands_take_ids_values_and_repeatable_options() {
+        let (c, a) = pv(&[
+            "rule",
+            "add",
+            "--trigger",
+            "Ctrl+Shift+F13",
+            "--action",
+            "engine",
+            "--op",
+            "pause",
+            "--mode",
+            "base",
+            "--mode",
+            "nav",
+            "--priority",
+            "-5",
+            "--title",
+            "--weird title",
+            "--json",
+        ])
+        .unwrap();
+        assert_eq!(c, Cmd::RuleAdd);
+        assert_eq!(a.get("--trigger"), Some("Ctrl+Shift+F13"));
+        assert_eq!(a.all("--mode"), ["base", "nav"]);
+        assert_eq!(
+            a.get("--priority"),
+            Some("-5"),
+            "values may start with a dash"
+        );
+        assert_eq!(a.get("--title"), Some("--weird title"));
+        assert!(a.positional.is_empty());
+        let (c, a) = p("rule delete r-1 r-2 --yes --dry-run").unwrap();
+        assert_eq!(c, Cmd::RuleDelete);
+        assert_eq!(a.positional, ["r-1", "r-2"]);
+        assert!(a.yes && a.dry_run);
+        assert!(p("rule delete one -y").unwrap().1.yes);
+        let (c, a) = p("rule revoke r-1 input-injection").unwrap();
+        assert_eq!((c, a.positional.len()), (Cmd::RuleRevoke, 2));
+        assert_eq!(p("rules draft").unwrap().0, Cmd::RulesDraft);
+        assert_eq!(p("rules draft apply").unwrap().0, Cmd::RulesDraftApply);
+        let (c, a) = p("rules restore 20261104T000000Z-r3.json --yes").unwrap();
+        assert_eq!((c, a.positional.len()), (Cmd::RulesRestore, 1));
+        assert_eq!(p("rule move r-1 --to 0").unwrap().1.get("--to"), Some("0"));
+        let (_, a) = p("rule edit r-1 --title=New").unwrap();
+        assert_eq!(
+            (a.positional[0].as_str(), a.get("--title")),
+            ("r-1", Some("New"))
+        );
+    }
+
+    #[test]
     fn usage_errors_name_the_longest_command() {
         let (name, e) = p("engine fly").unwrap_err();
         assert_eq!((name.as_str(), e.code.as_str()), ("engine.fly", "usage"));
@@ -236,5 +591,13 @@ mod tests {
         assert!(p("status --endpoint bad/name").is_err());
         assert!(p("status --bogus").is_err());
         assert!(p("status -q -v").is_err());
+        let (name, e) = p("rule show").unwrap_err();
+        assert_eq!(name, "rule.show");
+        assert!(e.message.contains("rule ID"));
+        assert_eq!(p("rule fly").unwrap_err().0, "rule.fly");
+        assert!(p("rule show a b").is_err());
+        assert!(p("rule add --title a --title b").is_err());
+        assert!(p("rule list --yes").is_err());
+        assert!(p("rule add --trigger").is_err());
     }
 }

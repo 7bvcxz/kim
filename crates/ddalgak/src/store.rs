@@ -394,15 +394,19 @@ pub fn lock_timeout() -> Duration {
 /// writing `rules.json.tmp`, create the marker and wait to be killed. Compiled out of release
 /// builds.
 #[cfg(debug_assertions)]
-fn crash_point(f: &mut File, text: &[u8]) -> io::Result<bool> {
+fn crash_point(path: &Path, f: &mut File, text: &[u8]) -> io::Result<()> {
     let Some(marker) = std::env::var_os("DDALGAK_TEST_CRASH_IN_SAVE") else {
-        return Ok(false);
+        return Ok(());
     };
+    if path.file_name().is_none_or(|n| n != "rules.json") {
+        return Ok(());
+    }
     f.write_all(&text[..text.len() / 2])?;
     f.sync_all()?;
     std::fs::write(&marker, b"in the middle of a save\n")?;
     std::thread::sleep(Duration::from_secs(60));
-    Ok(true)
+    // Never finish this save, even when nobody killed the process.
+    std::process::exit(70);
 }
 
 /// Writes `text` to `path` atomically: `<path>.tmp`, flush to disk, rename over `path`.
@@ -422,9 +426,7 @@ pub fn write_atomic(path: &Path, text: &[u8]) -> Result<(), StoreError> {
     let written = (|| -> io::Result<()> {
         let mut f = File::create(&tmp)?;
         #[cfg(debug_assertions)]
-        if crash_point(&mut f, text)? {
-            return Ok(());
-        }
+        crash_point(path, &mut f, text)?;
         f.write_all(text)?;
         f.sync_all()?;
         Ok(())
@@ -540,6 +542,25 @@ pub fn save(
         backup,
         snapshot,
     })
+}
+
+/// `ddalgak rules backup`: a history snapshot of the saved file as it is (origin `backup`).
+/// `None` when nothing was saved yet.
+pub fn backup_now(files: &Files, _lock: &Lock) -> Result<Option<(PathBuf, u64)>, StoreError> {
+    let bytes = match std::fs::read(&files.rules) {
+        Ok(b) => b,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(io_err("cannot read", &files.rules, &e)),
+    };
+    let l = interpret(&bytes, &Context::default(), MIGRATIONS);
+    match l.state {
+        FileState::NewerVersion(v) => return Err(StoreError::Newer(v)),
+        FileState::Invalid(why) => return Err(StoreError::Invalid(why)),
+        _ => {}
+    }
+    let revision = l.revision();
+    let path = snapshot(files, &bytes, revision, "backup", "backup", "rules.backup")?;
+    Ok(Some((path, revision)))
 }
 
 /// `20261104T090000Z`

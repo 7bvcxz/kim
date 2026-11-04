@@ -4189,6 +4189,29 @@ pub(crate) mod tests {
             ("pin.close", json!({"id": "pin-1"})),
             ("pin.reopen", json!({"dry_run": true})),
             ("pin.reopen", json!({})),
+            (
+                "pin.set",
+                json!({"id": "pin-2", "rotate": "cw", "opacity": 50, "dry_run": true}),
+            ),
+            (
+                "pin.set",
+                json!({"id": "pin-2", "rotation": 90, "mirrored": true, "opacity": 50,
+                       "thumbnail": true, "click_through": true, "move_to_group": "work"}),
+            ),
+            (
+                "pin.set",
+                json!({"all": true, "click_through": false, "thumbnail": false}),
+            ),
+            (
+                "pin.set",
+                json!({"id": "pin-3", "at": {"x": 4, "y": 5}, "zoom": 150}),
+            ),
+            ("group.list", json!({})),
+            ("group.switch", json!({"group": "work", "dry_run": true})),
+            ("group.switch", json!({"group": "work"})),
+            ("pin.hide", json!({"group": "default"})),
+            ("pin.list", json!({})),
+            ("group.switch", json!({"group": "default"})),
             ("hotkeys.reload", json!({})),
             ("settings.reload", json!({})),
             ("status", json!({})),
@@ -4210,6 +4233,14 @@ pub(crate) mod tests {
             ("pin.show", json!({"id": "pin-77"})),
             ("pin.create", json!({"source": "file"})),
             ("pin.create", json!({"source": "clipboard", "at": {"x": 1}})),
+            ("pin.set", json!({"id": "pin-1"})),
+            ("pin.set", json!({"id": "pin-1", "opacity": 5})),
+            ("pin.set", json!({"id": "pin-1", "rotation": 45})),
+            ("pin.set", json!({"id": "pin-1", "flip": "diagonal"})),
+            ("pin.set", json!({"all": true, "at": {"x": 1, "y": 1}})),
+            ("pin.set", json!({"id": "pin-1", "move_to_group": "a/b"})),
+            ("pin.hide", json!({"group": ""})),
+            ("group.switch", json!({})),
             ("quit", json!({})),
             (
                 "capture",
@@ -4730,6 +4761,413 @@ pub(crate) mod tests {
             a.shell.windows.log.borrow().focused.is_empty(),
             "no IPC request gave a pin focus"
         );
+    }
+
+    // ---- Step 54: transforms, click-through, thumbnails, groups, GIF (ADR 0044) ----
+
+    /// The transform keys of a focused pin each do what they say, are undone by their inverse
+    /// keys, and never touch another pin; the zoom reset also restores opacity and the full size.
+    #[test]
+    fn transform_keys_are_reversible_per_pin() {
+        let mut a = keyed("pin-transform-keys");
+        a.shell.pointer_at = Some((0, 0));
+        a.shell.clipboard = Some((40, 20));
+        a.action("paste.float", None);
+        a.shell.clipboard = Some((10, 10));
+        a.action("paste.float", None);
+        let (one, two) = (PinId(1), PinId(2));
+        let other = a.pins.list(&a.capture.desktop())["pins"][1].clone();
+        let start = a.pins.rect(one).unwrap();
+        let key = |a: &mut App<FakeShell>, name: &str, ctrl: bool, shift: bool| {
+            a.pin_event(PinEvent::Key(one, chord(name, ctrl, shift), false));
+        };
+        key(&mut a, "1", false, false);
+        let t = a.pins.info(one).unwrap().transforms;
+        assert_eq!(t.orientation.rotation(), 90);
+        assert_eq!(a.status()["last_action"]["result"], "transformed");
+        key(&mut a, "2", false, false);
+        assert!(
+            a.pins
+                .info(one)
+                .unwrap()
+                .transforms
+                .orientation
+                .is_identity()
+        );
+        assert_eq!(a.pins.rect(one), Some(start), "turned back in place");
+        key(&mut a, "3", false, false);
+        assert!(a.pins.info(one).unwrap().transforms.orientation.mirrored());
+        key(&mut a, "3", false, false);
+        key(&mut a, "4", false, false);
+        key(&mut a, "4", false, false);
+        assert!(
+            a.pins
+                .info(one)
+                .unwrap()
+                .transforms
+                .orientation
+                .is_identity()
+        );
+        // Opacity: Ctrl+Minus nine times reaches 10 % and stops; Ctrl+Plus comes back.
+        for _ in 0..12 {
+            key(&mut a, "Minus", true, false);
+        }
+        assert_eq!(a.pins.info(one).unwrap().transforms.opacity, 10);
+        assert_eq!(
+            a.status()["last_action"]["result"],
+            "unchanged",
+            "never below 10 %"
+        );
+        key(&mut a, "Plus", true, false);
+        assert_eq!(a.pins.info(one).unwrap().transforms.opacity, 20);
+        // T: thumbnail and back; zoom keys wait meanwhile.
+        key(&mut a, "T", false, false);
+        assert!(a.pins.info(one).unwrap().transforms.thumbnail.is_some());
+        key(&mut a, "Plus", false, false);
+        assert_eq!(a.pins.info(one).unwrap().zoom, 100);
+        key(&mut a, "T", false, false);
+        assert!(a.pins.info(one).unwrap().transforms.thumbnail.is_none());
+        // 0 resets zoom and opacity and ends thumbnail mode; the orientation stays.
+        key(&mut a, "Plus", false, false);
+        key(&mut a, "1", false, false);
+        key(&mut a, "T", false, false);
+        key(&mut a, "0", false, false);
+        let i = a.pins.info(one).unwrap();
+        assert_eq!(
+            (i.zoom, i.transforms.opacity, i.transforms.thumbnail),
+            (100, 100, None)
+        );
+        assert_eq!(
+            i.transforms.orientation.rotation(),
+            90,
+            "a reset keeps the turn"
+        );
+        assert_eq!(
+            a.pins.list(&a.capture.desktop())["pins"][1],
+            other,
+            "the other pin never changed"
+        );
+        assert!(a.pins.contains(two));
+        // Every transform action is in the manifest and its menu.
+        let actions: Vec<&str> = a
+            .pin_menu_items(one)
+            .iter()
+            .filter_map(|i| i.action)
+            .collect();
+        for want in [
+            "pin.rotate-cw",
+            "pin.rotate-ccw",
+            "pin.flip-horizontal",
+            "pin.flip-vertical",
+            "pin.opacity-up",
+            "pin.opacity-down",
+            "pin.thumbnail",
+            "pin.click-through",
+            "pin.group-new",
+        ] {
+            assert!(actions.contains(&want), "{want} in the menu");
+            assert!(crate::hotkeys::IMPLEMENTED.contains(&want));
+        }
+    }
+
+    /// Scroll direction: away from the user zooms in, towards zooms out; with Ctrl the same
+    /// directions make the pin more and less opaque. `Shift`+double-click toggles a thumbnail;
+    /// the border drag resizes.
+    #[test]
+    fn the_wheel_direction_ctrl_opacity_shift_double_click_and_border_drag() {
+        let mut a = keyed("pin-wheel-54");
+        a.shell.pointer_at = Some((0, 0));
+        a.shell.clipboard = Some((40, 20));
+        a.action("paste.float", None);
+        let id = PinId(1);
+        a.pin_event(PinEvent::Wheel(id, -120, (5, 5), true));
+        a.pin_event(PinEvent::Wheel(id, -120, (5, 5), true));
+        assert_eq!(
+            a.pins.info(id).unwrap().transforms.opacity,
+            80,
+            "towards: fainter"
+        );
+        assert_eq!(a.pins.info(id).unwrap().zoom, 100, "Ctrl+wheel never zooms");
+        a.pin_event(PinEvent::Wheel(id, 240, (5, 5), true));
+        assert_eq!(
+            a.pins.info(id).unwrap().transforms.opacity,
+            100,
+            "away: more opaque"
+        );
+        a.pin_event(PinEvent::Wheel(id, 120, (5, 5), false));
+        assert_eq!(a.pins.info(id).unwrap().zoom, 110, "away: zoom in");
+        a.pin_event(PinEvent::Wheel(id, -120, (5, 5), false));
+        assert_eq!(a.pins.info(id).unwrap().zoom, 100, "towards: zoom out");
+        a.pin_event(PinEvent::ShiftDoubleClick(id));
+        assert!(a.pins.info(id).unwrap().transforms.thumbnail.is_some());
+        a.pin_event(PinEvent::ShiftDoubleClick(id));
+        assert!(a.pins.info(id).unwrap().transforms.thumbnail.is_none());
+        let r = a.pins.rect(id).unwrap();
+        a.pin_event(PinEvent::Resize(id, Edge::Right, r, (40, 0)));
+        assert_eq!(a.pins.info(id).unwrap().zoom, 200);
+        assert_eq!(
+            a.status()["last_action"],
+            json!({"action": "pin.resize", "result": "resized"})
+        );
+        a.pin_event(PinEvent::Resize(id, Edge::Right, r, (0, 0)));
+        assert_eq!(a.pins.rect(id), Some(r), "dragged back to where it began");
+        a.pin_event(PinEvent::MiddleClick(id));
+        assert_eq!(a.status()["last_action"]["result"], "unchanged");
+    }
+
+    /// Click-through always has a way back (NOEUL-FR-063, NOEUL-SEC-013): its own key while the
+    /// pin has focus, the tray's item, the `pins.clickable` action, a second start, and
+    /// `pin.set`; turning it on from the pin needs a way back that works without the pin.
+    #[test]
+    fn click_through_always_has_a_way_back() {
+        let mut a = keyed("pin-click-through");
+        a.shell.clipboard = Some((30, 30));
+        a.action("paste.float", None);
+        a.action("paste.float", None);
+        let (one, two) = (PinId(1), PinId(2));
+        let toggle = chord("T", true, true);
+        // No tray icon and no `pins.clickable` key: refused, the pin stays clickable.
+        a.pin_event(PinEvent::Key(one, toggle, false));
+        assert_eq!(a.status()["last_action"]["result"], "no_recovery_path");
+        assert!(!a.pins.info(one).unwrap().transforms.click_through);
+        // With the tray shown it works, says how to come back, and the tray offers the way.
+        a.shell.tray = true;
+        a.pin_event(PinEvent::Key(one, toggle, false));
+        assert!(a.pins.info(one).unwrap().transforms.click_through);
+        assert!(
+            a.shell
+                .notices
+                .last()
+                .unwrap()
+                .contains("Make all pins clickable")
+        );
+        assert!(a.tray_menu().contains(&MenuItem::MakeAllPinsClickable));
+        assert_eq!(a.status()["pins"]["click_through"], 1);
+        // 1. The keyboard: the same key on the still-focused pin turns it off.
+        a.pin_event(PinEvent::Key(one, toggle, false));
+        assert!(!a.pins.info(one).unwrap().transforms.click_through);
+        // 2. The tray item, even when the tray is gone afterwards.
+        for id in [one, two] {
+            a.pin_event(PinEvent::Key(id, toggle, false));
+        }
+        assert_eq!(a.pins.click_through(), 2);
+        a.shell.tray = false;
+        a.tray_command(MenuItem::MakeAllPinsClickable);
+        assert_eq!(a.pins.click_through(), 0);
+        assert!(!a.tray_menu().contains(&MenuItem::MakeAllPinsClickable));
+        // 3. The global action (bound by the user; no default).
+        a.request("pin.set", &json!({"all": true, "click_through": true}))
+            .unwrap();
+        assert_eq!(a.pins.click_through(), 2, "the CLI may always turn it on");
+        a.action(PINS_CLICKABLE, None);
+        assert_eq!(a.pins.click_through(), 0);
+        assert_eq!(a.status()["last_action"]["result"], "clickable");
+        // 4. A second start.
+        a.request("pin.set", &json!({"id": "pin-2", "click_through": true}))
+            .unwrap();
+        let r = a.request("activate", &json!({"reason": "start"})).unwrap();
+        assert_eq!(r["clickable"], json!(["pin-2"]));
+        assert!(a.shell.notices.last().unwrap().contains("clickable again"));
+        // 5. The CLI.
+        a.request("pin.set", &json!({"id": "pin-1", "click_through": true}))
+            .unwrap();
+        let r = a
+            .request("pin.set", &json!({"all": true, "click_through": false}))
+            .unwrap();
+        assert_eq!(r["changed"], json!(["pin-1"]));
+        // The window shows the badge while it lets clicks through.
+        a.request("pin.set", &json!({"id": "pin-1", "click_through": true}))
+            .unwrap();
+        let views = a.shell.windows.log.borrow().views.clone();
+        assert!(views.last().unwrap().1.click_through);
+        assert!(
+            a.shell.windows.log.borrow().focused.is_empty(),
+            "nothing took focus"
+        );
+        // A registered `pins.clickable` key also counts as a way back.
+        a.shell.tray = false;
+        assert!(!a.click_through_recoverable());
+    }
+
+    /// Hidden pins and thumbnails come back from the tray, the CLI and the global
+    /// `pins.toggle-hidden` action; a hidden thumbnail stays a thumbnail.
+    #[test]
+    fn hidden_pins_and_thumbnails_come_back() {
+        let mut a = keyed("pin-hidden-thumb");
+        a.shell.clipboard = Some((300, 200));
+        a.shell.pointer_at = Some((0, 0));
+        a.action("paste.float", None);
+        a.action("paste.float", None);
+        a.pin_event(PinEvent::Key(PinId(1), chord("T", false, false), false));
+        a.action(PINS_TOGGLE_HIDDEN, None);
+        assert_eq!(a.pins.hidden(), 2);
+        assert_eq!(a.status()["last_action"]["result"], "hidden");
+        a.action(PINS_TOGGLE_HIDDEN, None);
+        assert_eq!(a.pins.hidden(), 0);
+        let i = a.pins.info(PinId(1)).unwrap();
+        assert!(i.transforms.thumbnail.is_some(), "still a thumbnail");
+        assert_eq!((i.rect.width, i.rect.height), (96, 64));
+        let r = a
+            .request("pin.set", &json!({"id": "pin-1", "thumbnail": false}))
+            .unwrap();
+        assert_eq!(
+            r["pins"][0]["rect"]["width"], 99,
+            "full size: 33 %, zoomed to fit the 100×100 desktop"
+        );
+        assert_eq!(r["pins"][0]["thumbnail"], false);
+    }
+
+    /// Groups: switching shows one group and hides the others; hide, show and close act on a
+    /// group; the menu's new group and a Ctrl-drop onto another pin organise pins; the tray
+    /// switches between groups (NOEUL-FR-064).
+    #[test]
+    fn groups_are_switched_and_organised_by_menu_drop_tray_and_cli() {
+        let mut a = keyed("pin-groups");
+        a.shell.clipboard = Some((10, 10));
+        a.shell.pointer_at = Some((0, 0));
+        for _ in 0..3 {
+            a.action("paste.float", None);
+        }
+        a.request("pin.set", &json!({"id": "pin-2", "at": {"x": 50, "y": 50}}))
+            .unwrap();
+        a.request("pin.set", &json!({"id": "pin-3", "at": {"x": 80, "y": 0}}))
+            .unwrap();
+        // The menu moves pin-2 into a new group of its own.
+        a.pin_menu_choice(PinId(2), "pin.group-new");
+        assert_eq!(a.pins.group(PinId(2)), Some("group-2"));
+        // pin-3 dropped onto pin-2 with Ctrl joins its group.
+        a.pin_event(PinEvent::Dropped(PinId(3), 52, 52));
+        assert_eq!(a.pins.group(PinId(3)), Some("group-2"));
+        assert!(a.shell.notices.last().unwrap().contains("joined group-2"));
+        // A drop without a pin below, or a plain move, changes no group.
+        a.pin_event(PinEvent::Dropped(PinId(1), 0, 30));
+        assert_eq!(a.pins.group(PinId(1)), Some("default"));
+        assert_eq!(a.status()["last_action"]["result"], "moved");
+        // The tray lists both groups and switches.
+        let entries = a.tray_entries();
+        let groups: Vec<(String, bool)> = entries
+            .iter()
+            .filter(|e| matches!(e.item, MenuItem::Group(_)))
+            .map(|e| (e.label.clone(), e.checked))
+            .collect();
+        assert_eq!(
+            groups,
+            [
+                ("Group: default".to_string(), true),
+                ("Group: group-2".to_string(), false)
+            ]
+        );
+        a.tray_command(MenuItem::Group(1));
+        assert_eq!(a.pins.current_group(), "group-2");
+        assert_eq!(a.pins.hidden(), 1, "pin-1 hides");
+        // The CLI: hide, show and close a group (closing several at once needs --yes in the CLI).
+        let r = a.request("pin.hide", &json!({"group": "group-2"})).unwrap();
+        assert_eq!(r["hidden"], json!(["pin-2", "pin-3"]));
+        let r = a.request("pin.show", &json!({"group": "default"})).unwrap();
+        assert_eq!(r["shown"], json!(["pin-1"]));
+        let r = a.request("group.list", &json!({})).unwrap();
+        assert_eq!(r["current"], "group-2");
+        assert_eq!(
+            r["groups"][1],
+            json!({"name": "group-2", "pins": 2, "hidden": 2})
+        );
+        let r = a
+            .request("pin.close", &json!({"group": "group-2"}))
+            .unwrap();
+        assert_eq!(r["closed"], json!(["pin-2", "pin-3"]));
+        assert_eq!(a.pins.ids(), [PinId(1)]);
+        // New pins go to the current group.
+        a.action("paste.float", None);
+        assert_eq!(a.pins.group(PinId(4)), Some("group-2"));
+        let r = a
+            .request("group.switch", &json!({"group": "default"}))
+            .unwrap();
+        assert_eq!(
+            (r["shown"].clone(), r["hidden"].clone()),
+            (json!([]), json!(["pin-4"]))
+        );
+    }
+
+    /// An animated GIF on the clipboard is pinned as its first frame with a notice, never
+    /// silently; the pin's menu and list say so too (NOEUL-FR-068).
+    #[test]
+    fn an_animated_gif_is_never_flattened_silently() {
+        let mut a = keyed("pin-gif");
+        a.shell.clipboard = Some((12, 12));
+        a.shell.clipboard_frames = 8;
+        a.action("paste.float", None);
+        assert!(
+            a.shell
+                .notices
+                .last()
+                .unwrap()
+                .contains("8 frames; Noeul shows only the first")
+        );
+        let listed = a.request("pin.list", &json!({})).unwrap();
+        assert_eq!(
+            listed["pins"][0]["animation"],
+            json!({"frames": 8, "shown": "first_frame"})
+        );
+        let last = a.pin_menu_items(PinId(1)).pop().unwrap();
+        assert!(last.label.contains("first of 8 frames") && !last.enabled);
+        // A still picture says nothing about animation.
+        a.shell.clipboard_frames = 1;
+        let notices = a.shell.notices.len();
+        a.action("paste.float", None);
+        assert_eq!(a.shell.notices.len(), notices);
+        assert_eq!(a.pins.info(PinId(2)).unwrap().animation, None);
+        // The CLI's clipboard pin says it too.
+        a.shell.clipboard_frames = 3;
+        a.request("pin.create", &json!({"source": "clipboard"}))
+            .unwrap();
+        assert_eq!(a.pins.info(PinId(3)).unwrap().animation, Some(3));
+    }
+
+    /// `pin.set` places a pin exactly, checks every value before changing anything, and a dry
+    /// run changes nothing.
+    #[test]
+    fn pin_set_is_precise_and_checked_first() {
+        let mut a = keyed("pin-set");
+        a.shell.clipboard = Some((20, 10));
+        a.action("paste.float", None);
+        let before = a.request("pin.list", &json!({})).unwrap();
+        let r = a
+            .request(
+                "pin.set",
+                &json!({"id": "pin-1", "at": {"x": -7, "y": 33}, "rotation": 270, "dry_run": true}),
+            )
+            .unwrap();
+        assert_eq!(
+            (r["targets"].clone(), r["changed"].clone()),
+            (json!(["pin-1"]), json!([]))
+        );
+        assert_eq!(a.request("pin.list", &json!({})).unwrap(), before);
+        let r = a
+            .request(
+                "pin.set",
+                &json!({"id": "pin-1", "at": {"x": -7, "y": 33}, "zoom": 200, "rotation": 270, "flip": "vertical"}),
+            )
+            .unwrap();
+        let p = &r["pins"][0];
+        assert_eq!(
+            p["rect"],
+            json!({"x": -7, "y": 33, "width": 20, "height": 40})
+        );
+        // A quarter left, then flipped top to bottom: mirrored, then three quarters right.
+        assert_eq!(p["orientation"], json!({"rotation": 270, "mirrored": true}));
+        let e = a
+            .request(
+                "pin.set",
+                &json!({"id": "pin-1", "zoom": 200, "opacity": 101}),
+            )
+            .unwrap_err();
+        assert_eq!(e.code, Code::Usage);
+        assert_eq!(
+            a.pins.info(PinId(1)).unwrap().zoom,
+            200,
+            "nothing changed by a refused set"
+        );
+        assert!(a.shell.windows.log.borrow().focused.is_empty());
     }
 
     // ---- Step 51: the outputs of the overlay (UX spec §4.3, window-free) ----

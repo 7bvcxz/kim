@@ -235,8 +235,10 @@ glyph cache 18–55 KiB for a typical screen; the model ~1.3 MB with 10 000 hist
 **What the inbox ConPTY passes through** (Windows 10 Pro 22H2 19045, measured 2026-11-04 by
 `conpty_passthrough_of_mouse_paste_focus_and_hyperlinks`): bracketed paste (2004) and focus events
 (1004) reach the Host; mouse tracking (1000/1006) and OSC 8 hyperlinks do **not** (conhost renders
-the program's output itself). The test logs the same probe on the CI runner's Windows build.
-Where they do arrive (a newer ConPTY, Linux), the model, view and renderer already handle them.
+the program's output itself). On the CI runner (Windows Server 2025, build 26100, run
+41787159636) the same probe saw bracketed paste, focus events **and OSC 8** arrive, mouse
+tracking still not. Where they arrive, the model, view and renderer handle them (the OSC 8 link
+was hit-tested by the view there).
 
 ## 7. Benchmark harness
 
@@ -260,7 +262,7 @@ release build. Raw data: [research/terminal-eval](../research/terminal-eval/READ
 | High DPI (full frame, cold) | 100 %: cell 8×17, 1.66 ms · 125 %: 9×21, 1.95 ms · 150 %: 12×27, 2.49 ms · 175 %: 13×30, 2.83 ms · 200 %: 15×34, 3.49 ms; a live 100 → 150 % change and its next frame 3.03 ms |
 | Theme change | kim-dark ↔ high-contrast, full redraw with a warm cache: 0.23 ms |
 | Keyboard latency in the view | key → bytes → echo fed back → frame ready: p50 31 µs, p95 33 µs (2 000 keys) |
-| Keyboard latency through Host + ConPTY + cmd | p50 15.5 ms, p95 15.6 ms, max 21.3 ms (`terminal_render.rs`; ConPTY's output cadence dominates) |
+| Keyboard latency through Host + ConPTY + cmd | p50 15.5 ms, p95 15.6 ms, max 21.3 ms (`terminal_render.rs`; ConPTY's output cadence dominates; the CI runner: p50 15.8 ms, p95 23.7 ms) |
 | Idle, 30 s | CPU renderer + GDI window (120×30 view, 2 000 history lines): **0 ms CPU, 3.40 MiB private, 8.10 MiB working set, 1 thread, 95 handles**; Kim Manager's egui + glow preview, same sampler: 0 ms CPU, 107.0 MiB private, 73.0 MiB working set, 12 threads, 366 handles |
 
 CPU time is accounted in 15.6 ms ticks; "0 ms" means below one tick over the window.
@@ -280,7 +282,8 @@ CPU time is accounted in 15.6 ms ticks; "0 ms" means below one tick over the win
 - Colour emoji are monochrome (GDI); no ligatures or complex-script shaping; IME composition is
   drawn by the window (Step 16).
 - Synchronized output (2026) is modelled; deferring frames while it is set is the window's job.
-- On the inbox ConPTY of Windows 10, programs' mouse modes and hyperlinks never reach Subak (§6).
+- On the inbox ConPTY of Windows 10, programs' mouse modes and hyperlinks never reach Subak; on
+  build 26100 hyperlinks do, mouse modes still not (§6).
 
 ## 9. Windows verification
 

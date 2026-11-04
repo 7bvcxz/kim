@@ -91,7 +91,8 @@ ended. Raw data: [research/terminal-eval/results.json](../../research/terminal-e
    ADR why it accepts the GPU stack's cost.
 5. **Inbox ConPTY stays** (ADR 0004 item 7). Measured on Windows 10 19045: the inbox ConPTY
    passes bracketed paste (2004) and focus events (1004) through, but **not** mouse tracking
-   (1000/1006) or OSC 8; conhost renders those itself. Shipping `conpty.dll` + `OpenConsole.exe`
+   (1000/1006) or OSC 8; conhost renders those itself (the CI runner's ConPTY, build 26100, passes
+   OSC 8 but still not mouse tracking). Shipping `conpty.dll` + `OpenConsole.exe`
    would add a second binary set with its own update and signing path (`KIM-SEC-001`,
    RELEASE_POLICY) for mouse-driven TUIs and hyperlinks on Windows 10. Subak keeps the inbox
    ConPTY for M2; the emulator and view already handle both when a newer ConPTY (or Linux) sends
@@ -124,7 +125,8 @@ ended. Raw data: [research/terminal-eval/results.json](../../research/terminal-e
   and frames compared with goldens); the idle probe's window is placed off-screen and never
   activated. The manual check is TERMINAL_EMULATOR.md §9 (`term_bench --show`).
 - Windows 11 and other Windows 10 builds: the ConPTY passthrough above was measured on 19045
-  (the CI runner, Windows Server 2025 build 26100, runs the same probe and logs its result).
+  and on the CI runner (Windows Server 2025, build 26100: OSC 8 passes there); client Windows 11
+  builds were not available.
 - High-DPI on a real multi-monitor setup: scales 100–200 % are rendered headlessly; moving a
   window between monitors is Step 16's.
 

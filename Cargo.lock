@@ -2888,6 +2888,7 @@ dependencies = [
 name = "subak-term"
 version = "0.0.1"
 dependencies = [
+ "regex",
  "serde_json",
  "windows-sys 0.61.2",
 ]

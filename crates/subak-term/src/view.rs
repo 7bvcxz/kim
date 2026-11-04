@@ -8,7 +8,9 @@
 //! [`TermView::mouse`] and [`TermView::focus`] and writes what they return to the pane.
 
 use crate::input::{self, Key, Mods, MouseAction, MouseButton, MouseEvent};
-use crate::screen::{CellWidth, HISTORY_BYTES, Limits, Link, MouseTracking, Row, Screen};
+use crate::screen::{
+    Attrs, CellWidth, HISTORY_BYTES, Limits, Link, MouseTracking, Row, Screen, char_width,
+};
 use std::borrow::Cow;
 use std::sync::Arc;
 
@@ -27,10 +29,121 @@ pub enum SelectMode {
 
 /// A position in the whole pane. `line` numbers every line that ever entered the history first,
 /// then the screen rows, so it stays the same while output scrolls the screen into the history.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Point {
     pub line: u64,
     pub col: u16,
+}
+
+/// A run of cells from `start` to `end` (both included, in reading order), possibly over
+/// several rows: a search match, a detected link.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Span {
+    pub start: Point,
+    pub end: Point,
+}
+
+/// One logical line: the rows of a line joined across soft wraps, as plain text (a wide
+/// character once, combining marks after their character), with where each row starts.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LogicalLine {
+    pub text: String,
+    /// `(line number, byte offset)` of each row in [`LogicalLine::text`], in order.
+    pub rows: Vec<(u64, usize)>,
+    /// Columns of the view (cells past them are clamped to the last one).
+    cols: u16,
+}
+
+impl LogicalLine {
+    /// The row segment holding byte `b`.
+    fn segment(&self, b: usize) -> (u64, usize) {
+        let i = self
+            .rows
+            .partition_point(|&(_, s)| s <= b)
+            .saturating_sub(1);
+        self.rows.get(i).copied().unwrap_or((0, 0))
+    }
+
+    /// The cell of the character that starts at byte `b` (a combining mark: its character's).
+    pub fn point(&self, b: usize) -> Point {
+        let (line, start) = self.segment(b);
+        let mut col: usize = 0;
+        for c in self.text[start..b.min(self.text.len())].chars() {
+            col += usize::from(char_width(c));
+        }
+        if let Some(c) = self.text[b.min(self.text.len())..].chars().next()
+            && char_width(c) == 0
+        {
+            col = col.saturating_sub(1);
+        }
+        let last = usize::from(self.cols.max(1) - 1);
+        Point {
+            line,
+            col: u16::try_from(col.min(last)).unwrap_or(0),
+        }
+    }
+
+    /// The cells of the text `a..b` (bytes; `b` exclusive) as a [`Span`]: from the first cell of
+    /// its first character to the last cell of its last one (a wide character's second cell).
+    pub fn span(&self, a: usize, b: usize) -> Span {
+        let start = self.point(a);
+        let Some((i, c)) = self.text[a..b.max(a)].char_indices().last() else {
+            return Span { start, end: start };
+        };
+        let mut end = self.point(a + i);
+        let w = char_width(c);
+        if w == 2 && end.col + 1 < self.cols {
+            end.col += 1;
+        }
+        Span {
+            start,
+            end: end.max(start),
+        }
+    }
+
+    /// The byte offset of the character drawn in cell `p`, if the line has one there.
+    pub fn byte_at(&self, p: Point) -> Option<usize> {
+        let i = self.rows.iter().position(|&(l, _)| l == p.line)?;
+        let start = self.rows[i].1;
+        let end = self.rows.get(i + 1).map_or(self.text.len(), |r| r.1);
+        let mut col = 0usize;
+        for (b, c) in self.text[start..end].char_indices() {
+            let w = usize::from(char_width(c));
+            if w == 0 {
+                continue;
+            }
+            if usize::from(p.col) < col + w {
+                return Some(start + b);
+            }
+            col += w;
+        }
+        None
+    }
+}
+
+/// How the keyboard moves the selection's free end in mark mode ([`TermView::mark_move`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Motion {
+    Left,
+    Right,
+    Up,
+    Down,
+    WordLeft,
+    WordRight,
+    LineStart,
+    LineEnd,
+    PageUp,
+    PageDown,
+    Top,
+    Bottom,
+}
+
+/// One selected cell for a formatted copy ([`TermView::selected_cells`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CopiedCell {
+    /// The character with its combining marks.
+    pub text: String,
+    pub attrs: Attrs,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,6 +185,11 @@ pub struct TermView {
     held: Option<MouseButton>,
     /// The cell of the last motion report, so one cell sends one report.
     last_motion: Option<(u16, u16)>,
+    /// Highlighted spans (search matches), sorted, and which one is the current one.
+    highlights: Vec<Span>,
+    current: Option<usize>,
+    /// Keyboard selection (mark mode): the arrows move the selection's free end.
+    marking: bool,
 }
 
 impl TermView {
@@ -99,6 +217,9 @@ impl TermView {
             focused: true,
             held: None,
             last_motion: None,
+            highlights: Vec::new(),
+            current: None,
+            marking: false,
         }
     }
 
@@ -140,6 +261,9 @@ impl TermView {
             // Its first line left the history.
             self.selection = None;
         }
+        if self.selection.is_none() {
+            self.marking = false;
+        }
     }
 
     /// The pane changed size (this view resized it, or another client did and the Host told us).
@@ -147,6 +271,7 @@ impl TermView {
         self.screen.resize(cols, rows);
         self.seen_total = self.screen.history().total_lines;
         self.selection = None;
+        self.marking = false;
         self.scroll = self.scroll.min(self.max_scroll());
     }
 
@@ -189,8 +314,113 @@ impl TermView {
     }
 
     /// The `line` number of the oldest history line kept.
-    fn first_line(&self) -> u64 {
+    pub fn first_line(&self) -> u64 {
         self.screen.history().total_lines - self.screen.history_len() as u64
+    }
+
+    /// The `line` number of the first screen row (every line before it is history).
+    pub fn screen_line(&self) -> u64 {
+        self.screen.history().total_lines
+    }
+
+    /// The first line the view can show: the oldest history line, or the first screen row on
+    /// the alternate screen (which has no history).
+    pub fn top_line(&self) -> u64 {
+        if self.screen.alternate() {
+            self.screen_line()
+        } else {
+            self.first_line()
+        }
+    }
+
+    /// The `line` number of the last screen row.
+    pub fn last_line(&self) -> u64 {
+        self.screen_line() + u64::from(self.size().1) - 1
+    }
+
+    /// Appends the plain text of line `line` to `out` — a wide character once, combining marks
+    /// after their character, the trailing blanks of a line that does not wrap left out — and
+    /// returns whether it continues on the next line (a soft wrap). Nothing is decoded into
+    /// cells for history lines (what a search reads quickly).
+    pub fn line_text(&self, line: u64, out: &mut String) -> Option<bool> {
+        let total = self.screen_line();
+        let from = out.len();
+        let wrapped = if line >= total {
+            let y = u16::try_from(line - total).ok()?;
+            if y >= self.size().1 {
+                return None;
+            }
+            let row = self.screen.row(y);
+            for x in 0..row.cols() {
+                let c = row.cell(x);
+                if c.width != CellWidth::Tail {
+                    out.push(c.ch);
+                    out.push_str(c.combining);
+                }
+            }
+            row.wrapped()
+        } else {
+            let i = usize::try_from(line.checked_sub(self.first_line())?).ok()?;
+            self.screen.history_text(i, out)?
+        };
+        if !wrapped {
+            let keep = out[from..].trim_end_matches(' ').len();
+            out.truncate(from + keep);
+        }
+        Some(wrapped)
+    }
+
+    /// Whether line `line` continues on the next one (a soft wrap).
+    pub fn line_wrapped(&self, line: u64) -> Option<bool> {
+        let total = self.screen_line();
+        if line >= total {
+            let y = u16::try_from(line - total).ok()?;
+            (y < self.size().1).then(|| self.screen.row(y).wrapped())
+        } else {
+            let i = usize::try_from(line.checked_sub(self.first_line())?).ok()?;
+            self.screen.history_wrapped(i)
+        }
+    }
+
+    /// The first line of the logical line that `line` belongs to (back over soft wraps).
+    pub fn logical_start(&self, line: u64) -> u64 {
+        let top = self.top_line();
+        let mut s = line;
+        while s > top && self.line_wrapped(s - 1) == Some(true) {
+            s -= 1;
+        }
+        s
+    }
+
+    /// The logical line `line` belongs to: its rows joined across soft wraps.
+    pub fn logical_line(&self, line: u64) -> Option<LogicalLine> {
+        if line < self.top_line() || line > self.last_line() {
+            return None;
+        }
+        let mut l = LogicalLine {
+            cols: self.size().0,
+            ..LogicalLine::default()
+        };
+        self.logical_line_into(self.logical_start(line), &mut l);
+        Some(l)
+    }
+
+    /// Fills `l` with the logical line starting at `start` (reusing its buffers) and returns
+    /// the line after it.
+    pub fn logical_line_into(&self, start: u64, l: &mut LogicalLine) -> u64 {
+        l.text.clear();
+        l.rows.clear();
+        l.cols = self.size().0;
+        let last = self.last_line();
+        let mut n = start;
+        loop {
+            l.rows.push((n, l.text.len()));
+            let wrapped = self.line_text(n, &mut l.text).unwrap_or(false);
+            n += 1;
+            if !wrapped || n > last {
+                return n;
+            }
+        }
     }
 
     /// The `line` number viewport row `row` shows.
@@ -240,6 +470,83 @@ impl TermView {
         self.row_at(row).link_at(usize::from(col)).cloned()
     }
 
+    /// The viewport row that shows `line`, if it is in view.
+    pub fn row_of_line(&self, line: u64) -> Option<u16> {
+        let first = self.line_of_row(0);
+        let row = line.checked_sub(first)?;
+        (row < u64::from(self.size().1)).then(|| u16::try_from(row).unwrap_or(0))
+    }
+
+    /// Scrolls so `line` is in view, below the first row (an overlay such as the search bar
+    /// may cover it) when there is room: a line already in rows 1… stays where it is; else it
+    /// is brought to about a third from the top. The alternate screen does not scroll.
+    pub fn reveal(&mut self, line: u64) {
+        if self.screen.alternate() {
+            return;
+        }
+        let rows = self.size().1;
+        if let Some(r) = self.row_of_line(line)
+            && (r >= 1 || rows == 1)
+        {
+            return;
+        }
+        // Row `r` shows `total + r - scroll`: choose `r` a third of the way down.
+        let r = u64::from(rows / 3).max(u64::from(rows > 1));
+        let want = (self.screen_line() + r).saturating_sub(line);
+        self.scroll = usize::try_from(want)
+            .unwrap_or(usize::MAX)
+            .min(self.max_scroll());
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // Highlights (search matches).
+
+    /// Highlights `spans` (sorted, not overlapping), `current` drawn as the current one.
+    pub fn set_highlights(&mut self, spans: Vec<Span>, current: Option<usize>) {
+        self.highlights = spans;
+        self.current = current.filter(|&i| i < self.highlights.len());
+    }
+
+    pub fn clear_highlights(&mut self) {
+        self.highlights.clear();
+        self.current = None;
+    }
+
+    pub fn highlights(&self) -> &[Span] {
+        &self.highlights
+    }
+
+    pub fn current_highlight(&self) -> Option<usize> {
+        self.current
+    }
+
+    /// The highlighted columns of viewport row `row` (inclusive), each with whether it is the
+    /// current one, into `out` (cleared first).
+    pub fn highlight_cols(&self, row: u16, out: &mut Vec<(u16, u16, bool)>) {
+        out.clear();
+        if self.highlights.is_empty() {
+            return;
+        }
+        let line = self.line_of_row(row);
+        let last = self.size().0 - 1;
+        // Spans are sorted and do not overlap, so their ends are sorted too.
+        let from = self.highlights.partition_point(|s| s.end.line < line);
+        for (i, s) in self.highlights[from..].iter().enumerate() {
+            if s.start.line > line {
+                break;
+            }
+            let a = if s.start.line == line { s.start.col } else { 0 };
+            let b = if s.end.line == line {
+                s.end.col.min(last)
+            } else {
+                last
+            };
+            if a <= b {
+                out.push((a, b, self.current == Some(from + i)));
+            }
+        }
+    }
+
     // -----------------------------------------------------------------------------------------
     // Selection and copy.
 
@@ -263,10 +570,255 @@ impl TermView {
 
     pub fn clear_selection(&mut self) {
         self.selection = None;
+        self.marking = false;
     }
 
     pub fn has_selection(&self) -> bool {
         self.selection.is_some()
+    }
+
+    /// Selects the cells of `span` (a search match, a link).
+    pub fn select_span(&mut self, span: Span) {
+        self.selection = Some(Selection {
+            anchor: span.start,
+            head: span.end,
+            mode: SelectMode::Cell,
+        });
+    }
+
+    /// Selects everything the view can show: the history and the screen (the alternate screen
+    /// alone while a full-screen program uses it).
+    pub fn select_all(&mut self) {
+        self.selection = Some(Selection {
+            anchor: Point {
+                line: self.top_line(),
+                col: 0,
+            },
+            head: Point {
+                line: self.last_line(),
+                col: self.size().0 - 1,
+            },
+            mode: SelectMode::Cell,
+        });
+    }
+
+    /// The selection's ends in reading order, before words and lines are expanded.
+    pub fn selection_span(&self) -> Option<Span> {
+        let (a, b, _) = self.selection_bounds()?;
+        Some(Span { start: a, end: b })
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // Keyboard selection (mark mode, as Windows Terminal's).
+
+    /// Whether the keyboard moves the selection (mark mode).
+    pub fn marking(&self) -> bool {
+        self.marking
+    }
+
+    /// Starts mark mode: the selection's free end becomes a caret the arrows move. An existing
+    /// selection is kept (its free end continues); otherwise the caret starts at the cursor (at
+    /// the bottom row of a scrolled-back view when the cursor is not in view).
+    pub fn mark_begin(&mut self) {
+        self.marking = true;
+        if self.selection.is_some() {
+            return;
+        }
+        let p = match self.cursor_in_view() {
+            Some((x, y)) => self.point_at(x, y),
+            None => self.point_at(0, self.size().1 - 1),
+        };
+        self.selection = Some(Selection {
+            anchor: p,
+            head: p,
+            mode: SelectMode::Cell,
+        });
+    }
+
+    /// Leaves mark mode; the selection stays when `keep` (to be copied), else it is cleared.
+    pub fn mark_end(&mut self, keep: bool) {
+        self.marking = false;
+        if !keep {
+            self.selection = None;
+        }
+    }
+
+    /// Moves the caret of mark mode; with `extend` the selection grows from its anchor (Shift),
+    /// else the anchor moves with it (one cell selected). The view scrolls to keep the caret
+    /// in view.
+    pub fn mark_move(&mut self, m: Motion, extend: bool) {
+        if !self.marking {
+            self.mark_begin();
+        }
+        let Some(mut s) = self.selection else {
+            return;
+        };
+        let (cols, rows) = self.size();
+        let last_col = cols - 1;
+        let (top, bottom) = (self.top_line(), self.last_line());
+        let page = u64::from(rows.saturating_sub(1).max(1));
+        let mut h = s.head;
+        match m {
+            Motion::Left => {
+                if h.col > 0 {
+                    h.col -= 1;
+                } else if h.line > top {
+                    h.line -= 1;
+                    h.col = last_col;
+                }
+            }
+            Motion::Right => {
+                if h.col < last_col {
+                    h.col += 1;
+                } else if h.line < bottom {
+                    h.line += 1;
+                    h.col = 0;
+                }
+            }
+            Motion::Up => h.line = h.line.saturating_sub(1).max(top),
+            Motion::Down => h.line = (h.line + 1).min(bottom),
+            Motion::PageUp => h.line = h.line.saturating_sub(page).max(top),
+            Motion::PageDown => h.line = (h.line + page).min(bottom),
+            Motion::LineStart => h.col = 0,
+            Motion::LineEnd => {
+                let mut t = String::new();
+                self.line_text(h.line, &mut t);
+                let used: usize = t.chars().map(|c| usize::from(char_width(c))).sum();
+                h.col = u16::try_from(used.saturating_sub(1))
+                    .unwrap_or(last_col)
+                    .min(last_col);
+            }
+            Motion::Top => {
+                h.line = top;
+                h.col = 0;
+            }
+            Motion::Bottom => {
+                h.line = bottom;
+                h.col = last_col;
+            }
+            Motion::WordLeft | Motion::WordRight => {
+                h = self.word_step(h, m == Motion::WordRight);
+            }
+        }
+        // A wide character is one place: growing forward onto it takes both its cells, and the
+        // caret never sits on its second cell alone.
+        if let Some(row) = self.line(h.line) {
+            let forward = matches!(
+                m,
+                Motion::Right | Motion::WordRight | Motion::LineEnd | Motion::Bottom
+            );
+            match row.cell(usize::from(h.col)).width {
+                CellWidth::Wide if extend && forward && h.col < last_col => h.col += 1,
+                CellWidth::Tail if !(extend && forward) && h.col > 0 => h.col -= 1,
+                _ => {}
+            }
+        }
+        s.head = h;
+        if !extend {
+            s.anchor = h;
+        }
+        s.mode = SelectMode::Cell;
+        self.selection = Some(s);
+        self.reveal_any(h.line);
+    }
+
+    /// The start of the next (or previous) word from `p`, crossing line ends.
+    fn word_step(&self, p: Point, forward: bool) -> Point {
+        let (top, bottom) = (self.top_line(), self.last_line());
+        let last_col = self.size().0 - 1;
+        let word_at = |q: Point| -> Option<bool> {
+            let row = self.line(q.line)?;
+            let c = row.cell(usize::from(q.col));
+            let ch = if c.width == CellWidth::Tail && q.col > 0 {
+                row.cell(usize::from(q.col) - 1).ch
+            } else {
+                c.ch
+            };
+            Some(ch != ' ' && is_word(ch))
+        };
+        let step = |q: Point| -> Option<Point> {
+            if forward {
+                if q.col < last_col {
+                    Some(Point {
+                        line: q.line,
+                        col: q.col + 1,
+                    })
+                } else if q.line < bottom {
+                    Some(Point {
+                        line: q.line + 1,
+                        col: 0,
+                    })
+                } else {
+                    None
+                }
+            } else if q.col > 0 {
+                Some(Point {
+                    line: q.line,
+                    col: q.col - 1,
+                })
+            } else if q.line > top {
+                Some(Point {
+                    line: q.line - 1,
+                    col: last_col,
+                })
+            } else {
+                None
+            }
+        };
+        let mut q = p;
+        if forward {
+            // Skip the rest of this word, then the gap, to the next word's first cell.
+            while word_at(q) == Some(true) {
+                match step(q) {
+                    Some(n) => q = n,
+                    None => return q,
+                }
+            }
+            while word_at(q) == Some(false) {
+                match step(q) {
+                    Some(n) => q = n,
+                    None => return q,
+                }
+            }
+            q
+        } else {
+            // Back over the gap, then to the first cell of that word.
+            if let Some(n) = step(q) {
+                q = n;
+            }
+            while word_at(q) == Some(false) {
+                match step(q) {
+                    Some(n) => q = n,
+                    None => return q,
+                }
+            }
+            while let Some(n) = step(q) {
+                if word_at(n) != Some(true) {
+                    break;
+                }
+                q = n;
+            }
+            q
+        }
+    }
+
+    /// Scrolls so `line` is in view (any row).
+    fn reveal_any(&mut self, line: u64) {
+        if self.screen.alternate() || self.row_of_line(line).is_some() {
+            return;
+        }
+        let first = self.line_of_row(0);
+        let rows = u64::from(self.size().1);
+        let want = if line < first {
+            // At the top.
+            self.screen_line().saturating_sub(line)
+        } else {
+            // At the bottom.
+            (self.screen_line() + rows - 1).saturating_sub(line)
+        };
+        self.scroll = usize::try_from(want)
+            .unwrap_or(usize::MAX)
+            .min(self.max_scroll());
     }
 
     /// The selection's first and last cell after expanding words and lines.
@@ -335,6 +887,15 @@ impl TermView {
     /// line, lines separated by `\n` (the Windows clipboard layer converts to CR LF).
     pub fn selected_text(&self) -> Option<String> {
         let (a, b, mode) = self.selection_bounds()?;
+        Some(self.text_between(a, b, mode))
+    }
+
+    /// The text of the cells of `span` (a search match, a detected link), as a copy gets it.
+    pub fn span_text(&self, span: Span) -> String {
+        self.text_between(span.start, span.end, SelectMode::Cell)
+    }
+
+    fn text_between(&self, a: Point, b: Point, mode: SelectMode) -> String {
         let last = self.size().0 - 1;
         let mut out = String::new();
         for line in a.line..=b.line {
@@ -371,6 +932,54 @@ impl TermView {
                 }
             }
         }
+        out
+    }
+
+    /// The selected cells with their attributes, line by line, for a formatted (HTML) copy: the
+    /// same cells and lines as [`TermView::selected_text`] (a wide character once, trailing
+    /// blanks removed, soft-wrapped rows joined).
+    pub fn selected_cells(&self) -> Option<Vec<Vec<CopiedCell>>> {
+        let (a, b, mode) = self.selection_bounds()?;
+        let last = self.size().0 - 1;
+        let mut out: Vec<Vec<CopiedCell>> = vec![Vec::new()];
+        for line in a.line..=b.line {
+            let Some(row) = self.line(line) else {
+                continue;
+            };
+            let (c0, c1) = match mode {
+                SelectMode::Block => (a.col, b.col),
+                _ => (
+                    if line == a.line { a.col } else { 0 },
+                    if line == b.line { b.col } else { last },
+                ),
+            };
+            let mut x = usize::from(c0);
+            if row.cell(x).width == CellWidth::Tail && x > 0 {
+                x -= 1;
+            }
+            let cur = out.last_mut().expect("one line at least");
+            while x <= usize::from(c1) && x < row.cols() {
+                let c = row.cell(x);
+                if c.width != CellWidth::Tail {
+                    let mut text = String::from(c.ch);
+                    text.push_str(c.combining);
+                    cur.push(CopiedCell {
+                        text,
+                        attrs: c.attrs,
+                    });
+                }
+                x += 1;
+            }
+            let joins = mode != SelectMode::Block && row.wrapped() && line != b.line;
+            if !joins {
+                while cur.last().is_some_and(|c| c.text == " ") {
+                    cur.pop();
+                }
+                if line != b.line {
+                    out.push(Vec::new());
+                }
+            }
+        }
         Some(out)
     }
 
@@ -383,6 +992,7 @@ impl TermView {
     pub fn key(&mut self, key: Key, mods: Mods) -> Vec<u8> {
         self.scroll = 0;
         self.selection = None;
+        self.marking = false;
         input::encode_key(key, mods, &self.screen.modes())
     }
 

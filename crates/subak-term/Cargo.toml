@@ -18,6 +18,13 @@ default = ["render"]
 # without it; the Subak GUI and the benchmark harness turn it on.
 render = ["dep:windows-sys"]
 
+[dependencies]
+# Search in a pane's output (Step 19, ADR 0048): linear-time matching (no backtracking), with
+# size and nesting caps, so a pattern cannot hang a window. The same feature set Ddalgak ships
+# (ADR 0028): `\w`, `\b`, `\d` and case folding are Unicode-aware; script classes are not
+# compiled in. Already in the workspace lock; no GUI crate.
+regex = { version = "1.13.1", default-features = false, features = ["std", "perf", "unicode-case", "unicode-perl"] }
+
 [target."cfg(windows)".dependencies]
 # Glyph rasterization with the system's fonts through GDI (ADR 0036): fonts are shared by the
 # system font cache instead of being read into this process.
